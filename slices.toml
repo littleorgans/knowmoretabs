@@ -145,7 +145,7 @@ the only thing that varies.
 id = "platforms"
 number = 5
 title = "Linux and Windows"
-status = "planned"
+status = "done"
 delivers = ["my-platform"]
 depends_on = ["browsers"]
 ships = """
