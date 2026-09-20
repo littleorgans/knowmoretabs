@@ -86,7 +86,31 @@ page can be in different groups in different snapshots, or in none; and most
 archives will have few groups, so it must degrade to nothing gracefully.
 Extend `fixtures/generate.py` to produce groups so it can be seen.
 
-### 5. Real data, real edges
+### 5. Two live bugs found while reviewing the backend
+
+Both are in `design-b/app.js` and both are yours, because they are frontend
+defects. Fix them as part of the promotion, and add a fixture case for each so
+they stay fixed.
+
+- **An empty archive makes the page throw.** `design-b/app.js:290` does
+  `S.snaps[0].date` and `S.snaps.at(-1).date` with no guard, so zero snapshots
+  gives `TypeError: Cannot read properties of undefined`. It sits outside the
+  `try` around `host.load()`, so `main()` rejects and the page never renders at
+  all. `renderSnapshots` needs the same guard — `Math.max(...[])` is `-Infinity`
+  at `app.js:187`. The backend side is correct and tested: an empty archive
+  exports a valid, contract-conformant document with empty arrays and zero
+  stats. Someone who runs `export` before `save` should get an empty library
+  that explains itself, not a blank page.
+
+- **The export masthead double-subtracts forgotten pages.**
+  `design-b/app.js:292` computes `S.pages.length - (S.stats.forgotten || 0)`.
+  In serve mode `pages[]` includes forgotten entries and that subtraction is
+  right; in export mode the contract omits them, so the count comes out short
+  by `stats.forgotten`. It never showed up in the prototype because
+  `fixtures/library.json` is the serve shape and `index.html` embedded it for
+  the export demo. The two modes need different arithmetic here.
+
+### 6. Real data, real edges
 
 The fixture was clean. Real archives are not. Handle, and add fixture cases for:
 a page with an empty title; a very long title and a very long URL; non-ASCII and

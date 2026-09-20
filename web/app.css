@@ -54,7 +54,7 @@ main { padding: 0 var(--gutter) 3rem; }
 .tools label { display: flex; flex-direction: column; gap: 0.2rem; font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
 .tools label:first-child { flex: 1 1 14rem; }
 .tools input { min-width: 0; width: 100%; padding: 0.4rem 0.55rem; background: var(--paper-2); border: 1px solid var(--line); border-radius: 4px; font-size: 0.9375rem; letter-spacing: 0; text-transform: none; color: var(--ink); }
-.tools label:nth-child(2) { flex: 0 1 12rem; }
+.tools label:nth-child(n+2) { flex: 0 1 11rem; }
 .seg { display: flex; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
 .seg button { background: none; border: 0; border-left: 1px solid var(--line); padding: 0.4rem 0.65rem; color: var(--ink-2); font-size: 0.875rem; white-space: nowrap; }
 .seg button:first-child { border-left: 0; }
@@ -100,6 +100,20 @@ main { padding: 0 var(--gutter) 3rem; }
 .pos { font: 0.75rem var(--mono); color: var(--ink-2); text-align: right; }
 .chip { font-size: 0.7rem; padding: 0.05em 0.5em; border-radius: 999px; border: 1px solid var(--line); color: var(--ink-2); white-space: nowrap; }
 .chip.pin { border-style: dashed; }
+/* group mark: a dot in the group's colour, then the name in the metadata colour.
+   Chrome's nine colours, dimmed to sit on paper and lifted for dark; only the
+   dot ever takes one, so they stay marks rather than a palette. Unknown → grey. */
+.grp { display: inline-flex; align-items: center; gap: 0.35em; flex: none; max-width: 14ch; font: 0.75rem var(--sans); color: var(--ink-2); background: none; border: 0; padding: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; --gc: light-dark(#80837d, #9c9a93); }
+.grp::before { content: ""; flex: none; width: 0.55em; height: 0.55em; border-radius: 50%; background: var(--gc); }
+.grp small { font-size: 0.85em; font-style: italic; }
+button.grp:hover { color: var(--ink); text-decoration: underline; }
+.grp[data-c="blue"] { --gc: light-dark(#3b6fb6, #7fa8dc); }   .grp[data-c="red"] { --gc: light-dark(#c0453a, #e0776b); }
+.grp[data-c="yellow"] { --gc: light-dark(#d3a11c, #e8c25a); } .grp[data-c="green"] { --gc: light-dark(#3a8a4b, #6fbf7e); }
+.grp[data-c="pink"] { --gc: light-dark(#c44a8a, #e07fb4); }   .grp[data-c="purple"] { --gc: light-dark(#8a55c8, #b28ee6); }
+.grp[data-c="cyan"] { --gc: light-dark(#2e8c96, #6cc2cb); }   .grp[data-c="orange"] { --gc: light-dark(#d8772c, #f0a060); }
+/* "show all 236" at the foot of a folded Open now band */
+.fold { padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--line); }
+.fold button { background: none; border: 0; padding: 0; font: inherit; font-size: 0.8125rem; color: var(--accent); text-decoration: underline; }
 
 /* expanded history */
 .hist { grid-column: 1 / -1; padding: 0.4rem 0 0.9rem 0.25rem; font-size: 0.8125rem; color: var(--ink-2); display: grid; gap: 0.45rem; }
@@ -112,7 +126,7 @@ main { padding: 0 var(--gutter) 3rem; }
 .hist .acts { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0; align-items: center; }
 .hist .acts button, .tray button, #toast button { background: var(--paper-2); border: 1px solid var(--line); border-radius: 4px; padding: 0.25rem 0.6rem; font-size: 0.8125rem; color: var(--ink); }
 .hist .acts button:hover, .tray button:hover, #toast button:hover { border-color: var(--ink-2); }
-.hist .ro { color: var(--ink-2); }
+.hist .ro { color: var(--ink-2); overflow-wrap: anywhere; }
 .hist .ro code { user-select: all; color: var(--ink); }
 
 #empty { padding: 3rem 0.5rem; color: var(--ink-2); font: italic 1.05rem var(--serif); }
@@ -125,6 +139,7 @@ main { padding: 0 var(--gutter) 3rem; }
 .snaps td.num { text-align: right; }
 .snaps .bar-cell { width: 40%; }
 .snaps .tabs-bar { display: inline-block; height: 0.6rem; background: var(--dot); border-radius: 1px; vertical-align: middle; margin-left: 0.5rem; opacity: 0.55; }
+.snaps .warn { margin-left: 0.6rem; font: italic 0.8125rem var(--serif); color: var(--ink); }
 .snaps tr:hover td { background: var(--paper-2); }
 .snap-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1rem; margin: 1rem 0 0.5rem; }
 .snap-head h2 { margin: 0; font: 1.5rem/1.2 var(--serif); font-weight: 400; }
@@ -137,6 +152,8 @@ main { padding: 0 var(--gutter) 3rem; }
 /* ---- tray, toast, footer, help ---- */
 .tray, #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 1rem; z-index: 5; display: flex; align-items: center; gap: 0.75rem; padding: 0.55rem 0.9rem; background: var(--paper); color: var(--ink); border: 1px solid var(--ink-2); border-radius: 6px; box-shadow: 0 6px 24px light-dark(rgb(0 0 0 / 0.12), rgb(0 0 0 / 0.5)); font-size: 0.875rem; max-width: calc(100vw - 2rem); }
 #toast { bottom: 4rem; }
+.tray { flex-wrap: wrap; }
+.tray small { flex-basis: 100%; color: var(--ink-2); font-size: 0.75rem; }
 footer { padding: 2rem var(--gutter); border-top: 1px solid var(--line); color: var(--ink-2); font-size: 0.8125rem; display: flex; flex-wrap: wrap; gap: 0.5rem 2rem; }
 footer p { margin: 0; }
 dialog { background: var(--paper); color: var(--ink); border: 1px solid var(--ink-2); border-radius: 6px; padding: 1.25rem 1.5rem; max-width: 26rem; }
@@ -153,6 +170,8 @@ dialog dd { margin: 0; }
   .strip { display: none; }
   .body { flex-direction: column; align-items: stretch; gap: 0; }
   .t, .u { flex: none; }
+  .body:has(.grp) { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 0.6rem; }
+  .body:has(.grp) .t { grid-column: 1 / -1; }
   .win .row { grid-template-columns: 2.5ch minmax(0, 1fr) auto 1.5rem; }
   .win .chip.pin { display: none; }
 }
@@ -161,8 +180,10 @@ dialog dd { margin: 0; }
   .views { grid-column: 1; grid-row: auto; margin-left: -0.75rem; }
   .keys { display: none; }
   .hist ol { grid-template-columns: 1fr; }
-  .tools label:nth-child(2) { flex-basis: 100%; }
+  .tools label:nth-child(n+2) { flex: 1 1 10rem; }
   .seg { flex-wrap: wrap; border: 0; gap: 0.3rem; overflow: visible; }
   .seg button { border: 1px solid var(--line); border-radius: 4px; }
+  .snaps th, .snaps td { white-space: normal; padding-inline: 0.3rem; }
+  .snaps .bar-cell { width: auto; }
 }
 @media (prefers-reduced-motion: reduce) { .more { transition: none; } }

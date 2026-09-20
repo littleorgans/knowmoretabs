@@ -9,7 +9,7 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use common::{Fixture, assert_success, stderr, stdout};
+use common::{Fixture, SessionBuilder, assert_success, stderr, stdout};
 use serde_json::{Value, json};
 
 fn write_snapshot(root: &Path, id: &str, captured_at: &str, tabs: &Value, groups: &Value) {
@@ -202,7 +202,15 @@ fn export_round_trip_has_contract_counts_order_and_deduplication() {
     assert_eq!(snapshots[0]["tabs_total"], 3);
     assert_eq!(
         snapshots[0]["groups"][0],
-        json!({"id":0,"title":"Reading","colour":"blue"})
+        json!({"id":0,"title":"Reading","colour":"blue","collapsed":false})
+    );
+    // Always present, zeroed, on a snapshot the parser read whole.
+    assert_eq!(
+        snapshots[0]["stats"],
+        json!({
+            "dropped_tabs": 0, "unknown_commands": 0, "malformed_commands": 0,
+            "truncated_bytes": 0, "marker_ok": true, "degraded": false
+        })
     );
     assert_eq!(snapshots[0]["tabs"][0], json!([0, 1, 0, 1, 1, 0]));
     assert_eq!(snapshots[0]["tabs"][1], json!([0, 1, 1, 2, 0, null]));
@@ -220,7 +228,7 @@ fn contract_matches_the_committed_fixture_shape() {
     archive_fixture(&fx);
     let library = exported_library(&fx);
     let fixture: Value =
-        serde_json::from_str(include_str!("../design-b/fixtures/library.json")).unwrap();
+        serde_json::from_str(include_str!("../web/fixtures/library.json")).unwrap();
     assert_contract_shape(&library, &fixture, "library");
 }
 
@@ -705,6 +713,79 @@ fn export_refuses_a_destination_holding_the_archive_or_its_snapshots() {
     );
     let output = fx.run(&["export"]);
     assert_success(&output);
+}
+
+/// The whole point of carrying the counters: a snapshot that lost tabs reports
+/// a low `tabs_total`, and the page can only say so if the parse reaches it.
+#[test]
+fn a_degraded_parse_reaches_the_exported_document() {
+    let fx = Fixture::new();
+    let token = (0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210);
+    let mut bytes = SessionBuilder::new()
+        .raw_command(200, &[1, 2, 3])
+        .simple_tab(1, 2, "https://example.test/one", "One")
+        .simple_tab(1, 3, "https://example.test/two", "Two")
+        .set_tab_group(3, Some(token))
+        .group_metadata(token, "Reading", 1, true, None)
+        // A tab the log placed but never navigated: kept out of the snapshot.
+        .set_tab_window(1, 4)
+        .set_tab_index(4, 2)
+        .select_navigation(4, 0)
+        .marker()
+        .build();
+    // A torn tail, which is what copying a session file Chrome is writing gives.
+    bytes.truncate(bytes.len() - 1);
+    fx.write_session("Default", 20, &bytes);
+    assert_success(&fx.run(&["save"]));
+
+    let snapshot = &exported_library(&fx)["snapshots"][0];
+    assert_eq!(snapshot["tabs_total"], 2);
+    assert_eq!(
+        snapshot["stats"],
+        json!({
+            "dropped_tabs": 1, "unknown_commands": 1, "malformed_commands": 0,
+            "truncated_bytes": 2, "marker_ok": false, "degraded": true
+        })
+    );
+    assert_eq!(
+        snapshot["groups"][0],
+        json!({"id": 0, "title": "Reading", "colour": "blue", "collapsed": true})
+    );
+}
+
+/// `degraded` covers what the five named counters do not: a navigation
+/// fallback alone leaves every counter at zero, and the page must still be
+/// told the parse was not clean.
+#[test]
+fn degradation_without_a_named_counter_still_reaches_the_document() {
+    let fx = Fixture::new();
+    write_snapshot(
+        &fx.root,
+        "2026-12-02-000000Z",
+        "2026-12-02T00:00:00Z",
+        &json!([tab(1, 0, "https://example.test/", "A", None)]),
+        &json!([]),
+    );
+    let path = fx.root.join("snapshots/2026-12-02-000000Z/snapshot.json");
+    let body = fs::read_to_string(&path).unwrap();
+    assert!(body.contains("\"navigation_fallbacks\":0"));
+    fs::write(
+        &path,
+        body.replace("\"navigation_fallbacks\":0", "\"navigation_fallbacks\":1"),
+    )
+    .unwrap();
+
+    let snapshot = &exported_library(&fx)["snapshots"][0];
+    assert_eq!(
+        snapshot["stats"],
+        json!({
+            "dropped_tabs": 0, "unknown_commands": 0, "malformed_commands": 0,
+            "truncated_bytes": 0, "marker_ok": true, "degraded": true
+        })
+    );
+    let human = fx.run(&["list"]);
+    assert_success(&human);
+    assert!(stdout(&human).contains("(degraded)"), "{}", stdout(&human));
 }
 
 #[test]

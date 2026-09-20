@@ -21,8 +21,9 @@ const host = (() => {
 })();
 
 // ---- 2. State -------------------------------------------------------------
-const S = { pages: [], snaps: [], stats: {}, shown: [], q: '', domain: '', status: '', sort: 'last',
-            cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages' };
+const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rendered: [], q: '', domain: '', group: '', status: '', sort: 'last',
+            openAll: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages' };
+const FOLD = 10;                                   // rows of "Open now" shown before "show all"
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = new Intl.NumberFormat();
@@ -32,6 +33,7 @@ const F = { day: fmt({ day: 'numeric', month: 'short' }), dayYear: fmt({ day: 'n
             month: fmt({ month: 'long', year: 'numeric' }), long: fmt({ weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' }),
             time: fmt({ hour: '2-digit', minute: '2-digit', hour12: false }), full: fmt({ day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) };
 const isForm = (el) => el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
+const plural = (n, one, many = one + 's') => `${num.format(n)} ${n === 1 ? one : many}`;
 const SORTS = {
   last: (a, b) => b.last - a.last || a.lw - b.lw || a.lp - b.lp,
   first: (a, b) => b.first - a.first || a.lw - b.lw || a.lp - b.lp,
@@ -41,18 +43,38 @@ const SORTS = {
 };
 
 // ---- 3. Derive pages ⇄ snapshots ------------------------------------------
+// The document comes from our own backend, but a hand-edited or half-written
+// one must degrade the way the parser does: skip what cannot be read, count
+// it, say so. A page keeps its index (tab rows point at it), so an unreadable
+// page is one with no sightings; a tab row that is not a tuple naming a
+// readable page is dropped and counted on its snapshot (§7 shows it as
+// "unreadable tab rows"); a snapshot without a parseable time is skipped and
+// counted in the footer.
 function derive(lib) {
   S.stats = lib.stats || {};
-  S.snaps = lib.snapshots.map((s, k) => ({ ...s, k, date: new Date(s.captured_at), fresh: 0, gone: 0 }));
-  S.pages = lib.pages.map((p, i) => ({ ...p, i, seen: [], forgotten: !!p.forgotten,
-    hay: (p.title + ' ' + p.url).toLowerCase(), addr: p.url.replace(/^[a-z]+:\/\/(www\.)?/i, ''),
-    name: (p.title || p.url).replace(/^[^\p{L}\p{N}]+/u, '') }));
-  for (const s of S.snaps) for (const [pi, w, pos, tid] of s.tabs) S.pages[pi].seen.push([s.k, w, tid, pos]);
+  const P = lib.pages || [];
+  S.pages = P.map((p, i) => { p = typeof p?.url === 'string' ? p : { url: '' }; return { ...p, i, seen: [], title: p.title || '', domain: p.domain || '', forgotten: !!p.forgotten,
+    hay: ((p.title || '') + ' ' + p.url).toLowerCase(), addr: p.url.replace(/^https?:\/\/(www\.)?/i, ''),
+    name: (p.title || p.url).replace(/^[^\p{L}\p{N}]+/u, ''), link: /^https?:\/\//i.test(p.url) }; });
+  S.skipped = 0;
+  S.snaps = (lib.snapshots || []).filter((s) => { const ok = s && !isNaN(new Date(s.captured_at)); if (!ok) S.skipped++; return ok; }).map((s, k) => {
+    const rows = Array.isArray(s.tabs) ? s.tabs : [], tabs = rows.filter((t) => Array.isArray(t) && t.length > 3 && typeof P[t[0]]?.url === 'string');
+    return { ...s, k, date: new Date(s.captured_at), groups: (s.groups || []).map((g) => ({ ...g, title: String(g?.title ?? ''), colour: String(g?.colour ?? 'grey') })),
+      tabs, tabs_total: (rows.length && +s.tabs_total) || tabs.length, windows: +s.windows || 0, bad: rows.length - tabs.length, fresh: 0, gone: 0 };
+  });
+  // Each sighting keeps the group object it sat in, so a page can be in "Papers" in
+  // March, "Later" in June and no group today without any per-page bookkeeping.
+  for (const s of S.snaps) for (const [pi, w, pos, tid, , g] of s.tabs) S.pages[pi]?.seen.push([s.k, w, tid, pos, g == null ? null : s.groups[g] || null]);
   const latest = S.snaps.length - 1, col = 4;
+  S.groups = new Map();
   for (const p of S.pages) {
+    if (!p.seen.length) { p.n = 0; continue; }      // allowed by the contract, never shown
     const ks = [...new Set(p.seen.map((x) => x[0]))];
     p.n = ks.length; p.first = ks[0]; p.last = ks.at(-1); p.open = p.last === latest;
     const l = p.seen.at(-1); p.lw = l[1]; p.lp = l[3];
+    p.grp = (p.seen.find((x) => x[0] === p.last && x[4]) || l)[4];   // the group it sat in when last seen
+    p.gs = [...new Set(p.seen.map((x) => x[4] && x[4].title.toLowerCase()).filter(Boolean))];
+    for (const t of p.gs) { const e = S.groups.get(t) || { title: p.seen.find((x) => x[4] && x[4].title.toLowerCase() === t)[4].title, n: 0 }; e.n++; S.groups.set(t, e); }
     S.snaps[p.first].fresh++; if (!p.open) S.snaps[p.last].gone++;
     const stops = []; let a = ks[0], b = ks[0];        // runs of consecutive sightings → gradient stops
     for (const k of ks.slice(1).concat(NaN)) {
@@ -64,13 +86,29 @@ function derive(lib) {
   }
   document.documentElement.style.setProperty('--n', S.snaps.length);
 }
+// The parser's per-snapshot counters (§5, always emitted, zeroed when clean),
+// plus the rows derive() could not read: a snapshot that lost tabs says so
+// instead of quietly reporting fewer.
+function degraded(s) {
+  const t = s.stats || {}, parts = [];
+  if (t.dropped_tabs) parts.push(plural(t.dropped_tabs, 'tab') + ' dropped');
+  if (t.unknown_commands) parts.push(plural(t.unknown_commands, 'unknown record'));
+  if (t.malformed_commands) parts.push(plural(t.malformed_commands, 'malformed record'));
+  if (t.truncated_bytes) parts.push(plural(t.truncated_bytes, 'byte') + ' truncated');
+  if (t.marker_ok === false) parts.push('no end marker');
+  if (s.bad) parts.push(plural(s.bad, 'unreadable tab row'));
+  if (!parts.length && t.degraded) parts.push('parse degraded');
+  return parts.join(', ');
+}
 
 // ---- 4. Pages view ---------------------------------------------------------
 function compute() {
   const words = S.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const wantForgotten = S.status === 'forgotten';
   const d = S.domain.trim().toLowerCase(), exact = d && S.pages.some((p) => p.domain === d);
-  S.shown = S.pages.filter((p) => p.forgotten === wantForgotten && (!d || (exact ? p.domain === d : p.domain.includes(d)))
+  const g = S.group.trim().toLowerCase(), gexact = g && S.groups.has(g);
+  S.shown = S.pages.filter((p) => p.n && p.forgotten === wantForgotten && (!d || (exact ? p.domain === d : p.domain.includes(d)))
+    && (!g || p.gs.some((t) => (gexact ? t === g : t.includes(g))))
     && (S.status !== 'open' || p.open) && (S.status !== 'closed' || !p.open)
     && words.every((w) => p.hay.includes(w))).sort(SORTS[S.sort]);
 }
@@ -79,47 +117,71 @@ function bandOf(p) {
   if (S.sort === 'first') return F.month.format(S.snaps[p.first].date);
   return '';
 }
+// A group mark: a dot in the group's colour and its name. Nothing else on the
+// page takes the colour, so nine of them can coexist with the one accent.
+function grpHTML(g, btn, state) {
+  if (!g) return '';
+  const label = g.title ? `Group: ${esc(g.title)}` : `Unnamed ${esc(g.colour)} group`;
+  btn = btn && !!g.title;                         // an unnamed group cannot be typed into the filter
+  const tag = btn ? `button type="button" tabindex="-1" data-act="group" aria-label="Only ${label}"` : 'span';
+  return `<${tag} class="grp" data-c="${esc(g.colour)}" title="${label}">${esc(g.title)}${state && g.collapsed ? '<small>collapsed</small>' : ''}</${btn ? 'button' : 'span'}>`;
+}
+function titleHTML(p) {
+  const inner = p.title ? esc(p.title) : '<i>untitled</i>';
+  return p.link ? `<a class="t" dir="auto" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" tabindex="-1">${inner}</a>` : `<span class="t" dir="auto">${inner}</span>`;
+}
 function rowHTML(p) {
   const s = S.snaps[p.last], y = s.date.getUTCFullYear() !== S.snaps.at(-1).date.getUTCFullYear();
   return `<li class="row${p.open ? ' open' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
     `<span class="pick"><input type="checkbox" tabindex="-1" aria-label="Select"${S.sel.has(p.i) ? ' checked' : ''}></span>` +
-    `<span class="body"><a class="t" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" tabindex="-1">${p.title ? esc(p.title) : '<i>untitled</i>'}</a><span class="u">${esc(p.addr)}</span></span>` +
+    `<span class="body">${titleHTML(p)}<span class="u">${esc(p.addr)}</span>${grpHTML(p.grp, true)}</span>` +
     `<span class="strip" title="Seen in ${p.n} of ${S.snaps.length} snapshots"></span><span class="n">${p.n}</span>` +
     `<time class="last" datetime="${s.captured_at}">${(y ? F.dayYear : F.day).format(s.date)}</time>` +
     `<button class="more" type="button" tabindex="-1" aria-label="History" aria-expanded="${S.exp.has(p.i)}">›</button>` +
     (S.exp.has(p.i) ? histHTML(p) : '') + '</li>';
 }
 function histHTML(p) {
-  const sightings = p.seen.map(([k, w, tid, pos]) => { const s = S.snaps[k];
-    return `<li><a href="#snapshot/${esc(s.id)}/${tid}">${F.full.format(s.date)}</a><span>window ${w} · tab ${pos + 1}</span></li>`; }).reverse();
-  const act = p.forgotten ? '<button type="button" data-act="restore">Restore</button>' : '<button type="button" data-act="forget">Forget</button>';
+  const sightings = p.seen.map(([k, w, tid, pos, g]) => { const s = S.snaps[k];
+    return `<li><a href="#snapshot/${esc(s.id)}/${tid}">${F.full.format(s.date)}</a><span>window ${w} · tab ${pos + 1}</span>${grpHTML(g)}</li>`; }).reverse();
+  const groups = p.gs.length ? ` · in ${p.gs.length === 1 ? 'group' : 'groups'} ${p.gs.map((t) => esc(S.groups.get(t).title)).join(', ')}` : '';
+  const act = p.forgotten ? '<button type="button" data-act="restore">Restore</button><span class="ro">Puts it back in the library.</span>'
+    : '<button type="button" data-act="forget">Forget</button><span class="ro">Hides it from the library. The snapshots themselves are never touched.</span>';
   const ro = `<span class="ro">Read-only export · to hide this page: <code>knowmoretabs forget '${esc(p.url)}'</code></span>`;
   return `<div class="hist"><p class="full">${esc(p.url)}</p>` +
-    `<p class="sum">Seen in ${p.n} of ${S.snaps.length} snapshots · first ${F.dayYear.format(S.snaps[p.first].date)} · last ${F.dayYear.format(S.snaps[p.last].date)}${p.open ? ' · open now' : ''}</p>` +
-    `<ol>${sightings.join('')}</ol><p class="acts"><button type="button" data-act="domain">Only ${esc(p.domain)}</button><button type="button" data-act="copy">Copy URL</button>${host.forget ? act : ro}</p></div>`;
+    `<p class="sum">Seen in ${p.n} of ${S.snaps.length} snapshots · first ${F.dayYear.format(S.snaps[p.first].date)} · last ${F.dayYear.format(S.snaps[p.last].date)}${p.open ? ' · open now' : ''}${groups}</p>` +
+    `<ol>${sightings.join('')}</ol><p class="acts">${p.domain ? `<button type="button" data-act="domain">Only ${esc(p.domain)}</button>` : ''}<button type="button" data-act="copy">Copy URL</button>${host.forget ? act : ro}</p></div>`;
 }
 function render() {
   const t0 = performance.now();
   compute();
-  let html = '', band = null;
+  // "Open now" folds to its first rows when nothing is filtered, so the archive
+  // starts on screen. Any filter, or "show all", unfolds it.
+  const plain = S.sort === 'last' && S.status === '' && !S.q.trim() && !S.domain.trim() && !S.group.trim();
+  const fold = (n, all) => `<li class="fold"><button type="button" id="fold">${all ? `Show all ${plural(n, 'open page')}` : 'Show fewer'}</button></li>`;
+  let html = '', band = null, inBand = 0, tail = '';
+  const nOpen = plain ? S.shown.filter((x) => x.open).length : 0;
+  S.rendered = [];
   for (const p of S.shown) {
     const b = bandOf(p);
-    if (b !== band) { html += (band === null ? '' : '</ol></section>') + `<section class="band">${b ? `<h3>${esc(b)}<small>${num.format(S.shown.filter((x) => bandOf(x) === b).length)}</small></h3>` : ''}<ol>`; band = b; }
-    html += rowHTML(p);
+    if (b !== band) { html += (band === null ? '' : tail + '</ol></section>') + `<section class="band">${b ? `<h3>${esc(b)}<small>${num.format(S.shown.filter((x) => bandOf(x) === b).length)}</small></h3>` : ''}<ol>`; band = b; inBand = 0; tail = ''; }
+    if (plain && p.open && ++inBand > FOLD) { tail = fold(nOpen, !S.openAll); if (!S.openAll) continue; }
+    S.rendered.push(p); html += rowHTML(p);
   }
   const list = $('list');
-  list.innerHTML = html + (band === null ? '' : '</ol></section>');
+  list.innerHTML = html + (band === null ? '' : tail + '</ol></section>');
   const strips = list.querySelectorAll('.strip');                 // CSSOM, because CSP forbids style attributes
-  S.shown.forEach((p, i) => strips[i].style.setProperty('--g', p.g));
-  if (S.shown.length && !list.querySelector('.row.cur')) list.querySelector('.row').tabIndex = 0;
-  const total = S.pages.filter((p) => !p.forgotten).length, n = S.shown.length;
-  $('count').textContent = S.status === 'forgotten' ? `${num.format(n)} forgotten ${n === 1 ? 'page' : 'pages'}` : n === total ? `All ${num.format(total)} pages` : `${num.format(n)} of ${num.format(total)} pages`;
+  S.rendered.forEach((p, i) => strips[i].style.setProperty('--g', p.g));
+  if (S.rendered.length && !list.querySelector('.row.cur')) list.querySelector('.row').tabIndex = 0;
+  const total = S.pages.filter((p) => p.n && !p.forgotten).length, n = S.shown.length;
+  $('count').textContent = S.status === 'forgotten' ? `${plural(n, 'forgotten page')}` : n === total ? `All ${plural(total, 'page')}` : `${num.format(n)} of ${plural(total, 'page')}`;
   $('empty').hidden = n > 0;
+  $('empty-msg').textContent = total ? 'Nothing matches.' : 'No pages yet.';
+  $('empty-clear').hidden = !total;
   $('sel-all').hidden = !host.forget || !n;
   tray();
   const ms = performance.now() - t0;
   document.documentElement.dataset.renderMs = ms.toFixed(1);
-  console.info(`render ${n} rows in ${ms.toFixed(1)} ms`);
+  console.info(`render ${S.rendered.length} rows in ${ms.toFixed(1)} ms`);
 }
 function setSeg(id, v) { S[id] = v; for (const b of $(id).querySelectorAll('button')) b.setAttribute('aria-pressed', b.dataset.v === v); }
 let raf = 0;
@@ -149,7 +211,7 @@ function toggle(i, force) {
 }
 function select(i, on, shift) {
   if (shift && S.anchor >= 0) {
-    const order = S.shown.map((p) => p.i), a = order.indexOf(S.anchor), b = order.indexOf(i);
+    const order = S.rendered.map((p) => p.i), a = order.indexOf(S.anchor), b = order.indexOf(i);
     for (const j of order.slice(Math.min(a, b), Math.max(a, b) + 1)) on ? S.sel.add(j) : S.sel.delete(j);
   } else { on ? S.sel.add(i) : S.sel.delete(i); S.anchor = i; }
   for (const el of $('list').querySelectorAll('.row')) { const k = +el.dataset.i, sel = S.sel.has(k); el.classList.toggle('sel', sel); el.querySelector('.pick input').checked = sel; }
@@ -159,6 +221,7 @@ function tray() {
   const t = $('tray'); t.hidden = !S.sel.size;
   $('selcount').textContent = `${num.format(S.sel.size)} selected`;
   $('forget-sel').textContent = S.status === 'forgotten' ? 'Restore' : 'Forget';
+  $('tray-why').textContent = S.status === 'forgotten' ? 'Puts them back in the library.' : 'Hides them from the library. The snapshots themselves are never touched.';
 }
 
 // ---- 6. Forget / restore, with undo ---------------------------------------
@@ -167,9 +230,9 @@ async function apply(idxs, restore) {
   if (!host.forget) { const p = S.pages[idxs[0]]; return toast(`Read-only export. In a terminal: knowmoretabs forget '${p.url}'`, 'Copy', () => navigator.clipboard.writeText(`knowmoretabs forget '${p.url}'`)); }
   for (const i of idxs) S.pages[i].forgotten = !restore;
   S.sel.clear(); S.exp.clear(); render();
-  const all = rows(); if (all.length) setCursor(all[Math.min(all.length - 1, Math.max(0, S.shown.findIndex((p) => p.i >= idxs[0])))], false);
+  const all = rows(); if (all.length) setCursor(all[Math.min(all.length - 1, Math.max(0, S.rendered.findIndex((p) => p.i >= idxs[0])))], false);
   S.undo = { idxs, restore };
-  toast(`${restore ? 'Restored' : 'Forgot'} ${idxs.length === 1 ? '1 page' : num.format(idxs.length) + ' pages'}`, 'Undo', undo);
+  toast(`${restore ? 'Restored' : 'Forgot'} ${plural(idxs.length, 'page')}`, 'Undo', undo);
   try { await (restore ? host.restore : host.forget)(idxs.map((i) => S.pages[i].url)); }
   catch (e) { for (const i of idxs) S.pages[i].forgotten = restore; render(); toast(`Could not reach the server (${e.message}); nothing changed.`); }
 }
@@ -184,25 +247,26 @@ const targets = () => (S.sel.size ? [...S.sel] : S.cur >= 0 ? [S.cur] : []);
 
 // ---- 7. Snapshots view -----------------------------------------------------
 function renderSnapshots() {
-  const max = Math.max(...S.snaps.map((s) => s.tabs_total));
-  $('snaps-body').innerHTML = S.snaps.slice().reverse().map((s) =>
-    `<tr><td><a href="#snapshot/${esc(s.id)}">${F.long.format(s.date)}</a> <span class="u">${F.time.format(s.date)} UTC</span></td>` +
-    `<td class="num">${s.windows}</td><td class="bar-cell"><span class="num">${s.tabs_total}</span><span class="tabs-bar" data-w="${Math.round(100 * s.tabs_total / max)}"></span></td>` +
-    `<td class="num">${s.fresh}</td><td class="num">${s.gone}</td></tr>`).join('');
+  const max = Math.max(1, ...S.snaps.map((s) => s.tabs_total));
+  $('snaps-empty').hidden = S.snaps.length > 0;
+  $('snaps-body').innerHTML = S.snaps.slice().reverse().map((s) => { const d = degraded(s);
+    return `<tr><td><a href="#snapshot/${esc(s.id)}">${F.long.format(s.date)}</a> <span class="u">${F.time.format(s.date)} UTC</span></td>` +
+    `<td class="num">${s.windows}</td><td class="bar-cell"><span class="num">${s.tabs_total}</span><span class="tabs-bar" data-w="${Math.round(100 * s.tabs_total / max)}"></span>${d ? `<span class="warn">incomplete: ${d}</span>` : ''}</td>` +
+    `<td class="num">${s.fresh}</td><td class="num">${s.gone}</td></tr>`; }).join('');
   for (const b of $('snaps-body').querySelectorAll('.tabs-bar')) b.style.width = `${b.dataset.w * 0.6}%`;
 }
 function renderSnapshot(id, tab) {
   const s = S.snaps.find((x) => x.id === id); if (!s) return showView('snapshots');
   const wins = new Map();
   for (const t of s.tabs) { if (!wins.has(t[1])) wins.set(t[1], []); wins.get(t[1]).push(t); }
-  const groups = s.groups || [];
+  const d = degraded(s);
   $('snap-title').textContent = F.long.format(s.date) + ', ' + F.time.format(s.date) + ' UTC';
-  $('snap-meta').textContent = `${num.format(s.tabs_total)} tabs in ${wins.size} windows · ${s.browser} / ${s.profile} · ${s.fresh} pages first seen here`;
-  $('snap-body').innerHTML = [...wins].sort((a, b) => a[0] - b[0]).map(([w, tabs]) => `<section class="win"><h3>Window ${w}<small>${tabs.length} tabs</small></h3><ol>` +
-    tabs.sort((a, b) => a[2] - b[2]).map(([pi, , pos, tid, pin, g]) => { const p = S.pages[pi], grp = g != null && groups[g];
+  $('snap-meta').textContent = `${plural(s.tabs_total, 'tab')} in ${plural(s.windows || wins.size, 'window')}${s.groups.length ? ', ' + plural(s.groups.length, 'group') : ''} · ${s.browser || 'unknown browser'} / ${s.profile || 'unknown profile'} · ${s.fresh} pages first seen here${d ? ' · incomplete: ' + d : ''}`;
+  $('snap-body').innerHTML = [...wins].sort((a, b) => a[0] - b[0]).map(([w, tabs]) => `<section class="win"><h3>Window ${w}<small>${plural(tabs.length, 'tab')}</small></h3><ol>` +
+    tabs.sort((a, b) => a[2] - b[2]).map(([pi, , pos, tid, pin, g]) => { const p = S.pages[pi];
       return `<li class="row${tid === +tab ? ' target' : ''}" id="t-${tid}" data-i="${pi}" tabindex="-1"><span class="pos">${pos + 1}</span>` +
-        `<span class="body"><a class="t" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" tabindex="-1">${p.title ? esc(p.title) : '<i>untitled</i>'}</a><span class="u">${esc(p.addr)}</span></span>` +
-        `<span>${grp ? `<span class="chip">${esc(grp.title)}</span>` : ''}</span><span>${pin ? '<span class="chip pin">pinned</span>' : ''}</span>` +
+        `<span class="body">${titleHTML(p)}<span class="u">${esc(p.addr)}</span></span>` +
+        `<span>${grpHTML(g == null ? null : s.groups[g], false, true)}</span><span>${pin ? '<span class="chip pin">pinned</span>' : ''}</span>` +
         `<a class="more" href="#pages/${pi}" tabindex="-1" aria-label="Show in library">${p.n}×</a></li>`; }).join('') + '</ol></section>').join('');
   const target = tab && $('t-' + tab);
   if (target) { setCursor(target); target.scrollIntoView({ block: 'center' }); }
@@ -219,17 +283,20 @@ function route() {
   const [view, a, b] = location.hash.slice(1).split('/');
   if (view === 'snapshot' && a) { showView('snapshot'); renderSnapshot(decodeURIComponent(a), b); }
   else if (view === 'snapshots') showView('snapshots');
-  else { showView('pages'); if (a !== undefined && S.pages[a]) reveal(+a); }
+  else { showView('pages'); if (a !== undefined && S.pages[a]?.n) reveal(+a); }
 }
+function clearFilters(status = '') { S.q = $('q').value = ''; S.domain = $('domain').value = ''; S.group = $('group').value = ''; setSeg('status', status); }
 function reveal(i) {
   const p = S.pages[i];
-  if (!S.shown.includes(p)) { S.q = $('q').value = ''; S.domain = $('domain').value = ''; setSeg('status', p.forgotten ? 'forgotten' : ''); render(); }
+  if (!S.shown.includes(p)) { clearFilters(p.forgotten ? 'forgotten' : ''); render(); }
+  if (!rowOf(i)) { S.openAll = true; render(); }   // it was behind the fold
   toggle(i, true); setCursor(rowOf(i)); rowOf(i).scrollIntoView({ block: 'center' });
 }
 
 // ---- 9. Wiring -------------------------------------------------------------
 function keys(e) {
   const t = e.target, k = e.key;
+  if ($('help').open) return;                     // the dialog is modal; esc closes it natively
   if (k === 'Escape' && isForm(t)) { if (t.value) { t.value = ''; t.dispatchEvent(new Event('input')); } else t.blur(); return; }
   if (isForm(t)) { if ((k === 'ArrowDown' || k === 'Enter') && t.id === 'q') { e.preventDefault(); move(1); } return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -255,12 +322,12 @@ function keys(e) {
 }
 function wire() {
   document.body.dataset.mode = host.mode;
-  $('q').addEventListener('input', (e) => { S.q = e.target.value; schedule(); });
-  $('domain').addEventListener('input', (e) => { S.domain = e.target.value; schedule(); });
+  for (const id of ['q', 'domain', 'group']) $(id).addEventListener('input', (e) => { S[id] = e.target.value; schedule(); });
   for (const id of ['status', 'sort']) $(id).addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { setSeg(id, b.dataset.v); render(); } });
-  $('reset').addEventListener('click', () => { S.q = $('q').value = ''; S.domain = $('domain').value = ''; setSeg('status', ''); render(); });
+  $('reset').addEventListener('click', () => { clearFilters(); render(); });
   $('empty-clear').addEventListener('click', () => $('reset').click());
   $('list').addEventListener('click', (e) => {
+    if (e.target.id === 'fold') { S.openAll = !S.openAll; render(); if (S.openAll) setCursor(rows()[FOLD]); else $('fold').focus(); return; }
     const row = e.target.closest('.row'); if (!row) return; const i = +row.dataset.i;
     if (e.target.matches('.pick input')) return select(i, e.target.checked, e.shiftKey);
     if (e.target.closest('a')) return;
@@ -269,6 +336,7 @@ function wire() {
     if (!act) { if (!window.getSelection().toString()) toggle(i); return; }
     const p = S.pages[i];
     if (act.dataset.act === 'domain') { S.domain = $('domain').value = S.domain === p.domain ? '' : p.domain; render(); }
+    if (act.dataset.act === 'group') { const t = p.grp.title; S.group = $('group').value = S.group.toLowerCase() === t.toLowerCase() ? '' : t; render(); }
     if (act.dataset.act === 'copy') navigator.clipboard.writeText(p.url).then(() => toast('URL copied'));
     if (act.dataset.act === 'forget') apply([i], false);
     if (act.dataset.act === 'restore') apply([i], true);
@@ -277,7 +345,7 @@ function wire() {
   $('view-snapshot').addEventListener('focusin', (e) => { const row = e.target.closest('.row'); if (row) setCursor(row, false); });
   $('forget-sel').addEventListener('click', () => apply([...S.sel], S.status === 'forgotten'));
   $('clear-sel').addEventListener('click', () => { S.sel.clear(); select(-1, false); });
-  $('sel-all').addEventListener('click', () => { for (const p of S.shown) S.sel.add(p.i); select(-1, false); });
+  $('sel-all').addEventListener('click', () => { for (const p of S.rendered) S.sel.add(p.i); select(-1, false); });
   $('help-close').addEventListener('click', () => $('help').close());
   document.addEventListener('keydown', keys);
   window.addEventListener('hashchange', route);
@@ -285,19 +353,30 @@ function wire() {
 async function main() {
   wire();
   let lib;
-  try { lib = await host.load(); } catch (e) { $('card').textContent = `Could not load the library (${e.message}).`; return; }
-  derive(lib);
-  const first = S.snaps[0].date, last = S.snaps.at(-1).date, domains = new Map();
-  for (const p of S.pages) if (!p.forgotten) domains.set(p.domain, (domains.get(p.domain) || 0) + 1);
-  $('card').innerHTML = `<b>${num.format(S.pages.length - (S.stats.forgotten || 0))} pages</b> across <b>${S.snaps.length} snapshots</b>, ${F.dayYear.format(first)} to ${F.dayYear.format(last)}. ${num.format(domains.size)} sites; ${num.format(S.pages.filter((p) => p.n === S.snaps.length).length)} pages present in every snapshot.`;
-  $('domains').innerHTML = [...domains].sort((a, b) => b[1] - a[1]).map(([d, n]) => `<option value="${esc(d)}">${n} pages</option>`).join('');
+  try { lib = await host.load(); derive(lib); } catch (e) { $('card').textContent = `Could not load the library (${e.message}).`; return; }
+  // Forgotten pages are counted by their flag: export omits them from pages[],
+  // serve includes them flagged, and either way this is the number on the shelf.
+  const n = S.snaps.length, total = S.pages.filter((p) => p.n && !p.forgotten).length, domains = new Map();
+  for (const p of S.pages) if (p.n && !p.forgotten && p.domain) domains.set(p.domain, (domains.get(p.domain) || 0) + 1);
+  if (!n) {
+    $('card').innerHTML = 'Nothing here yet. Run <code>knowmoretabs save</code> to capture what is open now; the library builds itself from there.';
+  } else {
+    const first = S.snaps[0].date, last = S.snaps.at(-1).date, sameDay = F.dayYear.format(first) === F.dayYear.format(last);
+    const every = S.pages.filter((p) => p.n === n && !p.forgotten).length;
+    $('card').innerHTML = `<b>${plural(total, 'page')}</b> across <b>${plural(n, 'snapshot')}</b>, ${sameDay ? 'taken ' : ''}${F.dayYear.format(first)}${sameDay ? '' : ' to ' + F.dayYear.format(last)}. ` +
+      `${plural(domains.size, 'site')}${n > 1 && total ? `; ${num.format(every)} ${every === 1 ? 'page' : 'pages'} present in every snapshot` : ''}.`;
+  }
+  $('domains').innerHTML = [...domains].sort((a, b) => b[1] - a[1]).map(([d, k]) => `<option value="${esc(d)}">${plural(k, 'page')}</option>`).join('');
+  $('group-l').hidden = !S.groups.size;
+  $('groups').innerHTML = [...S.groups.values()].sort((a, b) => b.n - a.n).map((g) => `<option value="${esc(g.title)}">${plural(g.n, 'page')}</option>`).join('');
   if (host.forget) {
     $('status').insertAdjacentHTML('beforeend', '<button type="button" data-v="forgotten" aria-pressed="false">Forgotten</button>');
     $('mode-note').textContent = 'Live — served by knowmoretabs on this machine. Forgetting hides a page; snapshots are never changed.';
   } else {
     const f = S.stats.forgotten || 0;
-    $('mode-note').textContent = `Offline copy, exported ${F.full.format(new Date(lib.generated_at || last))} UTC.` + (f ? ` ${f} forgotten ${f === 1 ? 'page is' : 'pages are'} not included.` : '');
+    $('mode-note').textContent = `Offline copy, exported ${F.full.format(new Date(lib.generated_at || Date.now()))} UTC.` + (f ? ` ${f} forgotten ${f === 1 ? 'page is' : 'pages are'} not included.` : '');
   }
+  if (S.skipped) $('mode-note').textContent += ` ${plural(S.skipped, 'snapshot')} in the data could not be read.`;
   renderSnapshots();
   render();
   route();
