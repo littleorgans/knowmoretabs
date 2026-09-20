@@ -1,0 +1,240 @@
+# The vertical slice matrix.
+#
+# Rows are what someone wants. Slices are vertical cuts that deliver those rows
+# end to end — CLI through parsing and storage to the rendered page — each one
+# shippable on its own. The `future` band is what we have deliberately not
+# built; it is there so that "not yet" is a recorded decision rather than an
+# oversight.
+#
+# This file is the single source of truth. `docs/SLICES.md` is generated from
+# it and `cargo xtask slices` enforces that source files agree with it. Never
+# hand-edit the generated file.
+
+[matrix]
+title = "knowmoretabs"
+tagline = "Every tab you ever had open, kept and searchable."
+
+# --- What people want -------------------------------------------------------
+
+[[capability]]
+id = "save-now"
+want = "Save what's open right now, in one command"
+
+[[capability]]
+id = "never-lose"
+want = "Never lose a snapshot to a crash or a half-written file"
+
+[[capability]]
+id = "survive-updates"
+want = "Keep working when my browser changes its format"
+
+[[capability]]
+id = "offline-forever"
+want = "Read my archive offline, years from now"
+
+[[capability]]
+id = "find-old-page"
+want = "Find a page I had open months ago"
+
+[[capability]]
+id = "when-and-where"
+want = "See when and where a page was open"
+
+[[capability]]
+id = "forget-pages"
+want = "Forget pages I don't want to see again"
+
+[[capability]]
+id = "triage-in-bulk"
+want = "Clear a backlog without touching the terminal"
+
+[[capability]]
+id = "my-browser"
+want = "Use the browser I actually use"
+
+[[capability]]
+id = "my-platform"
+want = "Use it on my Linux box or my work Windows machine"
+
+[[capability]]
+id = "easy-install"
+want = "Install it without installing a toolchain first"
+
+# --- Build order ------------------------------------------------------------
+
+[[slice]]
+id = "capture"
+number = 1
+title = "Capture a snapshot"
+status = "planned"
+delivers = ["save-now", "never-lose", "survive-updates"]
+depends_on = []
+ships = """
+`knowmoretabs save` finds the newest Chrome session on macOS, parses it, and
+writes an immutable dated snapshot: the tabs as JSON plus a verbatim copy of
+the session file. A session matching the previous snapshot is skipped. An
+interrupted run leaves the archive exactly as it was.
+"""
+intent = """
+The tracer bullet. Everything downstream reads what this writes, so its data
+model and its durability guarantees are the two decisions hardest to change
+later. The project's foundation — workspace, lints, CI, the slice lint itself —
+rides along here rather than becoming a horizontal slice of its own.
+"""
+
+[[slice]]
+id = "library"
+number = 2
+title = "The offline library"
+status = "planned"
+delivers = ["offline-forever", "find-old-page", "when-and-where"]
+depends_on = ["capture"]
+ships = """
+`knowmoretabs export` writes a static site: every page you have ever had open,
+listed once, with search, filters and a per-page history of the snapshots and
+windows it appeared in. `knowmoretabs list` shows the same from the terminal.
+Opens from `file://` with no server and no network.
+"""
+intent = """
+This is where a pile of snapshots becomes a thing worth having. The frontend
+built here is the same frontend slice 3 serves, so it is written to work
+against either an embedded JSON blob or a fetch — one renderer, two hosts.
+"""
+
+[[slice]]
+id = "triage"
+number = 3
+title = "Serve and triage"
+status = "planned"
+delivers = ["forget-pages", "triage-in-bulk"]
+depends_on = ["library"]
+ships = """
+`knowmoretabs serve` runs the library on 127.0.0.1 with the same assets and a
+small JSON API. Forget and restore become real buttons with bulk selection and
+undo. The `forget` and `restore` CLI commands do the same thing headlessly.
+Snapshots are never touched: forgetting hides a page, it does not delete it.
+"""
+intent = """
+The reason the project stopped being a script. Every feature asked for so far
+points at a button on the page, and a button needs somewhere to POST to.
+"""
+
+[[slice]]
+id = "browsers"
+number = 4
+title = "The browser you actually use"
+status = "planned"
+delivers = ["my-browser"]
+depends_on = ["capture"]
+ships = """
+Brave, Edge, Chromium, Vivaldi and Arc alongside Chrome, with profile discovery
+and `--browser` / `--profile`. Tab groups recovered where the format allows,
+because groups are how people actually organise a hundred tabs.
+"""
+intent = """
+Pure reach. It is slice 4 rather than slice 1 because a second browser teaches
+you nothing the first one did not, and it is cheap once the browser table is
+the only thing that varies.
+"""
+
+[[slice]]
+id = "platforms"
+number = 5
+title = "Linux and Windows"
+status = "planned"
+delivers = ["my-platform"]
+depends_on = ["browsers"]
+ships = """
+Session discovery on Linux and Windows, path handling that survives both, and
+a CI matrix that proves it rather than assuming it.
+"""
+intent = """
+Deferred this far because every platform doubles the CI bill and none of it is
+testable without a real profile on a real machine. Doing it after the browser
+table exists means one table gains a column, not three code paths.
+"""
+
+[[slice]]
+id = "release"
+number = 6
+title = "Install it in one line"
+status = "planned"
+delivers = ["easy-install"]
+depends_on = ["platforms"]
+ships = """
+Tagged releases with prebuilt binaries for macOS, Linux and Windows, a
+changelog, install instructions that do not begin with "first install Rust",
+and a crate ready to publish.
+"""
+intent = """
+A personal tool published openly still has to be installable by someone who
+does not care what it is written in. Publishing to a registry is a separate,
+explicit decision — this slice builds the machinery and leaves the trigger
+unpulled.
+"""
+
+# --- Prepared for, deliberately not built -----------------------------------
+
+[[future]]
+id = "live-tabs"
+want = "See live tabs, not the last session written to disk"
+prepared_by = ["capture", "browsers"]
+why_not_now = """
+Needs a browser extension. An extension sees live tabs and groups on every
+Chromium browser, but it cannot recover anything after a crash — which is the
+reason this project exists. It belongs as a second source alongside session
+files, never as a replacement. The capture layer keeps its source abstract so
+that adding one later is additive.
+"""
+
+[[future]]
+id = "notes-tags"
+want = "Tag a page and write myself a note about it"
+prepared_by = ["triage"]
+why_not_now = """
+`library.json` already carries per-URL user state; forgetting is the first and
+most-wanted instance of it. Tags earn their place once triage is in daily use
+and the shape of what people want to record is known, rather than guessed.
+"""
+
+[[future]]
+id = "fulltext"
+want = "Search what was on the page, not just its title"
+prepared_by = []
+why_not_now = """
+Means fetching and storing page bodies: network traffic, a much larger archive,
+and a privacy story that changes completely. Titles and URLs answer most
+searches. This is a different product until proven otherwise.
+"""
+
+[[future]]
+id = "scale-index"
+want = "Stay instant with years of snapshots"
+prepared_by = ["library", "triage"]
+why_not_now = """
+Fifty snapshots of three hundred tabs is fifteen thousand rows; reading JSON
+into memory is instant and costs no dependency, no migration and no corruption
+mode. A rebuildable SQLite index is the answer when a measured query is slow,
+and the JSON snapshots stay the source of truth when it arrives.
+"""
+
+[[future]]
+id = "close-live-tabs"
+want = "Close the tabs I have triaged, in the browser"
+prepared_by = []
+why_not_now = """
+Requires driving the live browser, and makes a read-only tool capable of
+destroying the thing it archives. If it is ever built it is opt-in, explicit,
+and only after a snapshot has been taken.
+"""
+
+[[future]]
+id = "encrypted-archive"
+want = "Keep the archive encrypted at rest"
+prepared_by = ["capture"]
+why_not_now = """
+The archive is a record of everything you browse. Today it is protected by
+0700 and by never leaving the machine. Encryption means key management, which
+means a way to lock yourself out of your own history. Worth doing properly or
+not at all.
+"""
