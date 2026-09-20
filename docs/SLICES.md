@@ -22,7 +22,7 @@
 
 ## Build order
 
-### 1. Capture a snapshot (`capture`) — planned
+### 1. Capture a snapshot (`capture`) — done
 
 - Delivers: save-now, never-lose, survive-updates
 - Depends on: —
