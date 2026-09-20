@@ -11,22 +11,24 @@ you have ever had open. Nothing leaves your machine.
 It works with Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and
 Vivaldi, on macOS, Linux and Windows.
 
-## Before you depend on it
-
-Chrome is moving its session files to an encrypted format that this tool
-cannot read. Today Chrome writes both the cleartext files `knowmoretabs`
-reads and the encrypted ones; at some future update it will stop writing the
-cleartext copy. When that happens, `knowmoretabs save` notices that the
-cleartext files have gone stale and **refuses to save**, with exit status 3,
-rather than reporting months-old tabs as current. Your archive stays intact
-and searchable; new snapshots stop until there is a second way to see your
-tabs. Google has not published a date. The detail, and why decrypting is the
-wrong answer for a tool that asks for no browser secrets, is in
-[`docs/research/encrypted-sessions.md`](docs/research/encrypted-sessions.md).
-
 ## Install
 
-Prebuilt binaries for each tagged release are on the
+With a Rust toolchain (1.89 or newer), one command builds it from the
+repository and puts it on your `PATH`:
+
+```
+cargo install --git https://github.com/littleorgans/knowmoretabs knowmoretabs
+```
+
+Or clone the repository and run `cargo build --release`; the binary is
+`target/release/knowmoretabs`, and it depends on nothing else.
+
+Nothing is tagged yet: the prebuilt binaries and the crates.io package
+described next arrive with v0.1.0, and until then the repository is the only
+source.
+
+Each tagged release publishes the crate, so `cargo install knowmoretabs`
+works without cloning, and puts prebuilt binaries on the
 [Releases](https://github.com/littleorgans/knowmoretabs/releases) page:
 
 | Platform | Archive |
@@ -37,7 +39,7 @@ Prebuilt binaries for each tagged release are on the
 | Linux, ARM64 | `knowmoretabs-<version>-aarch64-unknown-linux-gnu.tar.gz` |
 | Windows, x86-64 | `knowmoretabs-<version>-x86_64-pc-windows-msvc.zip` |
 
-Unpack it and put the `knowmoretabs` binary somewhere on your `PATH`. Each
+Unpack one and put the `knowmoretabs` binary somewhere on your `PATH`. Each
 archive also carries this README, the changelog and both licence files, and
 `SHA256SUMS` on the release page lets you check what you downloaded:
 
@@ -50,13 +52,6 @@ through a browser; either download with `curl`, which sets no quarantine
 flag, or clear it with `xattr -d com.apple.quarantine knowmoretabs`. The
 Linux binaries are built on Ubuntu 24.04 against its glibc; if one refuses
 to start on an older distribution, build from source instead.
-
-If you already have a Rust toolchain (1.89 or newer):
-
-```
-cargo install knowmoretabs                                        # from crates.io
-cargo install --git https://github.com/littleorgans/knowmoretabs  # from the repository
-```
 
 ## The two commands that matter
 
@@ -188,6 +183,52 @@ honoured for Chrome and Chromium. If a browser was launched with its own
 `--user-data-dir`, `chrome://version` shows the profile path; pass its
 parent as `--user-data-dir`.
 
+## Chrome is encrypting its session files
+
+`knowmoretabs` reads the cleartext session file that Chromium browsers have
+always written to disk. Chrome is moving that file to an encrypted format this
+tool does not read, and will not: decrypting it means asking the operating
+system for Chrome's keys, and the point of this tool is that it asks for
+nothing. Today Chrome writes both formats, the cleartext one still carries
+every tab, and `save` works as described above. At some future update Chrome
+will stop writing the cleartext file. Google has published no date.
+
+When that happens, `save` notices that the cleartext files are older than the
+encrypted ones and refuses, with exit status 3, rather than reporting
+months-old tabs as current. Nothing else changes. Every snapshot you have is
+kept, `serve` and `export` keep working, and new snapshots stop until there
+is a second way to see your tabs.
+
+The second way is a browser extension. It is designed and not built; the
+design is in
+[`docs/research/native-messaging.md`](docs/research/native-messaging.md).
+The two sources see different things:
+
+- **A session file** is what the browser has flushed to disk. It can be read
+  after a crash and with the browser closed, and the verbatim copy in each
+  snapshot holds every tab's back-and-forward list. It lags the screen by
+  however long since the last flush, and it is the one with the clock on it.
+- **An extension** asks the running browser what is open. It keeps working
+  after Chrome encrypts session storage, on Chrome, Brave, Edge, Vivaldi and
+  Chromium, and it sees favicons, window state and which tabs are actually
+  loaded. It sees only what is open at that moment: nothing from before a
+  crash, nothing while the browser is closed, and one URL per tab.
+
+An extension also changes who runs what. Stable Chrome has no supported way
+for a command-line process to pull tabs out of the browser, so the extension
+would push snapshots on its own schedule, and `save`, run by hand or from
+cron, could not obtain live tabs. Installing it would mean a permission
+prompt that reads "Read your browsing history", and a listing on the Chrome
+Web Store.
+
+It is not built yet because the clock has no date, `save` already detects the
+moment, and building a store listing and an install step for seven browsers
+on three platforms ahead of a migration that may be several releases away is
+the wrong order. What would start it is the detector firing on a real
+profile, or Chromium's default advancing past writing both formats in a
+stable release. Why decrypting is not the answer is in
+[`docs/research/encrypted-sessions.md`](docs/research/encrypted-sessions.md).
+
 ## Non-goals
 
 No sync. No accounts. No cloud. No telemetry. No browser extension (for
@@ -201,9 +242,9 @@ Each of these is a recorded decision, with its reasoning in
 [`slices.toml`](slices.toml) and [`docs/SLICES.md`](docs/SLICES.md).
 
 - **Live tabs, not the last session written to disk.** Needs a browser
-  extension, and an extension cannot recover anything after a crash. It
-  belongs as a second source beside session files, and it is also the real
-  answer to the encrypted-sessions clock above.
+  extension, which sees what is open in the running browser and nothing from
+  before a crash. Designed as a second source beside session files; for tabs
+  that are open when it runs, it answers the encrypted-sessions clock above.
 - **Arc.** Its open tabs live in a proprietary sidebar file, not in the
   session log.
 - **Notes and tags on a page.** `library.json` is where they would go;
