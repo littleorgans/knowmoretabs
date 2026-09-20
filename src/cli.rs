@@ -17,7 +17,7 @@ use clap::{Args, Parser, Subcommand};
     name = "knowmoretabs",
     version,
     about = "Keep and search the browser tabs you have had open",
-    long_about = "Reads Chrome's own session file, saves a dated snapshot of every open \
+    long_about = "Reads a Chromium-family browser's own session file, saves a dated snapshot of every open \
 window and tab, and never overwrites an earlier one. With no subcommand, runs `save`.",
     after_help = "Exit status: 0 success; 1 error; 3 refused because Chrome's \
 encrypted session files are newer than the cleartext ones it still writes."
@@ -31,7 +31,11 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "FILE")]
     pub session: Option<PathBuf>,
 
-    /// Chrome profile: a directory name ("Profile 1") or its display name ("Work")
+    /// Browser id (chrome, chrome-beta, chrome-canary, chromium, brave, edge, or vivaldi)
+    #[arg(long, global = true, value_name = "NAME", conflicts_with = "session")]
+    pub browser: Option<String>,
+
+    /// Browser profile: a directory name ("Profile 1") or its display name ("Work")
     #[arg(long, global = true, value_name = "NAME", conflicts_with = "session")]
     pub profile: Option<String>,
 

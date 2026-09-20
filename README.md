@@ -3,10 +3,11 @@
 Every tab you ever had open, kept and searchable.
 
 You have a hundred tabs open. They are a to-do list you cannot read, a memory
-you cannot search, and one crash away from gone. `knowmoretabs` reads Chrome's
-own session file from disk, saves a dated snapshot of every open window and
-tab, and never overwrites an earlier one. Later, a local page lets you search
-everything you have ever had open.
+you cannot search, and one crash away from gone. `knowmoretabs` reads a
+Chromium-family browser's own session file from disk, saves a dated snapshot
+of every open window and tab, and never overwrites an earlier one. On macOS it
+supports Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and Vivaldi.
+Later, a local page lets you search everything you have ever had open.
 
 ## The two commands that matter
 
@@ -33,9 +34,12 @@ no change since 2026-09-20-084415Z: 113 tabs across 12 windows, 3 groups. Nothin
 ```
 
 Flags: `--root DIR` (where the archive lives), `--session FILE` (read a
-specific session file), `--profile NAME` (a Chrome profile directory or its
-display name), `--user-data-dir DIR` (a relocated Chrome), `--force`, `--json`,
-`-v`, `-q`. `--help` lists them all.
+specific session file), `--browser NAME`, `--profile NAME` (a browser profile
+directory or its display name), `--user-data-dir DIR` (a relocated Chromium
+user-data directory), `--force`, `--json`, `-v`, `-q`. With no browser flag,
+the newest supported `Session_*` file wins and the command names the other
+browsers it found. Arc is excluded because its open tabs live in a different
+file format. `--help` lists them all.
 
 Exit status is 0 when a snapshot was saved or nothing needed saving, 1 on an
 error, and 3 when the encrypted-sessions check below refuses to save.
@@ -96,8 +100,8 @@ the source of truth and readable in any editor. Each snapshot is written to a
 temporary directory and renamed into place in one step, so an interrupted run
 leaves the archive exactly as it was.
 
-A run whose window, tab and URL layout matches the newest snapshot for the
-same profile saves nothing. Titles and timestamps do not count as change.
+A run whose window, tab and URL layout matches the newest snapshot for the same
+browser and profile saves nothing. Titles and timestamps do not count as change.
 
 `library.json` is written the same way a snapshot is, staged and renamed in
 one step under the archive lock, so a forget that is interrupted, or two
@@ -107,7 +111,8 @@ rather than quietly showing pages you had hidden.
 
 ## What it reads
 
-Chrome keeps its open windows in `<profile>/Sessions/Session_<n>`, an
+Chromium-family browsers keep their open windows in
+`<profile>/Sessions/Session_<n>`, an
 append-only log of commands. `knowmoretabs` reads the newest one, copies it
 verbatim, and folds it the way Chrome's own session restore does. It records
 each tab's URL, title, window, position, pinned state, group (name, colour,
@@ -136,6 +141,12 @@ directory has emptied while the encrypted one has files, it refuses with a
 clear message and exit status 3. `--force` does not override this. There is
 no workaround yet; progress is tracked in the issue tracker.
 
+The check runs for every browser the no-flag scan considers. A browser whose
+cleartext has gone stale is ranked by its encrypted files, so if it is the one
+used most recently the run refuses rather than quietly saving another browser
+in its place; if another browser is newer, that one is saved and the stale
+browser is listed under "also found" with a note saying it would be refused.
+
 ## Non-goals
 
 No sync. No accounts. No cloud. No telemetry. No browser extension (for now).
@@ -145,10 +156,9 @@ own files: it reads and copies, nothing else.
 
 ## Scope today
 
-Chrome on macOS only for `save`; the library commands work anywhere the
-archive is. Other Chromium browsers and other platforms are later
-slices; see `docs/SLICES.md` for the build order and `docs/BRIEF.md` for the
-reasoning.
+The supported browser paths for `save` are macOS-only; Linux and Windows are
+the next platform slice. The library commands work anywhere the archive is.
+See `docs/SLICES.md` for the build order and `docs/BRIEF.md` for the reasoning.
 
 ## Development
 
