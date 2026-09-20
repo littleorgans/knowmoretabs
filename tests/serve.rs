@@ -847,14 +847,19 @@ fn assets_have_correct_types_and_no_network_implying_headers() {
 
 // --- Adversarial HTTP review -------------------------------------------------
 
+/// The timeouts are the same ten seconds `Server::raw` uses, and they are
+/// guards rather than measurements: no test here passes by being quick, so
+/// the only thing a tighter one could do is turn a busy runner into a
+/// failure. Tests that need a socket to go quiet for a moment, or to outlast
+/// the server's own deadline, say so on the socket themselves.
 fn review_socket(server: &Server) -> TcpStream {
     let stream = TcpStream::connect(("127.0.0.1", server.port)).unwrap();
     stream.set_nodelay(true).unwrap();
     stream
-        .set_read_timeout(Some(Duration::from_secs(2)))
+        .set_read_timeout(Some(Duration::from_secs(10)))
         .unwrap();
     stream
-        .set_write_timeout(Some(Duration::from_secs(2)))
+        .set_write_timeout(Some(Duration::from_secs(10)))
         .unwrap();
     stream
 }
@@ -889,6 +894,10 @@ fn review_head_boundaries_and_split_terminators() {
             "a".repeat(1024 - prefix.len() - split)
         );
         stream.write_all(&head.as_bytes()[..1024]).unwrap();
+        // An answer here would mean the server had decided on an unterminated
+        // head, and it holds the connection for ten seconds before it decides
+        // anything, so a hundred milliseconds of silence is a hundred
+        // milliseconds a loaded runner can only lengthen.
         stream
             .set_read_timeout(Some(Duration::from_millis(100)))
             .unwrap();
@@ -898,7 +907,7 @@ fn review_head_boundaries_and_split_terminators() {
             std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
         ));
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
+            .set_read_timeout(Some(Duration::from_secs(10)))
             .unwrap();
         stream.write_all(&head.as_bytes()[1024..]).unwrap();
         stream.shutdown(Shutdown::Write).unwrap();
@@ -1163,13 +1172,20 @@ fn review_request_deadline_covers_silent_and_dribbling_clients() {
         ] {
             let server = &server;
             scope.spawn(move || {
+                // Before the connection, so the server's own deadline cannot
+                // have started earlier than this clock did: the floor below
+                // is then a floor on the server's ten seconds, not on
+                // whatever was left of them by the time this thread ran.
+                let start = Instant::now();
                 let mut stream = review_socket(server);
+                // Longer than the ceiling this asserts, so a connection the
+                // server never ends fails on the assertion rather than on a
+                // socket timeout that reads like a slow machine.
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(12)))
+                    .set_read_timeout(Some(Duration::from_secs(25)))
                     .unwrap();
                 stream.write_all(head.as_bytes()).unwrap();
                 let done = AtomicBool::new(false);
-                let start = Instant::now();
                 std::thread::scope(|scope| {
                     if dribble {
                         let mut writer = stream.try_clone().unwrap();
@@ -1187,8 +1203,15 @@ fn review_request_deadline_covers_silent_and_dribbling_clients() {
                     let result = stream.read_to_end(&mut bytes);
                     done.store(true, Ordering::Relaxed);
                     result.unwrap();
-                    assert!(start.elapsed() >= Duration::from_secs(9));
-                    assert!(start.elapsed() < Duration::from_secs(12));
+                    let elapsed = start.elapsed();
+                    // The budget is ten seconds and it is one budget. The
+                    // floor says a dribbler was not hung up on early; the
+                    // ceiling says it bought nothing, and it sits between one
+                    // budget and the two a head and a body would cost if each
+                    // started its own — not up against the ten, where a busy
+                    // runner decides the verdict.
+                    assert!(elapsed >= Duration::from_secs(9), "ended at {elapsed:?}");
+                    assert!(elapsed < Duration::from_secs(15), "took {elapsed:?}");
                     if head.is_empty() {
                         assert!(bytes.is_empty());
                     } else {
@@ -1317,6 +1340,15 @@ fn review_stalled_body_and_response_never_hold_archive_lock() {
             )
             .as_bytes(),
         )
+        .unwrap();
+    // Waiting for that first byte is waiting for an eight-megabyte library to
+    // be read, built and serialized by a debug binary, which is slow and gets
+    // slower on a busy machine. Nothing is being timed: what the lock says at
+    // the moment the response starts is the same answer however long the
+    // server took to start it, so this guard is set where only a server that
+    // never answers can hit it.
+    reader
+        .set_read_timeout(Some(Duration::from_secs(60)))
         .unwrap();
     let mut byte = [0];
     assert_eq!(reader.peek(&mut byte).unwrap(), 1, "response started");

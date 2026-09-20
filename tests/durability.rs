@@ -103,7 +103,12 @@ fn a_kill_between_staging_and_rename_leaves_the_archive_untouched() {
         .env("KNOWMORETABS_PAUSE_BEFORE_PUBLISH", &ready)
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    // A rendezvous, not a measurement: the child either reaches the pause or
+    // exits, and the exit is noticed on the next turn of this loop, so the
+    // deadline is only ever reached by a child that is neither running nor
+    // finished. Spawning a debug binary on a loaded machine is not quick, and
+    // nothing about this test gets weaker by waiting for it.
+    let deadline = std::time::Instant::now() + Duration::from_secs(60);
     while !ready.exists() {
         if std::time::Instant::now() >= deadline {
             let _ = child.kill();
@@ -172,28 +177,70 @@ fn two_concurrent_saves_both_succeed() {
     }
 }
 
+/// The id `archive::format_id` writes for a whole second: UTC, second
+/// resolution. Any drift from it fails the test below rather than hiding,
+/// because the id the save publishes has to name one of the seconds this
+/// produced.
+fn id_at_second(second: u64) -> String {
+    jiff::Timestamp::from_second(i64::try_from(second).unwrap())
+        .unwrap()
+        .strftime("%Y-%m-%d-%H%M%SZ")
+        .to_string()
+}
+
+/// The collision is arranged rather than waited for. This used to run two
+/// saves and hope both landed in the same second, retrying five times when
+/// they did not: a bet that two process starts and two session parses fit
+/// inside one second, which a machine slow enough loses five times out of
+/// five. Every second the second save could possibly stamp is taken before
+/// it runs, so the collision is certain whenever it happens and the test
+/// asserts what the id is instead of waiting to be dealt one.
 #[test]
 fn same_second_collision_gets_a_numeric_suffix() {
+    /// Ten minutes of seconds, at an empty directory each: far longer than a
+    /// save takes, and being generous here costs nothing and risks nothing —
+    /// a save that somehow landed outside the window would fail the test, not
+    /// pass it quietly.
+    const WINDOW: u64 = 600;
     let fx = Fixture::new();
     fx.write_session("Default", 20, &two_tab_session());
-    // Two saves usually land in the same second; when they straddle one,
-    // try again rather than flake.
-    for _ in 0..5 {
-        let _ = std::fs::remove_dir_all(&fx.root);
-        assert_success(&fx.run(&["--force"]));
-        assert_success(&fx.run(&["--force"]));
-        let names: Vec<String> = fx
-            .snapshot_dirs()
-            .iter()
-            .map(|d| d.file_name().unwrap().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names.len(), 2);
-        if names[1] == format!("{}-2", names[0]) {
-            assert_eq!(read_snapshot(&fx.snapshot_dirs()[1])["id"], names[1]);
-            return;
-        }
+    assert_success(&fx.run(&["--force"]));
+    let before = names(&fx.snapshot_dirs());
+    assert_eq!(before.len(), 1);
+
+    let snapshots = fx.root.join("snapshots");
+    let from = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    let taken: Vec<String> = (from..from + WINDOW).map(id_at_second).collect();
+    for id in &taken {
+        // The save above may already hold the second this starts from.
+        let _ = std::fs::create_dir(snapshots.join(id));
     }
-    panic!("five attempts never landed two saves in the same second");
+
+    assert_success(&fx.run(&["--force"]));
+    let published: Vec<String> = names(&fx.snapshot_dirs())
+        .into_iter()
+        .filter(|name| !taken.contains(name) && !before.contains(name))
+        .collect();
+    assert_eq!(published.len(), 1, "one new snapshot, got {published:?}");
+    let id = &published[0];
+    let (base, ordinal) = id
+        .split_once("Z-")
+        .unwrap_or_else(|| panic!("{id} took a second that was already held"));
+    assert!(
+        taken.contains(&format!("{base}Z")),
+        "{id} is outside the seeded window"
+    );
+    assert_eq!(ordinal, "2");
+    assert_eq!(read_snapshot(&snapshots.join(id))["id"], *id);
+}
+
+fn names(dirs: &[std::path::PathBuf]) -> Vec<String> {
+    dirs.iter()
+        .map(|d| d.file_name().unwrap().to_string_lossy().into_owned())
+        .collect()
 }
 
 fn set_mtime(path: &std::path::Path, secs_after_epoch: u64) {
