@@ -753,6 +753,41 @@ fn a_degraded_parse_reaches_the_exported_document() {
     );
 }
 
+/// `degraded` covers what the five named counters do not: a navigation
+/// fallback alone leaves every counter at zero, and the page must still be
+/// told the parse was not clean.
+#[test]
+fn degradation_without_a_named_counter_still_reaches_the_document() {
+    let fx = Fixture::new();
+    write_snapshot(
+        &fx.root,
+        "2026-12-02-000000Z",
+        "2026-12-02T00:00:00Z",
+        &json!([tab(1, 0, "https://example.test/", "A", None)]),
+        &json!([]),
+    );
+    let path = fx.root.join("snapshots/2026-12-02-000000Z/snapshot.json");
+    let body = fs::read_to_string(&path).unwrap();
+    assert!(body.contains("\"navigation_fallbacks\":0"));
+    fs::write(
+        &path,
+        body.replace("\"navigation_fallbacks\":0", "\"navigation_fallbacks\":1"),
+    )
+    .unwrap();
+
+    let snapshot = &exported_library(&fx)["snapshots"][0];
+    assert_eq!(
+        snapshot["stats"],
+        json!({
+            "dropped_tabs": 0, "unknown_commands": 0, "malformed_commands": 0,
+            "truncated_bytes": 0, "marker_ok": true, "degraded": true
+        })
+    );
+    let human = fx.run(&["list"]);
+    assert_success(&human);
+    assert!(stdout(&human).contains("(degraded)"), "{}", stdout(&human));
+}
+
 #[test]
 fn embedded_data_cannot_close_its_own_script_element() {
     let fx = Fixture::new();

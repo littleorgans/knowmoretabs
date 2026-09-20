@@ -43,12 +43,25 @@ const SORTS = {
 };
 
 // ---- 3. Derive pages ⇄ snapshots ------------------------------------------
+// The document comes from our own backend, but a hand-edited or half-written
+// one must degrade the way the parser does: skip what cannot be read, count
+// it, say so. A page keeps its index (tab rows point at it), so an unreadable
+// page is one with no sightings; a tab row that is not a tuple naming a
+// readable page is dropped and counted on its snapshot (§7 shows it as
+// "unreadable tab rows"); a snapshot without a parseable time is skipped and
+// counted in the footer.
 function derive(lib) {
   S.stats = lib.stats || {};
-  S.snaps = (lib.snapshots || []).map((s, k) => ({ ...s, k, date: new Date(s.captured_at), groups: s.groups || [], fresh: 0, gone: 0 }));
-  S.pages = (lib.pages || []).map((p, i) => ({ ...p, i, seen: [], title: p.title || '', forgotten: !!p.forgotten,
+  const P = lib.pages || [];
+  S.pages = P.map((p, i) => { p = typeof p?.url === 'string' ? p : { url: '' }; return { ...p, i, seen: [], title: p.title || '', domain: p.domain || '', forgotten: !!p.forgotten,
     hay: ((p.title || '') + ' ' + p.url).toLowerCase(), addr: p.url.replace(/^https?:\/\/(www\.)?/i, ''),
-    name: (p.title || p.url).replace(/^[^\p{L}\p{N}]+/u, ''), link: /^https?:\/\//i.test(p.url) }));
+    name: (p.title || p.url).replace(/^[^\p{L}\p{N}]+/u, ''), link: /^https?:\/\//i.test(p.url) }; });
+  S.skipped = 0;
+  S.snaps = (lib.snapshots || []).filter((s) => { const ok = s && !isNaN(new Date(s.captured_at)); if (!ok) S.skipped++; return ok; }).map((s, k) => {
+    const rows = Array.isArray(s.tabs) ? s.tabs : [], tabs = rows.filter((t) => Array.isArray(t) && t.length > 3 && typeof P[t[0]]?.url === 'string');
+    return { ...s, k, date: new Date(s.captured_at), groups: (s.groups || []).map((g) => ({ ...g, title: String(g?.title ?? ''), colour: String(g?.colour ?? 'grey') })),
+      tabs, tabs_total: (rows.length && +s.tabs_total) || tabs.length, windows: +s.windows || 0, bad: rows.length - tabs.length, fresh: 0, gone: 0 };
+  });
   // Each sighting keeps the group object it sat in, so a page can be in "Papers" in
   // March, "Later" in June and no group today without any per-page bookkeeping.
   for (const s of S.snaps) for (const [pi, w, pos, tid, , g] of s.tabs) S.pages[pi]?.seen.push([s.k, w, tid, pos, g == null ? null : s.groups[g] || null]);
@@ -73,16 +86,17 @@ function derive(lib) {
   }
   document.documentElement.style.setProperty('--n', S.snaps.length);
 }
-// Optional per-snapshot parser counters. Absent from the contract today; when
-// present, a snapshot that lost tabs says so instead of quietly reporting fewer.
+// The parser's per-snapshot counters (§5, always emitted, zeroed when clean),
+// plus the rows derive() could not read: a snapshot that lost tabs says so
+// instead of quietly reporting fewer.
 function degraded(s) {
-  const t = s.stats; if (!t) return '';
-  const parts = [];
+  const t = s.stats || {}, parts = [];
   if (t.dropped_tabs) parts.push(plural(t.dropped_tabs, 'tab') + ' dropped');
   if (t.unknown_commands) parts.push(plural(t.unknown_commands, 'unknown record'));
   if (t.malformed_commands) parts.push(plural(t.malformed_commands, 'malformed record'));
   if (t.truncated_bytes) parts.push(plural(t.truncated_bytes, 'byte') + ' truncated');
   if (t.marker_ok === false) parts.push('no end marker');
+  if (s.bad) parts.push(plural(s.bad, 'unreadable tab row'));
   if (!parts.length && t.degraded) parts.push('parse degraded');
   return parts.join(', ');
 }
@@ -247,7 +261,7 @@ function renderSnapshot(id, tab) {
   for (const t of s.tabs) { if (!wins.has(t[1])) wins.set(t[1], []); wins.get(t[1]).push(t); }
   const d = degraded(s);
   $('snap-title').textContent = F.long.format(s.date) + ', ' + F.time.format(s.date) + ' UTC';
-  $('snap-meta').textContent = `${plural(s.tabs_total, 'tab')} in ${plural(wins.size, 'window')}${s.groups.length ? ', ' + plural(s.groups.length, 'group') : ''} · ${s.browser} / ${s.profile} · ${s.fresh} pages first seen here${d ? ' · incomplete: ' + d : ''}`;
+  $('snap-meta').textContent = `${plural(s.tabs_total, 'tab')} in ${plural(s.windows || wins.size, 'window')}${s.groups.length ? ', ' + plural(s.groups.length, 'group') : ''} · ${s.browser || 'unknown browser'} / ${s.profile || 'unknown profile'} · ${s.fresh} pages first seen here${d ? ' · incomplete: ' + d : ''}`;
   $('snap-body').innerHTML = [...wins].sort((a, b) => a[0] - b[0]).map(([w, tabs]) => `<section class="win"><h3>Window ${w}<small>${plural(tabs.length, 'tab')}</small></h3><ol>` +
     tabs.sort((a, b) => a[2] - b[2]).map(([pi, , pos, tid, pin, g]) => { const p = S.pages[pi];
       return `<li class="row${tid === +tab ? ' target' : ''}" id="t-${tid}" data-i="${pi}" tabindex="-1"><span class="pos">${pos + 1}</span>` +
@@ -282,6 +296,7 @@ function reveal(i) {
 // ---- 9. Wiring -------------------------------------------------------------
 function keys(e) {
   const t = e.target, k = e.key;
+  if ($('help').open) return;                     // the dialog is modal; esc closes it natively
   if (k === 'Escape' && isForm(t)) { if (t.value) { t.value = ''; t.dispatchEvent(new Event('input')); } else t.blur(); return; }
   if (isForm(t)) { if ((k === 'ArrowDown' || k === 'Enter') && t.id === 'q') { e.preventDefault(); move(1); } return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -338,8 +353,7 @@ function wire() {
 async function main() {
   wire();
   let lib;
-  try { lib = await host.load(); } catch (e) { $('card').textContent = `Could not load the library (${e.message}).`; return; }
-  derive(lib);
+  try { lib = await host.load(); derive(lib); } catch (e) { $('card').textContent = `Could not load the library (${e.message}).`; return; }
   // Forgotten pages are counted by their flag: export omits them from pages[],
   // serve includes them flagged, and either way this is the number on the shelf.
   const n = S.snaps.length, total = S.pages.filter((p) => p.n && !p.forgotten).length, domains = new Map();
@@ -362,6 +376,7 @@ async function main() {
     const f = S.stats.forgotten || 0;
     $('mode-note').textContent = `Offline copy, exported ${F.full.format(new Date(lib.generated_at || Date.now()))} UTC.` + (f ? ` ${f} forgotten ${f === 1 ? 'page is' : 'pages are'} not included.` : '');
   }
+  if (S.skipped) $('mode-note').textContent += ` ${plural(S.skipped, 'snapshot')} in the data could not be read.`;
   renderSnapshots();
   render();
   route();

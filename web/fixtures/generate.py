@@ -574,6 +574,9 @@ def cases(seed):
     degraded["snapshots"][2]["tabs_total"] -= 3
     degraded["snapshots"][4]["stats"] = {"dropped_tabs": 0, "unknown_commands": 0, "malformed_commands": 1,
                                          "truncated_bytes": 0, "marker_ok": True, "degraded": True}
+    # Degraded with every named counter at zero: what a navigation fallback or
+    # a group without metadata produces. Renders as the generic "parse degraded".
+    degraded["snapshots"][1]["stats"] = dict(clean, degraded=True)
     exported = to_export(build(seed + 3, snapshot_count=8, head_count=12, forgotten_count=4))
     return {"empty": empty, "no-pages": no_pages, "one-snapshot": one, "degraded": degraded, "export-forgotten": exported}
 
