@@ -102,7 +102,19 @@ pub fn run(options: &Options) -> Result<(), Error> {
     Ok(())
 }
 
+/// Hands the URL to whatever the desktop uses to open one. Three commands,
+/// one per platform, and none of them may fail the run: a headless Linux box
+/// has no `xdg-open`, and `serve` is still doing its job without a window.
+/// The caller warns and carries on.
+///
+/// Windows goes through `cmd` because `start` is a shell builtin rather than
+/// a program. The empty argument after it is `start`'s window title, which it
+/// would otherwise take the URL to be. `cmd` would treat `&` or `|` in the
+/// URL as its own syntax, which is why this only ever passes a URL this
+/// process built: `http://127.0.0.1:<port>/`, digits and nothing else.
 fn open_browser(url: &str) -> io::Result<()> {
+    // `cfg!` rather than `#[cfg]`: all three arms are compiled everywhere, so
+    // a change to the Windows one is caught by a build on a Mac.
     let mut command = if cfg!(target_os = "macos") {
         let mut c = std::process::Command::new("open");
         c.arg(url);

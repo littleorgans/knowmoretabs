@@ -63,12 +63,8 @@ fn default_discovery_saves_the_newest_session_verbatim() {
         "snapshot.json is pretty-printed"
     );
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&fx.root).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700);
-    }
+    common::assert_private_dir(&fx.root);
+    common::assert_private_dir(&fx.root.join("snapshots"));
 }
 
 #[test]

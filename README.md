@@ -5,9 +5,10 @@ Every tab you ever had open, kept and searchable.
 You have a hundred tabs open. They are a to-do list you cannot read, a memory
 you cannot search, and one crash away from gone. `knowmoretabs` reads a
 Chromium-family browser's own session file from disk, saves a dated snapshot
-of every open window and tab, and never overwrites an earlier one. On macOS it
-supports Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and Vivaldi.
-Later, a local page lets you search everything you have ever had open.
+of every open window and tab, and never overwrites an earlier one. It supports
+Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and Vivaldi, on
+macOS, Linux and Windows. Later, a local page lets you search everything you
+have ever had open.
 
 ## The two commands that matter
 
@@ -55,7 +56,9 @@ Local only: it answers this machine and nothing else. Press Ctrl-C to stop.
 `serve` runs the same page `export` writes, with the data fetched from a
 small JSON API and the Forget and Restore buttons live: select rows, forget
 them, undo from the toast, and find them again under "Forgotten". `--port N`
-picks another port; `--open` opens your browser.
+picks another port; `--open` opens your browser, through `open` on macOS,
+`xdg-open` on Linux and `start` on Windows. If none of them is there — a
+headless Linux box has no `xdg-open` — `serve` says so and keeps serving.
 
 Forgetting hides a page from the library. It is a filter, recorded in
 `library.json`, and it never touches a snapshot: every page you forget is
@@ -85,7 +88,7 @@ Prebuilt binaries are a later slice.
 ## Where the data lives
 
 ```
-~/.knowmoretabs/
+~/.knowmoretabs/                 # %LOCALAPPDATA%\knowmoretabs on Windows
 ├── snapshots/
 │   └── 2026-09-20-084415Z/    # UTC, sorts as text, never rewritten
 │       ├── snapshot.json      # the tabs, windows, groups and parse statistics
@@ -94,11 +97,31 @@ Prebuilt binaries are a later slice.
 └── export/                    # what `export` writes by default; rebuildable
 ```
 
-The root is created with mode `0700` because it is a record of everything you
-browse. `snapshot.json` is pretty-printed JSON with a `schema_version`; it is
-the source of truth and readable in any editor. Each snapshot is written to a
+`--root DIR` puts it somewhere else.
+
+The archive is a record of everything you browse, so it is created private to
+you. On macOS and Linux that is mode `0700`, set when the directory is made.
+Windows has no such bit, and setting an access-control list needs Win32 calls
+this tool does not make, so on Windows the protection is inherited instead:
+`%LOCALAPPDATA%` grants you, SYSTEM and Administrators and nobody else, and a
+directory created inside it inherits exactly that. **This is why the default
+root on Windows is `%LOCALAPPDATA%\knowmoretabs` rather than a dotfile in your
+profile** — the profile directory is what enterprise folder redirection roams
+to a file server, and an archive of your browsing is the last thing that
+should be copied off the machine. The consequence is worth knowing: a
+`--root` you point somewhere else on Windows is only as private as wherever
+you put it, and a directory under `C:\` is readable by every local user. On
+macOS and Linux `--root` is `0700` wherever it is.
+
+`snapshot.json` is pretty-printed JSON with a `schema_version`; it is the
+source of truth and readable in any editor. Each snapshot is written to a
 temporary directory and renamed into place in one step, so an interrupted run
-leaves the archive exactly as it was.
+leaves the archive exactly as it was — on all three platforms. The rename
+never replaces anything: the destination is checked under the archive lock
+and a snapshot id that is already taken gets a `-2` suffix instead. That
+matters because renaming a directory onto an existing one is the one
+filesystem operation whose meaning differs between POSIX and Windows, and
+publication does not depend on it.
 
 A run whose window, tab and URL layout matches the newest snapshot for the same
 browser and profile saves nothing. Titles and timestamps do not count as change.
@@ -154,11 +177,50 @@ No full-text indexing of page contents. No tag taxonomy. It never touches,
 closes or reorders tabs in the live browser, and never modifies the browser's
 own files: it reads and copies, nothing else.
 
+## Where it looks for browsers
+
+One table, one row per browser, one column per platform.
+
+| Platform | Where a browser's user data is |
+|---|---|
+| macOS | `~/Library/Application Support/<product>` |
+| Linux | `$XDG_CONFIG_HOME/<product>`, else `~/.config/<product>` |
+| Windows | `%LOCALAPPDATA%\<product>\User Data` |
+
+On Linux a native, a Snap and a Flatpak install of the same browser are three
+separate installs with three separate user-data directories, and a machine can
+have two of them. All of them are probed — `~/snap/<name>/common/…`,
+`~/.var/app/<flatpak id>/config/…` — and the newest session wins, the same
+rule that picks between browsers. Snap and Flatpak hard-code their own config
+roots inside the sandbox, so `$XDG_CONFIG_HOME` moves the native path and
+leaves those alone.
+
+`$CHROME_CONFIG_HOME` replaces `~/.config` for Chrome and Chromium, and
+`$CHROME_USER_DATA_DIR` names a whole user-data directory for them. Both are
+Chrome's own Linux variables, and both are honoured for the Chrome family
+only: someone who set one for Chrome Remote Desktop should not find every
+browser reported at the same directory. `%LOCALAPPDATA%` and `%APPDATA%` are
+read from the environment, falling back to the `FOLDERID_LocalAppData` and
+`FOLDERID_RoamingAppData` known folders when they are not set.
+
+`--user-data-dir DIR` overrides all of it, and `--session FILE` skips
+discovery entirely. If a browser was launched with its own `--user-data-dir`,
+`chrome://version` → Profile Path names where it went; its parent is the
+directory to pass.
+
+Windows rejects file names the other two accept. A `--root` containing a
+reserved device name (`CON`, `NUL`, `COM1`…), a component ending in a dot or
+a space, or a character Windows forbids is refused by name on Windows before
+anything is created, rather than failing later as something unrecognisable.
+Long roots are fine: the paths the archive writes can pass the classic
+260-character limit, because Rust's standard library switches to the `\\?\`
+form beyond it.
+
 ## Scope today
 
-The supported browser paths for `save` are macOS-only; Linux and Windows are
-the next platform slice. The library commands work anywhere the archive is.
-See `docs/SLICES.md` for the build order and `docs/BRIEF.md` for the reasoning.
+`save` supports the browsers above on macOS, Linux and Windows. The library
+commands work anywhere the archive is. See `docs/SLICES.md` for the build
+order and `docs/BRIEF.md` for the reasoning.
 
 ## Development
 

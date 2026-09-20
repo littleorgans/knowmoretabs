@@ -105,14 +105,8 @@ impl Tree {
 
     fn run(&self, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_knowmoretabs"));
-        command
-            .env_clear()
-            .env("HOME", self.home.path())
-            .env("USERPROFILE", self.home.path())
-            .env("PATH", std::env::var_os("PATH").unwrap())
-            .arg("--root")
-            .arg(&self.root)
-            .args(args);
+        common::point_home_at(&mut command, self.home.path());
+        command.arg("--root").arg(&self.root).args(args);
         command.output().unwrap()
     }
 

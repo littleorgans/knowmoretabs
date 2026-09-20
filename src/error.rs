@@ -40,13 +40,19 @@ pub enum Error {
         installed: String,
     },
     #[error(
-        "{requested} has no user-data directory at {}; installed supported browsers: {installed}",
-        path.display()
+        "{requested} has no user-data directory at {paths}; installed supported browsers: {installed}"
     )]
     BrowserNotInstalled {
         requested: String,
-        path: PathBuf,
+        /// Every directory this browser's packaging could have put it in;
+        /// on Linux that includes the Snap and Flatpak locations.
+        paths: String,
         installed: String,
+    },
+    #[error("cannot use {} as the archive root: {problem}", root.display())]
+    RootName {
+        root: PathBuf,
+        problem: crate::platform::RootProblem,
     },
     #[error(
         "Arc is not supported: Arc stores open tabs in its proprietary StorableSidebar.json, not Session_* files"
@@ -113,6 +119,7 @@ impl Error {
             Self::Discovery(_) => "discovery",
             Self::UnknownBrowser { .. } => "unknown_browser",
             Self::BrowserNotInstalled { .. } => "browser_not_installed",
+            Self::RootName { .. } => "root_name",
             Self::ArcUnsupported => "arc_unsupported",
             Self::NoSession(_) | Self::NoBrowserSession { .. } => "no_session",
             Self::TabsFile(_) => "tabs_file",

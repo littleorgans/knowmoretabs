@@ -1,15 +1,18 @@
 //! Where Chrome keeps its files: the user-data directory, profile discovery
 //! through `Local State`, and picking the newest `Session_*` log.
 //!
-//! slice: capture
+//! slice: browsers
 //! why: The reference implementation hardcoded one macOS path and trusted a
 //!      profile name straight onto the filesystem. This module is the one
-//!      place that knowledge lives, shaped as a browser table with a single
-//!      row today so that slice 4 adds browsers and slice 5 adds platforms
-//!      by adding rows, not code paths. It never opens a session file: it
-//!      reads `Local State`, lists directories, and returns paths.
+//!      place that knowledge lives, shaped as a table whose rows are browsers
+//!      and whose columns are operating systems, so that reach is bought by
+//!      adding data rather than code paths. The platform is a value
+//!      ([`Os`]) rather than a `cfg!`, so every column is exercised by the
+//!      tests wherever they run. It never opens a session file: it reads
+//!      `Local State`, lists directories, and returns paths.
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -27,85 +30,263 @@ pub const VIVALDI: &str = "vivaldi";
 pub const SESSIONS_DIR: &str = "Sessions";
 /// Where it writes the version-5 files it will one day prefer.
 pub const ENCRYPTED_SESSIONS_DIR: &str = "Sessions_Encrypted";
-/// The archive directory under the home directory.
+/// The archive directory, under the home directory on Unix.
 pub const DEFAULT_ROOT_NAME: &str = ".knowmoretabs";
+/// The same archive, under `%LOCALAPPDATA%` on Windows: see [`default_root`].
+pub const DEFAULT_ROOT_NAME_WINDOWS: &str = "knowmoretabs";
 
-/// One row of the browser table: the id and where its user data lives,
-/// relative to the home directory (or `%LOCALAPPDATA%` on Windows).
+/// Which column of the browser table applies. A value rather than a `cfg!`
+/// so that the Linux and Windows rows are covered by tests run on any
+/// machine; [`Os::HOST`] is the one the binary actually uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Os {
+    Mac,
+    Linux,
+    Windows,
+}
+
+impl Os {
+    pub const HOST: Self = if cfg!(target_os = "macos") {
+        Self::Mac
+    } else if cfg!(windows) {
+        Self::Windows
+    } else {
+        Self::Linux
+    };
+}
+
+/// One row of the browser table: the id, and where its user data lives on
+/// each platform. Every column is relative to one of [`Roots`]'s directories,
+/// named in the field comments, because "relative to home" is only true on
+/// macOS.
 #[derive(Debug, Clone, Copy)]
 pub struct BrowserSpec {
     pub id: &'static str,
     pub channel_rank: u8,
+    /// Relative to the home directory.
     pub macos: &'static str,
+    /// Relative to the config home: `$CHROME_CONFIG_HOME` for the Chrome
+    /// family, else `$XDG_CONFIG_HOME`, else `~/.config`.
     pub linux: &'static str,
+    /// Snap and Flatpak, relative to the home directory. These are separate
+    /// installs with their own user data, not aliases of the native path
+    /// (`browsers.md` §2.1), so they are extra candidates and the host's XDG
+    /// variables do not apply to them.
+    pub linux_packaged: &'static [&'static str],
+    /// Relative to `%LOCALAPPDATA%`. The trailing `User Data` is Chromium's
+    /// `kUserDataDirname`, which exists on Windows only (`browsers.md` §2.4).
     pub windows: &'static str,
 }
 
-/// The platform column is deliberately part of each row. Slice 5 can add
-/// platform probing without changing browser selection or profile discovery.
 pub const BROWSERS: [BrowserSpec; 7] = [
     BrowserSpec {
         id: CHROME,
         channel_rank: 0,
         macos: "Library/Application Support/Google/Chrome",
-        linux: ".config/google-chrome",
-        windows: "AppData/Local/Google/Chrome/User Data",
+        linux: "google-chrome",
+        linux_packaged: &[".var/app/com.google.Chrome/config/google-chrome"],
+        windows: "Google/Chrome/User Data",
     },
     BrowserSpec {
         id: CHROME_BETA,
         channel_rank: 1,
         macos: "Library/Application Support/Google/Chrome Beta",
-        linux: ".config/google-chrome-beta",
-        windows: "AppData/Local/Google/Chrome Beta/User Data",
+        linux: "google-chrome-beta",
+        linux_packaged: &[],
+        windows: "Google/Chrome Beta/User Data",
     },
     BrowserSpec {
         id: CHROME_CANARY,
         channel_rank: 3,
         macos: "Library/Application Support/Google/Chrome Canary",
-        linux: ".config/google-chrome-canary",
-        windows: "AppData/Local/Google/Chrome SxS/User Data",
+        linux: "google-chrome-canary",
+        linux_packaged: &[],
+        windows: "Google/Chrome SxS/User Data",
     },
     BrowserSpec {
         id: CHROMIUM,
         channel_rank: 0,
         macos: "Library/Application Support/Chromium",
-        linux: ".config/chromium",
-        windows: "AppData/Local/Chromium/User Data",
+        linux: "chromium",
+        // The second snap path is the pre-migration layout, still in place on
+        // machines that installed the snap before it moved to `common`.
+        linux_packaged: &[
+            "snap/chromium/common/chromium",
+            "snap/chromium/current/.config/chromium",
+            ".var/app/org.chromium.Chromium/config/chromium",
+        ],
+        windows: "Chromium/User Data",
     },
     BrowserSpec {
         id: BRAVE,
         channel_rank: 0,
         macos: "Library/Application Support/BraveSoftware/Brave-Browser",
-        linux: ".config/BraveSoftware/Brave-Browser",
-        windows: "AppData/Local/BraveSoftware/Brave-Browser/User Data",
+        linux: "BraveSoftware/Brave-Browser",
+        linux_packaged: &[
+            "snap/brave/common/.config/BraveSoftware/Brave-Browser",
+            "snap/brave/current/.config/BraveSoftware/Brave-Browser",
+            ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
+        ],
+        windows: "BraveSoftware/Brave-Browser/User Data",
     },
     BrowserSpec {
         id: EDGE,
         channel_rank: 0,
         macos: "Library/Application Support/Microsoft Edge",
-        linux: ".config/microsoft-edge",
-        windows: "AppData/Local/Microsoft/Edge/User Data",
+        linux: "microsoft-edge",
+        linux_packaged: &[".var/app/com.microsoft.Edge/config/microsoft-edge"],
+        windows: "Microsoft/Edge/User Data",
     },
     BrowserSpec {
         id: VIVALDI,
         channel_rank: 0,
         macos: "Library/Application Support/Vivaldi",
-        linux: ".config/vivaldi",
-        windows: "AppData/Local/Vivaldi/User Data",
+        linux: "vivaldi",
+        linux_packaged: &[".var/app/com.vivaldi.Vivaldi/config/vivaldi"],
+        windows: "Vivaldi/User Data",
     },
 ];
 
-impl BrowserSpec {
-    /// The user-data directory on the platform this binary was built for.
-    pub fn user_data_dir(&self, home: &Path) -> PathBuf {
-        let relative = if cfg!(target_os = "macos") {
-            self.macos
-        } else if cfg!(windows) {
-            self.windows
-        } else {
-            self.linux
+/// `CHROME_CONFIG_HOME` and `CHROME_USER_DATA_DIR` are Chrome's own variables.
+/// A fork built from the same source reads them too, but someone who set one
+/// for Chrome would then have every browser "found" at that one directory, so
+/// `browsers.md` §7 restricts them to the Chrome family, and so does this.
+fn honours_chrome_env(id: &str) -> bool {
+    matches!(id, CHROME | CHROME_BETA | CHROME_CANARY | CHROMIUM)
+}
+
+/// The per-platform directories the browser table hangs off, resolved once
+/// from the environment. Splitting this out is what makes the table data:
+/// a row says "`google-chrome` under the config home" and this says where
+/// the config home is on this machine.
+#[derive(Debug, Clone)]
+pub struct Roots {
+    pub os: Os,
+    pub home: PathBuf,
+    /// Linux: `$XDG_CONFIG_HOME`, else `~/.config`.
+    config: PathBuf,
+    /// Linux, Chrome family: `$CHROME_CONFIG_HOME`, else `config`.
+    chrome_config: PathBuf,
+    /// Linux, Chrome family: `$CHROME_USER_DATA_DIR`, which names a whole
+    /// user-data directory and so replaces the native path rather than
+    /// prefixing it.
+    chrome_user_data: Option<PathBuf>,
+    /// Windows: `%LOCALAPPDATA%`, else `FOLDERID_LocalAppData`.
+    local_app_data: PathBuf,
+}
+
+impl Roots {
+    /// Reads the environment once. `None` only when there is no home
+    /// directory at all, which is the one case nothing can be resolved from.
+    pub fn detect() -> Option<Self> {
+        let home = home_dir()?;
+        // The known folder is consulted only as the fallback the variable
+        // does not provide, which is the property `browsers.md` §7 asks of it.
+        let known_local_app_data = match Os::HOST {
+            Os::Windows => directories::BaseDirs::new().map(|d| d.data_local_dir().to_path_buf()),
+            _ => None,
         };
-        home.join(relative)
+        Some(Self::resolve(
+            Os::HOST,
+            &home,
+            known_local_app_data,
+            |name| std::env::var_os(name),
+        ))
+    }
+
+    /// The environment rules, with the environment passed in so the tests can
+    /// state one. `known_local_app_data` is the Windows known folder.
+    fn resolve(
+        os: Os,
+        home: &Path,
+        known_local_app_data: Option<PathBuf>,
+        var: impl Fn(&str) -> Option<OsString>,
+    ) -> Self {
+        // Chromium's `GetXDGDirectory` takes any non-empty value and strips
+        // trailing separators; it does not require an absolute path, and
+        // neither does this, so that we look where Chrome would look.
+        let value = |name: &str| {
+            var(name)
+                .filter(|v| !v.is_empty())
+                .map(|v| PathBuf::from(v).components().collect::<PathBuf>())
+        };
+        // `chrome_main_delegate.cc` reads `CHROME_USER_DATA_DIR` on Linux and
+        // ChromeOS only, and the XDG variables mean nothing to Chromium on
+        // macOS or Windows.
+        let (config, chrome_config, chrome_user_data) = if os == Os::Linux {
+            let config = value("XDG_CONFIG_HOME").unwrap_or_else(|| home.join(".config"));
+            let chrome_config = value("CHROME_CONFIG_HOME").unwrap_or_else(|| config.clone());
+            (config, chrome_config, value("CHROME_USER_DATA_DIR"))
+        } else {
+            let config = home.join(".config");
+            (config.clone(), config, None)
+        };
+        let profile_local = home.join("AppData").join("Local");
+        let local_app_data = if os == Os::Windows {
+            value("LOCALAPPDATA")
+                .or(known_local_app_data)
+                .unwrap_or(profile_local)
+        } else {
+            profile_local
+        };
+        Self {
+            os,
+            home: home.to_path_buf(),
+            config,
+            chrome_config,
+            chrome_user_data,
+            local_app_data,
+        }
+    }
+
+    fn config_home(&self, id: &str) -> &Path {
+        if honours_chrome_env(id) {
+            &self.chrome_config
+        } else {
+            &self.config
+        }
+    }
+}
+
+/// Where the archive lives when `--root` is not passed.
+///
+/// `~/.knowmoretabs` on Unix. On Windows it is `%LOCALAPPDATA%\knowmoretabs`,
+/// not `%USERPROFILE%\.knowmoretabs`, for two reasons. A dotfile in the
+/// profile root is a Unix idiom that no Windows tool follows, and more
+/// importantly `%USERPROFILE%` is the directory enterprise folder redirection
+/// roams to a file server: an archive of every page the user has had open is
+/// exactly the thing that must not be copied off the machine. `LocalAppData`
+/// is the location Windows defines as per-user and deliberately non-roaming,
+/// and a directory created there inherits an ACL that grants the user,
+/// SYSTEM and Administrators and nobody else — which is the nearest Windows
+/// has to the `0700` the Unix root is created with.
+pub fn default_root(roots: &Roots) -> PathBuf {
+    if roots.os == Os::Windows {
+        roots.local_app_data.join(DEFAULT_ROOT_NAME_WINDOWS)
+    } else {
+        roots.home.join(DEFAULT_ROOT_NAME)
+    }
+}
+
+impl BrowserSpec {
+    /// Every directory this browser's user data can be in, most likely first.
+    /// Linux has more than one because native, Snap and Flatpak installs of
+    /// the same browser do not share a user-data directory and a machine can
+    /// have two; the caller probes all of them and lets recency decide.
+    pub fn user_data_dirs(&self, roots: &Roots) -> Vec<PathBuf> {
+        match roots.os {
+            Os::Mac => vec![roots.home.join(self.macos)],
+            Os::Windows => vec![roots.local_app_data.join(self.windows)],
+            Os::Linux => {
+                let native = match &roots.chrome_user_data {
+                    Some(dir) if honours_chrome_env(self.id) => dir.clone(),
+                    _ => roots.config_home(self.id).join(self.linux),
+                };
+                std::iter::once(native)
+                    .chain(self.linux_packaged.iter().map(|p| roots.home.join(p)))
+                    .collect()
+            }
+        }
     }
 }
 
@@ -113,8 +294,144 @@ pub fn browser(id: &str) -> Option<&'static BrowserSpec> {
     BROWSERS.iter().find(|b| b.id == id)
 }
 
+/// `$HOME` on Unix and `%USERPROFILE%` on Windows, each falling back to the
+/// platform's own lookup — the rule `std::env::home_dir` documents. The
+/// variable has to come first: it is how a relocated profile, and how the
+/// tests, name a home directory other than the logged-in user's.
 pub fn home_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf())
+    std::env::home_dir()
+        .or_else(|| directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf()))
+}
+
+/// Why Windows could not use a directory as the archive root. Every one of
+/// these names is legal on macOS and Linux, which is why the rule is applied
+/// only where it is true — but the rule itself is data, and is tested
+/// everywhere.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RootProblem {
+    /// `CON`, `NUL`, `COM3` and friends. `CreateFile` opens the device.
+    Reserved(String),
+    /// Windows strips these, so the directory created is not the one named.
+    TrailingDotOrSpace(String),
+    Illegal {
+        component: String,
+        character: char,
+    },
+    /// Nothing the archive writes under this root could be opened.
+    TooLong {
+        length: usize,
+        limit: usize,
+    },
+}
+
+impl std::fmt::Display for RootProblem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Reserved(name) => write!(
+                f,
+                "{name:?} is a reserved Windows device name; pass a --root Windows can open as a directory"
+            ),
+            Self::TrailingDotOrSpace(name) => write!(
+                f,
+                "{name:?} ends with a dot or a space, which Windows strips, so the archive would not be where you asked for it"
+            ),
+            Self::Illegal {
+                component,
+                character,
+            } => write!(
+                f,
+                "{component:?} contains {character:?}, which Windows does not allow in a file name"
+            ),
+            Self::TooLong { length, limit } => write!(
+                f,
+                "the path is {length} characters and the files the archive writes under it would pass Windows' {limit}-character limit; pass a shorter --root"
+            ),
+        }
+    }
+}
+
+/// The reserved device names, from the Windows file-naming rules. A name is
+/// reserved whatever extension follows it, so `CON.txt` is `CON`.
+const RESERVED_DEVICE_NAMES: [&str; 26] = [
+    "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM1", "COM2", "COM3", "COM4", "COM5",
+    "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
+    "LPT9", "COM0", "LPT0",
+];
+
+/// The longest thing the archive appends to its root: `snapshots/`, a staging
+/// directory (`.staging-` plus tempfile's six random characters), and the
+/// longest file name inside it.
+const DEEPEST_ARCHIVE_SUFFIX: usize = r"\snapshots\.staging-abcdef\snapshot.json".len();
+/// Windows' own ceiling, verbatim prefix included. Rust's standard library
+/// switches to `\\?\` form past 248 characters, so the classic 260 limit is
+/// not ours; this one is.
+const WINDOWS_PATH_LIMIT: usize = 32_767;
+
+/// The `--root` guard. Applied through `cfg!` rather than `#[cfg]` so the
+/// rules are compiled, and the type constructed, on every platform: the
+/// behaviour is Windows-only, the table behind it is not.
+pub fn check_root(root: &Path) -> Result<(), RootProblem> {
+    match windows_root_problem(root) {
+        Some(problem) if cfg!(windows) => Err(problem),
+        _ => Ok(()),
+    }
+}
+
+/// What Windows would make of `root`, whoever is asking.
+pub fn windows_root_problem(root: &Path) -> Option<RootProblem> {
+    let limit = WINDOWS_PATH_LIMIT - r"\\?\".len();
+    let length = root.as_os_str().len() + DEEPEST_ARCHIVE_SUFFIX;
+    if length > limit {
+        return Some(RootProblem::TooLong { length, limit });
+    }
+    for component in root.components() {
+        // A drive letter's colon and the separators are the path's own
+        // syntax, not a name; only the names between them are checked.
+        let std::path::Component::Normal(name) = component else {
+            continue;
+        };
+        let name = name.to_string_lossy();
+        if let Some(bad) = name
+            .chars()
+            .find(|c| matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*') || (*c as u32) < 0x20)
+        {
+            return Some(RootProblem::Illegal {
+                component: name.into_owned(),
+                character: bad,
+            });
+        }
+        if name.ends_with(['.', ' ']) {
+            return Some(RootProblem::TrailingDotOrSpace(name.into_owned()));
+        }
+        let stem = name.split('.').next().unwrap_or(&name);
+        if RESERVED_DEVICE_NAMES
+            .iter()
+            .any(|r| stem.eq_ignore_ascii_case(r))
+        {
+            return Some(RootProblem::Reserved(name.into_owned()));
+        }
+    }
+    None
+}
+
+/// Whether `path` is `ancestor` or sits inside it.
+///
+/// `Path::starts_with` compares components byte for byte. That is right on a
+/// case-sensitive filesystem and wrong on the macOS and Windows defaults,
+/// where `~/.knowmoretabs` and `~/.KNOWMORETABS` are one directory — and a
+/// guard that cannot see that is a guard that can be spelled around. Folding
+/// is ASCII-only, which covers the paths this guards and errs towards
+/// refusing rather than allowing.
+pub fn contains_path(ancestor: &Path, path: &Path) -> bool {
+    if Os::HOST == Os::Linux {
+        return path.starts_with(ancestor);
+    }
+    let mut candidate = path.components();
+    ancestor.components().all(|want| {
+        candidate
+            .next()
+            .is_some_and(|have| have.as_os_str().eq_ignore_ascii_case(want.as_os_str()))
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -718,22 +1035,64 @@ mod tests {
         );
     }
 
-    #[test]
-    fn browser_table_has_chrome() {
-        let chrome = browser(CHROME).unwrap();
-        let path = chrome.user_data_dir(Path::new("/home/x"));
-        assert!(path.starts_with("/home/x"));
-        assert!(
-            path.ends_with("Chrome")
-                || path.ends_with("google-chrome")
-                || path.ends_with("User Data")
-        );
-        assert!(browser("arc").is_none());
+    // --- The platform table ---------------------------------------------
+    //
+    // These run on every platform and cover every column, because the column
+    // is chosen by the `Os` passed in rather than by the machine the tests
+    // happen to be on. Expected paths are built by joining, so the separator
+    // is the host's on both sides of each assertion.
+
+    const HOME: &str = if cfg!(windows) {
+        r"C:\Users\person"
+    } else {
+        "/home/person"
+    };
+
+    /// A path under the fake home, written with `/` and joined so the
+    /// separator is the host's on both sides of every assertion.
+    fn home(relative: &str) -> PathBuf {
+        relative
+            .split('/')
+            .filter(|part| !part.is_empty())
+            .fold(PathBuf::from(HOME), |path, part| path.join(part))
+    }
+
+    fn roots(os: Os, env: &[(&str, &str)]) -> Roots {
+        roots_with(os, None, env)
+    }
+
+    /// Environment values are home-relative so that every one of them is a
+    /// path the host filesystem would accept, Windows drive letters included.
+    fn roots_with(os: Os, known_local_app_data: Option<PathBuf>, env: &[(&str, &str)]) -> Roots {
+        let env: Vec<(&str, OsString)> = env
+            .iter()
+            .map(|(k, v)| {
+                (
+                    *k,
+                    if v.is_empty() {
+                        OsString::new()
+                    } else {
+                        home(v).into_os_string()
+                    },
+                )
+            })
+            .collect();
+        Roots::resolve(os, Path::new(HOME), known_local_app_data, |name| {
+            env.iter().find(|(k, _)| *k == name).map(|(_, v)| v.clone())
+        })
+    }
+
+    fn dirs(os: Os, id: &str, env: &[(&str, &str)]) -> Vec<PathBuf> {
+        browser(id).unwrap().user_data_dirs(&roots(os, env))
     }
 
     #[test]
-    fn browser_table_has_the_slice_four_macos_rows() {
-        let expected = [
+    fn macos_paths_are_under_application_support_and_ignore_the_linux_variables() {
+        let xdg = [
+            ("XDG_CONFIG_HOME", "elsewhere"),
+            ("CHROME_CONFIG_HOME", "x"),
+        ];
+        for (id, relative) in [
             (CHROME, "Library/Application Support/Google/Chrome"),
             (
                 CHROME_BETA,
@@ -750,10 +1109,256 @@ mod tests {
             ),
             (EDGE, "Library/Application Support/Microsoft Edge"),
             (VIVALDI, "Library/Application Support/Vivaldi"),
-        ];
-        for (id, relative) in expected {
+        ] {
             assert_eq!(browser(id).unwrap().macos, relative);
+            assert_eq!(dirs(Os::Mac, id, &[]), vec![home(relative)], "{id}");
+            assert_eq!(dirs(Os::Mac, id, &xdg), vec![home(relative)], "{id}");
         }
+        assert!(browser("arc").is_none());
+    }
+
+    #[test]
+    fn linux_native_paths_hang_off_the_config_home() {
+        for (id, relative) in [
+            (CHROME, ".config/google-chrome"),
+            (CHROME_BETA, ".config/google-chrome-beta"),
+            (CHROME_CANARY, ".config/google-chrome-canary"),
+            (CHROMIUM, ".config/chromium"),
+            (BRAVE, ".config/BraveSoftware/Brave-Browser"),
+            (EDGE, ".config/microsoft-edge"),
+            (VIVALDI, ".config/vivaldi"),
+        ] {
+            assert_eq!(dirs(Os::Linux, id, &[])[0], home(relative), "{id}");
+        }
+    }
+
+    #[test]
+    fn linux_honours_xdg_and_the_two_chrome_variables() {
+        let xdg = [("XDG_CONFIG_HOME", "cfg")];
+        assert_eq!(dirs(Os::Linux, CHROME, &xdg)[0], home("cfg/google-chrome"));
+        assert_eq!(
+            dirs(Os::Linux, BRAVE, &xdg)[0],
+            home("cfg/BraveSoftware/Brave-Browser")
+        );
+
+        // CHROME_CONFIG_HOME replaces XDG for the Chrome family only, and
+        // channels keep their distinct suffixes under it.
+        let both = [("XDG_CONFIG_HOME", "cfg"), ("CHROME_CONFIG_HOME", "chr")];
+        assert_eq!(dirs(Os::Linux, CHROME, &both)[0], home("chr/google-chrome"));
+        assert_eq!(
+            dirs(Os::Linux, CHROME_BETA, &both)[0],
+            home("chr/google-chrome-beta")
+        );
+        assert_eq!(dirs(Os::Linux, CHROMIUM, &both)[0], home("chr/chromium"));
+        assert_eq!(dirs(Os::Linux, EDGE, &both)[0], home("cfg/microsoft-edge"));
+        assert_eq!(dirs(Os::Linux, VIVALDI, &both)[0], home("cfg/vivaldi"));
+
+        // CHROME_USER_DATA_DIR names a whole user-data directory, so it
+        // replaces the native path rather than prefixing it — and a person
+        // who set it for Chrome must not find every browser at that one path.
+        let user_data = [
+            ("XDG_CONFIG_HOME", "cfg"),
+            ("CHROME_CONFIG_HOME", "chr"),
+            ("CHROME_USER_DATA_DIR", "data/chrome"),
+        ];
+        assert_eq!(dirs(Os::Linux, CHROME, &user_data)[0], home("data/chrome"));
+        assert_eq!(
+            dirs(Os::Linux, CHROMIUM, &user_data)[0],
+            home("data/chrome")
+        );
+        assert_eq!(
+            dirs(Os::Linux, BRAVE, &user_data)[0],
+            home("cfg/BraveSoftware/Brave-Browser")
+        );
+
+        // Empty is unset, and a trailing separator is not a new component.
+        assert_eq!(
+            dirs(Os::Linux, CHROME, &[("XDG_CONFIG_HOME", "")])[0],
+            home(".config/google-chrome")
+        );
+        assert_eq!(
+            dirs(Os::Linux, CHROME, &[("XDG_CONFIG_HOME", "cfg/")])[0],
+            home("cfg/google-chrome")
+        );
+    }
+
+    #[test]
+    fn linux_snap_and_flatpak_are_extra_candidates_the_host_xdg_never_rewrites() {
+        let xdg = [("XDG_CONFIG_HOME", "cfg"), ("CHROME_CONFIG_HOME", "chr")];
+        let expected = [
+            (
+                CHROME,
+                vec![".var/app/com.google.Chrome/config/google-chrome"],
+            ),
+            (CHROME_BETA, vec![]),
+            (CHROME_CANARY, vec![]),
+            (
+                CHROMIUM,
+                vec![
+                    "snap/chromium/common/chromium",
+                    "snap/chromium/current/.config/chromium",
+                    ".var/app/org.chromium.Chromium/config/chromium",
+                ],
+            ),
+            (
+                BRAVE,
+                vec![
+                    "snap/brave/common/.config/BraveSoftware/Brave-Browser",
+                    "snap/brave/current/.config/BraveSoftware/Brave-Browser",
+                    ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
+                ],
+            ),
+            (
+                EDGE,
+                vec![".var/app/com.microsoft.Edge/config/microsoft-edge"],
+            ),
+            (VIVALDI, vec![".var/app/com.vivaldi.Vivaldi/config/vivaldi"]),
+        ];
+        for (id, packaged) in expected {
+            let want: Vec<PathBuf> = packaged.iter().map(|p| home(p)).collect();
+            // Sandboxes hard-code their own config root: the host's variables
+            // change the native path and leave these exactly where they are.
+            for env in [&[][..], &xdg[..]] {
+                assert_eq!(dirs(Os::Linux, id, env)[1..], want[..], "{id}");
+            }
+        }
+        // Not a platform where a browser is packaged twice.
+        for os in [Os::Mac, Os::Windows] {
+            assert_eq!(dirs(os, CHROMIUM, &[]).len(), 1);
+        }
+    }
+
+    #[test]
+    fn windows_paths_hang_off_local_app_data_with_the_user_data_component() {
+        let env = [("LOCALAPPDATA", "state/Local")];
+        let local = |relative: &str| home(&format!("state/Local/{relative}"));
+        for (id, relative) in [
+            (CHROME, "Google/Chrome/User Data"),
+            (CHROME_BETA, "Google/Chrome Beta/User Data"),
+            // Chrome Canary's directory is `Chrome SxS`, not `Chrome Canary`.
+            (CHROME_CANARY, "Google/Chrome SxS/User Data"),
+            (CHROMIUM, "Chromium/User Data"),
+            (BRAVE, "BraveSoftware/Brave-Browser/User Data"),
+            (EDGE, "Microsoft/Edge/User Data"),
+            (VIVALDI, "Vivaldi/User Data"),
+        ] {
+            assert_eq!(dirs(Os::Windows, id, &env), vec![local(relative)], "{id}");
+        }
+        // Unset falls back to the known folder, and to a path under the
+        // profile only when even that is unavailable.
+        let known = roots_with(Os::Windows, Some(home("known")), &[]);
+        assert_eq!(
+            browser(CHROME).unwrap().user_data_dirs(&known)[0],
+            home("known/Google/Chrome/User Data")
+        );
+        // The variable wins over the known folder, which is what lets a
+        // relocated profile, and these tests, name somewhere else.
+        let both = roots_with(Os::Windows, Some(home("known")), &env);
+        assert_eq!(
+            browser(CHROME).unwrap().user_data_dirs(&both)[0],
+            local("Google/Chrome/User Data")
+        );
+        assert_eq!(
+            dirs(Os::Windows, CHROME, &[])[0],
+            home("AppData/Local/Google/Chrome/User Data")
+        );
+    }
+
+    #[test]
+    fn the_default_archive_root_is_private_per_platform() {
+        assert_eq!(default_root(&roots(Os::Mac, &[])), home(".knowmoretabs"));
+        // `$XDG_CONFIG_HOME` is Chromium's, not ours: the archive is not
+        // config and does not move when a browser's config root does.
+        assert_eq!(
+            default_root(&roots(Os::Linux, &[("XDG_CONFIG_HOME", "cfg")])),
+            home(".knowmoretabs")
+        );
+        // Not `%USERPROFILE%\.knowmoretabs`: LocalAppData is the per-user
+        // directory Windows defines as never roaming to a file server.
+        assert_eq!(
+            default_root(&roots(Os::Windows, &[("LOCALAPPDATA", "state/Local")])),
+            home("state/Local/knowmoretabs")
+        );
+    }
+
+    #[test]
+    fn windows_rejects_root_names_the_other_platforms_accept() {
+        let root = |name: &str| PathBuf::from(HOME).join(name).join("archive");
+        for (name, expected) in [
+            ("CON", RootProblem::Reserved("CON".to_owned())),
+            ("nul", RootProblem::Reserved("nul".to_owned())),
+            ("COM9", RootProblem::Reserved("COM9".to_owned())),
+            ("LPT1.txt", RootProblem::Reserved("LPT1.txt".to_owned())),
+            ("aux", RootProblem::Reserved("aux".to_owned())),
+            ("tabs.", RootProblem::TrailingDotOrSpace("tabs.".to_owned())),
+            ("tabs ", RootProblem::TrailingDotOrSpace("tabs ".to_owned())),
+            (
+                "a|b",
+                RootProblem::Illegal {
+                    component: "a|b".to_owned(),
+                    character: '|',
+                },
+            ),
+            (
+                "alt:stream",
+                RootProblem::Illegal {
+                    component: "alt:stream".to_owned(),
+                    character: ':',
+                },
+            ),
+        ] {
+            assert_eq!(windows_root_problem(&root(name)), Some(expected), "{name}");
+        }
+        // `HOME` carries the drive letter on Windows, so these also say that
+        // the path's own syntax — `C:` and the separators — is not a name and
+        // its colon is not one of the colons above.
+        for fine in [
+            "knowmoretabs",
+            ".knowmoretabs",
+            "CONtext",
+            "COM10",
+            "my tabs",
+            "tabs.d",
+            "Ünïcøde",
+        ] {
+            assert_eq!(windows_root_problem(&root(fine)), None, "{fine}");
+        }
+    }
+
+    #[test]
+    fn a_root_is_too_long_only_when_what_we_write_under_it_would_not_fit() {
+        let limit = WINDOWS_PATH_LIMIT - r"\\?\".len();
+        let root = |len: usize| PathBuf::from("a".repeat(len));
+        assert_eq!(
+            windows_root_problem(&root(limit - DEEPEST_ARCHIVE_SUFFIX)),
+            None
+        );
+        assert_eq!(
+            windows_root_problem(&root(limit - DEEPEST_ARCHIVE_SUFFIX + 1)),
+            Some(RootProblem::TooLong {
+                length: limit + 1,
+                limit
+            })
+        );
+        // The classic 260 is not the limit: the standard library switches to
+        // `\\?\` form past 248 characters, so a root of that order works.
+        assert_eq!(windows_root_problem(&root(300)), None);
+    }
+
+    #[test]
+    fn contains_path_folds_case_where_the_filesystem_does() {
+        let root = home(".knowmoretabs");
+        assert!(contains_path(&root, &root.join("export")));
+        assert!(contains_path(&root, &root));
+        assert!(!contains_path(&root, &home(".knowmoretab")));
+        assert!(!contains_path(&root.join("export"), &root));
+
+        let shouted = home(".KNOWMORETABS/snapshots");
+        assert_eq!(
+            contains_path(&root, &shouted),
+            !(Os::HOST == Os::Linux),
+            "macOS and Windows treat these as one directory; Linux does not"
+        );
     }
 
     #[test]

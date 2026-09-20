@@ -44,6 +44,16 @@ fn main() -> ExitCode {
         out::problem(&error::render(&error::Error::NoHome, cli.verbose, cli.json));
         return ExitCode::from(error::Error::NoHome.exit_code());
     };
+    // Before any command touches it: a root Windows cannot represent has to
+    // say so by name, not as a mysterious failure three calls later.
+    if let Err(problem) = platform::check_root(&root) {
+        let err = error::Error::RootName {
+            root: root.clone(),
+            problem,
+        };
+        out::problem(&error::render(&err, cli.verbose, cli.json));
+        return ExitCode::from(err.exit_code());
+    }
     let result = match &cli.command {
         Some(Command::List) => library_commands::list(&root, cli.json, log),
         Some(Command::Export { dir }) => {
@@ -92,7 +102,7 @@ fn save(cli: &Cli, root: std::path::PathBuf, log: Log) -> Result<(), error::Erro
 }
 
 fn default_root() -> Option<std::path::PathBuf> {
-    platform::home_dir().map(|h| h.join(platform::DEFAULT_ROOT_NAME))
+    platform::Roots::detect().map(|roots| platform::default_root(&roots))
 }
 
 fn summary(snapshot: &Snapshot) -> String {

@@ -24,6 +24,39 @@ pub fn chrome_relative_path() -> &'static str {
     }
 }
 
+/// Where the archive goes when `--root` is not passed, relative to home.
+pub fn default_root_relative_path() -> &'static str {
+    if cfg!(windows) {
+        "AppData/Local/knowmoretabs"
+    } else {
+        ".knowmoretabs"
+    }
+}
+
+/// A home directory the binary will believe, on every platform.
+///
+/// `HOME` and `USERPROFILE` are what `std::env::home_dir` reads. The two
+/// `AppData` variables are what a Windows session sets and what the Windows
+/// column of the browser table hangs off; without them the binary would fall
+/// back to the known folder and look at the real user's browsers, which is
+/// both wrong and a thing no test may do. The XDG and Chrome variables are
+/// cleared so that Linux default discovery is what runs unless a test asks
+/// for an override.
+pub fn point_home_at(cmd: &mut Command, home: &Path) {
+    cmd.env_clear();
+    cmd.env("HOME", home);
+    cmd.env("USERPROFILE", home);
+    cmd.env("LOCALAPPDATA", home.join("AppData").join("Local"));
+    cmd.env("APPDATA", home.join("AppData").join("Roaming"));
+    // Windows needs its own system directory on PATH to start a process at
+    // all, and `%SystemRoot%` to resolve some of its own DLLs.
+    for inherited in ["PATH", "SystemRoot", "SYSTEMROOT", "COMSPEC", "TEMP", "TMP"] {
+        if let Some(value) = std::env::var_os(inherited) {
+            cmd.env(inherited, value);
+        }
+    }
+}
+
 pub struct Fixture {
     pub home: TempDir,
     pub user_data: PathBuf,
@@ -71,14 +104,15 @@ impl Fixture {
     /// user-data dir is *not* passed, so default discovery is what runs
     /// unless the caller adds `--user-data-dir` or `--session`.
     pub fn command(&self) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_knowmoretabs"));
-        cmd.env_clear();
-        cmd.env("HOME", self.home.path());
-        cmd.env("USERPROFILE", self.home.path());
-        if let Some(path) = std::env::var_os("PATH") {
-            cmd.env("PATH", path);
-        }
+        let mut cmd = self.command_without_root();
         cmd.arg("--root").arg(&self.root);
+        cmd
+    }
+
+    /// The binary with no `--root`, so the platform default applies.
+    pub fn command_without_root(&self) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_knowmoretabs"));
+        point_home_at(&mut cmd, self.home.path());
         cmd
     }
 
@@ -133,6 +167,42 @@ impl Fixture {
             })
             .collect()
     }
+}
+
+/// The archive is private to the user who made it. What that sentence means
+/// is not the same on both platforms, so each asserts its own: on Unix the
+/// mode is `0700`, set when the directory is created; on Windows there is no
+/// mode and no ACL is set, so the claim is that every entry on the directory
+/// is inherited — it grants nobody anything its parent did not already grant,
+/// and `%LOCALAPPDATA%`, where the default root goes, grants only this user.
+/// `(I)` is icacls' inherited flag and is a letter, not prose, so this reads
+/// the same on a non-English Windows.
+pub fn assert_private_dir(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "{} is not 0700", path.display());
+    }
+    #[cfg(windows)]
+    {
+        let out = Command::new("icacls").arg(path).output().expect("icacls");
+        assert!(out.status.success(), "icacls failed for {}", path.display());
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let entries: Vec<&str> = text.lines().filter(|l| l.contains(":(")).collect();
+        assert!(!entries.is_empty(), "icacls listed no entries: {text}");
+        assert!(
+            entries.iter().all(|line| line.contains("(I)")),
+            "{} has an access entry of its own rather than inheriting: {text}",
+            path.display()
+        );
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = path;
 }
 
 pub fn read_snapshot(dir: &Path) -> serde_json::Value {

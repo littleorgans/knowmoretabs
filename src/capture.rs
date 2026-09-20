@@ -227,30 +227,29 @@ fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
         });
     }
 
-    let home = platform::home_dir().ok_or(Error::NoHome)?;
+    let roots = platform::Roots::detect().ok_or(Error::NoHome)?;
     let spec = match opts.browser.as_deref() {
         Some("arc") => return Err(Error::ArcUnsupported),
         Some(id) => platform::browser(id).ok_or_else(|| Error::UnknownBrowser {
             requested: id.to_owned(),
-            installed: installed_names(&home),
+            installed: installed_names(&roots),
         })?,
         None => platform::browser(platform::CHROME).ok_or(Error::NoHome)?,
     };
     let explicit = opts.browser.is_some() || opts.user_data_dir.is_some();
 
-    let scan = discover_candidates(opts, &home, spec, log)?;
+    let scan = discover_candidates(opts, &roots, spec, log)?;
     let mut candidates = scan.candidates;
 
     if candidates.is_empty() {
         if explicit {
-            let user_data = scan.user_data;
-            if !user_data.is_dir() {
+            let Some(user_data) = scan.user_data.iter().find(|d| d.is_dir()).cloned() else {
                 return Err(Error::BrowserNotInstalled {
                     requested: spec.id.to_owned(),
-                    path: user_data,
-                    installed: installed_names(&home),
+                    paths: join_paths(&scan.user_data, &roots.home),
+                    installed: installed_names(&roots),
                 });
-            }
+            };
             let profile = platform::resolve_profile(&user_data, opts.profile.as_deref())?;
             return Ok(Located {
                 candidates: Vec::new(),
@@ -304,12 +303,28 @@ fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
 }
 
 /// What the browser table yielded: the candidates worth ranking, the
-/// user-data directory of the selected browser, and one line per browser
+/// user-data directories of the selected browser, and one line per browser
 /// that produced nothing, saying why, for the error when nothing did.
 struct Scan {
     candidates: Vec<BrowserCandidate>,
-    user_data: PathBuf,
+    user_data: Vec<PathBuf>,
     looked_at: Vec<(String, String)>,
+}
+
+/// Every directory a browser could be in, on one line. Linux gives a browser
+/// up to four — native, two Snap layouts, Flatpak — and seven browsers is
+/// sixteen paths, so the home directory is written `~` rather than repeated
+/// sixteen times. The paths themselves are all there: a "we looked and found
+/// nothing" error is only actionable if it says where it looked.
+fn join_paths(paths: &[PathBuf], home: &Path) -> String {
+    paths
+        .iter()
+        .map(|path| match path.strip_prefix(home) {
+            Ok(rest) => Path::new("~").join(rest).display().to_string(),
+            Err(_) => path.display().to_string(),
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// `chrome (path), edge (path): no user-data directory; brave (path): …`.
@@ -338,20 +353,25 @@ enum Probe {
     Failed(Error),
 }
 
+/// The two ordinary "not here" answers, named because `probe_browser` has to
+/// tell them apart when one browser has several directories.
+const NOT_INSTALLED: &str = "no user-data directory";
+const NO_SESSION_FILE: &str = "no Session_* file";
+
 fn discover_candidates(
     opts: &Options,
-    home: &Path,
+    roots: &platform::Roots,
     selected: &'static platform::BrowserSpec,
     log: Log,
 ) -> Result<Scan, Error> {
     let requested_profile = opts.profile.as_deref();
     if opts.browser.is_some() || opts.user_data_dir.is_some() {
-        let user_data = opts
-            .user_data_dir
-            .clone()
-            .unwrap_or_else(|| selected.user_data_dir(home));
+        let user_data = match &opts.user_data_dir {
+            Some(dir) => vec![dir.clone()],
+            None => selected.user_data_dirs(roots),
+        };
         // Asked for by name: every failure is the user's to see.
-        let candidates = match probe(selected, &user_data, requested_profile) {
+        let candidates = match probe_browser(selected, &user_data, requested_profile) {
             Probe::Found(candidate) => vec![candidate],
             Probe::Nothing(_) => Vec::new(),
             Probe::Failed(error) => return Err(error),
@@ -374,9 +394,9 @@ fn discover_candidates(
     let mut candidates = Vec::new();
     let mut looked_at = Vec::new();
     for spec in &platform::BROWSERS {
-        let user_data = spec.user_data_dir(home);
-        let where_ = format!("{} ({})", spec.id, user_data.display());
-        match probe(spec, &user_data, requested_profile) {
+        let user_data = spec.user_data_dirs(roots);
+        let where_ = format!("{} ({})", spec.id, join_paths(&user_data, &roots.home));
+        match probe_browser(spec, &user_data, requested_profile) {
             Probe::Found(candidate) => candidates.push(candidate),
             Probe::Nothing(reason) => looked_at.push((where_, reason.to_owned())),
             Probe::Failed(error) => {
@@ -397,9 +417,51 @@ fn discover_candidates(
     }
     Ok(Scan {
         candidates,
-        user_data: selected.user_data_dir(home),
+        user_data: selected.user_data_dirs(roots),
         looked_at,
     })
+}
+
+/// One browser across every directory its packaging can put it in. Linux is
+/// the platform where that is more than one: a native, a Snap and a Flatpak
+/// install of the same browser are three installs with three user-data
+/// directories, and a machine can have two of them. The newest wins, for the
+/// same reason the newest browser wins — it is the one the person was using.
+/// Collapsing them here rather than in the scan keeps one candidate per
+/// browser, so `--browser brave` still names one thing.
+fn probe_browser(
+    spec: &'static platform::BrowserSpec,
+    dirs: &[PathBuf],
+    requested_profile: Option<&str>,
+) -> Probe {
+    let mut best: Option<BrowserCandidate> = None;
+    let mut failure: Option<Error> = None;
+    let mut nothing = NOT_INSTALLED;
+    for dir in dirs {
+        match probe(spec, dir, requested_profile) {
+            Probe::Found(candidate) => {
+                if best
+                    .as_ref()
+                    .is_none_or(|b| platform::candidate_cmp(b, &candidate).is_lt())
+                {
+                    best = Some(candidate);
+                }
+            }
+            // "installed but empty" says more than "not installed", so it
+            // survives a sibling directory that is simply absent.
+            Probe::Nothing(reason) => {
+                if reason != NOT_INSTALLED {
+                    nothing = reason;
+                }
+            }
+            Probe::Failed(error) => failure = failure.or(Some(error)),
+        }
+    }
+    match (best, failure) {
+        (Some(candidate), _) => Probe::Found(candidate),
+        (None, Some(error)) => Probe::Failed(error),
+        (None, None) => Probe::Nothing(nothing),
+    }
 }
 
 /// Everything known about one browser before any file is opened: whether it
@@ -413,7 +475,7 @@ fn probe(
     requested_profile: Option<&str>,
 ) -> Probe {
     if !user_data.is_dir() {
-        return Probe::Nothing("no user-data directory");
+        return Probe::Nothing(NOT_INSTALLED);
     }
     let (profile, sessions) = match platform::profile_with_session(user_data, requested_profile) {
         Ok(found) => found,
@@ -426,7 +488,7 @@ fn probe(
     let (mut suffix, mut modified) = match sessions.first() {
         Some(newest) => (newest.suffix, platform::file_modified(&newest.path)),
         None if stale.is_some() => (0, None),
-        None => return Probe::Nothing("no Session_* file"),
+        None => return Probe::Nothing(NO_SESSION_FILE),
     };
     if stale.is_some()
         && let Some((encrypted_suffix, encrypted_modified)) =
@@ -466,12 +528,12 @@ fn is_ambiguous_profile_error(error: &Error) -> bool {
 /// The browsers a person could pass to `--browser` and get a session from.
 /// Judged by the same probe as the scan, so a leftover directory with no
 /// profile in it (Chromium on the research machine) is not called installed.
-fn installed_names(home: &Path) -> String {
+fn installed_names(roots: &platform::Roots) -> String {
     let names: Vec<&str> = platform::BROWSERS
         .iter()
         .filter(|spec| {
             matches!(
-                probe(spec, &spec.user_data_dir(home), None),
+                probe_browser(spec, &spec.user_data_dirs(roots), None),
                 Probe::Found(_)
             )
         })
@@ -551,6 +613,12 @@ fn read_stable(path: &Path) -> Result<(Vec<u8>, Option<std::time::SystemTime>), 
     Err(Error::Unstable(path.to_path_buf()))
 }
 
+/// Length and mtime everywhere, plus whatever else the platform can say
+/// cheaply about "this is still the same file, untouched". Unix adds the
+/// inode and ctime; Windows has no stable inode on `Metadata` but does have
+/// the creation time, which a replaced file carries a new value of unless
+/// NTFS tunnelling preserves it — and tunnelling only ever makes this agree
+/// where it would otherwise disagree, so it costs no correctness.
 fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     let basic = a.len() == b.len() && a.modified().ok() == b.modified().ok();
     #[cfg(unix)]
@@ -558,7 +626,12 @@ fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
         use std::os::unix::fs::MetadataExt;
         basic && a.ino() == b.ino() && a.ctime() == b.ctime() && a.ctime_nsec() == b.ctime_nsec()
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        basic && a.creation_time() == b.creation_time()
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         basic
     }
