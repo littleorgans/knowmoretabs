@@ -220,7 +220,7 @@ fn contract_matches_the_committed_fixture_shape() {
     archive_fixture(&fx);
     let library = exported_library(&fx);
     let fixture: Value =
-        serde_json::from_str(include_str!("../design-b/fixtures/library.json")).unwrap();
+        serde_json::from_str(include_str!("../web/fixtures/library.json")).unwrap();
     assert_contract_shape(&library, &fixture, "library");
 }
 

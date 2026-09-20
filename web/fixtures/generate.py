@@ -8,12 +8,15 @@ why:   The UI has to be designed against a realistic shape — a head of pages
        URL and title here is invented. Deterministic: same seed, same file.
 
 Writes fixtures/library.json and re-embeds the blob into ../index.html
-between the two marker comments, so the prototype opens from file://.
+between the two marker comments, so the page opens from file://. Also writes
+fixtures/cases/*.json: the small documents the edge cases are checked against
+(an empty archive, one snapshot, a degraded parse, the export shape).
 
-    python3 generate.py            # ~2000 pages, ~41 snapshots
+    python3 generate.py            # ~2000 pages, ~41 snapshots, plus the cases
     python3 generate.py --seed 7   # a different but equally plausible world
 """
 import argparse, json, random, re, sys
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -352,22 +355,46 @@ class World:
 
 
 GROUP_NAMES = [("Rust", "orange"), ("Reading", "blue"), ("Trip", "green"), ("Work", "grey"),
-               ("Kitchen", "yellow"), ("Later", "purple"), ("Keyboard", "pink"), ("Papers", "cyan")]
+               ("Kitchen", "yellow"), ("Later", "purple"), ("Keyboard", "pink"), ("Papers", "cyan"),
+               ("", "red")]        # Chrome allows a group with no name; only its colour shows
+
+# Pages real archives have and invented vocabularies do not. Every one is still
+# invented, but the shapes are the ones that break layouts: no title, a title
+# and a URL far longer than a row, non-Latin and right-to-left scripts, and
+# URLs with no host at all. The domain is computed the way the backend does it.
+EDGE_PAGES = [
+    ("https://example.com/notes/2026/untitled-draft", ""),
+    ("https://docs.example.org/reference/" + "very-long-path-segment-" * 40 + "index.html?" + "&".join(f"param{i}=value{i}" for i in range(60)),
+     "A title that runs on far longer than any row could show, " * 6 + "and then keeps going for good measure so that ellipsis and wrapping are both exercised"),
+    ("https://ja.wikipedia.org/wiki/日本語の記事", "日本語の記事 - Wikipedia"),
+    ("https://de.wikipedia.org/wiki/Straßenbahn_Zürich", "Straßenbahn Zürich – Wikipedia"),
+    ("https://ar.wikipedia.org/wiki/اللغة_العربية", "اللغة العربية - ويكيبيديا، الموسوعة الحرة"),
+    ("https://he.wikipedia.org/wiki/עברית", "עברית – ויקיפדיה"),
+    ("https://example.net/emoji", "🦀 Rust for Rustaceans 🦀 · 中文 · Ελληνικά"),
+    ("data:text/html;base64,PGh0bWw+PGJvZHk+PGgxPkhlbGxvPC9oMT48L2JvZHk+PC9odG1sPg==", "Hello"),
+    ("chrome://settings/", "Settings"),
+    ("chrome://version/", "About Version"),
+]
 
 
-def build(seed, snapshot_count=41, head_count=64):
+def domain_of(url):
+    """What the backend's `public_domain` would say: host, lowercased, no www."""
+    host = (urlsplit(url).hostname or "").lower()
+    return host[4:] if host.startswith("www.") else host
+
+
+def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6):
     r = random.Random(seed)
     world = World(r)
     pages = []          # {url,title,domain}
     meta = []           # per page: stickiness, home window, first_seen
     tab_ids = {}
 
-    def new_page(kind):
-        url, title = world.page()
-        if r.random() < 0.012:
+    def new_page(kind, fixed=None):
+        url, title = fixed or world.page()
+        if fixed is None and r.random() < 0.012:
             title = ""      # Chrome sometimes writes no title
-        host = re.sub(r"^https?://(www\.)?", "", url).split("/")[0]
-        pages.append({"url": url, "title": title, "domain": host})
+        pages.append({"url": url, "title": title, "domain": domain_of(url)})
         stick = {"head": 1.0, "sticky": 0.92, "medium": 0.6, "ephemeral": 0.12}[kind]
         meta.append({"stick": stick, "win": None})
         return len(pages) - 1
@@ -388,6 +415,12 @@ def build(seed, snapshot_count=41, head_count=64):
     win_of = {}
     for p in head:
         win_of[p] = r.randint(1, windows)
+    # Tab groups live on a window and persist from one snapshot to the next, the
+    # way Chrome's do: members stay until closed, newcomers to the window may
+    # join, a group is occasionally dissolved or renamed, and a page sometimes
+    # moves from one group to another. So the same page can be in "Papers" in
+    # March, "Later" in June, and in no group today.
+    live = {}           # window → {"name", "colour", "members": set}
 
     for k, when in enumerate(times):
         # windows drift slowly
@@ -407,6 +440,8 @@ def build(seed, snapshot_count=41, head_count=64):
         for _ in range(burst):
             kind = r.choices(["ephemeral", "medium", "sticky"], [58, 28, 14])[0]
             arrivals.append(new_page(kind))
+        if edges and k == max(0, snapshot_count - 3):
+            arrivals += [new_page("sticky", e) for e in EDGE_PAGES]
         open_set = survivors | reopened | set(arrivals)
         # assign windows to newcomers; a burst tends to land in one or two windows
         burst_win = r.randint(1, windows)
@@ -419,21 +454,42 @@ def build(seed, snapshot_count=41, head_count=64):
                 win_of[p] = r.randint(1, windows)
             if p not in tab_ids:
                 tab_ids[p] = 100 + len(tab_ids) * r.choice([1, 2, 3])
-        # groups on a couple of windows
-        groups = []
-        group_of = {}
+        # groups: persist, recruit, dissolve, and let the odd page move
+        for w in list(live):
+            if w > windows or r.random() < 0.08:
+                del live[w]
         for w in range(1, windows + 1):
-            if r.random() < 0.3:
-                name, colour = r.choice(GROUP_NAMES)
-                gid = len(groups)
-                groups.append({"id": gid, "title": name, "colour": colour})
-                for p in open_set:
-                    if win_of[p] == w and r.random() < 0.35:
-                        group_of[p] = gid
-        # lay out: per window, ordered by first appearance (older tabs sit left)
+            here = [p for p in open_set if win_of[p] == w]
+            if w not in live:
+                if r.random() < 0.18 and len(here) >= 4:
+                    name, colour = r.choice(GROUP_NAMES)
+                    live[w] = {"name": name, "colour": colour, "members": {p for p in here if r.random() < 0.35}}
+                continue
+            g = live[w]
+            g["members"] = {p for p in g["members"] if p in open_set and win_of[p] == w}
+            g["members"] |= {p for p in arrivals + list(reopened) if win_of[p] == w and r.random() < 0.4}
+            if r.random() < 0.05:
+                g["name"], g["colour"] = r.choice(GROUP_NAMES)
+        if len(live) >= 2 and r.random() < 0.5:        # a page changes group
+            a, b = r.sample(list(live), 2)
+            movers = [p for p in live[a]["members"] if p not in head]
+            if movers:
+                p = r.choice(movers)
+                live[a]["members"].discard(p); win_of[p] = b; live[b]["members"].add(p)
+        groups, group_of = [], {}
+        for w in sorted(live):
+            g = live[w]
+            if not g["members"]:
+                continue
+            gid = len(groups)
+            groups.append({"id": gid, "title": g["name"], "colour": g["colour"]})
+            for p in g["members"]:
+                group_of[p] = gid
+        # lay out: per window, grouped tabs sit together (Chrome keeps a group
+        # contiguous), ordered by first appearance within each run
         tabs = []
         for w in range(1, windows + 1):
-            members = sorted((p for p in open_set if win_of[p] == w), key=lambda p: tab_ids[p])
+            members = sorted((p for p in open_set if win_of[p] == w), key=lambda p: (p in group_of, tab_ids[p]))
             pos = 0
             for p in members:
                 pinned = 1 if (p in head and w == 1 and pos < 4) else 0
@@ -453,18 +509,60 @@ def build(seed, snapshot_count=41, head_count=64):
             "tabs": tabs,
         })
 
-    forgotten = set(r.sample(range(head_count, len(pages)), 6))
+    forgotten = set(r.sample(range(head_count, len(pages)), min(forgotten_count, max(0, len(pages) - head_count))))
     for i in forgotten:
         pages[i]["forgotten"] = True
-    domains = {p["domain"] for p in pages}
     return {
         "schema_version": 1,
         "generated_at": times[-1].strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "stats": {"pages": len(pages), "snapshots": len(snapshots), "domains": len(domains),
+        "stats": {"pages": len(pages), "snapshots": len(snapshots), "domains": len({p["domain"] for p in pages}),
                   "sightings": sum(len(s["tabs"]) for s in snapshots), "forgotten": len(forgotten)},
         "snapshots": snapshots,
         "pages": pages,
     }
+
+
+def to_export(lib):
+    """The export shape: forgotten pages and their tab rows are omitted, the
+    count survives in stats.forgotten, and page indices are renumbered."""
+    keep = [i for i, p in enumerate(lib["pages"]) if not p.get("forgotten")]
+    renum = {old: new for new, old in enumerate(keep)}
+    out = json.loads(json.dumps(lib))
+    out["pages"] = [{k: v for k, v in lib["pages"][i].items() if k != "forgotten"} for i in keep]
+    for s in out["snapshots"]:
+        s["tabs"] = [[renum[t[0]], *t[1:]] for t in s["tabs"] if t[0] in renum]
+        s["tabs_total"] = len(s["tabs"])
+    out["stats"].update(pages=len(out["pages"]), sightings=sum(len(s["tabs"]) for s in out["snapshots"]),
+                        domains=len({p["domain"] for p in out["pages"]}))
+    return out
+
+
+def cases(seed):
+    """Small documents for the edges a real archive has and the big fixture
+    cannot show. Fields the backend does not emit yet (`collapsed` on a group,
+    `stats` on a snapshot) appear only here, never in library.json, which the
+    Rust contract test uses as its exemplar."""
+    stamp = "2026-09-21T16:01:52Z"
+    empty = {"schema_version": 1, "generated_at": stamp,
+             "stats": {"pages": 0, "snapshots": 0, "domains": 0, "sightings": 0, "forgotten": 0},
+             "snapshots": [], "pages": []}
+    no_pages = json.loads(json.dumps(empty))
+    no_pages["stats"]["snapshots"] = 1
+    no_pages["snapshots"] = [{"id": "2026-09-20-101500Z", "captured_at": "2026-09-20T10:15:00Z", "browser": "chrome",
+                              "profile": "Default", "windows": 1, "tabs_total": 0, "groups": [], "tabs": []}]
+    one = build(seed + 1, snapshot_count=1, head_count=12)
+    degraded = build(seed + 2, snapshot_count=5, head_count=12, forgotten_count=0)
+    degraded["snapshots"][2]["stats"] = {"dropped_tabs": 3, "unknown_commands": 2, "malformed_commands": 0,
+                                         "truncated_bytes": 1024, "marker_ok": False}
+    degraded["snapshots"][2]["tabs"] = degraded["snapshots"][2]["tabs"][:-3]
+    degraded["snapshots"][2]["tabs_total"] -= 3
+    degraded["snapshots"][4]["stats"] = {"dropped_tabs": 0, "unknown_commands": 0, "malformed_commands": 1,
+                                         "truncated_bytes": 0, "marker_ok": True}
+    for s in degraded["snapshots"]:
+        for j, g in enumerate(s["groups"]):
+            g["collapsed"] = j == 0          # the first group in every snapshot is collapsed
+    exported = to_export(build(seed + 3, snapshot_count=8, head_count=12, forgotten_count=4))
+    return {"empty": empty, "no-pages": no_pages, "one-snapshot": one, "degraded": degraded, "export-forgotten": exported}
 
 
 def embed(html_path, blob):
@@ -476,6 +574,10 @@ def embed(html_path, blob):
     html_path.write_text(html, encoding="utf-8")
 
 
+def dump(obj):
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--seed", type=int, default=2026)
@@ -484,17 +586,24 @@ def main():
     args = ap.parse_args()
     lib = build(args.seed, args.snapshots)
     out = HERE / "library.json"
-    out.write_text(json.dumps(lib, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+    out.write_text(dump(lib), encoding="utf-8")
     counts = {}
     for s in lib["snapshots"]:
         for i in {t[0] for t in s["tabs"]}:
             counts[i] = counts.get(i, 0) + 1
     once = sum(1 for c in counts.values() if c == 1)
     every = sum(1 for c in counts.values() if c == len(lib["snapshots"]))
+    grouped = sum(1 for s in lib["snapshots"] for t in s["tabs"] if t[5] is not None)
     print(f"{out.name}: {out.stat().st_size:,} bytes · {lib['stats']['pages']} pages · "
           f"{lib['stats']['snapshots']} snapshots · {lib['stats']['domains']} domains · "
           f"{lib['stats']['sightings']} sightings · seen once {once} · in every snapshot {every} · "
-          f"tabs/snapshot {min(s['tabs_total'] for s in lib['snapshots'])}–{max(s['tabs_total'] for s in lib['snapshots'])}")
+          f"tabs/snapshot {min(s['tabs_total'] for s in lib['snapshots'])}–{max(s['tabs_total'] for s in lib['snapshots'])} · "
+          f"groups {sum(len(s['groups']) for s in lib['snapshots'])} · grouped sightings {grouped}")
+    cdir = HERE / "cases"
+    cdir.mkdir(exist_ok=True)
+    for name, doc in cases(args.seed).items():
+        (cdir / f"{name}.json").write_text(dump(doc), encoding="utf-8")
+    print(f"cases/: {', '.join(sorted(p.name for p in cdir.glob('*.json')))}")
     if not args.no_embed:
         html = HERE.parent / "index.html"
         if html.exists():

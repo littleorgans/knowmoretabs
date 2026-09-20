@@ -7,19 +7,34 @@ why:   The same index.html must work with the blob stripped and the data
        GET api/library, POST api/forget and api/restore, state in memory.
        Not the real backend — the Rust server implements the same contract.
 
-    python3 serve.py            # http://127.0.0.1:7878/
+    python3 serve.py                                   # http://127.0.0.1:7878/
+    python3 serve.py --fixture cases/degraded.json     # any case, serve mode
+    python3 serve.py --fixture cases/empty.json --export
+                                                       # any case, embedded, as export would
 """
-import json, sys
+import argparse, json, sys
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LIB = json.loads((ROOT / "fixtures" / "library.json").read_text(encoding="utf-8"))
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 7878
+ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+ap.add_argument("port", nargs="?", type=int, default=7878)
+ap.add_argument("--fixture", default=str(ROOT / "fixtures" / "library.json"))
+ap.add_argument("--export", action="store_true", help="embed the fixture instead of serving the API")
+ARGS = ap.parse_args()
+LIB = json.loads(Path(ARGS.fixture).read_text(encoding="utf-8"))
 
 
 def by_url():
     return {p["url"]: p for p in LIB["pages"]}
+
+
+def page():
+    html = (ROOT / "index.html").read_text(encoding="utf-8")
+    a = html.index("<!-- library-data:start -->")
+    b = html.index("<!-- library-data:end -->")
+    blob = json.dumps(LIB, ensure_ascii=False).replace("</", "<\\/") if ARGS.export else ""
+    return html[:a] + '<script id="library-data" type="application/json">' + blob + "</script>\n" + html[b:]
 
 
 class Handler(SimpleHTTPRequestHandler):
@@ -42,12 +57,7 @@ class Handler(SimpleHTTPRequestHandler):
             LIB["stats"]["forgotten"] = sum(1 for p in LIB["pages"] if p.get("forgotten"))
             return self.send_json(LIB)
         if self.path in ("/", "/index.html"):
-            # The serve host ships the same file with an empty data element.
-            html = (ROOT / "index.html").read_text(encoding="utf-8")
-            a = html.index("<!-- library-data:start -->")
-            b = html.index("<!-- library-data:end -->")
-            html = html[:a] + '<script id="library-data" type="application/json"></script>\n' + html[b:]
-            body = html.encode()
+            body = page().encode()
             self.send_response(200)
             self.send_header("content-type", "text/html; charset=utf-8")
             self.send_header("content-length", str(len(body)))
@@ -71,5 +81,6 @@ class Handler(SimpleHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"serving {ROOT} on http://127.0.0.1:{PORT}/  (Ctrl-C to stop)")
-    ThreadingHTTPServer(("127.0.0.1", PORT), Handler).serve_forever()
+    mode = "export (embedded)" if ARGS.export else "serve (api)"
+    print(f"serving {ROOT} on http://127.0.0.1:{ARGS.port}/  {mode} · {Path(ARGS.fixture).name}  (Ctrl-C to stop)")
+    ThreadingHTTPServer(("127.0.0.1", ARGS.port), Handler).serve_forever()
