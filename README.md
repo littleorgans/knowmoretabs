@@ -141,6 +141,12 @@ directory has emptied while the encrypted one has files, it refuses with a
 clear message and exit status 3. `--force` does not override this. There is
 no workaround yet; progress is tracked in the issue tracker.
 
+The check runs for every browser the no-flag scan considers. A browser whose
+cleartext has gone stale is ranked by its encrypted files, so if it is the one
+used most recently the run refuses rather than quietly saving another browser
+in its place; if another browser is newer, that one is saved and the stale
+browser is listed under "also found" with a note saying it would be refused.
+
 ## Non-goals
 
 No sync. No accounts. No cloud. No telemetry. No browser extension (for now).

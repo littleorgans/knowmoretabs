@@ -40,6 +40,15 @@ pub enum Error {
         installed: String,
     },
     #[error(
+        "{requested} has no user-data directory at {}; installed supported browsers: {installed}",
+        path.display()
+    )]
+    BrowserNotInstalled {
+        requested: String,
+        path: PathBuf,
+        installed: String,
+    },
+    #[error(
         "Arc is not supported: Arc stores open tabs in its proprietary StorableSidebar.json, not Session_* files"
     )]
     ArcUnsupported,
@@ -103,6 +112,7 @@ impl Error {
             Self::Profile(_) => "profile",
             Self::Discovery(_) => "discovery",
             Self::UnknownBrowser { .. } => "unknown_browser",
+            Self::BrowserNotInstalled { .. } => "browser_not_installed",
             Self::ArcUnsupported => "arc_unsupported",
             Self::NoSession(_) | Self::NoBrowserSession { .. } => "no_session",
             Self::TabsFile(_) => "tabs_file",

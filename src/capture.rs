@@ -234,17 +234,24 @@ fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
             requested: id.to_owned(),
             installed: installed_names(&home),
         })?,
-        None if opts.user_data_dir.is_some() => {
-            platform::browser(platform::CHROME).ok_or(Error::NoHome)?
-        }
         None => platform::browser(platform::CHROME).ok_or(Error::NoHome)?,
     };
+    let explicit = opts.browser.is_some() || opts.user_data_dir.is_some();
 
-    let (mut candidates, default_user_data, looked_at) = discover_candidates(opts, &home, spec)?;
+    let scan = discover_candidates(opts, &home, spec, log)?;
+    let mut candidates = scan.candidates;
 
     if candidates.is_empty() {
-        if opts.browser.is_some() || opts.user_data_dir.is_some() {
-            let profile = platform::resolve_profile(&default_user_data, opts.profile.as_deref())?;
+        if explicit {
+            let user_data = scan.user_data;
+            if !user_data.is_dir() {
+                return Err(Error::BrowserNotInstalled {
+                    requested: spec.id.to_owned(),
+                    path: user_data,
+                    installed: installed_names(&home),
+                });
+            }
+            let profile = platform::resolve_profile(&user_data, opts.profile.as_deref())?;
             return Ok(Located {
                 candidates: Vec::new(),
                 browser: Some(spec.id.to_owned()),
@@ -254,11 +261,22 @@ fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
                 also_found: Vec::new(),
             });
         }
-        return Err(Error::NoBrowserSession { looked_at });
+        return Err(Error::NoBrowserSession {
+            looked_at: group_by_reason(scan.looked_at),
+        });
     }
 
     candidates.sort_by(platform::candidate_cmp);
     let winner = candidates.pop().expect("checked non-empty");
+    // The browser used most recently is the one to refuse on, not to route
+    // around: a stale winner means the user's real session is unreadable, and
+    // saving the runner-up would present another browser as that session.
+    if let Some(reason) = winner.stale {
+        return Err(Error::Stale {
+            profile: winner.profile.path,
+            reason,
+        });
+    }
     let also_found = candidates;
     let profile = winner.profile.clone();
     let user_data = profile
@@ -285,69 +303,180 @@ fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
     })
 }
 
+/// What the browser table yielded: the candidates worth ranking, the
+/// user-data directory of the selected browser, and one line per browser
+/// that produced nothing, saying why, for the error when nothing did.
+struct Scan {
+    candidates: Vec<BrowserCandidate>,
+    user_data: PathBuf,
+    looked_at: Vec<(String, String)>,
+}
+
+/// `chrome (path), edge (path): no user-data directory; brave (path): …`.
+/// Seven browsers usually fail for two or three reasons; one line per reason
+/// keeps the error readable and still names every directory looked at.
+fn group_by_reason(looked_at: Vec<(String, String)>) -> String {
+    let mut groups: Vec<(String, Vec<String>)> = Vec::new();
+    for (where_, reason) in looked_at {
+        match groups.iter_mut().find(|(r, _)| *r == reason) {
+            Some((_, places)) => places.push(where_),
+            None => groups.push((reason, vec![where_])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(reason, places)| format!("{}: {reason}", places.join(", ")))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+/// One browser's answer. `Nothing` is the ordinary "not here"; `Failed` is
+/// something about that browser's files that a person may want to fix.
+enum Probe {
+    Found(BrowserCandidate),
+    Nothing(&'static str),
+    Failed(Error),
+}
+
 fn discover_candidates(
     opts: &Options,
     home: &Path,
     selected: &'static platform::BrowserSpec,
-) -> Result<(Vec<platform::BrowserCandidate>, PathBuf, String), Error> {
+    log: Log,
+) -> Result<Scan, Error> {
+    let requested_profile = opts.profile.as_deref();
     if opts.browser.is_some() || opts.user_data_dir.is_some() {
         let user_data = opts
             .user_data_dir
             .clone()
             .unwrap_or_else(|| selected.user_data_dir(home));
-        let candidate =
-            platform::candidate_for_browser(selected, &user_data, opts.profile.as_deref())
-                .map_err(Error::from)?;
-        return Ok((
-            candidate.into_iter().collect(),
-            user_data.clone(),
-            format!("{} ({})", selected.id, user_data.display()),
-        ));
+        // Asked for by name: every failure is the user's to see.
+        let candidates = match probe(selected, &user_data, requested_profile) {
+            Probe::Found(candidate) => vec![candidate],
+            Probe::Nothing(_) => Vec::new(),
+            Probe::Failed(error) => return Err(error),
+        };
+        return Ok(Scan {
+            candidates,
+            user_data,
+            looked_at: Vec::new(),
+        });
     }
+
+    // Scanning: a browser that cannot be read is passed over, because the
+    // user did not ask for it and another browser may be the one they use.
+    // Its reason is kept for the error shown if no browser works out, and
+    // shown under `-v` otherwise. Two exceptions are the user's own input and
+    // are the same for every browser, so they stop the scan at once: a
+    // pseudo-profile such as `Guest`, and a display name one browser cannot
+    // tell apart, which is warned about rather than silently dropped because
+    // the fix (`--browser NAME --profile DIR`) is browser-specific.
     let mut candidates = Vec::new();
     let mut looked_at = Vec::new();
-    for candidate_spec in &platform::BROWSERS {
-        let user_data = platform::candidate_user_data(candidate_spec, home);
-        looked_at.push(format!("{} ({})", candidate_spec.id, user_data.display()));
-        match platform::candidate_for_browser(candidate_spec, &user_data, opts.profile.as_deref()) {
-            Ok(Some(candidate)) => candidates.push(candidate),
-            Ok(None) => {
-                if let Ok((profile, _)) =
-                    platform::profile_with_session(&user_data, opts.profile.as_deref())
-                    && let Ok(Some(reason)) = staleness::check(&profile.path)
-                {
-                    return Err(Error::Stale {
-                        profile: profile.path,
-                        reason,
-                    });
+    for spec in &platform::BROWSERS {
+        let user_data = spec.user_data_dir(home);
+        let where_ = format!("{} ({})", spec.id, user_data.display());
+        match probe(spec, &user_data, requested_profile) {
+            Probe::Found(candidate) => candidates.push(candidate),
+            Probe::Nothing(reason) => looked_at.push((where_, reason.to_owned())),
+            Probe::Failed(error) => {
+                if requested_profile.is_some() && is_pseudo_profile_error(&error) {
+                    return Err(error);
                 }
+                if is_ambiguous_profile_error(&error) {
+                    log.warn(&format!(
+                        "{}: {error} (with --browser {})",
+                        spec.id, spec.id
+                    ));
+                } else {
+                    log.note(&format!("{}: skipped: {error}", spec.id));
+                }
+                looked_at.push((where_, error.to_string()));
             }
-            Err(error) if opts.profile.is_some() && is_profile_input_error(&error) => {
-                return Err(Error::Discovery(error));
-            }
-            Err(_) => {}
         }
     }
-    Ok((
+    Ok(Scan {
         candidates,
-        selected.user_data_dir(home),
-        looked_at.join(", "),
-    ))
+        user_data: selected.user_data_dir(home),
+        looked_at,
+    })
 }
 
-fn is_profile_input_error(error: &platform::DiscoveryError) -> bool {
+/// Everything known about one browser before any file is opened: whether it
+/// is installed, which profile is current, whether that profile is stale, and
+/// how recent it is. Staleness is decided here, per browser, so that a stale
+/// profile competes on its real recency (its encrypted files) rather than on
+/// the cleartext files that stopped moving.
+fn probe(
+    spec: &'static platform::BrowserSpec,
+    user_data: &Path,
+    requested_profile: Option<&str>,
+) -> Probe {
+    if !user_data.is_dir() {
+        return Probe::Nothing("no user-data directory");
+    }
+    let (profile, sessions) = match platform::profile_with_session(user_data, requested_profile) {
+        Ok(found) => found,
+        Err(error) => return Probe::Failed(Error::Discovery(error)),
+    };
+    let stale = match staleness::check(&profile.path) {
+        Ok(stale) => stale,
+        Err(source) => return Probe::Failed(Error::io("inspect", &profile.path)(source)),
+    };
+    let (mut suffix, mut modified) = match sessions.first() {
+        Some(newest) => (newest.suffix, platform::file_modified(&newest.path)),
+        None if stale.is_some() => (0, None),
+        None => return Probe::Nothing("no Session_* file"),
+    };
+    if stale.is_some()
+        && let Some((encrypted_suffix, encrypted_modified)) =
+            platform::encrypted_recency(&profile.path)
+        && encrypted_suffix > suffix
+    {
+        suffix = encrypted_suffix;
+        modified = encrypted_modified;
+    }
+    Probe::Found(BrowserCandidate {
+        browser: spec,
+        profile,
+        suffix,
+        modified,
+        stale,
+    })
+}
+
+fn is_pseudo_profile_error(error: &Error) -> bool {
     matches!(
         error,
-        platform::DiscoveryError::Profile(
-            platform::ProfileError::InvalidName(_)
-                | platform::ProfileError::NotBrowsing(_)
-                | platform::ProfileError::Ambiguous { .. }
-        )
+        Error::Discovery(platform::DiscoveryError::Profile(
+            platform::ProfileError::NotBrowsing(_)
+        ))
     )
 }
 
+fn is_ambiguous_profile_error(error: &Error) -> bool {
+    matches!(
+        error,
+        Error::Discovery(platform::DiscoveryError::Profile(
+            platform::ProfileError::Ambiguous { .. }
+        ))
+    )
+}
+
+/// The browsers a person could pass to `--browser` and get a session from.
+/// Judged by the same probe as the scan, so a leftover directory with no
+/// profile in it (Chromium on the research machine) is not called installed.
 fn installed_names(home: &Path) -> String {
-    let names = platform::installed_browser_ids(home);
+    let names: Vec<&str> = platform::BROWSERS
+        .iter()
+        .filter(|spec| {
+            matches!(
+                probe(spec, &spec.user_data_dir(home), None),
+                Probe::Found(_)
+            )
+        })
+        .map(|spec| spec.id)
+        .collect();
     if names.is_empty() {
         "none".to_owned()
     } else {

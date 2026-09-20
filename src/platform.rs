@@ -113,14 +113,6 @@ pub fn browser(id: &str) -> Option<&'static BrowserSpec> {
     BROWSERS.iter().find(|b| b.id == id)
 }
 
-pub fn installed_browser_ids(home: &Path) -> Vec<&'static str> {
-    BROWSERS
-        .iter()
-        .filter(|spec| spec.user_data_dir(home).is_dir())
-        .map(|spec| spec.id)
-        .collect()
-}
-
 pub fn home_dir() -> Option<PathBuf> {
     directories::BaseDirs::new().map(|d| d.home_dir().to_path_buf())
 }
@@ -166,12 +158,22 @@ pub struct Profile {
 }
 
 /// A browser/profile pair that can be selected by zero-flag discovery.
+///
+/// `suffix` is the recency the scan ranks by. For a stale profile (see
+/// `staleness`) it is the newer of the cleartext and encrypted `Session_*`
+/// suffixes, so a browser whose cleartext files stopped moving still competes
+/// on when it was really last used and cannot be quietly outranked by a
+/// browser the user touched less recently.
 #[derive(Debug, Clone)]
 pub struct BrowserCandidate {
     pub browser: &'static BrowserSpec,
     pub profile: Profile,
     pub suffix: i64,
     pub modified: Option<std::time::SystemTime>,
+    /// `Some` when the profile's encrypted sessions are newer than its
+    /// cleartext ones. Such a candidate is never saved: if it wins the scan
+    /// the run refuses, and if it loses it is reported as stale.
+    pub stale: Option<crate::staleness::StaleReason>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -244,10 +246,15 @@ fn resolve_requested(
     cache: &BTreeMap<String, ProfileEntry>,
     name: &str,
 ) -> Result<String, ProfileError> {
-    if name.is_empty() || name.contains(['/', '\\', '\0']) || name == "." || name == ".." {
+    if name.is_empty() {
         return Err(ProfileError::InvalidName(name.to_owned()));
     }
-    if cache.contains_key(name) || is_chromium_dir_name(name) {
+    // `browsers.md` §4.1: a directory name listed in `Local State` wins, then
+    // a display name, then the names Chromium would create even if `Local
+    // State` is missing. A display name is user-controlled text and may
+    // contain separators or `..`; it is matched here as text and only the
+    // directory it resolves to goes through `guard_dir_name`.
+    if cache.contains_key(name) {
         return Ok(name.to_owned());
     }
     let exact: Vec<&String> = cache
@@ -269,8 +276,14 @@ fn resolve_requested(
             });
         }
     }
+    if is_chromium_dir_name(name) {
+        return Ok(name.to_owned());
+    }
     if is_pseudo_profile(name) {
         return Err(ProfileError::NotBrowsing(name.to_owned()));
+    }
+    if name.contains(['/', '\\', '\0']) || name == "." || name == ".." {
+        return Err(ProfileError::InvalidName(name.to_owned()));
     }
     let folded: Vec<&String> = cache
         .iter()
@@ -410,17 +423,21 @@ pub fn profile_with_session(
         return Ok((preferred, preferred_sessions));
     }
 
+    // This is a search, not a request: a listed profile whose directory is
+    // missing, unreadable, or not a directory is passed over so it cannot
+    // hide a later profile that does have a session. The preferred profile's
+    // own failures were reported above.
     let state = read_local_state(user_data)?;
     for dir in state.profile.info_cache.keys() {
         if dir == &preferred.dir_name || guard_dir_name(dir, &state.profile.info_cache).is_err() {
             continue;
         }
-        let profile = resolve_profile(user_data, Some(dir))?;
-        let sessions_dir = profile.path.join(SESSIONS_DIR);
-        let sessions = session_candidates(&sessions_dir).map_err(|source| DiscoveryError::Io {
-            path: sessions_dir,
-            source,
-        })?;
+        let Ok(profile) = resolve_profile(user_data, Some(dir)) else {
+            continue;
+        };
+        let Ok(sessions) = session_candidates(&profile.path.join(SESSIONS_DIR)) else {
+            continue;
+        };
         if !sessions.is_empty() {
             return Ok((profile, sessions));
         }
@@ -428,31 +445,19 @@ pub fn profile_with_session(
     Ok((preferred, preferred_sessions))
 }
 
-pub fn candidate_for_browser(
-    spec: &'static BrowserSpec,
-    user_data: &Path,
-    requested_profile: Option<&str>,
-) -> Result<Option<BrowserCandidate>, DiscoveryError> {
-    if !user_data.is_dir() {
-        return Ok(None);
-    }
-    let (profile, sessions) = profile_with_session(user_data, requested_profile)?;
-    let Some(session) = sessions.first() else {
-        return Ok(None);
-    };
-    let modified = std::fs::metadata(&session.path)
-        .ok()
-        .and_then(|m| m.modified().ok());
-    Ok(Some(BrowserCandidate {
-        browser: spec,
-        profile,
-        suffix: session.suffix,
-        modified,
-    }))
+/// The newest `Session_*` under a profile's `Sessions_Encrypted/`: its suffix
+/// and mtime. Used only to rank a profile the staleness check has already
+/// refused, so a listing failure here is "nothing newer known", not an error.
+pub fn encrypted_recency(profile_path: &Path) -> Option<(i64, Option<std::time::SystemTime>)> {
+    let newest = session_candidates(&profile_path.join(ENCRYPTED_SESSIONS_DIR))
+        .ok()?
+        .into_iter()
+        .next()?;
+    Some((newest.suffix, file_modified(&newest.path)))
 }
 
-pub fn candidate_user_data(spec: &'static BrowserSpec, home: &Path) -> PathBuf {
-    spec.user_data_dir(home)
+pub fn file_modified(path: &Path) -> Option<std::time::SystemTime> {
+    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
 }
 
 /// The candidate ordering used by zero-flag capture. A suffix is Chromium's
@@ -774,5 +779,56 @@ mod tests {
         std::fs::write(sessions.join("Session_8"), b"synthetic").unwrap();
         let profile = profile_with_session(dir.path(), None).unwrap().0;
         assert_eq!(profile.dir_name, "Profile 2");
+    }
+    #[test]
+    fn display_names_resolve_before_lookalike_or_guarded_directory_names() {
+        let state = r#"{"profile":{"info_cache":{
+            "Profile 1":{"name":"Profile 2"},"Profile 3":{"name":"Work/Home"}}}}"#;
+        let dir = setup(state);
+        for d in ["Profile 1", "Profile 3"] {
+            std::fs::create_dir(dir.path().join(d)).unwrap();
+        }
+        // Shaped like a directory Chromium would create, but no such
+        // directory is listed: it is the display name of Profile 1.
+        let p = resolve_profile(dir.path(), Some("Profile 2")).unwrap();
+        assert_eq!(p.dir_name, "Profile 1");
+        // A separator in a display name is text; the guard runs on the
+        // directory it resolves to.
+        let p = resolve_profile(dir.path(), Some("Work/Home")).unwrap();
+        assert_eq!(p.dir_name, "Profile 3");
+        assert_eq!(p.path, dir.path().join("Profile 3"));
+        for bad in ["Work/Else", "../Profile 1", "Profile 1/", "a\\b", ".", ".."] {
+            assert!(
+                matches!(
+                    resolve_profile(dir.path(), Some(bad)),
+                    Err(ProfileError::InvalidName(_))
+                ),
+                "{bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_broken_listed_profile_does_not_stop_the_search_for_one_with_a_session() {
+        let state = r#"{"profile":{"last_used":"Default","info_cache":{
+            "Default":{"name":"Person 1"},"Profile 0":{"name":"Broken"},"Profile 1":{"name":"Work"}}}}"#;
+        let dir = setup(state);
+        std::fs::create_dir_all(dir.path().join("Default").join(SESSIONS_DIR)).unwrap();
+        std::fs::write(
+            dir.path().join("Profile 0"),
+            b"a file where a directory should be",
+        )
+        .unwrap();
+        let sessions = dir.path().join("Profile 1").join(SESSIONS_DIR);
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("Session_9"), b"synthetic").unwrap();
+        let (profile, found) = profile_with_session(dir.path(), None).unwrap();
+        assert_eq!(profile.dir_name, "Profile 1");
+        assert_eq!(found.len(), 1);
+        // Asked for by name, the broken one is still an error.
+        assert!(matches!(
+            profile_with_session(dir.path(), Some("Profile 0")),
+            Err(DiscoveryError::Profile(ProfileError::NotDirectory(_)))
+        ));
     }
 }
