@@ -23,11 +23,11 @@ window and tab, and never overwrites an earlier one. With no subcommand, runs `s
 encrypted session files are newer than the cleartext ones it still writes."
 )]
 pub struct Cli {
-    /// Archive directory (default: ~/.knowmoretabs)
+    /// Archive directory (default: ~/.knowmoretabs; on Windows %LOCALAPPDATA%\knowmoretabs)
     #[arg(long, global = true, value_name = "DIR")]
     pub root: Option<PathBuf>,
 
-    /// Read this session file instead of discovering Chrome's newest
+    /// Read this session file instead of discovering the newest one
     #[arg(long, global = true, value_name = "FILE")]
     pub session: Option<PathBuf>,
 
@@ -39,7 +39,7 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "NAME", conflicts_with = "session")]
     pub profile: Option<String>,
 
-    /// Chrome user-data directory, when it is not in the default place
+    /// The browser's user-data directory, when it is not in the default place
     #[arg(long, global = true, value_name = "DIR", conflicts_with = "session")]
     pub user_data_dir: Option<PathBuf>,
 
@@ -64,12 +64,13 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// Capture the newest Chrome session as a snapshot (the default)
+    /// Capture the newest browser session as a snapshot (the default)
     Save(SaveArgs),
     /// List saved snapshots, newest first
     List,
-    /// Write the offline library (default: <root>/export)
+    /// Write the library as a static site that opens from file://
     Export {
+        /// Directory to write it to (default: <root>/export)
         #[arg(value_name = "DIR")]
         dir: Option<PathBuf>,
     },
@@ -84,11 +85,13 @@ pub enum Command {
     },
     /// Hide pages from the library; the snapshots keep them
     Forget {
+        /// Page URLs to hide, each exactly as the library shows it
         #[arg(required = true, value_name = "URL")]
         urls: Vec<String>,
     },
     /// Bring forgotten pages back into the library
     Restore {
+        /// Forgotten URLs to bring back, each exactly as it was forgotten
         #[arg(required = true, value_name = "URL")]
         urls: Vec<String>,
     },

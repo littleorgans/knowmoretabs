@@ -188,8 +188,8 @@ rides along inside slice 1 rather than being a horizontal slice of its own.
 
 ### Inline metadata
 
-Every non-trivial source file declares, in its module header, which slice it
-belongs to and why it exists:
+Every non-trivial source file declares, in its module header, which slice or
+slices it belongs to and why it exists:
 
 ```rust
 //! Reads a browser session file into a list of tabs.
@@ -199,19 +199,26 @@ belongs to and why it exists:
 //!      last Tuesday. Unknown records are skipped and counted, never fatal.
 ```
 
+A file that genuinely serves several slices lists them comma-separated
+(`slice: browsers, platforms`); splitting a file to satisfy the lint would be
+the tail wagging the dog.
+
 This exists so that an agent — or a person — can answer "what is this file for,
 and what is it part of" without reading the code, and can find every file in a
-slice with `rg 'slice: triage'`.
+slice with `rg 'slice:.*triage'`.
 
 ### The custom lint
 
 `cargo xtask slices` enforces it and fails CI:
 
-- every `slice:` marker names a slice declared in `slices.toml`
-- every source file that is not a test or generated carries a marker
-- every marker has a non-empty `why:` that is not a restatement of the title
+- every name in a `slice:` marker is a slice declared in `slices.toml`
+- every `.rs` file under `src/` and `xtask/src/` carries a marker (integration
+  tests live in `tests/`, outside the roots the lint walks)
+- every marker has a `why:` of at least eight words that is not a restatement
+  of the title
 - every slice with `status = "done"` is claimed by at least one file
-- `docs/SLICES.md` matches what `slices.toml` would generate (`--check`)
+- `docs/SLICES.md` matches what `slices.toml` would generate (`--check`;
+  without the flag the command rewrites it)
 
 Keep the lint under ~300 lines. It is a helper, not a product.
 

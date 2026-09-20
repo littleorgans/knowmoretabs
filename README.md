@@ -67,7 +67,7 @@ knowmoretabs serve   # search everything you have ever had open, and forget what
 
 ```
 $ knowmoretabs
-saved 113 tabs across 12 windows, 3 groups to /Users/you/.knowmoretabs/snapshots/2026-09-20-084415Z
+saved 113 tabs across 12 windows, 3 groups to /Users/you/.knowmoretabs/snapshots/2026-09-20-084415Z from chrome / Default (Person 1)
 
 $ knowmoretabs
 no change since 2026-09-20-084415Z: 113 tabs across 12 windows, 3 groups. Nothing saved; use --force to save anyway.
@@ -131,6 +131,7 @@ error, and 3 when the encrypted-sessions check refused to save.
 │       ├── snapshot.json      # the tabs, windows, groups and parse statistics
 │       └── session.snss       # a verbatim copy of the browser's session file
 ├── library.json               # your own state: the forgotten URLs
+├── lock                       # held for the length of a run, so two can't collide
 └── export/                    # what `export` writes by default; rebuildable
 ```
 

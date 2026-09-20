@@ -27,7 +27,9 @@ use crate::snss::{self, HeaderError, Pickle, Token, i32_at, i64_at, u64_at};
 pub enum CommandTable {
     /// `Session_*` and `Apps_*`: open windows and tabs. Handled here.
     Session,
-    /// `Tabs_*`: the recently-closed list. Different ids; refused until slice 4.
+    /// `Tabs_*`: the recently-closed list, which is not the open tabs we
+    /// capture. Its ids collide with this table's, so it is refused by name
+    /// rather than read as if it were a session.
     Tabs,
 }
 
