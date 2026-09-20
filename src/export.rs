@@ -53,7 +53,8 @@ pub fn write(root: &Path, destination: &Path, library: &Library) -> Result<(), E
     archive::sync_dir(destination)
 }
 
-fn embed(html: &str, json: &str) -> Result<String, Error> {
+/// An empty `json` yields the serve host's page: the element present, nothing in it.
+pub fn embed(html: &str, json: &str) -> Result<String, Error> {
     let start = html.find(START).ok_or(Error::AssetMarkers)? + START.len();
     let end = html[start..].find(END).ok_or(Error::AssetMarkers)? + start;
     let safe = json.replace("</", "<\\/");

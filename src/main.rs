@@ -18,9 +18,11 @@ mod library;
 mod library_commands;
 mod model;
 mod platform;
+mod server;
 mod session;
 mod snss;
 mod staleness;
+mod triage;
 
 use std::fmt::Write as _;
 use std::process::ExitCode;
@@ -48,6 +50,19 @@ fn main() -> ExitCode {
         Some(Command::List) => library_commands::list(&root, cli.json, log),
         Some(Command::Export { dir }) => {
             library_commands::export(&root, dir.as_deref(), cli.json, log)
+        }
+        Some(Command::Serve { port, open }) => server::run(&server::Options {
+            root,
+            port: *port,
+            open: *open,
+            json: cli.json,
+            log,
+        }),
+        Some(Command::Forget { urls }) => {
+            triage::command(&root, urls, triage::Action::Forget, cli.json, log)
+        }
+        Some(Command::Restore { urls }) => {
+            triage::command(&root, urls, triage::Action::Restore, cli.json, log)
         }
         _ => save(&cli, root, log),
     };

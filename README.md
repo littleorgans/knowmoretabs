@@ -12,11 +12,17 @@ everything you have ever had open.
 
 ```
 knowmoretabs save    # snapshot what is open right now (also the default)
-knowmoretabs serve   # search everything you have ever had open (not built yet)
+knowmoretabs serve   # search everything you have ever had open, and forget what you don't want
 ```
 
-Today only `save` exists. It is the tracer bullet: the data model and the
-durability guarantees it establishes are what every later feature reads.
+The rest of the CLI:
+
+```
+knowmoretabs list                # snapshots, newest first
+knowmoretabs export [DIR]        # the same library as a static site that opens from file://
+knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
+knowmoretabs restore <URL>...    # bring them back
+```
 
 ```
 $ knowmoretabs
@@ -34,6 +40,34 @@ display name), `--user-data-dir DIR` (a relocated Chrome), `--force`, `--json`,
 Exit status is 0 when a snapshot was saved or nothing needed saving, 1 on an
 error, and 3 when the encrypted-sessions check below refuses to save.
 
+## The library, served
+
+```
+$ knowmoretabs serve
+Your library is at http://127.0.0.1:7878/
+Local only: it answers this machine and nothing else. Press Ctrl-C to stop.
+```
+
+`serve` runs the same page `export` writes, with the data fetched from a
+small JSON API and the Forget and Restore buttons live: select rows, forget
+them, undo from the toast, and find them again under "Forgotten". `--port N`
+picks another port; `--open` opens your browser.
+
+Forgetting hides a page from the library. It is a filter, recorded in
+`library.json`, and it never touches a snapshot: every page you forget is
+still in every snapshot it was ever in, and `restore` brings it back.
+`forget` and `restore` from the terminal do exactly what the buttons do.
+
+The server is deliberately unreachable from anywhere but this machine, and
+from anywhere but its own page. It binds `127.0.0.1` only; it refuses any
+request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>`,
+which is what stops a web page from reaching it through DNS rebinding; it
+refuses any request that carries another origin's `Origin` header; it sends
+no CORS headers; and the page's own Content-Security-Policy allows no request
+to anywhere else. There is no authentication because there is nobody to
+authenticate: the only client that can reach it is a browser on your own
+machine, and the only page that can read from it is its own.
+
 ## Install
 
 For now, build from source with Rust 1.89 or newer:
@@ -48,10 +82,12 @@ Prebuilt binaries are a later slice.
 
 ```
 ~/.knowmoretabs/
-└── snapshots/
-    └── 2026-09-20-084415Z/    # UTC, sorts as text, never rewritten
-        ├── snapshot.json      # the tabs, windows, groups and parse statistics
-        └── session.snss       # a verbatim copy of Chrome's session file
+├── snapshots/
+│   └── 2026-09-20-084415Z/    # UTC, sorts as text, never rewritten
+│       ├── snapshot.json      # the tabs, windows, groups and parse statistics
+│       └── session.snss       # a verbatim copy of Chrome's session file
+├── library.json               # your own state: the forgotten URLs
+└── export/                    # what `export` writes by default; rebuildable
 ```
 
 The root is created with mode `0700` because it is a record of everything you
@@ -62,6 +98,12 @@ leaves the archive exactly as it was.
 
 A run whose window, tab and URL layout matches the newest snapshot for the
 same profile saves nothing. Titles and timestamps do not count as change.
+
+`library.json` is written the same way a snapshot is, staged and renamed in
+one step under the archive lock, so a forget that is interrupted, or two
+that run at once, cannot lose anything. A damaged `library.json` stops
+`export`, `serve`, `forget` and `restore` with a message naming the file
+rather than quietly showing pages you had hidden.
 
 ## What it reads
 
@@ -103,7 +145,8 @@ own files: it reads and copies, nothing else.
 
 ## Scope today
 
-Chrome on macOS only. Other Chromium browsers and other platforms are later
+Chrome on macOS only for `save`; the library commands work anywhere the
+archive is. Other Chromium browsers and other platforms are later
 slices; see `docs/SLICES.md` for the build order and `docs/BRIEF.md` for the
 reasoning.
 

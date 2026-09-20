@@ -4,7 +4,7 @@
 //! why: One bad snapshot must not hide a whole archive; one repeated URL must
 //!      retain every tab sighting without repeating page metadata in the payload.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -49,31 +49,81 @@ fn usable(snapshot: &Snapshot) -> bool {
             .all(|t| t.window > 0 && tab_ids.insert(t.tab_id))
 }
 
-#[derive(Debug, Deserialize)]
-struct State {
+pub const STATE_FILE: &str = "library.json";
+const STATE_SCHEMA_VERSION: u32 = 1;
+
+/// The user's own state, beside the snapshots and never inside them. Today
+/// that is the forgotten set; unknown fields are carried through a rewrite
+/// so a newer build's additions survive an older build's `forget`.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct State {
     schema_version: u32,
-    forgotten: HashSet<String>,
+    pub forgotten: BTreeSet<String>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl State {
+    pub fn read(root: &Path) -> Result<Self, Error> {
+        let path = root.join(STATE_FILE);
+        let bytes = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self {
+                    schema_version: STATE_SCHEMA_VERSION,
+                    forgotten: BTreeSet::new(),
+                    extra: serde_json::Map::new(),
+                });
+            }
+            Err(err) => return Err(Error::io("read library state", &path)(err)),
+        };
+        // Unlike a lost snapshot, ignoring damaged user state could disclose hidden pages.
+        let state: Self = serde_json::from_slice(&bytes).map_err(|err| Error::LibraryState {
+            path: path.clone(),
+            reason: err.to_string(),
+        })?;
+        if state.schema_version != STATE_SCHEMA_VERSION {
+            return Err(Error::LibraryState {
+                path,
+                reason: "unsupported schema_version".to_owned(),
+            });
+        }
+        Ok(state)
+    }
+
+    /// Caller holds the archive lock across the read that preceded this.
+    pub fn write(&self, root: &Path) -> Result<(), Error> {
+        let path = root.join(STATE_FILE);
+        let mut bytes = serde_json::to_vec_pretty(self).map_err(|source| Error::Json {
+            path: path.clone(),
+            source,
+        })?;
+        bytes.push(b'\n');
+        archive::replace_file(&path, &bytes)
+    }
 }
 
 pub fn forgotten(root: &Path) -> Result<HashSet<String>, Error> {
-    let path = root.join("library.json");
-    let bytes = match fs::read(&path) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(HashSet::new()),
-        Err(err) => return Err(Error::io("read library state", &path)(err)),
-    };
-    // Unlike a lost snapshot, ignoring damaged user state could disclose hidden pages.
-    let state: State = serde_json::from_slice(&bytes).map_err(|err| Error::LibraryState {
-        path: path.clone(),
-        reason: err.to_string(),
-    })?;
-    if state.schema_version != 1 {
-        return Err(Error::LibraryState {
-            path,
-            reason: "unsupported schema_version".to_owned(),
-        });
-    }
-    Ok(state.forgotten)
+    Ok(State::read(root)?.forgotten.into_iter().collect())
+}
+
+/// Every URL the library would list: what `forget` may name. The same rule
+/// as `build`, so "not in your library" and "not shown" cannot disagree.
+pub fn known_urls(snapshots: &[Snapshot]) -> HashSet<&str> {
+    snapshots
+        .iter()
+        .flat_map(|snapshot| snapshot.tabs.iter())
+        .filter(|tab| public_domain(&tab.url).is_some())
+        .map(|tab| tab.url.as_str())
+        .collect()
+}
+
+/// Whether forgotten pages are left out (an export is read-only, so a hidden
+/// page has no way back) or kept and flagged (serve has a Restore button).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    Export,
+    Serve,
 }
 
 #[derive(Debug, Serialize)]
@@ -99,6 +149,9 @@ struct Page {
     url: String,
     title: String,
     domain: String,
+    /// Absent means false, so the export shape is unchanged.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    forgotten: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -152,7 +205,7 @@ struct Group {
 // `page_index`, window, position, `tab_id`, pinned (0/1), `group_index_or_null`.
 type Tab = (usize, u32, usize, i32, u8, Option<usize>);
 
-pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
+pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>, shape: Shape) -> Library {
     let mut library = Library {
         schema_version: 1,
         generated_at: Timestamp::now(),
@@ -198,9 +251,12 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
             let Some(domain) = public_domain(&tab.url) else {
                 continue;
             };
-            if forgotten.contains(&tab.url) {
+            let is_forgotten = forgotten.contains(&tab.url);
+            if is_forgotten {
                 forgotten_pages.insert(tab.url.as_str());
-                continue;
+                if shape == Shape::Export {
+                    continue;
+                }
             }
             let index = *page_indices.entry(tab.url.as_str()).or_insert_with(|| {
                 let index = library.pages.len();
@@ -208,6 +264,7 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
                     url: tab.url.clone(),
                     title: String::new(),
                     domain,
+                    forgotten: is_forgotten,
                 });
                 index
             });

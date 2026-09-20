@@ -147,7 +147,9 @@ fn version_and_help_work() {
     ] {
         assert!(help.contains(flag), "help lacks {flag}");
     }
-    assert!(!help.contains("serve"), "no slice-3 commands yet");
+    for command in ["save", "list", "export", "serve", "forget", "restore"] {
+        assert!(help.contains(command), "help lacks {command}");
+    }
 }
 
 #[test]

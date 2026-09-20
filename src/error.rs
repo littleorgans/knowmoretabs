@@ -58,8 +58,16 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
-    #[error("cannot read library state {}: {reason}; repair the file before exporting", path.display())]
+    #[error("cannot read library state {}: {reason}; repair the file first", path.display())]
     LibraryState { path: PathBuf, reason: String },
+    #[error("not in your library: {}; nothing changed", .0.join(", "))]
+    NotInLibrary(Vec<String>),
+    #[error("cannot listen on 127.0.0.1:{port}: {source}; pass --port N to use another port")]
+    Bind {
+        port: u16,
+        #[source]
+        source: std::io::Error,
+    },
     #[error(
         "cannot embed library data: missing or out-of-order library-data markers in index.html"
     )]
@@ -82,6 +90,8 @@ impl Error {
             Self::Unstable(_) => "unstable",
             Self::Json { .. } => "json",
             Self::LibraryState { .. } => "library_state",
+            Self::NotInLibrary(_) => "not_in_library",
+            Self::Bind { .. } => "bind",
             Self::AssetMarkers => "asset_markers",
             Self::ExportDestination(_) => "export_destination",
         }

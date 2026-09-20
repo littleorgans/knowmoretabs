@@ -234,6 +234,29 @@ pub fn read_snapshot(path: &Path) -> Result<Snapshot, Error> {
     })
 }
 
+/// Replaces one file in a single rename: staged beside it on the same
+/// volume, fsynced, renamed over the old content, then the parent synced.
+/// This is the snapshot publish sequence for a file that is allowed to
+/// change, which is what user state is. Caller holds the archive lock.
+pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut staged = tempfile::Builder::new()
+        .prefix(STAGING_PREFIX)
+        .tempfile_in(parent)
+        .map_err(Error::io("stage beside", path))?;
+    staged
+        .write_all(bytes)
+        .map_err(Error::io("write staged", path))?;
+    staged
+        .as_file()
+        .sync_all()
+        .map_err(Error::io("sync staged", path))?;
+    staged
+        .persist(path)
+        .map_err(|err| Error::io("replace", path)(err.error))?;
+    sync_dir(parent)
+}
+
 pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         return Ok(());
@@ -350,6 +373,24 @@ mod tests {
             0,
             "failed publish cleans itself"
         );
+    }
+
+    #[test]
+    fn replace_file_swaps_content_in_one_rename_and_leaves_no_stage_behind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("state.json");
+        replace_file(&path, b"first").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"first");
+        replace_file(&path, b"second").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second");
+        let leftovers: Vec<_> = fs::read_dir(tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name != "state.json")
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+        // The destination's parent must exist; nothing is created above it.
+        assert!(replace_file(&tmp.path().join("missing/state.json"), b"x").is_err());
     }
 
     #[test]

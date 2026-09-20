@@ -82,7 +82,7 @@ pub fn export(root: &Path, destination: Option<&Path>, json: bool, log: Log) -> 
     let loaded = library::load(&archive)?;
     report_skipped(&loaded, log);
     let forgotten = library::forgotten(root)?;
-    let library = library::build(&loaded.snapshots, &forgotten);
+    let library = library::build(&loaded.snapshots, &forgotten, library::Shape::Export);
     let default_destination = root.join("export");
     let destination = destination.unwrap_or(&default_destination);
     export::write(root, destination, &library)?;
