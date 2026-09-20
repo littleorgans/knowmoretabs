@@ -9,7 +9,7 @@ mod common;
 use std::fs;
 use std::path::Path;
 
-use common::{Fixture, assert_success, stderr, stdout};
+use common::{Fixture, SessionBuilder, assert_success, stderr, stdout};
 use serde_json::{Value, json};
 
 fn write_snapshot(root: &Path, id: &str, captured_at: &str, tabs: &Value, groups: &Value) {
@@ -202,7 +202,15 @@ fn export_round_trip_has_contract_counts_order_and_deduplication() {
     assert_eq!(snapshots[0]["tabs_total"], 3);
     assert_eq!(
         snapshots[0]["groups"][0],
-        json!({"id":0,"title":"Reading","colour":"blue"})
+        json!({"id":0,"title":"Reading","colour":"blue","collapsed":false})
+    );
+    // Always present, zeroed, on a snapshot the parser read whole.
+    assert_eq!(
+        snapshots[0]["stats"],
+        json!({
+            "dropped_tabs": 0, "unknown_commands": 0, "malformed_commands": 0,
+            "truncated_bytes": 0, "marker_ok": true, "degraded": false
+        })
     );
     assert_eq!(snapshots[0]["tabs"][0], json!([0, 1, 0, 1, 1, 0]));
     assert_eq!(snapshots[0]["tabs"][1], json!([0, 1, 1, 2, 0, null]));
@@ -705,6 +713,44 @@ fn export_refuses_a_destination_holding_the_archive_or_its_snapshots() {
     );
     let output = fx.run(&["export"]);
     assert_success(&output);
+}
+
+/// The whole point of carrying the counters: a snapshot that lost tabs reports
+/// a low `tabs_total`, and the page can only say so if the parse reaches it.
+#[test]
+fn a_degraded_parse_reaches_the_exported_document() {
+    let fx = Fixture::new();
+    let token = (0x0123_4567_89ab_cdef, 0xfedc_ba98_7654_3210);
+    let mut bytes = SessionBuilder::new()
+        .raw_command(200, &[1, 2, 3])
+        .simple_tab(1, 2, "https://example.test/one", "One")
+        .simple_tab(1, 3, "https://example.test/two", "Two")
+        .set_tab_group(3, Some(token))
+        .group_metadata(token, "Reading", 1, true, None)
+        // A tab the log placed but never navigated: kept out of the snapshot.
+        .set_tab_window(1, 4)
+        .set_tab_index(4, 2)
+        .select_navigation(4, 0)
+        .marker()
+        .build();
+    // A torn tail, which is what copying a session file Chrome is writing gives.
+    bytes.truncate(bytes.len() - 1);
+    fx.write_session("Default", 20, &bytes);
+    assert_success(&fx.run(&["save"]));
+
+    let snapshot = &exported_library(&fx)["snapshots"][0];
+    assert_eq!(snapshot["tabs_total"], 2);
+    assert_eq!(
+        snapshot["stats"],
+        json!({
+            "dropped_tabs": 1, "unknown_commands": 1, "malformed_commands": 0,
+            "truncated_bytes": 2, "marker_ok": false, "degraded": true
+        })
+    );
+    assert_eq!(
+        snapshot["groups"][0],
+        json!({"id": 0, "title": "Reading", "colour": "blue", "collapsed": true})
+    );
 }
 
 #[test]

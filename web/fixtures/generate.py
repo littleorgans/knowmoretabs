@@ -482,7 +482,10 @@ def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6)
             if not g["members"]:
                 continue
             gid = len(groups)
-            groups.append({"id": gid, "title": g["name"], "colour": g["colour"]})
+            # Collapsed is a property of the moment the snapshot was taken, not
+            # of the group, so it comes from the position rather than from `r`.
+            groups.append({"id": gid, "title": g["name"], "colour": g["colour"],
+                           "collapsed": (k + gid) % 5 == 0})
             for p in g["members"]:
                 group_of[p] = gid
         # lay out: per window, grouped tabs sit together (Chrome keeps a group
@@ -498,6 +501,11 @@ def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6)
                 if r.random() < 0.03:  # the same page open twice in one window
                     tabs.append([p, w, pos, tab_ids[p] + 5000 + pos, 0, group_of.get(p)])
                     pos += 1
+        # The parser's counters, emitted for every snapshot. A real archive is
+        # mostly clean with the occasional torn tail or command id this build
+        # does not know, so two snapshots of a long run carry non-zero counts.
+        torn = snapshot_count >= 8 and k == snapshot_count - 5
+        strange = snapshot_count >= 8 and k == snapshot_count // 3
         snapshots.append({
             "id": when.strftime("%Y-%m-%d-%H%M%SZ"),
             "captured_at": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -505,6 +513,12 @@ def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6)
             "profile": "Default",
             "windows": windows,
             "tabs_total": len(tabs),
+            "stats": {"dropped_tabs": 2 if torn else 0,
+                      "unknown_commands": 3 if strange else 0,
+                      "malformed_commands": 0,
+                      "truncated_bytes": 1462 if torn else 0,
+                      "marker_ok": not torn,
+                      "degraded": torn or strange},
             "groups": groups,
             "tabs": tabs,
         })
@@ -539,28 +553,27 @@ def to_export(lib):
 
 def cases(seed):
     """Small documents for the edges a real archive has and the big fixture
-    cannot show. Fields the backend does not emit yet (`collapsed` on a group,
-    `stats` on a snapshot) appear only here, never in library.json, which the
-    Rust contract test uses as its exemplar."""
+    cannot show. library.json is the exemplar the Rust contract test checks the
+    real export against, so every field used here is emitted there too."""
     stamp = "2026-09-21T16:01:52Z"
+    clean = {"dropped_tabs": 0, "unknown_commands": 0, "malformed_commands": 0,
+             "truncated_bytes": 0, "marker_ok": True, "degraded": False}
     empty = {"schema_version": 1, "generated_at": stamp,
              "stats": {"pages": 0, "snapshots": 0, "domains": 0, "sightings": 0, "forgotten": 0},
              "snapshots": [], "pages": []}
     no_pages = json.loads(json.dumps(empty))
     no_pages["stats"]["snapshots"] = 1
     no_pages["snapshots"] = [{"id": "2026-09-20-101500Z", "captured_at": "2026-09-20T10:15:00Z", "browser": "chrome",
-                              "profile": "Default", "windows": 1, "tabs_total": 0, "groups": [], "tabs": []}]
+                              "profile": "Default", "windows": 1, "tabs_total": 0, "stats": dict(clean),
+                              "groups": [], "tabs": []}]
     one = build(seed + 1, snapshot_count=1, head_count=12)
     degraded = build(seed + 2, snapshot_count=5, head_count=12, forgotten_count=0)
     degraded["snapshots"][2]["stats"] = {"dropped_tabs": 3, "unknown_commands": 2, "malformed_commands": 0,
-                                         "truncated_bytes": 1024, "marker_ok": False}
+                                         "truncated_bytes": 1024, "marker_ok": False, "degraded": True}
     degraded["snapshots"][2]["tabs"] = degraded["snapshots"][2]["tabs"][:-3]
     degraded["snapshots"][2]["tabs_total"] -= 3
     degraded["snapshots"][4]["stats"] = {"dropped_tabs": 0, "unknown_commands": 0, "malformed_commands": 1,
-                                         "truncated_bytes": 0, "marker_ok": True}
-    for s in degraded["snapshots"]:
-        for j, g in enumerate(s["groups"]):
-            g["collapsed"] = j == 0          # the first group in every snapshot is collapsed
+                                         "truncated_bytes": 0, "marker_ok": True, "degraded": True}
     exported = to_export(build(seed + 3, snapshot_count=8, head_count=12, forgotten_count=4))
     return {"empty": empty, "no-pages": no_pages, "one-snapshot": one, "degraded": degraded, "export-forgotten": exported}
 

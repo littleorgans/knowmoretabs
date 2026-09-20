@@ -109,8 +109,36 @@ struct LibrarySnapshot {
     profile: String,
     windows: usize,
     tabs_total: usize,
+    stats: SnapshotStats,
     groups: Vec<Group>,
     tabs: Vec<Tab>,
+}
+
+/// The counters the page can name, and only those: `model::Stats` also carries
+/// per-command-id bookkeeping that would cost every snapshot in the payload
+/// bytes no reader ever renders.
+#[derive(Debug, Serialize)]
+struct SnapshotStats {
+    dropped_tabs: u64,
+    unknown_commands: u64,
+    malformed_commands: u64,
+    truncated_bytes: u64,
+    marker_ok: bool,
+    /// Degradation the named counters do not cover still has to show.
+    degraded: bool,
+}
+
+impl From<&model::Stats> for SnapshotStats {
+    fn from(stats: &model::Stats) -> Self {
+        Self {
+            dropped_tabs: stats.dropped_tabs,
+            unknown_commands: stats.unknown_commands,
+            malformed_commands: stats.malformed_commands,
+            truncated_bytes: stats.truncated_bytes,
+            marker_ok: stats.marker_ok,
+            degraded: stats.is_degraded(),
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +146,7 @@ struct Group {
     id: usize,
     title: String,
     colour: String,
+    collapsed: bool,
 }
 
 // `page_index`, window, position, `tab_id`, pinned (0/1), `group_index_or_null`.
@@ -144,6 +173,7 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
                 id,
                 title: group.title.clone().unwrap_or_default(),
                 colour: group.colour.clone(),
+                collapsed: group.collapsed,
             })
             .collect();
         let group_indices: HashMap<&str, usize> = snapshot
@@ -209,6 +239,9 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
             profile: snapshot.source.profile.clone().unwrap_or_default(),
             windows: snapshot.windows.len(),
             tabs_total: tabs.len(),
+            // Always emitted, zeroed when the parse was clean: a snapshot that
+            // lost tabs must not report a low count and say nothing.
+            stats: (&snapshot.stats).into(),
             groups,
             tabs,
         });
