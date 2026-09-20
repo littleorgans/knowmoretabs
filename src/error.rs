@@ -1,6 +1,6 @@
 //! Typed errors for the whole binary and their one-line rendering.
 //!
-//! slice: capture
+//! slice: capture, library, triage, browsers, platforms
 //! why: A failed `save` has to tell the user what to do next in one line,
 //!      keep the categories apart so tests and scripts can tell "no Chrome
 //!      here" from "archive unwritable", and never show a backtrace. Each

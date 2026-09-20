@@ -3,12 +3,60 @@
 Every tab you ever had open, kept and searchable.
 
 You have a hundred tabs open. They are a to-do list you cannot read, a memory
-you cannot search, and one crash away from gone. `knowmoretabs` reads a
-Chromium-family browser's own session file from disk, saves a dated snapshot
-of every open window and tab, and never overwrites an earlier one. It supports
-Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and Vivaldi, on
-macOS, Linux and Windows. Later, a local page lets you search everything you
-have ever had open.
+you cannot search, and one crash away from gone. `knowmoretabs` reads your
+browser's own session file from disk, saves a dated snapshot of every open
+window and tab, and gives you a local page where you can search everything
+you have ever had open. Nothing leaves your machine.
+
+It works with Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and
+Vivaldi, on macOS, Linux and Windows.
+
+## Before you depend on it
+
+Chrome is moving its session files to an encrypted format that this tool
+cannot read. Today Chrome writes both the cleartext files `knowmoretabs`
+reads and the encrypted ones; at some future update it will stop writing the
+cleartext copy. When that happens, `knowmoretabs save` notices that the
+cleartext files have gone stale and **refuses to save**, with exit status 3,
+rather than reporting months-old tabs as current. Your archive stays intact
+and searchable; new snapshots stop until there is a second way to see your
+tabs. Google has not published a date. The detail, and why decrypting is the
+wrong answer for a tool that asks for no browser secrets, is in
+[`docs/research/encrypted-sessions.md`](docs/research/encrypted-sessions.md).
+
+## Install
+
+Prebuilt binaries for each tagged release are on the
+[Releases](https://github.com/littleorgans/knowmoretabs/releases) page:
+
+| Platform | Archive |
+|---|---|
+| macOS, Apple silicon | `knowmoretabs-<version>-aarch64-apple-darwin.tar.gz` |
+| macOS, Intel | `knowmoretabs-<version>-x86_64-apple-darwin.tar.gz` |
+| Linux, x86-64 | `knowmoretabs-<version>-x86_64-unknown-linux-gnu.tar.gz` |
+| Linux, ARM64 | `knowmoretabs-<version>-aarch64-unknown-linux-gnu.tar.gz` |
+| Windows, x86-64 | `knowmoretabs-<version>-x86_64-pc-windows-msvc.zip` |
+
+Unpack it and put the `knowmoretabs` binary somewhere on your `PATH`. Each
+archive also carries this README, the changelog and both licence files, and
+`SHA256SUMS` on the release page lets you check what you downloaded:
+
+```
+sha256sum -c --ignore-missing SHA256SUMS
+```
+
+The binaries are not code-signed. macOS may refuse to open one that arrived
+through a browser; either download with `curl`, which sets no quarantine
+flag, or clear it with `xattr -d com.apple.quarantine knowmoretabs`. The
+Linux binaries are built on Ubuntu 24.04 against its glibc; if one refuses
+to start on an older distribution, build from source instead.
+
+If you already have a Rust toolchain (1.89 or newer):
+
+```
+cargo install knowmoretabs                                        # from crates.io
+cargo install --git https://github.com/littleorgans/knowmoretabs  # from the repository
+```
 
 ## The two commands that matter
 
@@ -17,7 +65,35 @@ knowmoretabs save    # snapshot what is open right now (also the default)
 knowmoretabs serve   # search everything you have ever had open, and forget what you don't want
 ```
 
-The rest of the CLI:
+```
+$ knowmoretabs
+saved 113 tabs across 12 windows, 3 groups to /Users/you/.knowmoretabs/snapshots/2026-09-20-084415Z from chrome / Default (Person 1)
+
+$ knowmoretabs
+no change since 2026-09-20-084415Z: 113 tabs across 12 windows, 3 groups. Nothing saved; use --force to save anyway.
+
+$ knowmoretabs serve
+Your library is at http://127.0.0.1:7878/
+Local only: it answers this machine and nothing else. Press Ctrl-C to stop.
+```
+
+`save` reads the newest session file, copies it verbatim, and records every
+tab's URL, title, window, position, pinned state, tab group (name, colour,
+collapsed) and last-active time. A run whose window, tab and URL layout
+matches the newest snapshot saves nothing; `--force` saves anyway.
+
+`serve` is a page on `127.0.0.1` listing every page you have ever had open,
+once, with search, a site filter, an open-or-not filter, five sort orders,
+tab groups, and each page's history of the snapshots and windows it appeared
+in. Select rows and forget them; undo from the toast; find them again under
+"Forgotten". `/` focuses search, `j` and `k` move, `f` forgets. `--port N`
+picks another port and `--open` opens your browser.
+
+Forgetting hides a page from the library. It never touches a snapshot: every
+page you forget is still in every snapshot it was ever in, and `restore`
+brings it back.
+
+## The rest of the command line
 
 ```
 knowmoretabs list                # snapshots, newest first
@@ -26,207 +102,121 @@ knowmoretabs forget <URL>...     # hide pages from the library; the snapshots ke
 knowmoretabs restore <URL>...    # bring them back
 ```
 
-```
-$ knowmoretabs
-saved 113 tabs across 12 windows, 3 groups to /Users/you/.knowmoretabs/snapshots/2026-09-20-084415Z
+Options, all accepted before or after the command: `--root DIR` (where the
+archive lives), `--browser NAME`, `--profile NAME` (a profile directory or its
+display name), `--user-data-dir DIR` (a relocated browser user-data
+directory), `--session FILE` (read this session file, skipping discovery),
+`--json` (one machine-readable document on stdout), `-v` (source file,
+statistics, error causes) and `-q`. `--help` on any command lists them.
 
-$ knowmoretabs
-no change since 2026-09-20-084415Z: 113 tabs across 12 windows, 3 groups. Nothing saved; use --force to save anyway.
-```
-
-Flags: `--root DIR` (where the archive lives), `--session FILE` (read a
-specific session file), `--browser NAME`, `--profile NAME` (a browser profile
-directory or its display name), `--user-data-dir DIR` (a relocated Chromium
-user-data directory), `--force`, `--json`, `-v`, `-q`. With no browser flag,
-the newest supported `Session_*` file wins and the command names the other
-browsers it found. Arc is excluded because its open tabs live in a different
-file format. `--help` lists them all.
+With no browser flag, the supported browser with the newest session wins and
+the others found are named. Arc is refused with an explanation: its open tabs
+live in a different file, and reading its session log would snapshot the
+wrong thing convincingly.
 
 Exit status is 0 when a snapshot was saved or nothing needed saving, 1 on an
-error, and 3 when the encrypted-sessions check below refuses to save.
-
-## The library, served
-
-```
-$ knowmoretabs serve
-Your library is at http://127.0.0.1:7878/
-Local only: it answers this machine and nothing else. Press Ctrl-C to stop.
-```
-
-`serve` runs the same page `export` writes, with the data fetched from a
-small JSON API and the Forget and Restore buttons live: select rows, forget
-them, undo from the toast, and find them again under "Forgotten". `--port N`
-picks another port; `--open` opens your browser, through `open` on macOS,
-`xdg-open` on Linux and `start` on Windows. If none of them is there — a
-headless Linux box has no `xdg-open` — `serve` says so and keeps serving.
-
-Forgetting hides a page from the library. It is a filter, recorded in
-`library.json`, and it never touches a snapshot: every page you forget is
-still in every snapshot it was ever in, and `restore` brings it back.
-`forget` and `restore` from the terminal do exactly what the buttons do.
-
-The server is deliberately unreachable from anywhere but this machine, and
-from anywhere but its own page. It binds `127.0.0.1` only; it refuses any
-request whose `Host` header is not `127.0.0.1:<port>` or `localhost:<port>`,
-which is what stops a web page from reaching it through DNS rebinding; it
-refuses any request that carries another origin's `Origin` header; it sends
-no CORS headers; and the page's own Content-Security-Policy allows no request
-to anywhere else. There is no authentication because there is nobody to
-authenticate: the only client that can reach it is a browser on your own
-machine, and the only page that can read from it is its own.
-
-## Install
-
-For now, build from source with Rust 1.89 or newer:
-
-```
-cargo install --path .
-```
-
-Prebuilt binaries are a later slice.
+error, and 3 when the encrypted-sessions check refused to save.
 
 ## Where the data lives
 
+| Platform | Archive root |
+|---|---|
+| macOS, Linux | `~/.knowmoretabs` |
+| Windows | `%LOCALAPPDATA%\knowmoretabs` |
+
 ```
-~/.knowmoretabs/                 # %LOCALAPPDATA%\knowmoretabs on Windows
+~/.knowmoretabs/
 ├── snapshots/
 │   └── 2026-09-20-084415Z/    # UTC, sorts as text, never rewritten
 │       ├── snapshot.json      # the tabs, windows, groups and parse statistics
-│       └── session.snss       # a verbatim copy of Chrome's session file
+│       └── session.snss       # a verbatim copy of the browser's session file
 ├── library.json               # your own state: the forgotten URLs
+├── lock                       # held for the length of a run, so two can't collide
 └── export/                    # what `export` writes by default; rebuildable
 ```
 
-`--root DIR` puts it somewhere else.
+`--root DIR` puts it somewhere else. `snapshot.json` is pretty-printed JSON
+with a `schema_version`; it is the source of truth and readable in any
+editor. Everything under `export/` is derived and can be deleted.
 
-The archive is a record of everything you browse, so it is created private to
-you. On macOS and Linux that is mode `0700`, set when the directory is made.
-Windows has no such bit, and setting an access-control list needs Win32 calls
-this tool does not make, so on Windows the protection is inherited instead:
-`%LOCALAPPDATA%` is the intended per-user location, and a directory created
-inside it inherits that parent's ACL. **This is why the default root on
-Windows is `%LOCALAPPDATA%\knowmoretabs` rather than a dotfile in your
-profile** — the profile directory is what enterprise folder redirection roams
-to a file server, and an archive of your browsing is the last thing that
-should be copied off the machine. The consequence is worth knowing: a
-`--root` you point somewhere else on Windows inherits whatever permissions its
-parent grants. knowmoretabs warns for an explicit Windows `--root`; check the
-ACL before saving browsing history there. On macOS and Linux `--root` is `0700`
-wherever it is.
+Nothing leaves the machine. The tool makes no network requests of any kind.
+`serve` binds `127.0.0.1` only, refuses any request whose `Host` is not
+`127.0.0.1` or `localhost` with its own port, which is what stops a web page
+reaching it through DNS rebinding, refuses any request carrying another
+origin's `Origin` header, and
+sends no CORS headers; the page's own Content-Security-Policy allows no
+request to anywhere else. The exported site opens from `file://` with the
+same policy.
 
-`snapshot.json` is pretty-printed JSON with a `schema_version`; it is the
-source of truth and readable in any editor. Each snapshot is written to a
-temporary directory and renamed into place in one step, so an interrupted run
-leaves the archive logically unchanged on all three platforms. Unix also
-flushes the containing directory; Windows relies on its filesystem's metadata
-journal because the standard library has no directory-flush operation. The rename
-never replaces anything: the destination is checked under the archive lock
-and a snapshot id that is already taken gets a `-2` suffix instead. That
-matters because renaming a directory onto an existing one is the one
-filesystem operation whose meaning differs between POSIX and Windows, and
-publication does not depend on it.
+The archive is a record of everything you browse, so it is created private
+to you: mode `0700` on macOS and Linux. Windows has no such bit, which is why
+the default root is under `%LOCALAPPDATA%`, the per-user folder whose
+permissions a new directory inherits and which enterprise folder redirection
+does not copy to a file server. A `--root` you point elsewhere on Windows
+inherits whatever its parent grants; `knowmoretabs` warns when you do that.
 
-A run whose window, tab and URL layout matches the newest snapshot for the same
-browser and profile saves nothing. Titles and timestamps do not count as change.
+Every snapshot is written to a temporary directory and renamed into place in
+one step, under a lock, so an interrupted run leaves the archive exactly as
+it was and two runs at once both succeed. A snapshot id that is already taken
+gets a `-2` suffix rather than being overwritten. `library.json` is written
+the same way.
 
-`library.json` is written the same way a snapshot is, staged and renamed in
-one step under the archive lock, so a forget that is interrupted, or two
-that run at once, cannot lose anything. Unlike a snapshot it does replace an
-existing file, and on Windows that goes through the rename mode that can
-unlink a file another program is reading — so a virus scanner or a backup
-agent holding it open for a moment does not fail your `forget`. A damaged `library.json` stops
-`export`, `serve`, `forget` and `restore` with a message naming the file
-rather than quietly showing pages you had hidden.
-
-## What it reads
+## What it reads, and what it tolerates
 
 Chromium-family browsers keep their open windows in
-`<profile>/Sessions/Session_<n>`, an
-append-only log of commands. `knowmoretabs` reads the newest one, copies it
-verbatim, and folds it the way Chrome's own session restore does. It records
-each tab's URL, title, window, position, pinned state, group (name, colour,
-collapsed) and last-active time.
+`<profile>/Sessions/Session_<n>`, an append-only log that `knowmoretabs`
+folds the way the browser's own session restore does. It reads and copies;
+it never modifies a browser file, and it never touches the live browser.
 
-The parser never fails on a file Chrome can read. A command it does not
+The parser never fails on a file the browser can read. A record it does not
 recognise is skipped and counted; a half-written tail is counted and the
-rest kept; a tab with no usable navigation is dropped and counted. Every one
-of those counters is in `snapshot.json` under `stats`, and `save` prints one
-line on stdout when any of them is non-zero. Only three things are fatal: the
-file does not exist, cannot be read, or does not start with a recognised
-header.
+rest kept; a tab with no usable page is dropped and counted. The counters
+are in `snapshot.json` under `stats`, and `save` prints one line when any of
+them is non-zero. Only three things are fatal: the file does not exist,
+cannot be read, or does not start with a recognised header.
 
-## The encrypted-sessions clock
+Where it looks:
 
-Chrome is moving its session files to an encrypted format. Today it writes
-both `Sessions/` (cleartext, which this tool reads) and `Sessions_Encrypted/`
-(which it cannot). At some future update Chrome will stop writing the
-cleartext copy. When that happens the cleartext file does not disappear at
-once; it goes stale.
+| Platform | Browser user data |
+|---|---|
+| macOS | `~/Library/Application Support/<product>` |
+| Linux | `$XDG_CONFIG_HOME/<product>`, else `~/.config/<product>`; Snap and Flatpak installs in their own sandboxes |
+| Windows | `%LOCALAPPDATA%\<product>\User Data` |
 
-To avoid archiving old tabs as current, `save` compares the modification
-times of the two directories before reading anything. If the encrypted files
-are five minutes or more newer than the cleartext ones, or the cleartext
-directory has emptied while the encrypted one has files, it refuses with a
-clear message and exit status 3. `--force` does not override this. There is
-no workaround yet; progress is tracked in the issue tracker.
-
-The check runs for every browser the no-flag scan considers. A browser whose
-cleartext has gone stale is ranked by its encrypted files, so if it is the one
-used most recently the run refuses rather than quietly saving another browser
-in its place; if another browser is newer, that one is saved and the stale
-browser is listed under "also found" with a note saying it would be refused.
+On Linux, Chrome's own `CHROME_CONFIG_HOME` and `CHROME_USER_DATA_DIR` are
+honoured for Chrome and Chromium. If a browser was launched with its own
+`--user-data-dir`, `chrome://version` shows the profile path; pass its
+parent as `--user-data-dir`.
 
 ## Non-goals
 
-No sync. No accounts. No cloud. No telemetry. No browser extension (for now).
-No full-text indexing of page contents. No tag taxonomy. It never touches,
-closes or reorders tabs in the live browser, and never modifies the browser's
-own files: it reads and copies, nothing else.
+No sync. No accounts. No cloud. No telemetry. No browser extension (for
+now). No full-text indexing of page contents. No tag taxonomy. It never
+touches, closes or reorders tabs in the live browser, and never modifies the
+browser's own files: it reads and copies, nothing else.
 
-## Where it looks for browsers
+## Deliberately not built
 
-One table, one row per browser, one column per platform.
+Each of these is a recorded decision, with its reasoning in
+[`slices.toml`](slices.toml) and [`docs/SLICES.md`](docs/SLICES.md).
 
-| Platform | Where a browser's user data is |
-|---|---|
-| macOS | `~/Library/Application Support/<product>` |
-| Linux | `$XDG_CONFIG_HOME/<product>`, else `~/.config/<product>` |
-| Windows | `%LOCALAPPDATA%\<product>\User Data` |
-
-On Linux a native, a Snap and a Flatpak install of the same browser are three
-separate installs with three separate user-data directories, and a machine can
-have two of them. All of them are probed — `~/snap/<name>/common/…`,
-`~/.var/app/<flatpak id>/config/…` — and the newest session wins, the same
-rule that picks between browsers. Snap and Flatpak hard-code their own config
-roots inside the sandbox, so `$XDG_CONFIG_HOME` moves the native path and
-leaves those alone.
-
-`$CHROME_CONFIG_HOME` replaces `~/.config` for Chrome and Chromium, and
-`$CHROME_USER_DATA_DIR` names a whole user-data directory for them. Both are
-Chrome's own Linux variables, and both are honoured for the Chrome family
-only: someone who set one for Chrome Remote Desktop should not find every
-browser reported at the same directory. `%LOCALAPPDATA%` and `%APPDATA%` are
-read from the environment, falling back to the `FOLDERID_LocalAppData` and
-`FOLDERID_RoamingAppData` known folders when they are not set.
-
-`--user-data-dir DIR` overrides all of it, and `--session FILE` skips
-discovery entirely. If a browser was launched with its own `--user-data-dir`,
-`chrome://version` → Profile Path names where it went; its parent is the
-directory to pass.
-
-Windows rejects file names the other two accept. A `--root` containing a
-reserved device name (`CON`, `NUL`, `COM1`…), a component ending in a dot or
-a space, or a character Windows forbids is refused by name on Windows before
-anything is created, rather than failing later as something unrecognisable.
-Long roots are fine: the paths the archive writes can pass the classic
-260-character limit, because Rust's standard library switches to the `\\?\`
-form beyond it.
-
-## Scope today
-
-`save` supports the browsers above on macOS, Linux and Windows. The library
-commands work anywhere the archive is. See `docs/SLICES.md` for the build
-order and `docs/BRIEF.md` for the reasoning.
+- **Live tabs, not the last session written to disk.** Needs a browser
+  extension, and an extension cannot recover anything after a crash. It
+  belongs as a second source beside session files, and it is also the real
+  answer to the encrypted-sessions clock above.
+- **Arc.** Its open tabs live in a proprietary sidebar file, not in the
+  session log.
+- **Notes and tags on a page.** `library.json` is where they would go;
+  forgetting is the first use of it.
+- **Searching page contents.** Means fetching and storing page bodies: a
+  different product with a different privacy story.
+- **An index for years of snapshots.** Reading JSON into memory is instant at
+  fifteen thousand rows. A rebuildable index arrives when a measured query is
+  slow.
+- **Closing the tabs you have triaged.** Would make a read-only tool able to
+  destroy what it archives.
+- **An encrypted archive.** Key management means a way to lock yourself out
+  of your own history; worth doing properly or not at all.
 
 ## Development
 
@@ -236,8 +226,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo xtask slices --check    # slice metadata lint and docs/SLICES.md
 ```
 
-Every source file starts with a `slice:` / `why:` header naming the slice it
-belongs to and why it exists. `cargo xtask slices` enforces that.
+Every source file starts with a `slice:` / `why:` header naming the slice or
+slices it belongs to and why it exists; `cargo xtask slices` enforces it.
+`docs/BRIEF.md` is the reasoning behind the project, `docs/SLICES.md` the
+build order, and `docs/briefs/` the brief each slice was built from.
+Releases are built by `.github/workflows/release.yml` from a `v*` tag.
 
 ## Licence
 

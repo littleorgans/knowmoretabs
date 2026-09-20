@@ -5,8 +5,26 @@ edition = "2024"
 rust-version = "1.89"
 description = "Keep and search the browser tabs you have had open"
 repository = "https://github.com/littleorgans/knowmoretabs"
+homepage = "https://github.com/littleorgans/knowmoretabs"
 license = "MIT OR Apache-2.0"
 readme = "README.md"
+keywords = ["browser", "tabs", "chrome", "session", "archive"]
+categories = ["command-line-utilities"]
+# The crate ships the source, the tests and the three frontend assets the
+# binary embeds at build time. Everything else is project material, not
+# product: research, briefs, the vendored reference script, the frontend
+# fixtures, the slice matrix and its lint, and CI.
+exclude = [
+    "/.cargo/",
+    "/.github/",
+    "/.gitignore",
+    "/docs/",
+    "/reference/",
+    "/slices.toml",
+    "/web/NOTES.md",
+    "/web/fixtures/",
+    "/xtask/",
+]
 
 [workspace]
 members = [".", "xtask"]
@@ -25,6 +43,13 @@ url = "2.5"
 
 [dev-dependencies]
 proptest = "1"
+
+# Release binaries are what people download; keep them small. Nothing here
+# changes what the program does.
+[profile.release]
+codegen-units = 1
+lto = true
+strip = true
 
 [lints.rust]
 unsafe_code = "forbid"

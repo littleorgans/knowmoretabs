@@ -8,9 +8,11 @@
 //!      what Chrome would restore. It is deliberately tolerant where Chromium
 //!      is not: an unknown command, a bad payload or a tab with no usable
 //!      navigation costs us that one record and a counter, never the run.
-//!      `Tabs_*` files use a different table with colliding ids; selecting
-//!      the table by file name is an explicit decision here, so slice 4 can
-//!      add the second table without touching this one.
+//!      `Tabs_*` files, the recently-closed list, use a different table with
+//!      colliding ids; the table is chosen from the file name and never
+//!      guessed from contents, and `Tabs_*` is refused by name rather than
+//!      misread. Nothing supported writes only `Tabs_*`, so that second table
+//!      was never needed.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -25,7 +27,9 @@ use crate::snss::{self, HeaderError, Pickle, Token, i32_at, i64_at, u64_at};
 pub enum CommandTable {
     /// `Session_*` and `Apps_*`: open windows and tabs. Handled here.
     Session,
-    /// `Tabs_*`: the recently-closed list. Different ids; refused until slice 4.
+    /// `Tabs_*`: the recently-closed list, which is not the open tabs we
+    /// capture. Its ids collide with this table's, so it is refused by name
+    /// rather than read as if it were a session.
     Tabs,
 }
 

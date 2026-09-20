@@ -100,11 +100,14 @@ fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// What a module header declares. `title` is its first line.
+/// What a module header declares. `title` is its first line. `slices` is
+/// usually one entry; a file that genuinely serves several slices lists them
+/// comma-separated (`slice: browsers, platforms`), because splitting a file
+/// to satisfy the lint would be the tail wagging the dog.
 #[derive(Debug, PartialEq, Eq)]
 struct Header {
     title: String,
-    slice: String,
+    slices: Vec<String>,
     why: String,
 }
 
@@ -124,12 +127,18 @@ fn parse_header(text: &str) -> Result<Header, String> {
         .iter()
         .find(|l| !l.trim().is_empty())
         .map(|l| l.trim().to_owned());
-    let mut slice = None;
+    let mut slices = None;
     let mut why = String::new();
     let mut in_why = false;
     for line in &lines {
         if let Some(rest) = line.trim_start().strip_prefix("slice:") {
-            slice = Some(rest.trim().to_owned());
+            slices = Some(
+                rest.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>(),
+            );
             in_why = false;
         } else if let Some(rest) = line.trim_start().strip_prefix("why:") {
             rest.trim().clone_into(&mut why);
@@ -141,8 +150,8 @@ fn parse_header(text: &str) -> Result<Header, String> {
             in_why = false;
         }
     }
-    match (title, slice) {
-        (Some(title), Some(slice)) if !slice.is_empty() => Ok(Header { title, slice, why }),
+    match (title, slices) {
+        (Some(title), Some(slices)) if !slices.is_empty() => Ok(Header { title, slices, why }),
         (None, _) => Err("no `//!` module header".to_owned()),
         (Some(_), _) => Err("module header has no `slice:` marker".to_owned()),
     }
@@ -168,13 +177,14 @@ fn lint(matrix: &toml::Table, headers: &[(String, Result<Header, String>)]) -> V
         match header {
             Err(reason) => problems.push(format!("{file}: {reason}")),
             Ok(h) => {
-                if !declared.contains(h.slice.as_str()) {
-                    problems.push(format!(
-                        "{file}: slice `{}` is not declared in {MATRIX}",
-                        h.slice
-                    ));
+                for slice in &h.slices {
+                    if !declared.contains(slice.as_str()) {
+                        problems.push(format!(
+                            "{file}: slice `{slice}` is not declared in {MATRIX}"
+                        ));
+                    }
+                    claimed.insert(slice.as_str());
                 }
-                claimed.insert(h.slice.as_str());
                 let why = words(&h.why);
                 let title = words(&h.title);
                 if why.is_empty() {
@@ -303,8 +313,29 @@ mod tests {
     fn parses_a_good_header_with_continuation_lines() {
         let h = parse_header(GOOD).unwrap();
         assert_eq!(h.title, "Reads things.");
-        assert_eq!(h.slice, "capture");
+        assert_eq!(h.slices, ["capture"]);
         assert!(h.why.starts_with("Because the reader") && h.why.ends_with("noticing."));
+    }
+
+    #[test]
+    fn a_file_may_claim_several_slices() {
+        let h = parse_header("//! One table, one column per OS.\n//! slice: browsers, platforms\n//! why: Splitting the table would serve the linter, not the reader.\n").unwrap();
+        assert_eq!(h.slices, ["browsers", "platforms"]);
+        assert!(
+            parse_header("//! T\n//! slice: ,\n//! why: x\n")
+                .unwrap_err()
+                .contains("no `slice:`")
+        );
+        let claimed = lint(
+            &matrix(),
+            &[(
+                "both.rs".to_owned(),
+                parse_header(
+                    "//! T\n//! slice: capture, later\n//! why: One reason long enough to pass the restatement rule here.\n",
+                ),
+            )],
+        );
+        assert!(claimed.is_empty(), "{}", claimed.join("\n"));
     }
 
     #[test]

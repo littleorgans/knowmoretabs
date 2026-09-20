@@ -1,7 +1,7 @@
 //! The archive on disk: root creation, the advisory lock, staged writes,
 //! atomic publish, and reading back what was published.
 //!
-//! slice: capture
+//! slice: capture, triage, platforms
 //! why: The archive is sacred. A snapshot directory either exists in full or
 //!      does not exist, and once renamed into place it is never written to
 //!      again. Getting that promise right means one place owns the sequence

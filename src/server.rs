@@ -1,7 +1,7 @@
 //! `knowmoretabs serve`: the library over HTTP/1.1 on 127.0.0.1, written
 //! directly on `std::net`.
 //!
-//! slice: triage
+//! slice: triage, platforms
 //! why: Any web page the user has open can reach a localhost server, and
 //!      this one discloses every URL they ever had open and mutates their
 //!      library. Owning the HTTP layer keeps the three defences (loopback
