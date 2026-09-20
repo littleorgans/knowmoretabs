@@ -5,41 +5,57 @@ mod common;
 use std::path::PathBuf;
 use std::process::{Command, Output};
 
-use common::{read_snapshot, stderr, stdout, two_tab_session};
+use common::{read_snapshot, stderr, stdout, two_tab_session, under};
 use tempfile::TempDir;
 
-fn relative_path(browser: &str) -> &'static str {
+/// The directory names each browser's user data sits under, below the home
+/// directory, on the platform these are running on. Names rather than a
+/// path: joining them one at a time is what keeps a separator out of the
+/// middle of a path the tests then compare against the binary's own.
+fn relative_names(browser: &str) -> &'static [&'static str] {
+    const APP_SUPPORT: [&str; 2] = ["Library", "Application Support"];
     if cfg!(target_os = "macos") {
         match browser {
-            "chrome" => "Library/Application Support/Google/Chrome",
-            "chrome-beta" => "Library/Application Support/Google/Chrome Beta",
-            "chrome-canary" => "Library/Application Support/Google/Chrome Canary",
-            "chromium" => "Library/Application Support/Chromium",
-            "brave" => "Library/Application Support/BraveSoftware/Brave-Browser",
-            "edge" => "Library/Application Support/Microsoft Edge",
-            "vivaldi" => "Library/Application Support/Vivaldi",
+            "chrome" => &[APP_SUPPORT[0], APP_SUPPORT[1], "Google", "Chrome"],
+            "chrome-beta" => &[APP_SUPPORT[0], APP_SUPPORT[1], "Google", "Chrome Beta"],
+            "chrome-canary" => &[APP_SUPPORT[0], APP_SUPPORT[1], "Google", "Chrome Canary"],
+            "chromium" => &[APP_SUPPORT[0], APP_SUPPORT[1], "Chromium"],
+            "brave" => &[
+                APP_SUPPORT[0],
+                APP_SUPPORT[1],
+                "BraveSoftware",
+                "Brave-Browser",
+            ],
+            "edge" => &[APP_SUPPORT[0], APP_SUPPORT[1], "Microsoft Edge"],
+            "vivaldi" => &[APP_SUPPORT[0], APP_SUPPORT[1], "Vivaldi"],
             _ => panic!("unknown synthetic browser"),
         }
     } else if cfg!(windows) {
         match browser {
-            "chrome" => "AppData/Local/Google/Chrome/User Data",
-            "chrome-beta" => "AppData/Local/Google/Chrome Beta/User Data",
-            "chrome-canary" => "AppData/Local/Google/Chrome SxS/User Data",
-            "chromium" => "AppData/Local/Chromium/User Data",
-            "brave" => "AppData/Local/BraveSoftware/Brave-Browser/User Data",
-            "edge" => "AppData/Local/Microsoft/Edge/User Data",
-            "vivaldi" => "AppData/Local/Vivaldi/User Data",
+            "chrome" => &["AppData", "Local", "Google", "Chrome", "User Data"],
+            "chrome-beta" => &["AppData", "Local", "Google", "Chrome Beta", "User Data"],
+            "chrome-canary" => &["AppData", "Local", "Google", "Chrome SxS", "User Data"],
+            "chromium" => &["AppData", "Local", "Chromium", "User Data"],
+            "brave" => &[
+                "AppData",
+                "Local",
+                "BraveSoftware",
+                "Brave-Browser",
+                "User Data",
+            ],
+            "edge" => &["AppData", "Local", "Microsoft", "Edge", "User Data"],
+            "vivaldi" => &["AppData", "Local", "Vivaldi", "User Data"],
             _ => panic!("unknown synthetic browser"),
         }
     } else {
         match browser {
-            "chrome" => ".config/google-chrome",
-            "chrome-beta" => ".config/google-chrome-beta",
-            "chrome-canary" => ".config/google-chrome-canary",
-            "chromium" => ".config/chromium",
-            "brave" => ".config/BraveSoftware/Brave-Browser",
-            "edge" => ".config/microsoft-edge",
-            "vivaldi" => ".config/vivaldi",
+            "chrome" => &[".config", "google-chrome"],
+            "chrome-beta" => &[".config", "google-chrome-beta"],
+            "chrome-canary" => &[".config", "google-chrome-canary"],
+            "chromium" => &[".config", "chromium"],
+            "brave" => &[".config", "BraveSoftware", "Brave-Browser"],
+            "edge" => &[".config", "microsoft-edge"],
+            "vivaldi" => &[".config", "vivaldi"],
             _ => panic!("unknown synthetic browser"),
         }
     }
@@ -60,7 +76,7 @@ impl Tree {
     }
 
     fn user_data(&self, browser: &str) -> PathBuf {
-        self.home.path().join(relative_path(browser))
+        under(self.home.path(), relative_names(browser))
     }
 
     fn browser(&self, browser: &str, profile: &str, display: &str, suffix: i64) {
@@ -105,14 +121,8 @@ impl Tree {
 
     fn run(&self, args: &[&str]) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_knowmoretabs"));
-        command
-            .env_clear()
-            .env("HOME", self.home.path())
-            .env("USERPROFILE", self.home.path())
-            .env("PATH", std::env::var_os("PATH").unwrap())
-            .arg("--root")
-            .arg(&self.root)
-            .args(args);
+        common::point_home_at(&mut command, self.home.path());
+        command.arg("--root").arg(&self.root).args(args);
         command.output().unwrap()
     }
 

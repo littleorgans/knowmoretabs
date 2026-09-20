@@ -102,13 +102,28 @@ pub fn run(options: &Options) -> Result<(), Error> {
     Ok(())
 }
 
+/// Hands the URL to whatever the desktop uses to open one. Three commands,
+/// one per platform, and none of them may fail the run: a headless Linux box
+/// has no `xdg-open`, and `serve` is still doing its job without a window.
+/// The caller warns and carries on.
+///
+/// Windows goes through `COMSPEC` because `start` is a shell builtin rather
+/// than a program. The empty argument after it is `start`'s window title,
+/// which it would otherwise take the URL to be. `cmd` would treat `&` or `|` in the
+/// URL as its own syntax, which is why this only ever passes a URL this
+/// process built: `http://127.0.0.1:<port>/`, digits and nothing else.
 fn open_browser(url: &str) -> io::Result<()> {
+    // `cfg!` rather than `#[cfg]`: all three arms are compiled everywhere, so
+    // a change to the Windows one is caught by a build on a Mac.
     let mut command = if cfg!(target_os = "macos") {
         let mut c = std::process::Command::new("open");
         c.arg(url);
         c
     } else if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd");
+        let shell = std::env::var_os("COMSPEC")
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "cmd.exe".into());
+        let mut c = std::process::Command::new(shell);
         c.args(["/C", "start", "", url]);
         c
     } else {
@@ -846,19 +861,51 @@ mod tests {
         writer.join().unwrap();
     }
 
+    /// A client that stops reading must not hold a worker. How much a kernel
+    /// will absorb before a write blocks is not a constant: one 32 MiB write
+    /// blocks on Linux and macOS and was swallowed whole by Windows loopback
+    /// autotuning, which made an earlier version of this pass on two
+    /// platforms and fail on the third. Neither version was wrong about the
+    /// guarantee; the first one measured buffers instead of it. The budget is
+    /// a clock, so this waits on the clock: keep writing until the deadline
+    /// takes the write away, which happens whether a buffer filled or not.
     #[test]
     fn review_response_write_has_a_total_deadline() {
+        // A deadline already gone: no write is attempted at all, and no
+        // socket is involved in saying so.
+        let (mut socket, _client) = socket_pair();
+        let mut spent = DeadlineWriter {
+            stream: &mut socket,
+            deadline: Instant::now(),
+        };
+        assert_eq!(
+            spent.write(b"x").unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+
         let (mut socket, _client) = socket_pair();
         let mut writer = DeadlineWriter {
             stream: &mut socket,
             deadline: Instant::now() + Duration::from_millis(100),
         };
         let start = Instant::now();
-        let err = writer.write_all(&vec![b'x'; 32 * 1024 * 1024]).unwrap_err();
-        assert!(matches!(
-            err.kind(),
-            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-        ));
-        assert!(start.elapsed() < Duration::from_secs(2));
+        let chunk = vec![b'x'; 256 * 1024];
+        // The cap is a runaway guard, not the mechanism: once 100ms have
+        // passed the next `write` fails before it touches the socket, so a
+        // kernel with room for everything still ends the loop on time.
+        let stopped = (0..8192).find_map(|_| writer.write_all(&chunk).err());
+        let err = stopped.expect("the deadline has to end the write");
+        assert!(
+            matches!(
+                err.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+            ),
+            "{err:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "took {:?}",
+            start.elapsed()
+        );
     }
 }

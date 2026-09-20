@@ -12,15 +12,61 @@ use tempfile::TempDir;
 
 pub use session_builder::SessionBuilder;
 
-/// Where `platform::BrowserSpec` for Chrome looks, relative to home, on the
-/// platform the tests are running on. Kept in step by `default_discovery`.
-pub fn chrome_relative_path() -> &'static str {
+/// The directory names `platform::BrowserSpec` for Chrome looks under,
+/// below the home directory, on the platform the tests are running on.
+///
+/// Names rather than a path, and joined through [`under`], for the same
+/// reason the table itself is: a `/` inside one of them would survive into
+/// an expected value and make the test agree with the code only on the
+/// platforms where `/` is the separator.
+pub fn chrome_relative_names() -> &'static [&'static str] {
     if cfg!(target_os = "macos") {
-        "Library/Application Support/Google/Chrome"
+        &["Library", "Application Support", "Google", "Chrome"]
     } else if cfg!(windows) {
-        "AppData/Local/Google/Chrome/User Data"
+        &["AppData", "Local", "Google", "Chrome", "User Data"]
     } else {
-        ".config/google-chrome"
+        &[".config", "google-chrome"]
+    }
+}
+
+/// Where the archive goes when `--root` is not passed, below the home directory.
+pub fn default_root_names() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["AppData", "Local", "knowmoretabs"]
+    } else {
+        &[".knowmoretabs"]
+    }
+}
+
+/// Joins directory names onto a base, one at a time, so the separator is
+/// always the host's.
+pub fn under(base: &Path, names: &[&str]) -> PathBuf {
+    names
+        .iter()
+        .fold(base.to_path_buf(), |path, name| path.join(name))
+}
+
+/// A home directory the binary will believe, on every platform.
+///
+/// `HOME` and `USERPROFILE` are what `std::env::home_dir` reads. The two
+/// `AppData` variables are what a Windows session sets and what the Windows
+/// column of the browser table hangs off; without them the binary would fall
+/// back to the known folder and look at the real user's browsers, which is
+/// both wrong and a thing no test may do. The XDG and Chrome variables are
+/// cleared so that Linux default discovery is what runs unless a test asks
+/// for an override.
+pub fn point_home_at(cmd: &mut Command, home: &Path) {
+    cmd.env_clear();
+    cmd.env("HOME", home);
+    cmd.env("USERPROFILE", home);
+    cmd.env("LOCALAPPDATA", home.join("AppData").join("Local"));
+    cmd.env("APPDATA", home.join("AppData").join("Roaming"));
+    // Windows needs its own system directory on PATH to start a process at
+    // all, and `%SystemRoot%` to resolve some of its own DLLs.
+    for inherited in ["PATH", "SystemRoot", "SYSTEMROOT", "COMSPEC", "TEMP", "TMP"] {
+        if let Some(value) = std::env::var_os(inherited) {
+            cmd.env(inherited, value);
+        }
     }
 }
 
@@ -35,7 +81,7 @@ impl Fixture {
     /// and an archive root beside it. No session file yet.
     pub fn new() -> Self {
         let home = tempfile::tempdir().expect("tempdir");
-        let user_data = home.path().join(chrome_relative_path());
+        let user_data = under(home.path(), chrome_relative_names());
         std::fs::create_dir_all(&user_data).expect("user data dir");
         let fixture = Self {
             root: home.path().join("archive"),
@@ -71,14 +117,15 @@ impl Fixture {
     /// user-data dir is *not* passed, so default discovery is what runs
     /// unless the caller adds `--user-data-dir` or `--session`.
     pub fn command(&self) -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_knowmoretabs"));
-        cmd.env_clear();
-        cmd.env("HOME", self.home.path());
-        cmd.env("USERPROFILE", self.home.path());
-        if let Some(path) = std::env::var_os("PATH") {
-            cmd.env("PATH", path);
-        }
+        let mut cmd = self.command_without_root();
         cmd.arg("--root").arg(&self.root);
+        cmd
+    }
+
+    /// The binary with no `--root`, so the platform default applies.
+    pub fn command_without_root(&self) -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_knowmoretabs"));
+        point_home_at(&mut cmd, self.home.path());
         cmd
     }
 
@@ -133,6 +180,70 @@ impl Fixture {
             })
             .collect()
     }
+}
+
+/// The archive is private to the user who made it. What that sentence means
+/// differs by platform, so each arm asserts its own.
+///
+/// Unix: mode `0700`, which the archive sets.
+///
+/// Windows: there is no mode, and no access-control list is set, so the only
+/// claim that is ours is that creating the archive **grants nothing an
+/// ordinary directory in the same place would not** — asserted by making one
+/// beside it and comparing. Where that place is doing the protecting is the
+/// other half, and `no_root_flag_puts_the_archive_where_the_platform_keeps_
+/// per_user_data` pins it to `%LOCALAPPDATA%`.
+pub fn assert_private_dir(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = std::fs::metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o700, "{} is not 0700", path.display());
+    }
+    #[cfg(windows)]
+    {
+        let ordinary = path.with_file_name(".knowmoretabs-acl-reference");
+        let _ = std::fs::remove_dir(&ordinary);
+        std::fs::create_dir(&ordinary).expect("reference directory");
+        let (ours, theirs) = (access_entries(path), access_entries(&ordinary));
+        std::fs::remove_dir(&ordinary).expect("remove reference directory");
+        assert_eq!(
+            ours,
+            theirs,
+            "{} grants access an ordinary directory beside it would not",
+            path.display()
+        );
+    }
+    #[cfg(not(any(unix, windows)))]
+    let _ = path;
+}
+
+/// Who a directory grants what, with the directory's own name removed so
+/// that two of them can be compared. `icacls` echoes the name it was given
+/// verbatim ahead of the first entry, and that name is the one thing that
+/// must not take part in the comparison. No localised text is ever read:
+/// the entries are only compared with each other, on one machine.
+#[cfg(windows)]
+fn access_entries(path: &Path) -> Vec<String> {
+    let out = Command::new("icacls").arg(path).output().expect("icacls");
+    assert!(out.status.success(), "icacls failed for {}", path.display());
+    let text = String::from_utf8_lossy(&out.stdout).replace(&path.display().to_string(), "");
+    let mut entries: Vec<String> = text
+        .lines()
+        .filter(|line| line.contains(":("))
+        .map(|line| line.trim().to_owned())
+        .collect();
+    assert!(
+        !entries.is_empty(),
+        "icacls listed no entries for {}",
+        path.display()
+    );
+    entries.sort();
+    entries
 }
 
 pub fn read_snapshot(dir: &Path) -> serde_json::Value {

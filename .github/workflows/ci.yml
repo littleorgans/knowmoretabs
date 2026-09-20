@@ -1,6 +1,12 @@
-# Runs on Blacksmith only. The GitHub-hosted credit pool is exhausted, so a
-# job on `ubuntu-latest` would never start. Actions are pinned to commit SHAs;
-# the ref each SHA was resolved from is in the comment beside it.
+# Linux runs on Blacksmith. The GitHub-hosted *Linux* credit pool is
+# exhausted, so a job on `ubuntu-latest` would never start — that is the
+# reason for the rule, and it is the only reason. Blacksmith has no macOS or
+# Windows runner, so those two jobs use GitHub-hosted ones, which is the
+# sanctioned exception and applies to them alone. They run the tests and
+# nothing else: rustfmt and clippy judge the source, not the platform, and
+# running them three times would cost three times as much to learn the same
+# thing. Actions are pinned to commit SHAs; the ref each SHA was resolved
+# from is in the comment beside it.
 name: CI
 
 on:
@@ -46,7 +52,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
   test:
-    name: test
+    name: test (linux)
     runs-on: blacksmith-2vcpu-ubuntu-2404
     timeout-minutes: 20
     steps:
@@ -56,6 +62,53 @@ jobs:
         uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # branch 1.89.0
       - name: Cache Cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - name: Test
+        run: cargo test --workspace --all-targets --locked
+
+  # The other two platforms. Same command, same toolchain, no fmt and no
+  # clippy. `fail-fast: false` because "Windows is broken and macOS is fine"
+  # is the answer worth having, and cancelling the other job hides it.
+  test-desktop:
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macos
+            runner: macos-latest
+          - name: windows
+            runner: windows-latest
+    steps:
+      # The Windows image sets `core.autocrlf=true` system-wide, which would
+      # rewrite every checked-out file's line endings and so change the bytes
+      # of the frontend assets the binary embeds and serves. The archive
+      # writes LF on every platform and the repository stores LF; checkout
+      # must not disagree.
+      - name: Keep line endings as they are committed
+        run: |
+          git config --global core.autocrlf false
+          git config --global core.eol lf
+      - name: Check out
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install the MSRV toolchain
+        uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # branch 1.89.0
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: ${{ matrix.name }}
+      # Not a belt-and-braces check on the step above: `include_str!` bakes
+      # the frontend assets into the binary at build time, so a checkout that
+      # rewrote them would ship CRLF in everything `export` writes, and
+      # nothing else in the suite would notice.
+      - name: Check the working tree holds the line endings it was committed with
+        shell: bash
+        run: |
+          if git ls-files --eol | grep 'w/crlf'; then
+            echo "checkout rewrote line endings; core.autocrlf must be false"
+            exit 1
+          fi
       - name: Test
         run: cargo test --workspace --all-targets --locked
 

@@ -40,10 +40,26 @@ fn main() -> ExitCode {
         quiet: cli.quiet,
         verbose: cli.verbose,
     };
-    let Some(root) = cli.root.clone().or_else(default_root) else {
-        out::problem(&error::render(&error::Error::NoHome, cli.verbose, cli.json));
-        return ExitCode::from(error::Error::NoHome.exit_code());
+    let roots = platform::Roots::detect();
+    let Some(root) = cli
+        .root
+        .clone()
+        .or_else(|| roots.as_ref().map(platform::default_root))
+    else {
+        return fail(&error::Error::NoHome, &cli);
     };
+    // Before any command touches it: a root Windows cannot represent has to
+    // say so by name, not as a mysterious failure three calls later.
+    if let Err(problem) = platform::check_root(&root) {
+        return fail(
+            &error::Error::RootName {
+                root: root.clone(),
+                problem,
+            },
+            &cli,
+        );
+    }
+    warn_if_root_is_not_private(&cli, &root, roots.as_ref());
     let result = match &cli.command {
         Some(Command::List) => library_commands::list(&root, cli.json, log),
         Some(Command::Export { dir }) => {
@@ -66,10 +82,49 @@ fn main() -> ExitCode {
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(err) => {
-            out::problem(&error::render(&err, cli.verbose, cli.json));
-            ExitCode::from(err.exit_code())
-        }
+        Err(err) => fail(&err, &cli),
+    }
+}
+
+/// The one way a command ends badly, so there is one answer to which stream
+/// the report goes to.
+///
+/// Under `--json` the report is a document and goes to stdout, beside the
+/// documents every other command writes there: `--json` means machine-
+/// readable output on stdout, and a caller that pipes stdout to a parser
+/// should get something parseable whether the run worked or not. It cannot
+/// go to stderr, because stderr is the human channel in every mode — it
+/// carries the warnings and the `-v` notes — and a document sharing a
+/// stream with free text is a document nobody can read: one warning ahead
+/// of it and the whole stream stops being JSON.
+///
+/// Without `--json` there is no document, and the one line goes to stderr
+/// where the rest of the prose is.
+fn fail(err: &error::Error, cli: &Cli) -> ExitCode {
+    if cli.json {
+        out::json(&error::render_json(err));
+    } else {
+        out::problem(&error::render_human(err, cli.verbose));
+    }
+    ExitCode::from(err.exit_code())
+}
+
+/// Windows only, and only when the root is somewhere Windows would not keep
+/// private on its own: see [`platform::root_outside_home`] for what that
+/// means and why passing `--root` is not by itself worth saying anything
+/// about. A default root is always private, so it is never worth a word.
+fn warn_if_root_is_not_private(cli: &Cli, root: &std::path::Path, roots: Option<&platform::Roots>) {
+    if !cfg!(windows) || cli.quiet || cli.root.is_none() {
+        return;
+    }
+    let (Some(roots), Ok(current_dir)) = (roots, std::env::current_dir()) else {
+        return;
+    };
+    if platform::root_outside_home(root, &roots.home, &current_dir) {
+        out::problem(&format!(
+            "warning: {} is outside your user profile, so it keeps whatever permissions its parent grants and other accounts on this machine may be able to read it; an archive of every page you have open belongs somewhere private, such as under %LOCALAPPDATA%",
+            root.display()
+        ));
     }
 }
 
@@ -89,10 +144,6 @@ fn save(cli: &Cli, root: std::path::PathBuf, log: Log) -> Result<(), error::Erro
         out::block(&human_outcome(&outcome, cli.verbose));
     }
     Ok(())
-}
-
-fn default_root() -> Option<std::path::PathBuf> {
-    platform::home_dir().map(|h| h.join(platform::DEFAULT_ROOT_NAME))
 }
 
 fn summary(snapshot: &Snapshot) -> String {

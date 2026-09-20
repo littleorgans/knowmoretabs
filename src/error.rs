@@ -40,13 +40,19 @@ pub enum Error {
         installed: String,
     },
     #[error(
-        "{requested} has no user-data directory at {}; installed supported browsers: {installed}",
-        path.display()
+        "{requested} has no user-data directory at {paths}; installed supported browsers: {installed}"
     )]
     BrowserNotInstalled {
         requested: String,
-        path: PathBuf,
+        /// Every directory this browser's packaging could have put it in;
+        /// on Linux that includes the Snap and Flatpak locations.
+        paths: String,
         installed: String,
+    },
+    #[error("cannot use {} as the archive root: {problem}", root.display())]
+    RootName {
+        root: PathBuf,
+        problem: crate::platform::RootProblem,
     },
     #[error(
         "Arc is not supported: Arc stores open tabs in its proprietary StorableSidebar.json, not Session_* files"
@@ -113,6 +119,7 @@ impl Error {
             Self::Discovery(_) => "discovery",
             Self::UnknownBrowser { .. } => "unknown_browser",
             Self::BrowserNotInstalled { .. } => "browser_not_installed",
+            Self::RootName { .. } => "root_name",
             Self::ArcUnsupported => "arc_unsupported",
             Self::NoSession(_) | Self::NoBrowserSession { .. } => "no_session",
             Self::TabsFile(_) => "tabs_file",
@@ -154,19 +161,22 @@ impl Error {
     }
 }
 
-/// The text written to stderr. Human form is one line, plus the cause chain
-/// under `-v`; JSON form is one object.
-pub fn render(error: &Error, verbose: bool, json: bool) -> String {
-    if json {
-        let value = serde_json::json!({
-            "error": {
-                "kind": error.kind(),
-                "message": error.to_string(),
-                "detail": error.detail(),
-            }
-        });
-        return value.to_string();
-    }
+/// The failure as one JSON object, for the document `--json` writes to
+/// stdout. Kept apart from [`render_human`] because the two go to different
+/// streams: a document is not a diagnostic, and the two must never be
+/// candidates for the same `write`.
+pub fn render_json(error: &Error) -> serde_json::Value {
+    serde_json::json!({
+        "error": {
+            "kind": error.kind(),
+            "message": error.to_string(),
+            "detail": error.detail(),
+        }
+    })
+}
+
+/// The text written to stderr: one line, plus the cause chain under `-v`.
+pub fn render_human(error: &Error, verbose: bool) -> String {
     let mut out = format!("knowmoretabs: {error}");
     if verbose {
         if let Some(detail) = error.detail() {
@@ -192,10 +202,10 @@ mod tests {
             path: PathBuf::from("/x/y"),
             source: std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied"),
         };
-        let plain = render(&err, false, false);
+        let plain = render_human(&err, false);
         assert_eq!(plain.lines().count(), 1);
         assert!(plain.starts_with("knowmoretabs: cannot read /x/y"));
-        let verbose = render(&err, true, false);
+        let verbose = render_human(&err, true);
         assert!(verbose.contains("caused by: denied"));
     }
 
@@ -205,7 +215,7 @@ mod tests {
             profile: PathBuf::from("/p"),
             reason: StaleReason::NoCleartext,
         };
-        let value: serde_json::Value = serde_json::from_str(&render(&err, false, true)).unwrap();
+        let value = render_json(&err);
         assert_eq!(value["error"]["kind"], "stale");
         assert!(value["error"]["detail"].as_str().unwrap().contains("/p"));
         assert_eq!(err.exit_code(), 3);

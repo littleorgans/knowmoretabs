@@ -63,12 +63,8 @@ fn default_discovery_saves_the_newest_session_verbatim() {
         "snapshot.json is pretty-printed"
     );
 
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&fx.root).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o700);
-    }
+    common::assert_private_dir(&fx.root);
+    common::assert_private_dir(&fx.root.join("snapshots"));
 }
 
 #[test]
@@ -389,7 +385,7 @@ fn no_session_means_no_archive_and_an_actionable_error() {
     );
 
     let output = fx.run(&["--json"]);
-    let value: serde_json::Value = serde_json::from_str(&stderr(&output)).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(value["error"]["kind"], "no_session");
 }
 

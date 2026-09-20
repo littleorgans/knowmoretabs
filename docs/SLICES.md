@@ -68,7 +68,7 @@ Snapshots are never touched: forgetting hides a page, it does not delete it.
 **Intent.** The reason the project stopped being a script. Every feature asked for so far
 points at a button on the page, and a button needs somewhere to POST to.
 
-### 4. The browser you actually use (`browsers`) — planned
+### 4. The browser you actually use (`browsers`) — done
 
 - Delivers: my-browser
 - Depends on: capture

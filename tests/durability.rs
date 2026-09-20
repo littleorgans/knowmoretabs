@@ -81,11 +81,14 @@ fn skip_compares_within_the_same_profile_only() {
     );
 }
 
+/// The durability promise, exercised rather than reasoned about: a run is
+/// killed outright after it has staged a complete snapshot and before it
+/// renames one into place, and the archive has to be exactly what it was.
+/// This runs everywhere. It used to be Unix-only, which left the platform
+/// whose `rename` differs as the one platform never checked.
 #[test]
-#[cfg(all(unix, debug_assertions))]
+#[cfg(debug_assertions)]
 fn a_kill_between_staging_and_rename_leaves_the_archive_untouched() {
-    use std::os::unix::process::ExitStatusExt;
-
     let fx = Fixture::new();
     fx.write_session("Default", 20, &two_tab_session());
     assert_success(&fx.run(&[]));
@@ -114,7 +117,16 @@ fn a_kill_between_staging_and_rename_leaves_the_archive_untouched() {
         std::thread::sleep(Duration::from_millis(10));
     }
     child.kill().unwrap();
-    assert_eq!(child.wait().unwrap().signal(), Some(9), "actual SIGKILL");
+    let status = child.wait().unwrap();
+    assert!(!status.success(), "the run was stopped, not finished");
+    // Unix kills with SIGKILL, which leaves no exit code at all; Windows
+    // uses TerminateProcess, which sets one. Either way nothing ran on the
+    // way out — no unwinding, no destructor, no chance to tidy up.
+    assert_eq!(
+        status.code().is_none(),
+        cfg!(unix),
+        "unexpected exit: {status:?}"
+    );
     assert_eq!(fx.snapshot_dirs(), before, "nothing new was published");
     assert_eq!(
         std::fs::read(before[0].join("snapshot.json")).unwrap(),
@@ -227,7 +239,7 @@ fn staleness_check_refuses_when_encrypted_files_are_newer() {
     assert_eq!(fx.snapshot_dirs().len(), 1);
 
     let output = fx.run(&["--json"]);
-    let value: serde_json::Value = serde_json::from_str(&stderr(&output)).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(value["error"]["kind"], "stale");
     assert!(
         value["error"]["detail"]

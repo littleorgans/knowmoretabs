@@ -105,7 +105,7 @@ fn a_url_not_in_the_library_is_refused_and_nothing_is_written() {
         assert!(!fx.root.join("library.json").exists(), "{args:?}");
     }
     let output = fx.run(&["--json", "forget", "https://nowhere.test/"]);
-    let value: Value = serde_json::from_str(&stderr(&output)).unwrap();
+    let value: Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(value["error"]["kind"], "not_in_library");
 }
 

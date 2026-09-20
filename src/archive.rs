@@ -72,6 +72,16 @@ impl Archive {
 
     /// Takes the exclusive lock, calling `on_wait` once if another run holds
     /// it, then blocking until it is free.
+    ///
+    /// `File::lock` is `flock` on Unix and `LockFileEx` on Windows. The two
+    /// differ in a way that does not matter here and one that is worth
+    /// knowing: `flock` is advisory, so a process that never asks for the
+    /// lock is unaffected by it, while `LockFileEx` is mandatory and also
+    /// fails other processes' reads of the locked range. Both are per open
+    /// handle and both release when it closes, including when the process
+    /// dies, which is the whole of what this is used for: two knowmoretabs
+    /// runs never interleave, and a killed run does not leave the archive
+    /// locked. Windows is, if anything, the stronger of the two.
     pub fn lock(&self, on_wait: impl FnOnce()) -> Result<Lock, Error> {
         let path = self.root.join(LOCK_FILE);
         let file = File::options()
@@ -185,7 +195,19 @@ impl Archive {
     }
 
     /// One rename, then the parent directory is synced so the rename itself
-    /// is durable. Never renames over an existing path.
+    /// is durable.
+    ///
+    /// **Never renames over an existing path, on any platform, by design.**
+    /// Renaming a directory onto an existing one is the operation whose
+    /// semantics differ: POSIX replaces an empty destination and fails
+    /// `ENOTEMPTY` otherwise, while Windows' `MoveFileExW` cannot replace a
+    /// directory at all and the standard library's `FILE_RENAME_POSIX_
+    /// SEMANTICS` fallback only reaches the empty case. Publication does not
+    /// depend on any of that: the destination must not exist, which is
+    /// checked under the archive lock, and what rename has to do is create a
+    /// name that is not there — which is a single atomic metadata operation
+    /// everywhere. An interrupted run therefore leaves the archive exactly as
+    /// it was on Linux, macOS and Windows alike.
     pub fn publish(&self, staging: Staging, id: &str) -> Result<PathBuf, Error> {
         let destination = self.snapshots_dir().join(id);
         if destination.exists() {
@@ -238,6 +260,27 @@ pub fn read_snapshot(path: &Path) -> Result<Snapshot, Error> {
 /// volume, fsynced, renamed over the old content, then the parent synced.
 /// This is the snapshot publish sequence for a file that is allowed to
 /// change, which is what user state is. Caller holds the archive lock.
+///
+/// Unlike [`Archive::publish`] this one does rename onto an existing name,
+/// and it is a **file**, which is the case where replacement is atomic
+/// everywhere. Either the old bytes or the new ones are at `path` at every
+/// instant, never neither and never a mixture.
+///
+/// It goes through `fs::rename` rather than `tempfile`'s `persist`, and the
+/// difference is not cosmetic. Both issue `MoveFileExW` with
+/// `MOVEFILE_REPLACE_EXISTING` on Windows, which is what makes the call
+/// replace rather than fail with `ERROR_ALREADY_EXISTS`. But that path goes
+/// through the classic `FileRenameInformation`, and replacing a destination
+/// that **any** process currently has open fails there with
+/// `ERROR_ACCESS_DENIED` — sharing flags do not help, because the target is
+/// being deleted, not shared. POSIX `rename` has no such rule. Only
+/// `fs::rename` retries with `FileRenameInfoEx` and
+/// `FILE_RENAME_FLAG_POSIX_SEMANTICS`, the flag that exists precisely to
+/// unlink an open target, which gives Windows the same behaviour as the
+/// other two. `persist` has no retry, so a virus scanner, a backup agent or
+/// an editor holding `library.json` open for a moment was enough to fail a
+/// `forget`. The staged file's own handle is closed first so that the retry
+/// can open the source for `DELETE`.
 pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut staged = tempfile::Builder::new()
@@ -251,12 +294,36 @@ pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         .as_file()
         .sync_all()
         .map_err(Error::io("sync staged", path))?;
-    staged
-        .persist(path)
-        .map_err(|err| Error::io("replace", path)(err.error))?;
+    // `keep` also clears the temporary attribute Windows marks the file
+    // with, which the published file must not carry.
+    let (file, staged_path) = staged
+        .keep()
+        .map_err(|err| Error::io("stage beside", path)(err.error))?;
+    drop(file);
+    if let Err(source) = fs::rename(&staged_path, path) {
+        // `keep` took cleanup away from the destructor; nothing else will
+        // remove the stage now, and a failed write must leave no litter.
+        let _ = fs::remove_file(&staged_path);
+        return Err(Error::io("replace", path)(source));
+    }
     sync_dir(parent)
 }
 
+/// The archive is a record of everything the user browses, so it is created
+/// private to them.
+///
+/// On Unix that is `0700`, set here. Windows has no mode bit and setting a
+/// DACL needs the Win32 security APIs, which this crate cannot reach —
+/// `unsafe_code` is forbidden and a `windows-sys` dependency for one call is
+/// not worth it. What it gets instead is inheritance: a directory created
+/// under `%LOCALAPPDATA%` inherits that folder's ACL. On a standard Windows
+/// installation that is the per-user protection intended for this location,
+/// so the default root from [`crate::platform::default_root`] is private
+/// without our help. **A
+/// `--root` chosen outside the user profile is not**: it inherits whatever
+/// its parent grants, and a root directory may grant ordinary users read
+/// access. That difference is real and is in the README rather than papered
+/// over.
 pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         return Ok(());
@@ -272,7 +339,16 @@ pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
 }
 
 /// Directory fsync is what makes a rename survive a crash on Unix. Windows
-/// has no equivalent and does not need one for this purpose.
+/// has no directory-flush operation exposed by the standard library, so this
+/// is the strongest portable sequence available there: each staged file is
+/// flushed before the rename and NTFS journals the metadata change. Journaling
+/// is recovery support, not a promise that a sudden power loss has persisted
+/// the rename, so callers must not describe the Windows step as equivalent to
+/// a Unix directory fsync.
+// The `Result` is what every caller handles and what Unix genuinely returns.
+// Collapsing it where the body happens to be empty would put a `cfg` in each
+// of the four call sites to say the same thing this one comment says.
+#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
 pub fn sync_dir(dir: &Path) -> Result<(), Error> {
     #[cfg(unix)]
     {
@@ -302,6 +378,20 @@ mod tests {
         assert!(format_id(at) < format!("{}-2", format_id(at)));
     }
 
+    /// "Private to the user" is not the same sentence on both platforms, so
+    /// each asserts its own.
+    ///
+    /// Unix: mode `0700`, which we set.
+    ///
+    /// Windows: there is no mode, and we cannot set an access-control list
+    /// without the Win32 security APIs, so the only claim that is ours to
+    /// make is **we add no access of our own** — the archive is exactly as
+    /// private as an ordinary directory created in the same place, and
+    /// `default_root` makes sure that place is under `%LOCALAPPDATA%`. That
+    /// is asserted by building an ordinary directory beside it and comparing
+    /// the two. An earlier version asserted every entry was inherited, which
+    /// was a fact about the parent rather than about us, and duly failed
+    /// under `%TEMP%`, where entries are explicit.
     #[test]
     fn open_creates_root_privately_and_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
@@ -314,8 +404,48 @@ mod tests {
             let mode = fs::metadata(&root).unwrap().permissions().mode() & 0o777;
             assert_eq!(mode, 0o700);
         }
+        #[cfg(windows)]
+        {
+            let ordinary = root.with_file_name("ordinary");
+            fs::create_dir(&ordinary).unwrap();
+            assert_eq!(
+                windows_access_entries(&root),
+                windows_access_entries(&ordinary),
+                "creating the archive granted access an ordinary directory here would not have"
+            );
+            fs::remove_dir(&ordinary).unwrap();
+        }
         Archive::open(&root).unwrap();
         assert!(archive.snapshot_ids().unwrap().is_empty());
+    }
+
+    /// Who a directory grants what, read back through `icacls`, with the
+    /// directory's own name removed so that two directories can be compared.
+    /// Nothing here reads the localised text beside an entry; the entries are
+    /// only ever compared with each other, on the same machine, moments apart.
+    #[cfg(windows)]
+    fn windows_access_entries(path: &Path) -> Vec<String> {
+        let out = std::process::Command::new("icacls")
+            .arg(path)
+            .output()
+            .expect("icacls");
+        assert!(out.status.success(), "icacls failed for {}", path.display());
+        // icacls echoes the name it was given, verbatim, before the first
+        // entry; that name is the one thing that must not take part in the
+        // comparison, and it is a string we already hold.
+        let text = String::from_utf8_lossy(&out.stdout).replace(&path.display().to_string(), "");
+        let mut entries: Vec<String> = text
+            .lines()
+            .filter(|line| line.contains(":("))
+            .map(|line| line.trim().to_owned())
+            .collect();
+        assert!(
+            !entries.is_empty(),
+            "icacls listed no entries for {}",
+            path.display()
+        );
+        entries.sort();
+        entries
     }
 
     #[test]
@@ -354,6 +484,10 @@ mod tests {
         let archive = Archive::open(tmp.path()).unwrap();
         let staging = archive.stage().unwrap();
         staging.write("a.txt", b"hello").unwrap();
+        // "Moved, not copied" is the same claim on both platforms, but only
+        // Unix can be asked it on stable: `MetadataExt::file_index` is the
+        // Windows equivalent of an inode and is still unstable there. The
+        // assertions around this one hold everywhere.
         #[cfg(unix)]
         let staging_inode = std::fs::metadata(staging.path()).unwrap().ino();
         let published = archive.publish(staging, "2026-01-01-000000Z").unwrap();
@@ -375,22 +509,125 @@ mod tests {
         );
     }
 
+    /// The durability promise in the one shape where `rename` does not mean
+    /// the same thing on POSIX and Windows. POSIX `rename` replaces an empty
+    /// destination directory and takes the whole snapshot with it; Windows
+    /// refuses. Publication depends on neither, because it refuses first —
+    /// so this asserts the same outcome on all three platforms, against an
+    /// empty directory, a full one, and a file wearing a snapshot's name.
+    /// What is already sitting at the snapshot's name.
+    enum Occupied {
+        EmptyDirectory,
+        FullDirectory,
+        File,
+    }
+
+    #[test]
+    fn publish_never_renames_over_anything_that_already_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = Archive::open(tmp.path()).unwrap();
+        let occupied = [
+            ("2026-01-01-000001Z", Occupied::EmptyDirectory),
+            ("2026-01-01-000002Z", Occupied::FullDirectory),
+            ("2026-01-01-000003Z", Occupied::File),
+        ];
+        for (id, what) in occupied {
+            let destination = archive.snapshots_dir().join(id);
+            match what {
+                Occupied::EmptyDirectory => fs::create_dir(&destination).unwrap(),
+                Occupied::FullDirectory => {
+                    fs::create_dir(&destination).unwrap();
+                    fs::write(destination.join("keep.txt"), b"mine").unwrap();
+                }
+                Occupied::File => fs::write(&destination, b"not a directory").unwrap(),
+            }
+            let before = fs::symlink_metadata(&destination).unwrap();
+            let staging = archive.stage().unwrap();
+            staging.write("snapshot.json", b"the new snapshot").unwrap();
+
+            let err = archive.publish(staging, id).unwrap_err();
+            assert!(err.to_string().contains("already exists"), "{id}: {err}");
+            let after = fs::symlink_metadata(&destination).unwrap();
+            assert_eq!(
+                before.file_type().is_dir(),
+                after.file_type().is_dir(),
+                "{id}"
+            );
+            assert!(
+                !destination.join("snapshot.json").exists(),
+                "{id}: the staged snapshot reached the destination"
+            );
+            assert_eq!(archive.clean_stale_staging().unwrap(), 0, "{id}");
+        }
+        assert_eq!(
+            fs::read(
+                archive
+                    .snapshots_dir()
+                    .join("2026-01-01-000002Z")
+                    .join("keep.txt")
+            )
+            .unwrap(),
+            b"mine"
+        );
+        assert_eq!(
+            fs::read(archive.snapshots_dir().join("2026-01-01-000003Z")).unwrap(),
+            b"not a directory"
+        );
+    }
+
+    /// The other half of the rename answer: here the destination does exist
+    /// and has to be replaced.
+    ///
+    /// The replacement happens while a reader holds the old content open,
+    /// because that is the case where Windows used to differ and no longer
+    /// does. Classic `MoveFileExW` replacement refuses a destination anyone
+    /// has open; `fs::rename`'s POSIX-semantics retry unlinks it instead,
+    /// which is what Unix does. This test found that difference on CI and
+    /// now pins the fix.
     #[test]
     fn replace_file_swaps_content_in_one_rename_and_leaves_no_stage_behind() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("state.json");
         replace_file(&path, b"first").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"first");
+
+        let reader = File::open(&path).unwrap();
         replace_file(&path, b"second").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"second");
-        let leftovers: Vec<_> = fs::read_dir(tmp.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|name| name != "state.json")
-            .collect();
-        assert!(leftovers.is_empty(), "{leftovers:?}");
+        // What the held handle now sees is unlinked-file behaviour rather
+        // than part of the contract, so it is not asserted; that it could
+        // not block the replacement is the contract, and it just did not.
+        drop(reader);
+
+        let leftovers = |kept: &[&str]| -> Vec<String> {
+            let mut names: Vec<String> = fs::read_dir(tmp.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| !kept.contains(&name.as_str()))
+                .collect();
+            names.sort();
+            names
+        };
+        assert!(leftovers(&["state.json"]).is_empty(), "after a replacement");
+
+        // A replacement that cannot complete leaves the old bytes in place:
+        // a directory in the way is the cheapest way to make rename refuse
+        // on every platform. Cleaning up the stage afterwards is ours to do
+        // now that the rename is `fs::rename` and not a `tempfile` destructor.
+        let blocked = tmp.path().join("blocked");
+        replace_file(&blocked, b"original").unwrap();
+        fs::remove_file(&blocked).unwrap();
+        fs::create_dir(&blocked).unwrap();
+        assert!(replace_file(&blocked, b"replacement").is_err());
+        assert!(blocked.is_dir());
+        assert!(
+            leftovers(&["state.json", "blocked"]).is_empty(),
+            "a failed replacement left its stage behind: {:?}",
+            leftovers(&["state.json", "blocked"])
+        );
+
         // The destination's parent must exist; nothing is created above it.
-        assert!(replace_file(&tmp.path().join("missing/state.json"), b"x").is_err());
+        assert!(replace_file(&tmp.path().join("missing").join("state.json"), b"x").is_err());
     }
 
     #[test]

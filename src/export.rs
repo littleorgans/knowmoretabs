@@ -70,7 +70,9 @@ fn check_destination(root: &Path, destination: &Path) -> Result<(), Error> {
         .canonicalize()
         .map_err(Error::io("resolve archive root", root))?;
     let destination = resolve_destination(destination)?;
-    if root.starts_with(&destination) || destination.starts_with(root.join(SNAPSHOTS_DIR)) {
+    if crate::platform::contains_path(&destination, &root)
+        || crate::platform::contains_path(&root.join(SNAPSHOTS_DIR), &destination)
+    {
         return Err(Error::ExportDestination(destination));
     }
     Ok(())
@@ -88,6 +90,16 @@ fn resolve_destination(path: &Path) -> Result<std::path::PathBuf, Error> {
             }
             std::path::Component::CurDir => {}
             _ => resolved.push(component),
+        }
+        // A Windows path begins `C:` then `\`, and `C:` on its own is
+        // drive-relative: resolving it would name the current directory on
+        // that drive rather than its root. Nothing is resolved until there
+        // is a directory to resolve.
+        if matches!(
+            component,
+            std::path::Component::Prefix(_) | std::path::Component::RootDir
+        ) {
+            continue;
         }
         match resolved.canonicalize() {
             Ok(path) => resolved = path,
