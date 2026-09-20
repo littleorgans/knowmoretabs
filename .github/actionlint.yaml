@@ -1,0 +1,5 @@
+# Labels actionlint does not know: the Blacksmith runner ci.yml and
+# release.yml use for Linux.
+self-hosted-runner:
+  labels:
+    - blacksmith-2vcpu-ubuntu-2404

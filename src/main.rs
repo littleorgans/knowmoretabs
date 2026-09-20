@@ -1,12 +1,14 @@
-//! Entry point: parses the command line, runs the capture, and turns the
-//! outcome into stdout lines or JSON and an exit status.
+//! Entry point: parses the command line, runs the chosen command, and turns
+//! the outcome into stdout lines or JSON and an exit status.
 //!
-//! slice: capture
+//! slice: capture, library, triage
 //! why: Presentation lives here and nowhere else. The capture code returns
 //!      typed outcomes and typed errors; this file decides what a person
 //!      sees on a terminal, what a script sees under `--json`, and which
 //!      exit code each outcome maps to. Keeping that in one short file means
-//!      the library-shaped modules stay silent and testable.
+//!      the library-shaped modules stay silent and testable. Every slice that
+//!      added a command added its presentation here, so this file claims
+//!      each of them.
 
 mod archive;
 mod assets;

@@ -81,7 +81,7 @@ installed.
 you nothing the first one did not, and it is cheap once the browser table is
 the only thing that varies.
 
-### 5. Linux and Windows (`platforms`) — planned
+### 5. Linux and Windows (`platforms`) — done
 
 - Delivers: my-platform
 - Depends on: browsers

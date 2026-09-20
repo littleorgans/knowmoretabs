@@ -1,6 +1,6 @@
 //! The command line: clap types for `knowmoretabs` and its subcommands.
 //!
-//! slice: capture
+//! slice: capture, library, triage, browsers
 //! why: The whole CLI surface is visible in one file, so "what flags exist
 //!      and where are they allowed" is a question answered by reading forty
 //!      lines rather than grepping. Global options are global so that

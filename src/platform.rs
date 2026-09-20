@@ -1,7 +1,7 @@
 //! Where Chrome keeps its files: the user-data directory, profile discovery
 //! through `Local State`, and picking the newest `Session_*` log.
 //!
-//! slice: browsers
+//! slice: browsers, platforms
 //! why: The reference implementation hardcoded one macOS path and trusted a
 //!      profile name straight onto the filesystem. This module is the one
 //!      place that knowledge lives, shaped as a table whose rows are browsers
