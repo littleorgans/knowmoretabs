@@ -127,7 +127,7 @@ points at a button on the page, and a button needs somewhere to POST to.
 id = "browsers"
 number = 4
 title = "The browser you actually use"
-status = "planned"
+status = "done"
 delivers = ["my-browser"]
 depends_on = ["capture"]
 ships = """
