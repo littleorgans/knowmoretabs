@@ -15,7 +15,9 @@
 # GitHub-hosted Linux credit pool is exhausted; macOS and Windows on
 # GitHub-hosted runners, the sanctioned exception. The ARM Linux binary is
 # cross-compiled on the x86-64 Blacksmith runner with the distribution's
-# cross toolchain: the crate has no C dependencies, so that is all it needs.
+# cross compiler and the target C runtime the linker needs even though the
+# crate has no C dependencies (`gcc-aarch64-linux-gnu` does not pull the
+# latter in on its own).
 # Actions are pinned to commit SHAs; the ref each was resolved from is in the
 # comment beside it.
 name: Release
@@ -97,11 +99,11 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: release-${{ matrix.target }}
-      - name: Install the ARM64 cross linker
+      - name: Install the ARM64 cross toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - name: Build
         run: cargo build --release --locked --target "${{ matrix.target }}"
