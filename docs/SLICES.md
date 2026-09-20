@@ -55,7 +55,7 @@ Opens from `file://` with no server and no network.
 built here is the same frontend slice 3 serves, so it is written to work
 against either an embedded JSON blob or a fetch — one renderer, two hosts.
 
-### 3. Serve and triage (`triage`) — planned
+### 3. Serve and triage (`triage`) — done
 
 - Delivers: forget-pages, triage-in-bulk
 - Depends on: library

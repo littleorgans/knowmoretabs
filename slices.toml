@@ -109,7 +109,7 @@ against either an embedded JSON blob or a fetch — one renderer, two hosts.
 id = "triage"
 number = 3
 title = "Serve and triage"
-status = "planned"
+status = "done"
 delivers = ["forget-pages", "triage-in-bulk"]
 depends_on = ["library"]
 ships = """
