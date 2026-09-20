@@ -1,0 +1,4 @@
+# `cargo xtask <cmd>` runs the repository's helper crate. CI calls the crate
+# directly (`cargo run -p xtask`) so a fresh checkout does not depend on this.
+[alias]
+xtask = "run --quiet --package xtask --"
