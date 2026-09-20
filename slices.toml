@@ -190,6 +190,18 @@ that adding one later is additive.
 """
 
 [[future]]
+id = "arc"
+want = "Use it with Arc"
+prepared_by = ["browsers"]
+why_not_now = """
+Arc is Chromium-based and writes SNSS files, but only `Tabs_*` — its open-tab
+model lives in `StorableSidebar.json`, a proprietary schema of Spaces and a
+pinned sidebar. Parsing its session files would snapshot the wrong thing
+convincingly, which is worse than not supporting it. Arc needs a second source
+adapter, not a row in the browser table.
+"""
+
+[[future]]
 id = "notes-tags"
 want = "Tag a page and write myself a note about it"
 prepared_by = ["triage"]
