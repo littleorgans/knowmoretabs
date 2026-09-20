@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 use crate::archive::{Archive, SNAPSHOT_JSON};
 use crate::error::Error;
 use crate::model::{SCHEMA_VERSION, SESSION_FILE_NAME, Snapshot, Source};
-use crate::platform::{self, Profile, SESSIONS_DIR};
+use crate::platform::{self, BrowserCandidate, Profile, SESSIONS_DIR};
 use crate::session::{self, CommandTable, Parsed};
 use crate::snss::HeaderError;
 use crate::staleness;
@@ -30,6 +30,7 @@ use crate::staleness;
 pub struct Options {
     pub root: PathBuf,
     pub session: Option<PathBuf>,
+    pub browser: Option<String>,
     pub profile: Option<String>,
     pub user_data_dir: Option<PathBuf>,
     pub force: bool,
@@ -70,11 +71,13 @@ pub enum Outcome {
     Saved {
         path: PathBuf,
         snapshot: Snapshot,
+        also_found: Vec<BrowserCandidate>,
     },
     /// The layout matched `previous_id`; `snapshot` was built but not written.
     Skipped {
         previous_id: String,
         snapshot: Snapshot,
+        also_found: Vec<BrowserCandidate>,
     },
 }
 
@@ -89,6 +92,7 @@ struct Located {
     profile_dir: Option<PathBuf>,
     /// Where discovery looked, for the error when it found nothing.
     sessions_dir: Option<PathBuf>,
+    also_found: Vec<BrowserCandidate>,
 }
 
 /// Debug-test rendezvous: write a readiness file, then wait for the parent
@@ -167,6 +171,7 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
             return Ok(Outcome::Skipped {
                 previous_id: previous.id,
                 snapshot,
+                also_found: located.also_found,
             });
         }
     }
@@ -188,7 +193,11 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
         }
     }
     let path = archive.publish(staging, &snapshot.id)?;
-    Ok(Outcome::Saved { path, snapshot })
+    Ok(Outcome::Saved {
+        path,
+        snapshot,
+        also_found: located.also_found,
+    })
 }
 
 fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
@@ -214,18 +223,49 @@ fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
             profile: None,
             profile_dir,
             sessions_dir: None,
+            also_found: Vec::new(),
         });
     }
 
-    let user_data = if let Some(dir) = &opts.user_data_dir {
-        dir.clone()
-    } else {
-        let home = platform::home_dir().ok_or(Error::NoHome)?;
-        platform::browser(platform::CHROME)
-            .map(|b| b.user_data_dir(&home))
-            .ok_or(Error::NoHome)?
+    let home = platform::home_dir().ok_or(Error::NoHome)?;
+    let spec = match opts.browser.as_deref() {
+        Some("arc") => return Err(Error::ArcUnsupported),
+        Some(id) => platform::browser(id).ok_or_else(|| Error::UnknownBrowser {
+            requested: id.to_owned(),
+            installed: installed_names(&home),
+        })?,
+        None if opts.user_data_dir.is_some() => {
+            platform::browser(platform::CHROME).ok_or(Error::NoHome)?
+        }
+        None => platform::browser(platform::CHROME).ok_or(Error::NoHome)?,
     };
-    let profile = platform::resolve_profile(&user_data, opts.profile.as_deref())?;
+
+    let (mut candidates, default_user_data, looked_at) = discover_candidates(opts, &home, spec)?;
+
+    if candidates.is_empty() {
+        if opts.browser.is_some() || opts.user_data_dir.is_some() {
+            let profile = platform::resolve_profile(&default_user_data, opts.profile.as_deref())?;
+            return Ok(Located {
+                candidates: Vec::new(),
+                browser: Some(spec.id.to_owned()),
+                profile: Some(profile.clone()),
+                profile_dir: Some(profile.path.clone()),
+                sessions_dir: Some(profile.path.join(SESSIONS_DIR)),
+                also_found: Vec::new(),
+            });
+        }
+        return Err(Error::NoBrowserSession { looked_at });
+    }
+
+    candidates.sort_by(platform::candidate_cmp);
+    let winner = candidates.pop().expect("checked non-empty");
+    let also_found = candidates;
+    let profile = winner.profile.clone();
+    let user_data = profile
+        .path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_default();
     log.note(&format!(
         "profile {} ({}) under {}",
         profile.dir_name,
@@ -233,15 +273,86 @@ fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
         user_data.display()
     ));
     let sessions_dir = profile.path.join(SESSIONS_DIR);
-    let candidates =
+    let session_candidates =
         platform::session_candidates(&sessions_dir).map_err(Error::io("list", &sessions_dir))?;
     Ok(Located {
-        candidates: candidates.into_iter().map(|c| c.path).collect(),
-        browser: Some(platform::CHROME.to_owned()),
+        candidates: session_candidates.into_iter().map(|c| c.path).collect(),
+        browser: Some(winner.browser.id.to_owned()),
         profile_dir: Some(profile.path.clone()),
         profile: Some(profile),
         sessions_dir: Some(sessions_dir),
+        also_found,
     })
+}
+
+fn discover_candidates(
+    opts: &Options,
+    home: &Path,
+    selected: &'static platform::BrowserSpec,
+) -> Result<(Vec<platform::BrowserCandidate>, PathBuf, String), Error> {
+    if opts.browser.is_some() || opts.user_data_dir.is_some() {
+        let user_data = opts
+            .user_data_dir
+            .clone()
+            .unwrap_or_else(|| selected.user_data_dir(home));
+        let candidate =
+            platform::candidate_for_browser(selected, &user_data, opts.profile.as_deref())
+                .map_err(Error::from)?;
+        return Ok((
+            candidate.into_iter().collect(),
+            user_data.clone(),
+            format!("{} ({})", selected.id, user_data.display()),
+        ));
+    }
+    let mut candidates = Vec::new();
+    let mut looked_at = Vec::new();
+    for candidate_spec in &platform::BROWSERS {
+        let user_data = platform::candidate_user_data(candidate_spec, home);
+        looked_at.push(format!("{} ({})", candidate_spec.id, user_data.display()));
+        match platform::candidate_for_browser(candidate_spec, &user_data, opts.profile.as_deref()) {
+            Ok(Some(candidate)) => candidates.push(candidate),
+            Ok(None) => {
+                if let Ok((profile, _)) =
+                    platform::profile_with_session(&user_data, opts.profile.as_deref())
+                    && let Ok(Some(reason)) = staleness::check(&profile.path)
+                {
+                    return Err(Error::Stale {
+                        profile: profile.path,
+                        reason,
+                    });
+                }
+            }
+            Err(error) if opts.profile.is_some() && is_profile_input_error(&error) => {
+                return Err(Error::Discovery(error));
+            }
+            Err(_) => {}
+        }
+    }
+    Ok((
+        candidates,
+        selected.user_data_dir(home),
+        looked_at.join(", "),
+    ))
+}
+
+fn is_profile_input_error(error: &platform::DiscoveryError) -> bool {
+    matches!(
+        error,
+        platform::DiscoveryError::Profile(
+            platform::ProfileError::InvalidName(_)
+                | platform::ProfileError::NotBrowsing(_)
+                | platform::ProfileError::Ambiguous { .. }
+        )
+    )
+}
+
+fn installed_names(home: &Path) -> String {
+    let names = platform::installed_browser_ids(home);
+    if names.is_empty() {
+        "none".to_owned()
+    } else {
+        names.join(", ")
+    }
 }
 
 #[derive(Debug)]
@@ -366,6 +477,7 @@ mod tests {
         let opts = Options {
             root: tmp.path().join("root"),
             session: Some(inside.clone()),
+            browser: None,
             profile: None,
             user_data_dir: None,
             force: false,

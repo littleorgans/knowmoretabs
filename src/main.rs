@@ -77,6 +77,7 @@ fn save(cli: &Cli, root: std::path::PathBuf, log: Log) -> Result<(), error::Erro
     let opts = Options {
         root,
         session: cli.session.clone(),
+        browser: cli.browser.clone(),
         profile: cli.profile.clone(),
         user_data_dir: cli.user_data_dir.clone(),
         force: cli.save_args().force,
@@ -112,19 +113,32 @@ fn summary(snapshot: &Snapshot) -> String {
 fn human_outcome(outcome: &Outcome, verbose: bool) -> String {
     let mut out = String::new();
     let snapshot = match outcome {
-        Outcome::Saved { path, snapshot } => {
-            let _ = writeln!(out, "saved {} to {}", summary(snapshot), path.display());
+        Outcome::Saved {
+            path,
+            snapshot,
+            also_found,
+        } => {
+            let _ = writeln!(
+                out,
+                "saved {} to {} from {}",
+                summary(snapshot),
+                path.display(),
+                source_label(snapshot)
+            );
+            write_also_found(&mut out, snapshot, also_found);
             snapshot
         }
         Outcome::Skipped {
             previous_id,
             snapshot,
+            also_found,
         } => {
             let _ = writeln!(
                 out,
                 "no change since {previous_id}: {}. Nothing saved; use --force to save anyway.",
                 summary(snapshot)
             );
+            write_also_found(&mut out, snapshot, also_found);
             snapshot
         }
     };
@@ -166,23 +180,100 @@ fn human_outcome(outcome: &Outcome, verbose: bool) -> String {
     out
 }
 
+fn source_label(snapshot: &Snapshot) -> String {
+    let source = &snapshot.source;
+    format!(
+        "{} / {} ({})",
+        source.browser.as_deref().unwrap_or("unknown browser"),
+        source.profile.as_deref().unwrap_or("unknown profile"),
+        source
+            .profile_display
+            .as_deref()
+            .unwrap_or("no display name")
+    )
+}
+
+fn write_also_found(
+    out: &mut String,
+    snapshot: &Snapshot,
+    candidates: &[platform::BrowserCandidate],
+) {
+    if candidates.is_empty() {
+        return;
+    }
+    let winner_suffix = snapshot
+        .source
+        .path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| platform::session_suffix(name, "Session_"));
+    let _ = writeln!(out, "  also found:");
+    for candidate in candidates.iter().rev() {
+        let age = winner_suffix.map_or(0, |suffix| {
+            suffix.saturating_sub(candidate.suffix) / 1_000_000
+        });
+        let _ = writeln!(
+            out,
+            "    {} / {} ({})       {} older  — --browser {}",
+            candidate.browser.id,
+            candidate.profile.dir_name,
+            candidate
+                .profile
+                .display
+                .as_deref()
+                .unwrap_or("no display name"),
+            format_age(age),
+            candidate.browser.id
+        );
+    }
+}
+
+fn format_age(seconds: i64) -> String {
+    if seconds < 60 {
+        format!("{seconds} seconds")
+    } else if seconds < 3_600 {
+        format!("{} minutes", seconds / 60)
+    } else if seconds < 86_400 {
+        format!("{} hours", seconds / 3_600)
+    } else {
+        format!("{} days", seconds / 86_400)
+    }
+}
+
 fn json_outcome(outcome: &Outcome) -> serde_json::Value {
     match outcome {
-        Outcome::Saved { path, snapshot } => serde_json::json!({
+        Outcome::Saved {
+            path,
+            snapshot,
+            also_found,
+        } => serde_json::json!({
             "saved": {
                 "id": snapshot.id,
                 "path": path,
+                "browser": snapshot.source.browser,
+                "profile": snapshot.source.profile,
+                "profile_display": snapshot.source.profile_display,
                 "tabs": snapshot.stats.tabs,
                 "windows": snapshot.stats.windows,
                 "groups": snapshot.stats.groups,
                 "degraded": snapshot.stats.is_degraded(),
                 "stats": snapshot.stats,
                 "source": snapshot.source,
-            }
+            },
+            "also_found": also_found.iter().map(|candidate| serde_json::json!({
+                "browser": candidate.browser.id,
+                "profile": candidate.profile.dir_name,
+                "profile_display": candidate.profile.display,
+                "age_seconds": snapshot.source.path.file_name()
+                    .and_then(|name| name.to_str())
+                    .and_then(|name| platform::session_suffix(name, "Session_"))
+                    .map_or(0, |suffix| suffix.saturating_sub(candidate.suffix) / 1_000_000),
+            })).collect::<Vec<_>>(),
         }),
         Outcome::Skipped {
             previous_id,
             snapshot,
+            also_found,
         } => serde_json::json!({
             "skipped": {
                 "previous": previous_id,
@@ -192,7 +283,12 @@ fn json_outcome(outcome: &Outcome) -> serde_json::Value {
                 "degraded": snapshot.stats.is_degraded(),
                 "stats": snapshot.stats,
                 "source": snapshot.source,
-            }
+            },
+            "also_found": also_found.iter().map(|candidate| serde_json::json!({
+                "browser": candidate.browser.id,
+                "profile": candidate.profile.dir_name,
+                "profile_display": candidate.profile.display,
+            })).collect::<Vec<_>>(),
         }),
     }
 }

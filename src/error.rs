@@ -12,7 +12,7 @@
 use std::fmt::Write as _;
 use std::path::PathBuf;
 
-use crate::platform::ProfileError;
+use crate::platform::{DiscoveryError, ProfileError};
 use crate::snss::HeaderError;
 use crate::staleness::StaleReason;
 
@@ -29,11 +29,29 @@ pub enum Error {
     },
     #[error(transparent)]
     Profile(#[from] ProfileError),
+    #[error(transparent)]
+    Discovery(#[from] DiscoveryError),
+    #[error(
+        "unknown browser {requested:?}; installed supported browsers: {installed}
+        (supported: chrome, chrome-beta, chrome-canary, chromium, brave, edge, vivaldi)"
+    )]
+    UnknownBrowser {
+        requested: String,
+        installed: String,
+    },
+    #[error(
+        "Arc is not supported: Arc stores open tabs in its proprietary StorableSidebar.json, not Session_* files"
+    )]
+    ArcUnsupported,
     #[error(
         "no Session_* file under {}; open Chrome once so it writes one, or pass --session FILE",
         .0.display()
     )]
     NoSession(PathBuf),
+    #[error(
+        "no Session_* file under supported browser directories; looked at {looked_at}; pass --browser NAME or --session FILE (see chrome://version → Profile Path)"
+    )]
+    NoBrowserSession { looked_at: String },
     #[error(
         "{} is a Tabs_* file, Chrome's recently-closed list, which uses a different command table; pass the Session_* file beside it",
         .0.display()
@@ -83,7 +101,10 @@ impl Error {
             Self::NoHome => "no_home",
             Self::Io { .. } => "io",
             Self::Profile(_) => "profile",
-            Self::NoSession(_) => "no_session",
+            Self::Discovery(_) => "discovery",
+            Self::UnknownBrowser { .. } => "unknown_browser",
+            Self::ArcUnsupported => "arc_unsupported",
+            Self::NoSession(_) | Self::NoBrowserSession { .. } => "no_session",
             Self::TabsFile(_) => "tabs_file",
             Self::Parse { .. } => "parse",
             Self::Stale { .. } => "stale",

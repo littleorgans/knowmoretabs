@@ -15,8 +15,14 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::Deserialize;
 
-/// The `--browser` id of the only browser this slice knows.
+/// The stable `--browser` ids supported by this slice.
 pub const CHROME: &str = "chrome";
+pub const CHROME_BETA: &str = "chrome-beta";
+pub const CHROME_CANARY: &str = "chrome-canary";
+pub const CHROMIUM: &str = "chromium";
+pub const BRAVE: &str = "brave";
+pub const EDGE: &str = "edge";
+pub const VIVALDI: &str = "vivaldi";
 /// Chrome's own name for the session directory (`kSessionsDirectory`).
 pub const SESSIONS_DIR: &str = "Sessions";
 /// Where it writes the version-5 files it will one day prefer.
@@ -29,17 +35,65 @@ pub const DEFAULT_ROOT_NAME: &str = ".knowmoretabs";
 #[derive(Debug, Clone, Copy)]
 pub struct BrowserSpec {
     pub id: &'static str,
+    pub channel_rank: u8,
     pub macos: &'static str,
     pub linux: &'static str,
     pub windows: &'static str,
 }
 
-pub const BROWSERS: [BrowserSpec; 1] = [BrowserSpec {
-    id: CHROME,
-    macos: "Library/Application Support/Google/Chrome",
-    linux: ".config/google-chrome",
-    windows: "AppData/Local/Google/Chrome/User Data",
-}];
+/// The platform column is deliberately part of each row. Slice 5 can add
+/// platform probing without changing browser selection or profile discovery.
+pub const BROWSERS: [BrowserSpec; 7] = [
+    BrowserSpec {
+        id: CHROME,
+        channel_rank: 0,
+        macos: "Library/Application Support/Google/Chrome",
+        linux: ".config/google-chrome",
+        windows: "AppData/Local/Google/Chrome/User Data",
+    },
+    BrowserSpec {
+        id: CHROME_BETA,
+        channel_rank: 1,
+        macos: "Library/Application Support/Google/Chrome Beta",
+        linux: ".config/google-chrome-beta",
+        windows: "AppData/Local/Google/Chrome Beta/User Data",
+    },
+    BrowserSpec {
+        id: CHROME_CANARY,
+        channel_rank: 3,
+        macos: "Library/Application Support/Google/Chrome Canary",
+        linux: ".config/google-chrome-canary",
+        windows: "AppData/Local/Google/Chrome SxS/User Data",
+    },
+    BrowserSpec {
+        id: CHROMIUM,
+        channel_rank: 0,
+        macos: "Library/Application Support/Chromium",
+        linux: ".config/chromium",
+        windows: "AppData/Local/Chromium/User Data",
+    },
+    BrowserSpec {
+        id: BRAVE,
+        channel_rank: 0,
+        macos: "Library/Application Support/BraveSoftware/Brave-Browser",
+        linux: ".config/BraveSoftware/Brave-Browser",
+        windows: "AppData/Local/BraveSoftware/Brave-Browser/User Data",
+    },
+    BrowserSpec {
+        id: EDGE,
+        channel_rank: 0,
+        macos: "Library/Application Support/Microsoft Edge",
+        linux: ".config/microsoft-edge",
+        windows: "AppData/Local/Microsoft/Edge/User Data",
+    },
+    BrowserSpec {
+        id: VIVALDI,
+        channel_rank: 0,
+        macos: "Library/Application Support/Vivaldi",
+        linux: ".config/vivaldi",
+        windows: "AppData/Local/Vivaldi/User Data",
+    },
+];
 
 impl BrowserSpec {
     /// The user-data directory on the platform this binary was built for.
@@ -57,6 +111,14 @@ impl BrowserSpec {
 
 pub fn browser(id: &str) -> Option<&'static BrowserSpec> {
     BROWSERS.iter().find(|b| b.id == id)
+}
+
+pub fn installed_browser_ids(home: &Path) -> Vec<&'static str> {
+    BROWSERS
+        .iter()
+        .filter(|spec| spec.user_data_dir(home).is_dir())
+        .map(|spec| spec.id)
+        .collect()
 }
 
 pub fn home_dir() -> Option<PathBuf> {
@@ -91,6 +153,8 @@ pub enum ProfileError {
     },
     #[error("no browsing profile with a session under {0}")]
     NoDefault(PathBuf),
+    #[error("profile directory {0} is not a directory")]
+    NotDirectory(PathBuf),
 }
 
 /// A resolved profile: the directory Chrome uses and the name people see.
@@ -99,6 +163,15 @@ pub struct Profile {
     pub dir_name: String,
     pub display: Option<String>,
     pub path: PathBuf,
+}
+
+/// A browser/profile pair that can be selected by zero-flag discovery.
+#[derive(Debug, Clone)]
+pub struct BrowserCandidate {
+    pub browser: &'static BrowserSpec,
+    pub profile: Profile,
+    pub suffix: i64,
+    pub modified: Option<std::time::SystemTime>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -136,9 +209,20 @@ pub fn resolve_profile(user_data: &Path, requested: Option<&str>) -> Result<Prof
         None => resolve_default(user_data, &state.profile)?,
     };
     guard_dir_name(&dir_name, cache)?;
+    let joined = user_data.join(&dir_name);
+    let path = match std::fs::symlink_metadata(&joined) {
+        Ok(metadata) if metadata.file_type().is_symlink() => match std::fs::canonicalize(&joined) {
+            Ok(path) if path.is_dir() => path,
+            Ok(_) => return Err(ProfileError::NotDirectory(joined)),
+            Err(_) => joined,
+        },
+        Ok(metadata) if metadata.is_dir() => joined,
+        Ok(_) => return Err(ProfileError::NotDirectory(joined)),
+        Err(_) => joined,
+    };
     Ok(Profile {
         display: cache.get(&dir_name).and_then(|e| e.name.clone()),
-        path: user_data.join(&dir_name),
+        path,
         dir_name,
     })
 }
@@ -184,6 +268,9 @@ fn resolve_requested(
                     .join(" and "),
             });
         }
+    }
+    if is_pseudo_profile(name) {
+        return Err(ProfileError::NotBrowsing(name.to_owned()));
     }
     let folded: Vec<&String> = cache
         .iter()
@@ -269,7 +356,7 @@ fn guard_dir_name(name: &str, cache: &BTreeMap<String, ProfileEntry>) -> Result<
     if Path::new(name).components().count() != 1 {
         return Err(invalid());
     }
-    if name == "Guest Profile" || name == "System Profile" {
+    if is_pseudo_profile(name) {
         return Err(ProfileError::NotBrowsing(name.to_owned()));
     }
     if let Some(entry) = cache.get(name) {
@@ -282,6 +369,100 @@ fn guard_dir_name(name: &str, cache: &BTreeMap<String, ProfileEntry>) -> Result<
         return Ok(());
     }
     Err(invalid())
+}
+
+fn is_pseudo_profile(name: &str) -> bool {
+    matches!(
+        name,
+        "Guest" | "Guest Profile" | "System" | "System Profile"
+    )
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum DiscoveryError {
+    #[error(transparent)]
+    Profile(#[from] ProfileError),
+    #[error("cannot list {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+/// Resolve the preferred profile, then use the first listed profile that has
+/// a session if the preferred profile is empty. Profile order is intentional:
+/// cross-browser recency chooses the browser, while Chromium's own preference
+/// chooses the profile inside that browser.
+pub fn profile_with_session(
+    user_data: &Path,
+    requested: Option<&str>,
+) -> Result<(Profile, Vec<SessionCandidate>), DiscoveryError> {
+    let preferred = resolve_profile(user_data, requested)?;
+    let preferred_sessions =
+        session_candidates(&preferred.path.join(SESSIONS_DIR)).map_err(|source| {
+            DiscoveryError::Io {
+                path: preferred.path.join(SESSIONS_DIR),
+                source,
+            }
+        })?;
+    if requested.is_some() || !preferred_sessions.is_empty() {
+        return Ok((preferred, preferred_sessions));
+    }
+
+    let state = read_local_state(user_data)?;
+    for dir in state.profile.info_cache.keys() {
+        if dir == &preferred.dir_name || guard_dir_name(dir, &state.profile.info_cache).is_err() {
+            continue;
+        }
+        let profile = resolve_profile(user_data, Some(dir))?;
+        let sessions_dir = profile.path.join(SESSIONS_DIR);
+        let sessions = session_candidates(&sessions_dir).map_err(|source| DiscoveryError::Io {
+            path: sessions_dir,
+            source,
+        })?;
+        if !sessions.is_empty() {
+            return Ok((profile, sessions));
+        }
+    }
+    Ok((preferred, preferred_sessions))
+}
+
+pub fn candidate_for_browser(
+    spec: &'static BrowserSpec,
+    user_data: &Path,
+    requested_profile: Option<&str>,
+) -> Result<Option<BrowserCandidate>, DiscoveryError> {
+    if !user_data.is_dir() {
+        return Ok(None);
+    }
+    let (profile, sessions) = profile_with_session(user_data, requested_profile)?;
+    let Some(session) = sessions.first() else {
+        return Ok(None);
+    };
+    let modified = std::fs::metadata(&session.path)
+        .ok()
+        .and_then(|m| m.modified().ok());
+    Ok(Some(BrowserCandidate {
+        browser: spec,
+        profile,
+        suffix: session.suffix,
+        modified,
+    }))
+}
+
+pub fn candidate_user_data(spec: &'static BrowserSpec, home: &Path) -> PathBuf {
+    spec.user_data_dir(home)
+}
+
+/// The candidate ordering used by zero-flag capture. A suffix is Chromium's
+/// recency key; mtime resolves synthetic or copied files with equal suffixes.
+pub fn candidate_cmp(a: &BrowserCandidate, b: &BrowserCandidate) -> std::cmp::Ordering {
+    a.suffix
+        .cmp(&b.suffix)
+        .then_with(|| a.modified.cmp(&b.modified))
+        .then_with(|| b.browser.channel_rank.cmp(&a.browser.channel_rank))
+        .then_with(|| b.browser.id.cmp(a.browser.id))
 }
 
 /// A `Session_<n>` file and its suffix, which is the key Chrome sorts by.
@@ -543,5 +724,55 @@ mod tests {
                 || path.ends_with("User Data")
         );
         assert!(browser("arc").is_none());
+    }
+
+    #[test]
+    fn browser_table_has_the_slice_four_macos_rows() {
+        let expected = [
+            (CHROME, "Library/Application Support/Google/Chrome"),
+            (
+                CHROME_BETA,
+                "Library/Application Support/Google/Chrome Beta",
+            ),
+            (
+                CHROME_CANARY,
+                "Library/Application Support/Google/Chrome Canary",
+            ),
+            (CHROMIUM, "Library/Application Support/Chromium"),
+            (
+                BRAVE,
+                "Library/Application Support/BraveSoftware/Brave-Browser",
+            ),
+            (EDGE, "Library/Application Support/Microsoft Edge"),
+            (VIVALDI, "Library/Application Support/Vivaldi"),
+        ];
+        for (id, relative) in expected {
+            assert_eq!(browser(id).unwrap().macos, relative);
+        }
+    }
+
+    #[test]
+    fn missing_last_used_uses_the_first_active_profile() {
+        let state = r#"{"profile":{"last_active_profiles":["Profile 2"],"info_cache":{
+            "Default":{"name":"Person 1"},"Profile 2":{"name":"Research"}}}}"#;
+        let dir = setup(state);
+        let sessions = dir.path().join("Profile 2").join(SESSIONS_DIR);
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("Session_7"), b"synthetic").unwrap();
+        let profile = profile_with_session(dir.path(), None).unwrap().0;
+        assert_eq!(profile.dir_name, "Profile 2");
+        assert_eq!(profile.display.as_deref(), Some("Research"));
+    }
+
+    #[test]
+    fn missing_and_stale_preferences_fall_back_to_a_profile_with_a_session() {
+        let state = r#"{"profile":{"last_used":"Profile 9",
+            "info_cache":{"Default":{"name":"Person 1"},"Profile 2":{"name":"Only"}}}}"#;
+        let dir = setup(state);
+        let sessions = dir.path().join("Profile 2").join(SESSIONS_DIR);
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("Session_8"), b"synthetic").unwrap();
+        let profile = profile_with_session(dir.path(), None).unwrap().0;
+        assert_eq!(profile.dir_name, "Profile 2");
     }
 }
