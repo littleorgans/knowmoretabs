@@ -132,6 +132,9 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
         pages: Vec::new(),
     };
     let mut page_indices = HashMap::new();
+    // Which forgotten URLs the archive actually holds; a state file may name
+    // URLs no surviving snapshot mentions, and those are not pages.
+    let mut forgotten_pages: HashSet<&str> = HashSet::new();
     for snapshot in snapshots {
         let groups: Vec<Group> = snapshot
             .groups
@@ -152,10 +155,13 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
         let mut tabs = Vec::new();
         let mut positions = HashMap::<u32, usize>::new();
         let mut ordered_tabs: Vec<_> = snapshot.tabs.iter().collect();
-        ordered_tabs.sort_by_key(|tab| (tab.window, tab.position, tab.tab_id));
+        // Capture writes -1 when the log never said where a tab sat. Those
+        // sort after the tabs whose place is known, so that renumbering does
+        // not push every real position along by one.
+        ordered_tabs.sort_by_key(|tab| (tab.window, tab.position < 0, tab.position, tab.tab_id));
         for tab in ordered_tabs {
-            // Capture may have position -1. Number the best-known layout from zero,
-            // before filtering, so even those rows satisfy the frontend contract.
+            // Number the best-known layout from zero, before filtering, so even
+            // the unplaced rows satisfy the frontend contract.
             let position = positions.entry(tab.window).or_default();
             let current_position = *position;
             *position += 1;
@@ -163,6 +169,7 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
                 continue;
             };
             if forgotten.contains(&tab.url) {
+                forgotten_pages.insert(tab.url.as_str());
                 continue;
             }
             let index = *page_indices.entry(tab.url.as_str()).or_insert_with(|| {
@@ -175,7 +182,9 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
                 index
             });
             // Ascending snapshots make the most recent non-empty title win.
-            if !tab.title.is_empty() {
+            // Whitespace counts as empty: a blank title renders as a nameless
+            // row, which is worse than the older title it would replace.
+            if !tab.title.trim().is_empty() {
                 library.pages[index].title.clone_from(&tab.title);
             }
             let group = tab
@@ -212,7 +221,7 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>) -> Library {
         .map(|p| &p.domain)
         .collect::<HashSet<_>>()
         .len();
-    library.stats.forgotten = forgotten.len();
+    library.stats.forgotten = forgotten_pages.len();
     library
 }
 
@@ -220,11 +229,26 @@ fn public_domain(raw: &str) -> Option<String> {
     let Ok(url) = Url::parse(raw) else {
         return Some(String::new());
     };
-    let host = url.host_str().unwrap_or("").to_lowercase();
-    if url.scheme() == "file" || matches!(host.trim_end_matches('.'), "localhost" | "127.0.0.1") {
+    if url.scheme() == "file" || url.host().as_ref().is_some_and(is_local) {
         return None;
     }
+    let host = url.host_str().unwrap_or("").to_lowercase();
     Some(host.strip_prefix("www.").unwrap_or(&host).to_owned())
+}
+
+/// The one machine the archive was captured on, under all its spellings:
+/// `localhost` and its RFC 6761 subdomains, the loopback ranges, and the
+/// unspecified addresses a development server binds to. None of these names
+/// a page that would still be there for whoever reads the export.
+fn is_local(host: &url::Host<&str>) -> bool {
+    match host {
+        url::Host::Domain(name) => {
+            let name = name.trim_end_matches('.').to_lowercase();
+            name == "localhost" || name.ends_with(".localhost")
+        }
+        url::Host::Ipv4(ip) => ip.is_loopback() || ip.is_unspecified(),
+        url::Host::Ipv6(ip) => ip.is_loopback() || ip.is_unspecified(),
+    }
 }
 
 #[cfg(test)]
@@ -238,8 +262,13 @@ mod tests {
             "HTTP://LOCALHOST:8080/a",
             "http://127.0.0.1/a",
             "http://localhost./",
+            // The same machine, spelled differently.
+            "http://[::1]:8080/a",
+            "http://127.0.0.2/a",
+            "http://0.0.0.0:3000/a",
+            "http://app.localhost/a",
         ] {
-            assert_eq!(public_domain(raw), None);
+            assert_eq!(public_domain(raw), None, "{raw}");
         }
         for (raw, domain) in [
             ("https://user:pass@WWW.Example.test:8443/a", "example.test"),
