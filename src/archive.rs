@@ -6,8 +6,7 @@
 //!      does not exist, and once renamed into place it is never written to
 //!      again. Getting that promise right means one place owns the sequence
 //!      "stage beside the destination, fsync, rename once, fsync the parent"
-//!      and the lock that keeps two runs from interleaving. Nothing else in
-//!      the binary touches the filesystem under the root.
+//!      and the lock that keeps two runs from interleaving.
 
 use std::fs::{self, File, TryLockError};
 use std::io::Write;
@@ -50,6 +49,13 @@ pub struct Previous {
 }
 
 impl Archive {
+    /// A read-only handle; listing an absent archive must not create it.
+    pub fn at(root: &Path) -> Self {
+        Self {
+            root: root.to_path_buf(),
+        }
+    }
+
     /// Creates the root (mode `0700` on Unix) and `snapshots/` if absent.
     pub fn open(root: &Path) -> Result<Self, Error> {
         create_private_dir(root).map_err(Error::io("create", root))?;
@@ -108,7 +114,12 @@ impl Archive {
     pub fn snapshot_ids(&self) -> Result<Vec<String>, Error> {
         let dir = self.snapshots_dir();
         let mut ids = Vec::new();
-        for entry in fs::read_dir(&dir).map_err(Error::io("list", &dir))? {
+        let entries = match fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(ids),
+            Err(err) => return Err(Error::io("list", &dir)(err)),
+        };
+        for entry in entries {
             let entry = entry.map_err(Error::io("list", &dir))?;
             let name = entry.file_name().to_string_lossy().into_owned();
             if name.starts_with('.') || !entry.path().is_dir() {
@@ -223,7 +234,7 @@ pub fn read_snapshot(path: &Path) -> Result<Snapshot, Error> {
     })
 }
 
-fn create_private_dir(path: &Path) -> std::io::Result<()> {
+pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         return Ok(());
     }
@@ -239,7 +250,7 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 
 /// Directory fsync is what makes a rename survive a crash on Unix. Windows
 /// has no equivalent and does not need one for this purpose.
-fn sync_dir(dir: &Path) -> Result<(), Error> {
+pub fn sync_dir(dir: &Path) -> Result<(), Error> {
     #[cfg(unix)]
     {
         File::open(dir)

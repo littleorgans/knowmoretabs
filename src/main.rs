@@ -9,9 +9,13 @@
 //!      the library-shaped modules stay silent and testable.
 
 mod archive;
+mod assets;
 mod capture;
 mod cli;
 mod error;
+mod export;
+mod library;
+mod library_commands;
 mod model;
 mod platform;
 mod session;
@@ -24,7 +28,7 @@ use std::process::ExitCode;
 use clap::Parser;
 
 use capture::{Log, Options, Outcome};
-use cli::Cli;
+use cli::{Cli, Command};
 use model::Snapshot;
 
 fn main() -> ExitCode {
@@ -40,6 +44,23 @@ fn main() -> ExitCode {
         );
         return ExitCode::from(error::Error::NoHome.exit_code());
     };
+    let result = match &cli.command {
+        Some(Command::List) => library_commands::list(&root, cli.json, log),
+        Some(Command::Export { dir }) => {
+            library_commands::export(&root, dir.as_deref(), cli.json, log)
+        }
+        _ => save(&cli, root, log),
+    };
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{}", error::render(&err, cli.verbose, cli.json));
+            ExitCode::from(err.exit_code())
+        }
+    }
+}
+
+fn save(cli: &Cli, root: std::path::PathBuf, log: Log) -> Result<(), error::Error> {
     let opts = Options {
         root,
         session: cli.session.clone(),
@@ -47,20 +68,13 @@ fn main() -> ExitCode {
         user_data_dir: cli.user_data_dir.clone(),
         force: cli.save_args().force,
     };
-    match capture::save(&opts, log) {
-        Ok(outcome) => {
-            if cli.json {
-                println!("{}", json_outcome(&outcome));
-            } else if !cli.quiet {
-                print!("{}", human_outcome(&outcome, cli.verbose));
-            }
-            ExitCode::SUCCESS
-        }
-        Err(err) => {
-            eprintln!("{}", error::render(&err, cli.verbose, cli.json));
-            ExitCode::from(err.exit_code())
-        }
+    let outcome = capture::save(&opts, log)?;
+    if cli.json {
+        println!("{}", json_outcome(&outcome));
+    } else if !cli.quiet {
+        print!("{}", human_outcome(&outcome, cli.verbose));
     }
+    Ok(())
 }
 
 fn default_root() -> Option<std::path::PathBuf> {

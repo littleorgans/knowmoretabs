@@ -58,6 +58,14 @@ pub enum Error {
         #[source]
         source: serde_json::Error,
     },
+    #[error("cannot read library state {}: {reason}; repair the file before exporting", path.display())]
+    LibraryState { path: PathBuf, reason: String },
+    #[error(
+        "cannot embed library data: missing or out-of-order library-data markers in index.html"
+    )]
+    AssetMarkers,
+    #[error("cannot export into {}; choose a directory outside the archive's source data", .0.display())]
+    ExportDestination(PathBuf),
 }
 
 impl Error {
@@ -73,6 +81,9 @@ impl Error {
             Self::Stale { .. } => "stale",
             Self::Unstable(_) => "unstable",
             Self::Json { .. } => "json",
+            Self::LibraryState { .. } => "library_state",
+            Self::AssetMarkers => "asset_markers",
+            Self::ExportDestination(_) => "export_destination",
         }
     }
 

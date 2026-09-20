@@ -19,7 +19,7 @@ use clap::{Args, Parser, Subcommand};
     about = "Keep and search the browser tabs you have had open",
     long_about = "Reads Chrome's own session file, saves a dated snapshot of every open \
 window and tab, and never overwrites an earlier one. With no subcommand, runs `save`.",
-    after_help = "Exit status: 0 saved or nothing to save; 1 error; 3 refused because Chrome's \
+    after_help = "Exit status: 0 success; 1 error; 3 refused because Chrome's \
 encrypted session files are newer than the cleartext ones it still writes."
 )]
 pub struct Cli {
@@ -62,6 +62,13 @@ pub struct Cli {
 pub enum Command {
     /// Capture the newest Chrome session as a snapshot (the default)
     Save(SaveArgs),
+    /// List saved snapshots, newest first
+    List,
+    /// Write the offline library (default: <root>/export)
+    Export {
+        #[arg(value_name = "DIR")]
+        dir: Option<PathBuf>,
+    },
 }
 
 #[derive(Debug, Args, Default, Clone)]
@@ -78,7 +85,7 @@ impl Cli {
             Some(Command::Save(args)) => SaveArgs {
                 force: args.force || self.save.force,
             },
-            None => self.save.clone(),
+            _ => self.save.clone(),
         }
     }
 }
