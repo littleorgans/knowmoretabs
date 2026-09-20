@@ -1,12 +1,14 @@
 # knowmoretabs
 
-Every tab you ever had open, kept and searchable.
+Save your live tabs, and everything that becomes possible once they are saved.
 
 You have a hundred tabs open. They are a to-do list you cannot read, a memory
-you cannot search, and one crash away from gone. `knowmoretabs` reads your
-browser's own session file from disk, saves a dated snapshot of every open
-window and tab, and gives you a local page where you can search everything
-you have ever had open. Nothing leaves your machine.
+you cannot search, and one crash away from gone. `knowmoretabs` saves a dated
+snapshot of every open window and tab, and gives you a local page where you
+search everything you have ever had open, see what you keep reopening, and
+forget what you do not want. It reads your browser's own session file from
+disk to do it, so there is nothing to install in the browser. Nothing leaves
+your machine.
 
 It works with Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and
 Vivaldi, on macOS, Linux and Windows.
@@ -40,7 +42,8 @@ works without cloning, and puts prebuilt binaries on the
 | Windows, x86-64 | `knowmoretabs-<version>-x86_64-pc-windows-msvc.zip` |
 
 Unpack one and put the `knowmoretabs` binary somewhere on your `PATH`. Each
-archive also carries this README, the changelog and both licence files, and
+archive also carries this README, the changelog, `LICENSE-MIT` and
+`LICENSE-APACHE`, and
 `SHA256SUMS` on the release page lets you check what you downloaded:
 
 ```
@@ -204,29 +207,29 @@ design is in
 [`docs/research/native-messaging.md`](docs/research/native-messaging.md).
 The two sources see different things:
 
-- **A session file** is what the browser has flushed to disk. It can be read
-  after a crash and with the browser closed, and the verbatim copy in each
-  snapshot holds every tab's back-and-forward list. It lags the screen by
-  however long since the last flush, and it is the one with the clock on it.
-- **An extension** asks the running browser what is open. It keeps working
-  after Chrome encrypts session storage, on Chrome, Brave, Edge, Vivaldi and
-  Chromium, and it sees favicons, window state and which tabs are actually
-  loaded. It sees only what is open at that moment: nothing from before a
-  crash, nothing while the browser is closed, and one URL per tab.
+- **A session file** is what the browser last flushed to disk. It lags the
+  live screen by however long since that flush. It can be read after a crash
+  and with the browser closed, the verbatim copy in each snapshot holds every
+  tab's back-and-forward list, and it is the one with the clock on it.
+- **An extension** sees the live tabs exactly as they are on screen, on
+  Chrome, Brave, Edge, Vivaldi and Chromium, and keeps working after Chrome
+  encrypts session storage. It also sees favicons, window state and which
+  tabs are actually loaded. It sees only what is open at that moment: nothing
+  from before a crash, nothing while the browser is closed, and one URL per
+  tab.
 
 An extension also changes who runs what. Stable Chrome has no supported way
 for a command-line process to pull tabs out of the browser, so the extension
-would push snapshots on its own schedule, and `save`, run by hand or from
-cron, could not obtain live tabs. Installing it would mean a permission
-prompt that reads "Read your browsing history", and a listing on the Chrome
-Web Store.
+pushes snapshots on its own schedule, and `save`, run by hand or from cron,
+cannot obtain live tabs. Installing it means a permission prompt that reads
+"Read your browsing history", and a listing on the Chrome Web Store, with a
+developer account, a fee and a review queue.
 
-It is not built yet because the clock has no date, `save` already detects the
-moment, and building a store listing and an install step for seven browsers
-on three platforms ahead of a migration that may be several releases away is
-the wrong order. What would start it is the detector firing on a real
-profile, or Chromium's default advancing past writing both formats in a
-stable release. Why decrypting is not the answer is in
+It is not built yet because of what it costs: the store listing and its
+review round-trip, an install step for seven browsers on three platforms, and
+a permission prompt on a tool whose pitch is that it asks for nothing. The
+session file serves in the meantime, and `save` detects the moment it stops.
+Why decrypting is not the answer is in
 [`docs/research/encrypted-sessions.md`](docs/research/encrypted-sessions.md).
 
 ## Non-goals
@@ -241,10 +244,11 @@ browser's own files: it reads and copies, nothing else.
 Each of these is a recorded decision, with its reasoning in
 [`slices.toml`](slices.toml) and [`docs/SLICES.md`](docs/SLICES.md).
 
-- **Live tabs, not the last session written to disk.** Needs a browser
-  extension, which sees what is open in the running browser and nothing from
-  before a crash. Designed as a second source beside session files; for tabs
-  that are open when it runs, it answers the encrypted-sessions clock above.
+- **Live tabs, exactly as they are on screen.** Needs a browser extension,
+  which sees what is open in the running browser at that moment and nothing
+  from before a crash or while it is closed. Costed in the section above: a
+  store listing, an install step per browser and platform, and a "Read your
+  browsing history" prompt.
 - **Arc.** Its open tabs live in a proprietary sidebar file, not in the
   session log.
 - **Notes and tags on a page.** `library.json` is where they would go;
@@ -273,6 +277,20 @@ slices it belongs to and why it exists; `cargo xtask slices` enforces it.
 build order, and `docs/briefs/` the brief each slice was built from.
 Releases are built by `.github/workflows/release.yml` from a `v*` tag.
 
-## Licence
+## License
 
-MIT or Apache-2.0, at your option.
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or
+  <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or
+  <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.

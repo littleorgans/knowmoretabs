@@ -181,18 +181,19 @@ unpulled.
 
 [[future]]
 id = "live-tabs"
-want = "See live tabs, not the last session written to disk"
+want = "See my live tabs exactly, not the last session written to disk"
 prepared_by = ["capture", "browsers"]
 why_not_now = """
-Needs a browser extension. An extension keeps working once Chrome encrypts
-session storage, on every Chromium browser, and sees more per tab; a session
-file can be read after a crash and with the browser closed, and holds each
-tab's history. Neither sees what the other does, which is why the capture
-layer keeps its source abstract: adding one is additive. It also inverts
-control: stable Chrome gives a process no way to pull tabs, so the browser
-pushes on its own schedule and `save` from cron never sees live tabs. Both
-formats are still written and no date is published, so the slice 1 detector
-holds the line. Design: docs/research/native-messaging.md.
+Needs a browser extension, and it is the most direct route to what the product
+is for: an extension sees the tabs on screen at that moment, on every Chromium
+browser, before and after Chrome encrypts session storage. A session file lags
+the screen by a flush, and is what can be read after a crash or with the
+browser closed. Cost: a "Read your browsing history" prompt, a Web Store
+listing with its fee and review queue, an install step per browser and
+platform, and inverted control: stable Chrome lets no process pull tabs, so
+the browser pushes on its own schedule and `save` from cron never sees live
+tabs. The capture layer keeps its source abstract, so adding one is additive.
+Design: docs/research/native-messaging.md.
 """
 
 [[future]]

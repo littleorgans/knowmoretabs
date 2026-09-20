@@ -637,15 +637,6 @@ This is the part that decides the recommendation, so it is specific.
 
 **1. Tabs after a crash.**
 
-> Editorial note, added after this document was written: the brief that
-> commissioned it asserted that crash recovery is "the reason this project
-> exists". That claim was the orchestrator's, inherited from an earlier
-> analysis and never made by the project's owner. The technical content below
-> stands on its own evidence; the ranking it was used to justify — that an
-> extension could only ever be a second source — does not, and has been
-> withdrawn. How much the owner values recovering a crashed session against
-> seeing live tabs is their call, and is not recorded anywhere yet.
-
 When Chrome dies, the extension dies with it. Its service worker is a Chrome
 process. There is no final flush, no exit handler that survives a SIGKILL or
 a kernel panic or a battery pull, and no state anywhere on disk that the

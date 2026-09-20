@@ -14,11 +14,28 @@ You have a hundred tabs open. They are a to-do list you cannot read, a memory
 you cannot search, and one crash away from gone. Closing them feels like
 throwing something away. Keeping them costs memory and attention.
 
-### What knowmoretabs does
+### What knowmoretabs is for
 
-It reads your browser's own on-disk session files, saves a dated snapshot, and
-builds a searchable library of every page you have ever had open. Snapshots are
-immutable and local. You can always go back.
+**Saving your live tabs, and everything that becomes possible once they are
+saved** — searching them, deduplicating them, seeing what you keep reopening,
+forgetting what you do not want.
+
+Reading on-disk session files is the mechanism, not the point. It is what we
+use because it needs nothing installed and works on an unmodified browser. Two
+things follow from that distinction:
+
+- A session file lags the live screen by however long since the browser last
+  flushed it. Against this purpose that is a shortcoming of the mechanism.
+- A browser extension sees live tabs exactly, so it serves this purpose better
+  than what ships today. Chrome's move to encrypted session storage is a second
+  reason to build one, not the only one. The costs are real and specific — the
+  browser would push on its own schedule, so `save` from cron could not obtain
+  live tabs. See `docs/research/native-messaging.md`.
+
+Recovering the tabs that were open when the browser died is a property the
+session-file mechanism happens to have. Worth keeping, not the reason to build.
+
+Snapshots are immutable and local. You can always go back.
 
 ### The 80/20
 
