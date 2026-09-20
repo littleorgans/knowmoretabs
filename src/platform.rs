@@ -59,91 +59,151 @@ impl Os {
 /// each platform. Every column is relative to one of [`Roots`]'s directories,
 /// named in the field comments, because "relative to home" is only true on
 /// macOS.
+///
+/// A column is a list of **directory names**, not a path. `browsers.md`
+/// spells these with `/` because a document has to spell them somehow, and
+/// carrying that spelling into the code produced
+/// `…\AppData\Local\Google/Chrome/User Data\Default\…` on Windows, which
+/// works — Windows accepts either separator — and is wrong, and which reached
+/// `snapshot.json`. Names are joined one at a time, so the separator is
+/// always the platform's own, and [`no_column_hides_a_separator_inside_a_name`]
+/// stops one creeping back in.
 #[derive(Debug, Clone, Copy)]
 pub struct BrowserSpec {
     pub id: &'static str,
     pub channel_rank: u8,
-    /// Relative to the home directory.
-    pub macos: &'static str,
-    /// Relative to the config home: `$CHROME_CONFIG_HOME` for the Chrome
-    /// family, else `$XDG_CONFIG_HOME`, else `~/.config`.
-    pub linux: &'static str,
-    /// Snap and Flatpak, relative to the home directory. These are separate
+    /// Under the home directory.
+    pub macos: &'static [&'static str],
+    /// Under the config home: `$CHROME_CONFIG_HOME` for the Chrome family,
+    /// else `$XDG_CONFIG_HOME`, else `~/.config`.
+    pub linux: &'static [&'static str],
+    /// Snap and Flatpak, under the home directory. These are separate
     /// installs with their own user data, not aliases of the native path
     /// (`browsers.md` §2.1), so they are extra candidates and the host's XDG
     /// variables do not apply to them.
-    pub linux_packaged: &'static [&'static str],
-    /// Relative to `%LOCALAPPDATA%`. The trailing `User Data` is Chromium's
+    pub linux_packaged: &'static [&'static [&'static str]],
+    /// Under `%LOCALAPPDATA%`. The trailing `User Data` is Chromium's
     /// `kUserDataDirname`, which exists on Windows only (`browsers.md` §2.4).
-    pub windows: &'static str,
+    pub windows: &'static [&'static str],
 }
+
+/// The one place a table column becomes a path.
+fn under(base: &Path, names: &[&str]) -> PathBuf {
+    names
+        .iter()
+        .fold(base.to_path_buf(), |path, name| path.join(name))
+}
+
+/// macOS puts every browser under the same two directories.
+const APP_SUPPORT: [&str; 2] = ["Library", "Application Support"];
+/// Windows appends Chromium's `kUserDataDirname` to the product directory.
+const USER_DATA: &str = "User Data";
 
 pub const BROWSERS: [BrowserSpec; 7] = [
     BrowserSpec {
         id: CHROME,
         channel_rank: 0,
-        macos: "Library/Application Support/Google/Chrome",
-        linux: "google-chrome",
-        linux_packaged: &[".var/app/com.google.Chrome/config/google-chrome"],
-        windows: "Google/Chrome/User Data",
+        macos: &[APP_SUPPORT[0], APP_SUPPORT[1], "Google", "Chrome"],
+        linux: &["google-chrome"],
+        linux_packaged: &[&[
+            ".var",
+            "app",
+            "com.google.Chrome",
+            "config",
+            "google-chrome",
+        ]],
+        windows: &["Google", "Chrome", USER_DATA],
     },
     BrowserSpec {
         id: CHROME_BETA,
         channel_rank: 1,
-        macos: "Library/Application Support/Google/Chrome Beta",
-        linux: "google-chrome-beta",
+        macos: &[APP_SUPPORT[0], APP_SUPPORT[1], "Google", "Chrome Beta"],
+        linux: &["google-chrome-beta"],
         linux_packaged: &[],
-        windows: "Google/Chrome Beta/User Data",
+        windows: &["Google", "Chrome Beta", USER_DATA],
     },
     BrowserSpec {
         id: CHROME_CANARY,
         channel_rank: 3,
-        macos: "Library/Application Support/Google/Chrome Canary",
-        linux: "google-chrome-canary",
+        macos: &[APP_SUPPORT[0], APP_SUPPORT[1], "Google", "Chrome Canary"],
+        linux: &["google-chrome-canary"],
         linux_packaged: &[],
-        windows: "Google/Chrome SxS/User Data",
+        // `Chrome SxS`, not `Chrome Canary`, on this platform alone.
+        windows: &["Google", "Chrome SxS", USER_DATA],
     },
     BrowserSpec {
         id: CHROMIUM,
         channel_rank: 0,
-        macos: "Library/Application Support/Chromium",
-        linux: "chromium",
-        // The second snap path is the pre-migration layout, still in place on
-        // machines that installed the snap before it moved to `common`.
+        macos: &[APP_SUPPORT[0], APP_SUPPORT[1], "Chromium"],
+        linux: &["chromium"],
+        // The second snap entry is the pre-migration layout, still in place
+        // on machines that installed the snap before it moved to `common`.
         linux_packaged: &[
-            "snap/chromium/common/chromium",
-            "snap/chromium/current/.config/chromium",
-            ".var/app/org.chromium.Chromium/config/chromium",
+            &["snap", "chromium", "common", "chromium"],
+            &["snap", "chromium", "current", ".config", "chromium"],
+            &[".var", "app", "org.chromium.Chromium", "config", "chromium"],
         ],
-        windows: "Chromium/User Data",
+        windows: &["Chromium", USER_DATA],
     },
     BrowserSpec {
         id: BRAVE,
         channel_rank: 0,
-        macos: "Library/Application Support/BraveSoftware/Brave-Browser",
-        linux: "BraveSoftware/Brave-Browser",
-        linux_packaged: &[
-            "snap/brave/common/.config/BraveSoftware/Brave-Browser",
-            "snap/brave/current/.config/BraveSoftware/Brave-Browser",
-            ".var/app/com.brave.Browser/config/BraveSoftware/Brave-Browser",
+        macos: &[
+            APP_SUPPORT[0],
+            APP_SUPPORT[1],
+            "BraveSoftware",
+            "Brave-Browser",
         ],
-        windows: "BraveSoftware/Brave-Browser/User Data",
+        linux: &["BraveSoftware", "Brave-Browser"],
+        linux_packaged: &[
+            &[
+                "snap",
+                "brave",
+                "common",
+                ".config",
+                "BraveSoftware",
+                "Brave-Browser",
+            ],
+            &[
+                "snap",
+                "brave",
+                "current",
+                ".config",
+                "BraveSoftware",
+                "Brave-Browser",
+            ],
+            &[
+                ".var",
+                "app",
+                "com.brave.Browser",
+                "config",
+                "BraveSoftware",
+                "Brave-Browser",
+            ],
+        ],
+        windows: &["BraveSoftware", "Brave-Browser", USER_DATA],
     },
     BrowserSpec {
         id: EDGE,
         channel_rank: 0,
-        macos: "Library/Application Support/Microsoft Edge",
-        linux: "microsoft-edge",
-        linux_packaged: &[".var/app/com.microsoft.Edge/config/microsoft-edge"],
-        windows: "Microsoft/Edge/User Data",
+        macos: &[APP_SUPPORT[0], APP_SUPPORT[1], "Microsoft Edge"],
+        linux: &["microsoft-edge"],
+        linux_packaged: &[&[
+            ".var",
+            "app",
+            "com.microsoft.Edge",
+            "config",
+            "microsoft-edge",
+        ]],
+        windows: &["Microsoft", "Edge", USER_DATA],
     },
     BrowserSpec {
         id: VIVALDI,
         channel_rank: 0,
-        macos: "Library/Application Support/Vivaldi",
-        linux: "vivaldi",
-        linux_packaged: &[".var/app/com.vivaldi.Vivaldi/config/vivaldi"],
-        windows: "Vivaldi/User Data",
+        macos: &[APP_SUPPORT[0], APP_SUPPORT[1], "Vivaldi"],
+        linux: &["vivaldi"],
+        linux_packaged: &[&[".var", "app", "com.vivaldi.Vivaldi", "config", "vivaldi"]],
+        windows: &["Vivaldi", USER_DATA],
     },
 ];
 
@@ -275,15 +335,19 @@ impl BrowserSpec {
     /// have two; the caller probes all of them and lets recency decide.
     pub fn user_data_dirs(&self, roots: &Roots) -> Vec<PathBuf> {
         match roots.os {
-            Os::Mac => vec![roots.home.join(self.macos)],
-            Os::Windows => vec![roots.local_app_data.join(self.windows)],
+            Os::Mac => vec![under(&roots.home, self.macos)],
+            Os::Windows => vec![under(&roots.local_app_data, self.windows)],
             Os::Linux => {
                 let native = match &roots.chrome_user_data {
                     Some(dir) if honours_chrome_env(self.id) => dir.clone(),
-                    _ => roots.config_home(self.id).join(self.linux),
+                    _ => under(roots.config_home(self.id), self.linux),
                 };
                 std::iter::once(native)
-                    .chain(self.linux_packaged.iter().map(|p| roots.home.join(p)))
+                    .chain(
+                        self.linux_packaged
+                            .iter()
+                            .map(|names| under(&roots.home, names)),
+                    )
                     .collect()
             }
         }
@@ -1086,6 +1150,35 @@ mod tests {
         browser(id).unwrap().user_data_dirs(&roots(os, env))
     }
 
+    /// Every cell of the table is a list of directory names. A name holding a
+    /// separator would be joined whole, and the path would then carry that
+    /// separator wherever it was printed, stored or compared — which is how
+    /// `Google/Chrome/User Data` ended up in the middle of a backslash path,
+    /// and in `snapshot.json`. This runs on every platform because the table
+    /// is the same on every platform; the bug only *showed* on one.
+    #[test]
+    fn no_column_hides_a_separator_inside_a_name() {
+        for spec in &BROWSERS {
+            let columns = [spec.macos, spec.linux, spec.windows]
+                .into_iter()
+                .chain(spec.linux_packaged.iter().copied());
+            for name in columns.flatten() {
+                assert!(!name.is_empty(), "{}: empty directory name", spec.id);
+                assert!(
+                    !name.contains(['/', '\\']),
+                    "{}: {name:?} is a path, not a directory name",
+                    spec.id
+                );
+                assert_eq!(
+                    Path::new(name).components().count(),
+                    1,
+                    "{}: {name:?} is not one path component",
+                    spec.id
+                );
+            }
+        }
+    }
+
     #[test]
     fn macos_paths_are_under_application_support_and_ignore_the_linux_variables() {
         let xdg = [
@@ -1110,7 +1203,6 @@ mod tests {
             (EDGE, "Library/Application Support/Microsoft Edge"),
             (VIVALDI, "Library/Application Support/Vivaldi"),
         ] {
-            assert_eq!(browser(id).unwrap().macos, relative);
             assert_eq!(dirs(Os::Mac, id, &[]), vec![home(relative)], "{id}");
             assert_eq!(dirs(Os::Mac, id, &xdg), vec![home(relative)], "{id}");
         }

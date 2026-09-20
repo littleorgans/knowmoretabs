@@ -11,8 +11,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use common::{
-    Fixture, assert_private_dir, assert_success, default_root_relative_path, point_home_at,
-    read_snapshot, stderr, stdout, two_tab_session,
+    Fixture, assert_private_dir, assert_success, default_root_names, point_home_at, read_snapshot,
+    stderr, stdout, two_tab_session, under,
 };
 use tempfile::TempDir;
 
@@ -33,9 +33,7 @@ fn no_root_flag_puts_the_archive_where_the_platform_keeps_per_user_data() {
         .expect("run knowmoretabs");
     assert_success(&output);
 
-    let expected = default_root_relative_path()
-        .split('/')
-        .fold(fx.home.path().to_path_buf(), |path, part| path.join(part));
+    let expected = under(fx.home.path(), default_root_names());
     assert!(
         expected.join("snapshots").is_dir(),
         "expected the archive at {}; home holds {:?}",
@@ -289,11 +287,12 @@ impl Tree {
         }
     }
 
-    /// A one-profile user-data directory at a home-relative path.
+    /// A one-profile user-data directory below the home directory. The names
+    /// are written `/`-separated for legibility and split before joining, so
+    /// the tree is built with the host's separator and never a mixture.
     fn install(&self, relative: &str, suffix: i64) {
-        let user_data = relative
-            .split('/')
-            .fold(self.home.path().to_path_buf(), |path, part| path.join(part));
+        let names: Vec<&str> = relative.split('/').collect();
+        let user_data = under(self.home.path(), &names);
         let sessions = user_data.join("Default").join("Sessions");
         std::fs::create_dir_all(&sessions).unwrap();
         std::fs::write(

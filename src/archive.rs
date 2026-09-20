@@ -623,7 +623,7 @@ mod tests {
         );
 
         // The destination's parent must exist; nothing is created above it.
-        assert!(replace_file(&tmp.path().join("missing/state.json"), b"x").is_err());
+        assert!(replace_file(&tmp.path().join("missing").join("state.json"), b"x").is_err());
     }
 
     #[test]

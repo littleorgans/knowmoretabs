@@ -12,25 +12,38 @@ use tempfile::TempDir;
 
 pub use session_builder::SessionBuilder;
 
-/// Where `platform::BrowserSpec` for Chrome looks, relative to home, on the
-/// platform the tests are running on. Kept in step by `default_discovery`.
-pub fn chrome_relative_path() -> &'static str {
+/// The directory names `platform::BrowserSpec` for Chrome looks under,
+/// below the home directory, on the platform the tests are running on.
+///
+/// Names rather than a path, and joined through [`under`], for the same
+/// reason the table itself is: a `/` inside one of them would survive into
+/// an expected value and make the test agree with the code only on the
+/// platforms where `/` is the separator.
+pub fn chrome_relative_names() -> &'static [&'static str] {
     if cfg!(target_os = "macos") {
-        "Library/Application Support/Google/Chrome"
+        &["Library", "Application Support", "Google", "Chrome"]
     } else if cfg!(windows) {
-        "AppData/Local/Google/Chrome/User Data"
+        &["AppData", "Local", "Google", "Chrome", "User Data"]
     } else {
-        ".config/google-chrome"
+        &[".config", "google-chrome"]
     }
 }
 
-/// Where the archive goes when `--root` is not passed, relative to home.
-pub fn default_root_relative_path() -> &'static str {
+/// Where the archive goes when `--root` is not passed, below the home directory.
+pub fn default_root_names() -> &'static [&'static str] {
     if cfg!(windows) {
-        "AppData/Local/knowmoretabs"
+        &["AppData", "Local", "knowmoretabs"]
     } else {
-        ".knowmoretabs"
+        &[".knowmoretabs"]
     }
+}
+
+/// Joins directory names onto a base, one at a time, so the separator is
+/// always the host's.
+pub fn under(base: &Path, names: &[&str]) -> PathBuf {
+    names
+        .iter()
+        .fold(base.to_path_buf(), |path, name| path.join(name))
 }
 
 /// A home directory the binary will believe, on every platform.
@@ -68,7 +81,7 @@ impl Fixture {
     /// and an archive root beside it. No session file yet.
     pub fn new() -> Self {
         let home = tempfile::tempdir().expect("tempdir");
-        let user_data = home.path().join(chrome_relative_path());
+        let user_data = under(home.path(), chrome_relative_names());
         std::fs::create_dir_all(&user_data).expect("user data dir");
         let fixture = Self {
             root: home.path().join("archive"),
