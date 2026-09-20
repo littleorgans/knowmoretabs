@@ -362,6 +362,33 @@ fn corrupt_snapshot_is_skipped_and_export_succeeds() {
     assert!(fx.root.join("export/index.html").is_file());
 }
 
+/// The two streams under `--json`, when the run has something to say on
+/// both: stdout is the document and only the document, stderr is the prose.
+///
+/// A warning and a failure in the same run is the case that catches a
+/// document sharing a stream with free text, and it needs no particular
+/// platform to reach — `export` warns about the unreadable snapshot before
+/// it reads the state file and refuses. When the failure was written to
+/// stderr the warning landed in front of it and the error document could
+/// not be parsed at all; the only reason no test saw that was that no test
+/// had ever made a `--json` run warn and fail at once.
+#[test]
+fn a_json_failure_is_the_whole_of_stdout_even_when_the_run_warned() {
+    let fx = Fixture::new();
+    archive_fixture(&fx);
+    fs::write(fx.root.join("library.json"), b"{").unwrap();
+
+    let output = fx.run(&["export", "--json"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("skipped 1"),
+        "the warning belongs on stderr: {}",
+        stderr(&output)
+    );
+    let value: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(value["error"]["kind"], "library_state");
+}
+
 #[test]
 fn empty_archive_exports_valid_zero_page_library() {
     let fx = Fixture::new();

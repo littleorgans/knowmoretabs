@@ -385,7 +385,7 @@ fn no_session_means_no_archive_and_an_actionable_error() {
     );
 
     let output = fx.run(&["--json"]);
-    let value: serde_json::Value = serde_json::from_str(&stderr(&output)).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(value["error"]["kind"], "no_session");
 }
 

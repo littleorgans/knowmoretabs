@@ -441,6 +441,58 @@ pub fn check_root(root: &Path) -> Result<(), RootProblem> {
     }
 }
 
+/// Whether an archive at `root` would sit outside the user's own profile.
+///
+/// Unix creates the archive `0700` and is done; Windows has no mode, so a
+/// directory keeps whatever its parent grants, and the only lever left is
+/// where the root is put. Inside `%USERPROFILE%` — which is where
+/// `%LOCALAPPDATA%` and the user's own `%TEMP%` both live — the inherited
+/// ACL is the user, SYSTEM and Administrators. Outside it (`C:\`,
+/// `C:\ProgramData`, `C:\Users\Public`, another user's profile, a UNC
+/// share) it commonly is not, and an archive of every page the user has had
+/// open is exactly the thing that must not be left where the next account
+/// on the machine can read it.
+///
+/// This is the whole test, and it is deliberately narrow: passing `--root`
+/// is not itself a risk, so warning on every `--root` would be noise that
+/// teaches people to skip the line that matters. A relative root is
+/// resolved against `current_dir`, because that is where it will be
+/// created, and `..` is resolved rather than kept, so that a root that
+/// climbs back out of the profile is seen to have left it. Names are
+/// compared the way the host compares them — Windows folds case, so
+/// `C:\Users\Ada` and `c:\users\ada` are one place.
+pub fn root_outside_home(root: &Path, home: &Path, current_dir: &Path) -> bool {
+    let absolute = |path: &Path| {
+        current_dir
+            .join(path)
+            .components()
+            .fold(PathBuf::new(), |mut resolved, component| {
+                match component {
+                    std::path::Component::CurDir => {}
+                    std::path::Component::ParentDir => {
+                        resolved.pop();
+                    }
+                    other => resolved.push(other.as_os_str()),
+                }
+                resolved
+            })
+    };
+    let fold = |path: PathBuf| -> Vec<OsString> {
+        path.components()
+            .map(|c| {
+                let name = c.as_os_str();
+                if cfg!(windows) {
+                    OsString::from(name.to_string_lossy().to_lowercase())
+                } else {
+                    name.to_owned()
+                }
+            })
+            .collect()
+    };
+    let (root, home) = (fold(absolute(root)), fold(absolute(home)));
+    !root.starts_with(&home)
+}
+
 /// What Windows would make of `root`, whoever is asking.
 pub fn windows_root_problem(root: &Path) -> Option<RootProblem> {
     let limit = WINDOWS_PATH_LIMIT - r"\\?\".len();
@@ -1371,6 +1423,68 @@ mod tests {
             default_root(&roots(Os::Windows, &[("LOCALAPPDATA", "state/Local")])),
             home("state/Local/knowmoretabs")
         );
+    }
+
+    /// The rule behind the Windows privacy warning, checked everywhere the
+    /// way the rest of the Windows table is: what counts as private is a
+    /// property of the path, and the `cfg!` in `main` only decides whether
+    /// anyone is told.
+    #[test]
+    fn only_a_root_outside_the_user_profile_is_worth_warning_about() {
+        let cwd = home("cwd");
+        let outside = |root: PathBuf| root_outside_home(&root, &PathBuf::from(HOME), &cwd);
+
+        // The default root, the per-user locations, and the user's own
+        // temporary directory are all inside the profile: silence.
+        assert!(!outside(home(".knowmoretabs")));
+        assert!(!outside(home("AppData/Local/knowmoretabs")));
+        assert!(!outside(home("AppData/Local/Temp/tmp1234/archive")));
+        assert!(!outside(PathBuf::from(HOME)));
+        // A relative root is judged where it would actually be created.
+        assert!(!outside(PathBuf::from("archive")));
+        assert!(!outside(home("cwd/./sub/../archive")));
+
+        // Outside it, whoever else uses the machine may be able to read it.
+        let elsewhere = if cfg!(windows) {
+            [
+                r"C:\ProgramData\knowmoretabs",
+                r"C:\Users\Public\archive",
+                r"C:\Users\someone-else\archive",
+                r"D:\shared\archive",
+                r"\\fileserver\share\archive",
+            ]
+        } else {
+            [
+                "/var/tmp/knowmoretabs",
+                "/tmp/archive",
+                "/home/someone-else/archive",
+                "/srv/shared/archive",
+                "/mnt/share/archive",
+            ]
+        };
+        for path in elsewhere {
+            assert!(outside(PathBuf::from(path)), "{path}");
+        }
+        // A sibling of the home directory whose name merely starts with it
+        // is not inside it; the comparison is by component, not by prefix.
+        assert!(outside(PathBuf::from(format!("{HOME}-backup"))));
+        // And a root that climbs back out has left, whatever it is spelled
+        // like on the way.
+        assert!(outside(home("AppData/../../someone-else/archive")));
+        assert!(outside(PathBuf::from("../../../shared/archive")));
+    }
+
+    /// Windows folds case in path names, so two spellings of one directory
+    /// must not disagree about whether the archive is private.
+    #[test]
+    #[cfg(windows)]
+    fn the_privacy_rule_folds_case_the_way_windows_does() {
+        let cwd = home("cwd");
+        assert!(!root_outside_home(
+            &PathBuf::from(r"c:\users\PERSON\archive"),
+            &PathBuf::from(HOME),
+            &cwd
+        ));
     }
 
     #[test]

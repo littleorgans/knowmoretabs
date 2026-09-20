@@ -239,7 +239,7 @@ fn staleness_check_refuses_when_encrypted_files_are_newer() {
     assert_eq!(fx.snapshot_dirs().len(), 1);
 
     let output = fx.run(&["--json"]);
-    let value: serde_json::Value = serde_json::from_str(&stderr(&output)).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(value["error"]["kind"], "stale");
     assert!(
         value["error"]["detail"]
