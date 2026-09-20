@@ -69,7 +69,29 @@ pub enum Command {
         #[arg(value_name = "DIR")]
         dir: Option<PathBuf>,
     },
+    /// Serve the library on 127.0.0.1 with live forget and restore
+    Serve {
+        /// Port to listen on; 0 picks a free one
+        #[arg(long, default_value_t = DEFAULT_PORT, value_name = "N")]
+        port: u16,
+        /// Open the page in your browser once the server is listening
+        #[arg(long)]
+        open: bool,
+    },
+    /// Hide pages from the library; the snapshots keep them
+    Forget {
+        #[arg(required = true, value_name = "URL")]
+        urls: Vec<String>,
+    },
+    /// Bring forgotten pages back into the library
+    Restore {
+        #[arg(required = true, value_name = "URL")]
+        urls: Vec<String>,
+    },
 }
+
+/// The port the frontend's stand-in used, so a bookmark from then still works.
+pub const DEFAULT_PORT: u16 = 7878;
 
 #[derive(Debug, Args, Default, Clone)]
 pub struct SaveArgs {
@@ -114,7 +136,36 @@ mod tests {
     fn conflicting_flags_are_rejected() {
         assert!(Cli::try_parse_from(["knowmoretabs", "-v", "-q"]).is_err());
         assert!(Cli::try_parse_from(["knowmoretabs", "--session", "f", "--profile", "p"]).is_err());
-        assert!(Cli::try_parse_from(["knowmoretabs", "serve"]).is_err());
+        assert!(Cli::try_parse_from(["knowmoretabs", "forget"]).is_err());
+        assert!(Cli::try_parse_from(["knowmoretabs", "serve", "--port", "x"]).is_err());
+    }
+
+    #[test]
+    fn triage_commands_take_urls_and_serve_takes_a_port() {
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "forget",
+            "https://a.test/",
+            "https://b.test/",
+        ])
+        .unwrap();
+        assert!(matches!(&cli.command, Some(Command::Forget { urls }) if urls.len() == 2));
+        let cli = Cli::try_parse_from(["knowmoretabs", "serve"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Serve {
+                port: DEFAULT_PORT,
+                open: false
+            })
+        ));
+        let cli = Cli::try_parse_from(["knowmoretabs", "serve", "--port", "0", "--open"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Serve {
+                port: 0,
+                open: true
+            })
+        ));
     }
 
     #[test]

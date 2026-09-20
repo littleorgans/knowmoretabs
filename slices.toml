@@ -90,7 +90,7 @@ rides along here rather than becoming a horizontal slice of its own.
 id = "library"
 number = 2
 title = "The offline library"
-status = "planned"
+status = "done"
 delivers = ["offline-forever", "find-old-page", "when-and-where"]
 depends_on = ["capture"]
 ships = """

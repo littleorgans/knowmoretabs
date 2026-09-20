@@ -46,15 +46,23 @@ pub struct Log {
 impl Log {
     pub fn warn(self, message: &str) {
         if !self.quiet {
-            eprintln!("knowmoretabs: {message}");
+            emit(message);
         }
     }
 
     pub fn note(self, message: &str) {
         if self.verbose {
-            eprintln!("knowmoretabs: {message}");
+            emit(message);
         }
     }
+}
+
+/// Through `out` rather than `eprintln!`, which would panic if stderr had
+/// gone away. `serve` logs from the connection thread before it answers, so
+/// that panic unwound the thread and handed the client a closed socket
+/// instead of its response. Losing the log line is the lesser harm.
+fn emit(message: &str) {
+    crate::out::problem(&format!("knowmoretabs: {message}"));
 }
 
 #[derive(Debug)]

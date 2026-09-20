@@ -41,7 +41,7 @@ model and its durability guarantees are the two decisions hardest to change
 later. The project's foundation — workspace, lints, CI, the slice lint itself —
 rides along here rather than becoming a horizontal slice of its own.
 
-### 2. The offline library (`library`) — planned
+### 2. The offline library (`library`) — done
 
 - Delivers: offline-forever, find-old-page, when-and-where
 - Depends on: capture
