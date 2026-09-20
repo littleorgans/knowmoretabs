@@ -103,20 +103,23 @@ The archive is a record of everything you browse, so it is created private to
 you. On macOS and Linux that is mode `0700`, set when the directory is made.
 Windows has no such bit, and setting an access-control list needs Win32 calls
 this tool does not make, so on Windows the protection is inherited instead:
-`%LOCALAPPDATA%` grants you, SYSTEM and Administrators and nobody else, and a
-directory created inside it inherits exactly that. **This is why the default
-root on Windows is `%LOCALAPPDATA%\knowmoretabs` rather than a dotfile in your
+`%LOCALAPPDATA%` is the intended per-user location, and a directory created
+inside it inherits that parent's ACL. **This is why the default root on
+Windows is `%LOCALAPPDATA%\knowmoretabs` rather than a dotfile in your
 profile** — the profile directory is what enterprise folder redirection roams
 to a file server, and an archive of your browsing is the last thing that
 should be copied off the machine. The consequence is worth knowing: a
-`--root` you point somewhere else on Windows is only as private as wherever
-you put it, and a directory under `C:\` is readable by every local user. On
-macOS and Linux `--root` is `0700` wherever it is.
+`--root` you point somewhere else on Windows inherits whatever permissions its
+parent grants. knowmoretabs warns for an explicit Windows `--root`; check the
+ACL before saving browsing history there. On macOS and Linux `--root` is `0700`
+wherever it is.
 
 `snapshot.json` is pretty-printed JSON with a `schema_version`; it is the
 source of truth and readable in any editor. Each snapshot is written to a
 temporary directory and renamed into place in one step, so an interrupted run
-leaves the archive exactly as it was — on all three platforms. The rename
+leaves the archive logically unchanged on all three platforms. Unix also
+flushes the containing directory; Windows relies on its filesystem's metadata
+journal because the standard library has no directory-flush operation. The rename
 never replaces anything: the destination is checked under the archive lock
 and a snapshot id that is already taken gets a `-2` suffix instead. That
 matters because renaming a directory onto an existing one is the one

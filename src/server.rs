@@ -107,9 +107,9 @@ pub fn run(options: &Options) -> Result<(), Error> {
 /// has no `xdg-open`, and `serve` is still doing its job without a window.
 /// The caller warns and carries on.
 ///
-/// Windows goes through `cmd` because `start` is a shell builtin rather than
-/// a program. The empty argument after it is `start`'s window title, which it
-/// would otherwise take the URL to be. `cmd` would treat `&` or `|` in the
+/// Windows goes through `COMSPEC` because `start` is a shell builtin rather
+/// than a program. The empty argument after it is `start`'s window title,
+/// which it would otherwise take the URL to be. `cmd` would treat `&` or `|` in the
 /// URL as its own syntax, which is why this only ever passes a URL this
 /// process built: `http://127.0.0.1:<port>/`, digits and nothing else.
 fn open_browser(url: &str) -> io::Result<()> {
@@ -120,7 +120,10 @@ fn open_browser(url: &str) -> io::Result<()> {
         c.arg(url);
         c
     } else if cfg!(windows) {
-        let mut c = std::process::Command::new("cmd");
+        let shell = std::env::var_os("COMSPEC")
+            .filter(|value| !value.is_empty())
+            .unwrap_or_else(|| "cmd.exe".into());
+        let mut c = std::process::Command::new(shell);
         c.args(["/C", "start", "", url]);
         c
     } else {

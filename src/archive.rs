@@ -316,12 +316,14 @@ pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
 /// DACL needs the Win32 security APIs, which this crate cannot reach —
 /// `unsafe_code` is forbidden and a `windows-sys` dependency for one call is
 /// not worth it. What it gets instead is inheritance: a directory created
-/// under `%LOCALAPPDATA%` inherits that folder's ACL, which grants the user,
-/// SYSTEM and Administrators and no one else, so the default root from
-/// [`crate::platform::default_root`] is private without our help. **A
+/// under `%LOCALAPPDATA%` inherits that folder's ACL. On a standard Windows
+/// installation that is the per-user protection intended for this location,
+/// so the default root from [`crate::platform::default_root`] is private
+/// without our help. **A
 /// `--root` chosen outside the user profile is not**: it inherits whatever
-/// its parent grants, and `C:\` grants `Users` read access. That difference
-/// is real and is in the README rather than papered over.
+/// its parent grants, and a root directory may grant ordinary users read
+/// access. That difference is real and is in the README rather than papered
+/// over.
 pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         return Ok(());
@@ -337,10 +339,12 @@ pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
 }
 
 /// Directory fsync is what makes a rename survive a crash on Unix. Windows
-/// has no equivalent: a directory handle cannot be flushed, and it does not
-/// need to be, because NTFS logs the metadata change that a rename is and
-/// replays it on recovery. The file contents are already durable either way,
-/// since [`Staging::write`] syncs each file before the rename.
+/// has no directory-flush operation exposed by the standard library, so this
+/// is the strongest portable sequence available there: each staged file is
+/// flushed before the rename and NTFS journals the metadata change. Journaling
+/// is recovery support, not a promise that a sudden power loss has persisted
+/// the rename, so callers must not describe the Windows step as equivalent to
+/// a Unix directory fsync.
 // The `Result` is what every caller handles and what Unix genuinely returns.
 // Collapsing it where the body happens to be empty would put a `cfg` in each
 // of the four call sites to say the same thing this one comment says.

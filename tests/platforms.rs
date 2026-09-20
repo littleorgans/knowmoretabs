@@ -253,7 +253,8 @@ fn open_failing_never_fails_serve() {
     let mut child = fx
         .command()
         .args(["serve", "--port", "0", "--open"])
-        .env("PATH", "")
+        .env("PATH", "/path-that-does-not-exist")
+        .env("COMSPEC", "/path-that-does-not-exist/cmd.exe")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -265,6 +266,14 @@ fn open_failing_never_fails_serve() {
     assert!(
         banner.starts_with("Your library is at http://127.0.0.1:"),
         "{banner:?}"
+    );
+    let mut warning = String::new();
+    BufReader::new(child.stderr.take().unwrap())
+        .read_line(&mut warning)
+        .unwrap();
+    assert!(
+        warning.contains("could not open a browser"),
+        "the failed opener was not reported: {warning:?}"
     );
     child.kill().unwrap();
     child.wait().unwrap();

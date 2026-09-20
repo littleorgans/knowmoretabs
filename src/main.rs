@@ -54,6 +54,11 @@ fn main() -> ExitCode {
         out::problem(&error::render(&err, cli.verbose, cli.json));
         return ExitCode::from(err.exit_code());
     }
+    if cfg!(windows) && cli.root.is_some() && !cli.quiet {
+        out::problem(
+            "warning: Windows archive roots inherit the permissions of their parent; verify that this --root is private",
+        );
+    }
     let result = match &cli.command {
         Some(Command::List) => library_commands::list(&root, cli.json, log),
         Some(Command::Export { dir }) => {

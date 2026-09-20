@@ -416,10 +416,10 @@ impl std::fmt::Display for RootProblem {
 
 /// The reserved device names, from the Windows file-naming rules. A name is
 /// reserved whatever extension follows it, so `CON.txt` is `CON`.
-const RESERVED_DEVICE_NAMES: [&str; 26] = [
+const RESERVED_DEVICE_NAMES: [&str; 30] = [
     "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$", "COM1", "COM2", "COM3", "COM4", "COM5",
     "COM6", "COM7", "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
-    "LPT9", "COM0", "LPT0",
+    "LPT9", "COM¹", "COM²", "COM³", "LPT¹", "LPT²", "LPT³",
 ];
 
 /// The longest thing the archive appends to its root: `snapshots/`, a staging
@@ -1408,6 +1408,8 @@ mod tests {
             "knowmoretabs",
             ".knowmoretabs",
             "CONtext",
+            "COM0",
+            "LPT0",
             "COM10",
             "my tabs",
             "tabs.d",
