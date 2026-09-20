@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
-use crate::{export, library};
+use crate::{export, library, out};
 
 pub fn list(root: &Path, json: bool, log: Log) -> Result<(), Error> {
     let loaded = library::load(&Archive::at(root))?;
@@ -30,18 +30,15 @@ pub fn list(root: &Path, json: bool, log: Log) -> Result<(), Error> {
         })
         .collect();
     if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "snapshots": snapshots, "skipped_snapshots": loaded.unreadable.len(),
-            })
-        );
+        out::json(&serde_json::json!({
+            "snapshots": snapshots, "skipped_snapshots": loaded.unreadable.len(),
+        }));
     } else if !log.quiet {
         if loaded.snapshots.is_empty() {
-            println!("No snapshots found.");
+            out::line("No snapshots found.");
         }
         for snapshot in loaded.snapshots.iter().rev() {
-            println!(
+            out::line(&format!(
                 "{}  {}  {} / {}  {} tabs across {} windows, {} groups{}",
                 snapshot.id,
                 snapshot.captured_at,
@@ -63,7 +60,7 @@ pub fn list(root: &Path, json: bool, log: Log) -> Result<(), Error> {
                 } else {
                     ""
                 }
-            );
+            ));
         }
     }
     Ok(())
@@ -87,21 +84,18 @@ pub fn export(root: &Path, destination: Option<&Path>, json: bool, log: Log) -> 
     let destination = destination.unwrap_or(&default_destination);
     export::write(root, destination, &library)?;
     if json {
-        println!(
-            "{}",
-            serde_json::json!({ "exported": Exported {
-                path: destination, stats: &library.stats, skipped_snapshots: loaded.unreadable.len(),
-            }})
-        );
+        out::json(&serde_json::json!({ "exported": Exported {
+            path: destination, stats: &library.stats, skipped_snapshots: loaded.unreadable.len(),
+        }}));
     } else if !log.quiet {
-        println!(
+        out::line(&format!(
             "exported {} pages across {} snapshots ({} sightings, {} forgotten) to {}",
             library.stats.pages,
             library.stats.snapshots,
             library.stats.sightings,
             library.stats.forgotten,
             destination.display()
-        );
+        ));
     }
     Ok(())
 }

@@ -24,7 +24,7 @@ use crate::capture::Log;
 use crate::error::Error;
 use crate::library::{self, Shape};
 use crate::triage::{self, Action};
-use crate::{assets, export};
+use crate::{assets, export, out};
 
 /// Request line plus headers, including the final CRLF CRLF. A browser's own
 /// headers fit in a few hundred bytes; the margin is for localhost cookies.
@@ -64,14 +64,14 @@ pub fn run(options: &Options) -> Result<(), Error> {
     // a 500 the page can only describe as "HTTP 500".
     library::State::read(&options.root)?;
     let url = format!("http://127.0.0.1:{port}/");
+    // Through `out`: the banner is written after the port is bound and
+    // accepting, and on the main thread, so a `println!` that panicked on a
+    // closed pipe took down a server people were already connected to.
     if options.json {
-        println!(
-            "{}",
-            serde_json::json!({ "serving": { "url": url, "local_only": true } })
-        );
+        out::json(&serde_json::json!({ "serving": { "url": url, "local_only": true } }));
     } else if !options.log.quiet {
-        println!("Your library is at {url}");
-        println!("Local only: it answers this machine and nothing else. Press Ctrl-C to stop.");
+        out::line(&format!("Your library is at {url}"));
+        out::line("Local only: it answers this machine and nothing else. Press Ctrl-C to stop.");
     }
     if options.open
         && let Err(err) = open_browser(&url)

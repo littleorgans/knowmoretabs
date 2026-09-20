@@ -6,9 +6,9 @@ mod common;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{Fixture, fingerprint, stderr, write_snapshot};
 use serde_json::{Value, json};
@@ -51,13 +51,21 @@ struct Server {
 
 impl Server {
     fn start(fx: &Fixture) -> Self {
-        let mut child = fx
-            .command()
-            .args(["serve", "--port", "0"])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawn serve");
+        Self::from_child(
+            fx.command()
+                .args(["serve", "--port", "0"])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::inherit())
+                .spawn()
+                .expect("spawn serve"),
+        )
+    }
+
+    /// Takes the port from the banner's first line. The reader is dropped
+    /// here, closing the pipe while the server is still writing: a server
+    /// that treats that as fatal dies, which is what
+    /// `stdout_that_goes_nowhere_does_not_stop_the_server` pins down.
+    fn from_child(mut child: Child) -> Self {
         let mut first = String::new();
         BufReader::new(child.stdout.take().unwrap())
             .read_line(&mut first)
@@ -677,6 +685,109 @@ fn unreadable_heads_and_silent_connections_do_not_stop_the_server() {
     // A connection that sends nothing (a browser preconnect) is dropped quietly.
     assert_eq!(send(b""), "");
     assert_eq!(server.get("/api/library").status, 200, "still serving");
+}
+
+/// A port to hand the server when it cannot tell us the one it picked.
+/// Bound and released, so the kernel has just declared it free.
+fn free_loopback_port() -> u16 {
+    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .expect("bind")
+        .local_addr()
+        .expect("local addr")
+        .port()
+}
+
+/// Waits for the bind by connecting, since a server with no stdout has no
+/// banner to announce it with. Gives up the moment the child exits, so a
+/// server that died on its banner is reported as that and not as a timeout.
+fn wait_until_listening(server: &mut Server) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if TcpStream::connect(("127.0.0.1", server.port)).is_ok() {
+            return;
+        }
+        if let Some(status) = server.child.try_wait().expect("try_wait") {
+            panic!("the server exited before it accepted anything: {status}");
+        }
+        assert!(
+            Instant::now() < deadline,
+            "the server never listened on {}",
+            server.port
+        );
+        std::thread::yield_now();
+    }
+}
+
+/// The banner goes to stdout, and stdout can fail: `knowmoretabs serve |
+/// head -1` closes the pipe once it has the URL, and a full disk or a
+/// closed terminal fail the same way. `println!` panics on all of them, on
+/// the main thread, after the port is bound and accepting, so the whole
+/// server went down to report that a greeting had nowhere to go.
+///
+/// The read end is closed before the child is spawned, so the first write
+/// fails on every platform rather than racing the child the way a reader
+/// that takes one line and drops does: that race is lost about a third of
+/// the time on Linux and essentially never on macOS.
+#[test]
+fn stdout_that_goes_nowhere_does_not_stop_the_server() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let port = free_loopback_port();
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    let mut server = Server {
+        child: fx
+            .command()
+            .args(["serve", "--port", &port.to_string()])
+            .stdout(Stdio::from(writer))
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("spawn serve"),
+        port,
+        url: format!("http://127.0.0.1:{port}/"),
+    };
+    wait_until_listening(&mut server);
+    assert_eq!(server.get("/api/library").status, 200, "serving");
+    assert_eq!(
+        server.post("/api/forget", &json!({"urls": [A]})).status,
+        200,
+        "still mutating"
+    );
+    assert_eq!(state(&fx)["forgotten"], json!([A, HIDDEN]));
+    assert!(
+        server.child.try_wait().expect("try_wait").is_none(),
+        "the server exited"
+    );
+}
+
+/// The same for stderr, which `--verbose` writes to from the connection
+/// thread before the response: a panic there unwinds the thread and the
+/// client gets a closed socket instead of its answer. stdout is a real
+/// pipe here, so the banner still names the port.
+#[test]
+fn stderr_that_goes_nowhere_does_not_stop_the_server() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let (reader, writer) = std::io::pipe().expect("pipe");
+    drop(reader);
+    let mut server = Server::from_child(
+        fx.command()
+            .args(["--verbose", "serve", "--port", "0"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::from(writer))
+            .spawn()
+            .expect("spawn serve"),
+    );
+    assert_eq!(server.get("/api/library").status, 200, "serving");
+    assert_eq!(
+        server.post("/api/forget", &json!({"urls": [A]})).status,
+        200,
+        "still mutating"
+    );
+    assert!(
+        server.child.try_wait().expect("try_wait").is_none(),
+        "the server exited"
+    );
 }
 
 // --- Assets -----------------------------------------------------------------

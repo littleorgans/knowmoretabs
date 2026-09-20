@@ -14,6 +14,7 @@ use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
 use crate::library::{self, State};
+use crate::out;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -107,17 +108,14 @@ pub fn command(
 ) -> Result<(), Error> {
     let outcome = apply(root, urls, action, true, log)?;
     if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "action": match action { Action::Forget => "forget", Action::Restore => "restore" },
-                "changed": outcome.changed,
-                "unchanged": outcome.unchanged,
-                "forgotten": outcome.forgotten,
-            })
-        );
+        out::json(&serde_json::json!({
+            "action": match action { Action::Forget => "forget", Action::Restore => "restore" },
+            "changed": outcome.changed,
+            "unchanged": outcome.unchanged,
+            "forgotten": outcome.forgotten,
+        }));
     } else if !log.quiet {
-        println!("{}", human(action, &outcome));
+        out::line(&human(action, &outcome));
     }
     Ok(())
 }

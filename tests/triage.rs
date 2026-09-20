@@ -207,3 +207,28 @@ fn export_hides_what_forget_hid() {
     assert!(!html.contains(A));
     assert!(html.contains(B));
 }
+
+/// `knowmoretabs forget ... | head`: the state file is already written, so
+/// the lost report cannot change the exit status. See
+/// `a_dead_stdout_still_saves_and_exits_zero`.
+#[test]
+fn a_dead_stdout_still_forgets_and_restores_and_exits_zero() {
+    let fx = Fixture::new();
+    archive(&fx);
+    for args in [
+        vec!["forget", A],
+        vec!["--json", "forget", B],
+        vec!["restore", A],
+        vec!["--json", "restore", B],
+    ] {
+        let output = fx.run_with_dead_stdout(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stderr(&output).contains("panicked"), "{}", stderr(&output));
+    }
+    assert_eq!(state(&fx)["forgotten"], json!([]));
+}

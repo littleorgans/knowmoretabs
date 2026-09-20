@@ -17,6 +17,7 @@ mod export;
 mod library;
 mod library_commands;
 mod model;
+mod out;
 mod platform;
 mod server;
 mod session;
@@ -40,10 +41,7 @@ fn main() -> ExitCode {
         verbose: cli.verbose,
     };
     let Some(root) = cli.root.clone().or_else(default_root) else {
-        eprintln!(
-            "{}",
-            error::render(&error::Error::NoHome, cli.verbose, cli.json)
-        );
+        out::problem(&error::render(&error::Error::NoHome, cli.verbose, cli.json));
         return ExitCode::from(error::Error::NoHome.exit_code());
     };
     let result = match &cli.command {
@@ -69,7 +67,7 @@ fn main() -> ExitCode {
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
-            eprintln!("{}", error::render(&err, cli.verbose, cli.json));
+            out::problem(&error::render(&err, cli.verbose, cli.json));
             ExitCode::from(err.exit_code())
         }
     }
@@ -85,9 +83,9 @@ fn save(cli: &Cli, root: std::path::PathBuf, log: Log) -> Result<(), error::Erro
     };
     let outcome = capture::save(&opts, log)?;
     if cli.json {
-        println!("{}", json_outcome(&outcome));
+        out::json(&json_outcome(&outcome));
     } else if !cli.quiet {
-        print!("{}", human_outcome(&outcome, cli.verbose));
+        out::block(&human_outcome(&outcome, cli.verbose));
     }
     Ok(())
 }
@@ -168,8 +166,8 @@ fn human_outcome(outcome: &Outcome, verbose: bool) -> String {
     out
 }
 
-fn json_outcome(outcome: &Outcome) -> String {
-    let value = match outcome {
+fn json_outcome(outcome: &Outcome) -> serde_json::Value {
+    match outcome {
         Outcome::Saved { path, snapshot } => serde_json::json!({
             "saved": {
                 "id": snapshot.id,
@@ -196,6 +194,5 @@ fn json_outcome(outcome: &Outcome) -> String {
                 "source": snapshot.source,
             }
         }),
-    };
-    value.to_string()
+    }
 }

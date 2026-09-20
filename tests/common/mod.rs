@@ -6,7 +6,7 @@
 pub mod session_builder;
 
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::{Command, Output, Stdio};
 
 use tempfile::TempDir;
 
@@ -85,6 +85,21 @@ impl Fixture {
     pub fn run(&self, args: &[&str]) -> Output {
         self.command()
             .args(args)
+            .output()
+            .expect("run knowmoretabs")
+    }
+
+    /// The binary with nothing on the far end of stdout: what `knowmoretabs
+    /// ... | head` leaves behind once head has taken its lines and gone. The
+    /// read end is closed before the child starts, so every write fails, on
+    /// every platform. The work still has to happen and the exit status is
+    /// still the work's own; only the report is lost.
+    pub fn run_with_dead_stdout(&self, args: &[&str]) -> Output {
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        drop(reader);
+        self.command()
+            .args(args)
+            .stdout(Stdio::from(writer))
             .output()
             .expect("run knowmoretabs")
     }

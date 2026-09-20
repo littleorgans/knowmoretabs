@@ -453,3 +453,25 @@ fn newest_file_with_a_bad_header_falls_back_to_the_next_with_a_warning() {
             .ends_with("Session_20")
     );
 }
+
+/// A report that goes nowhere is not a failure: the snapshot is already on
+/// disk. `knowmoretabs | head` closes stdout, and so does a full disk; the
+/// exit status has to stay the one the work earned, in both output modes.
+/// `--json` matters most, because a half-written document is worse to hand
+/// a reader than none at all.
+#[test]
+fn a_dead_stdout_still_saves_and_exits_zero() {
+    for args in [vec![], vec!["--json"]] {
+        let fx = Fixture::new();
+        fx.write_session("Default", 20, &two_tab_session());
+        let output = fx.run_with_dead_stdout(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stderr(&output).contains("panicked"), "{}", stderr(&output));
+        assert_eq!(fx.snapshot_dirs().len(), 1, "{args:?}: nothing was saved");
+    }
+}

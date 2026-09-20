@@ -32,3 +32,7 @@ unsafe_code = "forbid"
 [lints.clippy]
 all = "deny"
 pedantic = "deny"
+# These macros panic if the write fails, which kills a process over output
+# nobody is reading. User-facing writes go through `out` instead.
+print_stdout = "deny"
+print_stderr = "deny"

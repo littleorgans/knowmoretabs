@@ -820,3 +820,31 @@ fn embedded_data_cannot_close_its_own_script_element() {
         "https://example.test/</script><script>x=1</script>"
     );
 }
+
+/// `knowmoretabs list | head` and `export | head`: the snapshots were read
+/// and the export was written, so losing the summary cannot change the exit
+/// status. See `a_dead_stdout_still_saves_and_exits_zero`.
+#[test]
+fn a_dead_stdout_still_lists_and_exports_and_exits_zero() {
+    let fx = Fixture::new();
+    archive_fixture(&fx);
+    for args in [
+        vec!["list"],
+        vec!["--json", "list"],
+        vec!["export"],
+        vec!["--json", "export"],
+    ] {
+        let output = fx.run_with_dead_stdout(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "{args:?}: {}",
+            stderr(&output)
+        );
+        assert!(!stderr(&output).contains("panicked"), "{}", stderr(&output));
+    }
+    assert!(
+        fx.root.join("export/index.html").exists(),
+        "the export was not written"
+    );
+}
