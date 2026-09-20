@@ -72,10 +72,12 @@ depends_on = []
 ships = """
 `knowmoretabs save` finds the newest Chrome session on macOS, parses it, and
 writes an immutable dated snapshot: the tabs as JSON plus a verbatim copy of
-the session file. Tab groups — name, colour, membership — are parsed here
-because the data model is the thing hardest to change later, even though
-nothing displays them until slice 2. A session matching the previous snapshot
-is skipped. An interrupted run leaves the archive exactly as it was.
+the session file. Tab groups — name, colour, membership — and each tab's
+last-active time are parsed here because the data model is the thing hardest
+to change later, even though nothing displays them until slice 2. A session
+matching the previous snapshot is skipped. An interrupted run leaves the
+archive exactly as it was. If Chrome's encrypted session files are newer than
+its cleartext ones, the run refuses rather than saving stale tabs as current.
 """
 intent = """
 The tracer bullet. Everything downstream reads what this writes, so its data
@@ -187,6 +189,13 @@ Chromium browser, but it cannot recover anything after a crash — which is the
 reason this project exists. It belongs as a second source alongside session
 files, never as a replacement. The capture layer keeps its source abstract so
 that adding one later is additive.
+
+This row has a clock on it. Chromium is mid-migration to encrypted session
+storage: both directories are written today, and at stage three the cleartext
+files stop being written and are deleted. The stable date is not published.
+See docs/research/encrypted-sessions.md. Slice 1 detects that moment and
+refuses to save rather than reporting months-old tabs as current, which buys
+time — but a second source is what actually answers it.
 """
 
 [[future]]
