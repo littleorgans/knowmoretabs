@@ -72,8 +72,10 @@ depends_on = []
 ships = """
 `knowmoretabs save` finds the newest Chrome session on macOS, parses it, and
 writes an immutable dated snapshot: the tabs as JSON plus a verbatim copy of
-the session file. A session matching the previous snapshot is skipped. An
-interrupted run leaves the archive exactly as it was.
+the session file. Tab groups — name, colour, membership — are parsed here
+because the data model is the thing hardest to change later, even though
+nothing displays them until slice 2. A session matching the previous snapshot
+is skipped. An interrupted run leaves the archive exactly as it was.
 """
 intent = """
 The tracer bullet. Everything downstream reads what this writes, so its data
@@ -127,9 +129,9 @@ status = "planned"
 delivers = ["my-browser"]
 depends_on = ["capture"]
 ships = """
-Brave, Edge, Chromium, Vivaldi and Arc alongside Chrome, with profile discovery
-and `--browser` / `--profile`. Tab groups recovered where the format allows,
-because groups are how people actually organise a hundred tabs.
+Brave, Edge, Chromium and Vivaldi alongside Chrome, with profile discovery and
+`--browser` / `--profile`, and a sensible answer when three browsers are
+installed.
 """
 intent = """
 Pure reach. It is slice 4 rather than slice 1 because a second browser teaches

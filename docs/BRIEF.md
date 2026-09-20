@@ -98,14 +98,15 @@ Do **not** copy its structure. It is one file because it was a script.
 | 2 | Raises on a truncated trailing command | Chrome's session file is an append log; a torn tail is normal. Parse what is whole, report the remainder |
 | 3 | Raises if a tab's selected navigation index is missing | Degrade: keep the tab with its best-known navigation, or drop that one tab, never the whole run |
 | 4 | Chrome-only, macOS-only, hardcoded path | Browser table + platform paths |
-| 5 | Ignores tab-group commands | Tab groups are how people actually organise. Recover name and colour if the format allows |
+| 5 | Ignores tab-group commands | Tab groups are how people actually organise. Confirmed recoverable from `Session_*` alone: command 25 gives tab → group token, command 27 gives token → title, colour and collapsed state. Parse them in slice 1; display them in slice 2 |
 | 6 | ~150 lines of HTML/CSS/JS inside Python string literals | Real `.html` / `.css` / `.js` files |
 | 7 | "Forget" requires copying a shell command from the page | A real button |
 
 ### Test corpus — real data you can use
 
 `~/Documents/chrome-tabs/*/session-backup/` holds **8 genuine Chrome session
-files** (5 × `Session_*`, 3 × `Tabs_*`), 741 KB – 4.3 MB, alongside the
+files** (6 × `Session_*`, 2 × `Tabs_*` — and note the two use *different*
+command-ID tables), 741 KB – 4.3 MB, alongside the
 `tabs.json` the reference implementation produced from them (74–289 tabs, up to
 12 windows). Use them as a fixture corpus: they are the only proof that a parser
 works on real Chrome output rather than on hand-built bytes.
