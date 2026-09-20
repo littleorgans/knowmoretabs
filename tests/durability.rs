@@ -82,24 +82,47 @@ fn skip_compares_within_the_same_profile_only() {
 }
 
 #[test]
+#[cfg(all(unix, debug_assertions))]
 fn a_kill_between_staging_and_rename_leaves_the_archive_untouched() {
+    use std::os::unix::process::ExitStatusExt;
+
     let fx = Fixture::new();
     fx.write_session("Default", 20, &two_tab_session());
     assert_success(&fx.run(&[]));
     let before = fx.snapshot_dirs();
     let original = std::fs::read(before[0].join("snapshot.json")).unwrap();
+    let original_session = std::fs::read(before[0].join("session.snss")).unwrap();
+    let ready = fx.home.path().join("staged");
 
-    let output = fx
+    let mut child = fx
         .command()
         .args(["--force"])
-        .env("KNOWMORETABS_CRASH_BEFORE_PUBLISH", "1")
-        .output()
+        .env("KNOWMORETABS_PAUSE_BEFORE_PUBLISH", &ready)
+        .spawn()
         .unwrap();
-    assert_eq!(output.status.code(), Some(70), "the simulated kill");
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !ready.exists() {
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            panic!("child never reached the staging rendezvous");
+        }
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "child exited before staging"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    child.kill().unwrap();
+    assert_eq!(child.wait().unwrap().signal(), Some(9), "actual SIGKILL");
     assert_eq!(fx.snapshot_dirs(), before, "nothing new was published");
     assert_eq!(
         std::fs::read(before[0].join("snapshot.json")).unwrap(),
         original
+    );
+    assert_eq!(
+        std::fs::read(before[0].join("session.snss")).unwrap(),
+        original_session
     );
     assert_eq!(
         fx.staging_dirs().len(),

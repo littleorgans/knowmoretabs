@@ -222,6 +222,81 @@ fn dropped_tabs_and_navigation_fallbacks_are_counted_not_fatal() {
 }
 
 #[test]
+fn hostile_payloads_degrade_without_losing_recovered_tabs() {
+    let fx = Fixture::new();
+    let mut builder = SessionBuilder::new().simple_tab(1, 2, "https://example.test/one", "One");
+    let mut malformed = 0;
+    // Fixed-size commands must include their whole payload. In particular,
+    // a close containing only an id must not delete the tab or its window.
+    for (id, size, identifier) in [
+        (0, 8, 1i32),
+        (2, 8, 2),
+        (5, 8, 2),
+        (7, 8, 2),
+        (8, 8, 1),
+        (9, 8, 1),
+        (11, 8, 2),
+        (12, 8, 2),
+        (16, 16, 2),
+        (17, 16, 1),
+        (21, 16, 2),
+        (24, 12, 2),
+        (25, 32, 2),
+    ] {
+        for len in [size - 1, size + 1] {
+            let mut payload = vec![0; len];
+            payload[..4].copy_from_slice(&identifier.to_le_bytes());
+            builder = builder.raw_command(id, &payload);
+            malformed += 1;
+        }
+    }
+    // Valid Pickle framing, hostile signed URL / UTF-16 length prefixes.
+    for length in [i32::MIN, -1, i32::MAX] {
+        for title in [false, true] {
+            let mut payload = 2i32.to_le_bytes().to_vec();
+            payload.extend(1i32.to_le_bytes());
+            if title {
+                payload.extend(4i32.to_le_bytes());
+                payload.extend(b"a://");
+            }
+            payload.extend(length.to_le_bytes());
+            let mut pickle = u32::try_from(payload.len()).unwrap().to_le_bytes().to_vec();
+            pickle.extend(payload);
+            builder = builder.raw_command(6, &pickle);
+            malformed += 1;
+        }
+    }
+    for command in [6, 27] {
+        builder = builder.raw_command(command, &u32::MAX.to_le_bytes());
+        malformed += 1;
+    }
+    for count in [i32::MIN, -1, 0] {
+        builder = builder.prune_front(2, count).prune(2, 0, count);
+        malformed += 2;
+    }
+    builder = builder.prune(2, -1, 1);
+    malformed += 1;
+    let complete = builder.marker().build();
+    for tail in [vec![0xff], vec![0xff, 0xff, 6, 0], vec![0, 0]] {
+        let mut bytes = complete.clone();
+        bytes.extend(&tail);
+        fx.write_session("Default", 20, &bytes);
+        let output = fx.run(&["--force", "--json"]);
+        assert_success(&output);
+        let result: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+        let stats = &result["saved"]["stats"];
+        assert_eq!(stats["malformed_commands"], malformed);
+        assert_eq!(stats["truncated_bytes"], tail.len());
+        assert_eq!(stats["tabs"], 1);
+        assert_eq!(stats["dropped_tabs"], 0);
+        let snapshot = read_snapshot(std::path::Path::new(
+            result["saved"]["path"].as_str().unwrap(),
+        ));
+        assert_eq!(snapshot["tabs"][0]["url"], "https://example.test/one");
+    }
+}
+
+#[test]
 fn tab_groups_and_last_active_reach_the_snapshot() {
     let fx = Fixture::new();
     let token = (0xAB, 0xCD);

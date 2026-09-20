@@ -83,9 +83,9 @@ struct Located {
     sessions_dir: Option<PathBuf>,
 }
 
-/// Set in debug builds by the atomicity test to simulate a kill after
-/// staging and before the rename. Release builds ignore it.
-pub const CRASH_BEFORE_PUBLISH_ENV: &str = "KNOWMORETABS_CRASH_BEFORE_PUBLISH";
+/// Debug-test rendezvous: write a readiness file, then wait for the parent
+/// to kill this process after staging. Release builds ignore it.
+pub const PAUSE_BEFORE_PUBLISH_ENV: &str = "KNOWMORETABS_PAUSE_BEFORE_PUBLISH";
 
 pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
     let located = locate(opts, log)?;
@@ -171,8 +171,13 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
         source,
     })?;
     staging.write(SNAPSHOT_JSON, &json)?;
-    if cfg!(debug_assertions) && std::env::var_os(CRASH_BEFORE_PUBLISH_ENV).is_some() {
-        std::process::exit(70);
+    if cfg!(debug_assertions)
+        && let Some(ready) = std::env::var_os(PAUSE_BEFORE_PUBLISH_ENV)
+    {
+        fs::write(&ready, []).map_err(Error::io("signal staged snapshot", Path::new(&ready)))?;
+        loop {
+            std::thread::park();
+        }
     }
     let path = archive.publish(staging, &snapshot.id)?;
     Ok(Outcome::Saved { path, snapshot })

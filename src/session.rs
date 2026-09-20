@@ -165,6 +165,19 @@ impl Fold {
     fn apply(&mut self, id: u8, contents: &[u8]) {
         self.stats.commands += 1;
         *self.stats.commands_by_id.entry(id).or_insert(0) += 1;
+        // GetContents in Chromium requires the entire fixed-size struct,
+        // including padding. A partial close must not erase a recovered tab.
+        let expected_size = match id {
+            0 | 2 | 5 | 7 | 8 | 9 | 11 | 12 => Some(8),
+            16 | 17 | 21 => Some(16),
+            24 => Some(12),
+            25 => Some(32),
+            _ => None,
+        };
+        if expected_size.is_some_and(|size| contents.len() != size) {
+            self.malformed();
+            return;
+        }
         let ok = match id {
             id::SET_TAB_WINDOW => pair(contents).map(|(window, tab)| {
                 self.tab(tab).window_id = Some(window);
@@ -758,13 +771,13 @@ mod tests {
             .navigation(2, 0, "https://example.test/0", "0")
             .navigation(2, 1, "https://example.test/1", "1")
             .navigation(2, 2, "https://example.test/2", "2")
-            .select_navigation(2, 1)
+            .select_navigation(2, 2)
             .prune_back(2, 2)
             .marker()
             .build();
         let parsed = parse(&bytes).unwrap();
         assert_eq!(urls(&parsed), vec!["https://example.test/1"]);
-        assert_eq!(parsed.stats.navigation_fallbacks, 0);
+        assert_eq!(parsed.stats.navigation_fallbacks, 1);
     }
 
     #[test]
@@ -812,12 +825,14 @@ mod tests {
             .navigation(2, 1, "https://example.test/1", "1")
             .navigation(2, 2, "https://example.test/2", "2")
             .navigation(2, 3, "https://example.test/3", "3")
-            .select_navigation(2, 3)
             .prune(2, 1, 2)
+            .select_navigation(2, 1)
             .marker()
             .build();
         let parsed = parse(&bytes).unwrap();
-        // 1 and 2 gone; 3 renumbered to 1; selection 3 -> 1.
+        // 1 and 2 gone; 3 renumbered to 1. The post-prune selection resolves
+        // to that renumbered entry; without pruning it would still resolve to
+        // the original entry at index 1.
         assert_eq!(urls(&parsed), vec!["https://example.test/3"]);
         assert_eq!(parsed.stats.navigation_fallbacks, 0);
 
@@ -836,6 +851,49 @@ mod tests {
         let parsed = parse(&bytes).unwrap();
         assert_eq!(urls(&parsed), vec!["https://example.test/0"]);
         assert_eq!(parsed.stats.navigation_fallbacks, 0);
+    }
+
+    #[test]
+    fn pruning_boundaries_preserve_chromiums_selected_index() {
+        // Sparse controller indices, not vector positions. Include both
+        // boundaries and a selection straddled by the removed range.
+        for (command, start, count, selected, expected, keys) in [
+            (24, 1, 3, 0, 0, vec![0, 1, 3]),
+            (24, 1, 3, 1, 0, vec![0, 1, 3]),
+            (24, 1, 3, 2, 0, vec![0, 1, 3]),
+            (24, 1, 3, 3, 0, vec![0, 1, 3]),
+            (24, 1, 3, 4, 1, vec![0, 1, 3]),
+            (24, 1, 3, 6, 3, vec![0, 1, 3]),
+            (11, 0, 4, 3, -1, vec![0, 2]),
+            (11, 0, 4, 4, 0, vec![0, 2]),
+            (5, 4, 0, 4, 4, vec![0, 1, 3]),
+        ] {
+            let mut builder = SessionBuilder::new()
+                .set_tab_window(1, 2)
+                .set_window_type(1, 0);
+            for index in [0, 1, 3, 4, 6] {
+                builder =
+                    builder.navigation(2, index, &format!("https://example.test/{index}"), "");
+            }
+            builder = builder.select_navigation(2, selected);
+            builder = match command {
+                5 => builder.prune_back(2, start),
+                11 => builder.prune_front(2, count),
+                _ => builder.prune(2, start, count),
+            };
+            let bytes = builder.build();
+            let mut fold = Fold::default();
+            for record in snss::frame(&bytes).commands {
+                fold.apply(record.id, record.contents);
+            }
+            let state = &fold.tabs[&2];
+            assert_eq!(
+                state.selected,
+                Some(expected),
+                "command {command}, selection {selected}"
+            );
+            assert_eq!(state.navigations.keys().copied().collect::<Vec<_>>(), keys);
+        }
     }
 
     #[test]

@@ -116,7 +116,13 @@ impl Archive {
             }
             ids.push(name);
         }
-        ids.sort();
+        ids.sort_by_cached_key(|id| {
+            let (base, ordinal) = id.split_once("Z-").map_or_else(
+                || (id.clone(), 1),
+                |(base, suffix)| (format!("{base}Z"), suffix.parse::<u32>().unwrap_or(0)),
+            );
+            (base, ordinal)
+        });
         Ok(ids)
     }
 
@@ -177,6 +183,7 @@ impl Archive {
                 "snapshot already exists",
             )));
         }
+        sync_dir(staging.dir.path())?;
         fs::rename(staging.dir.path(), &destination)
             .map_err(Error::io("rename into", &destination))?;
         // The rename succeeded, so the temp path no longer exists; forget it
@@ -249,6 +256,8 @@ fn sync_dir(dir: &Path) -> Result<(), Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
 
     #[test]
     fn id_format_is_utc_and_sortable() {
@@ -311,8 +320,12 @@ mod tests {
         let archive = Archive::open(tmp.path()).unwrap();
         let staging = archive.stage().unwrap();
         staging.write("a.txt", b"hello").unwrap();
+        #[cfg(unix)]
+        let staging_inode = std::fs::metadata(staging.path()).unwrap().ino();
         let published = archive.publish(staging, "2026-01-01-000000Z").unwrap();
         assert_eq!(fs::read(published.join("a.txt")).unwrap(), b"hello");
+        #[cfg(unix)]
+        assert_eq!(std::fs::metadata(&published).unwrap().ino(), staging_inode);
         assert_eq!(archive.snapshot_ids().unwrap(), vec!["2026-01-01-000000Z"]);
         assert_eq!(archive.clean_stale_staging().unwrap(), 0);
 
@@ -378,5 +391,16 @@ mod tests {
         assert_eq!(found.unreadable.len(), 1);
         let none = archive.latest_matching(None, None).unwrap();
         assert!(none.snapshot.is_none());
+
+        // Lexicographic ordering puts -9 after -10, which would compare the
+        // new layout against the wrong snapshot after a busy capture burst.
+        for suffix in [9, 10] {
+            let id = format!("2026-01-01-000004Z-{suffix}");
+            make(&id, &snapshot(&id, "Default"));
+        }
+        let latest = archive
+            .latest_matching(Some("chrome"), Some("Default"))
+            .unwrap();
+        assert_eq!(latest.snapshot.unwrap().id, "2026-01-01-000004Z-10");
     }
 }
