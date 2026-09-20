@@ -15,7 +15,7 @@ use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
@@ -26,8 +26,8 @@ use crate::library::{self, Shape};
 use crate::triage::{self, Action};
 use crate::{assets, export};
 
-/// Request line plus headers. A browser's own headers fit in a few hundred
-/// bytes; the margin is for cookies other localhost apps have set.
+/// Request line plus headers, including the final CRLF CRLF. A browser's own
+/// headers fit in a few hundred bytes; the margin is for localhost cookies.
 const HEAD_LIMIT: usize = 16 * 1024;
 /// A bulk forget of every page in a large archive is well under this.
 const BODY_LIMIT: usize = 4 * 1024 * 1024;
@@ -135,9 +135,8 @@ struct Server {
 
 impl Server {
     fn serve(&self, mut stream: TcpStream) {
-        let _ = stream.set_read_timeout(Some(IO_TIMEOUT));
-        let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
-        let (head, rest) = match read_head(&mut stream) {
+        let deadline = Instant::now() + IO_TIMEOUT;
+        let (head, rest) = match read_head(&mut stream, deadline) {
             Ok(Some(head)) => head,
             // Opened and closed without a request: a preconnect, not an error.
             Ok(None) => return,
@@ -150,10 +149,11 @@ impl Server {
             Err(response) => ("<malformed>".to_owned(), response),
             Ok(head) => {
                 let line = format!("{} {}", head.method, head.target);
-                // Host and Origin are judged before a byte of body is read.
+                // Judge Host and Origin before reading any further body bytes;
+                // `rest` may contain bytes prefetched with the head.
                 let response = match self.check_headers(&head) {
                     Err(response) => response,
-                    Ok(()) => match read_body(&mut stream, &head, rest) {
+                    Ok(()) => match read_body(&mut stream, &head, rest, deadline) {
                         Err(response) => response,
                         Ok(body) => self.route(&head, &body),
                     },
@@ -170,13 +170,17 @@ impl Server {
     /// can discard the response before the client has read it.
     fn finish(&self, stream: &mut TcpStream, line: &str, response: &Response) {
         self.log.note(&format!("{} {line}", response.status.code()));
-        let _ = response.write_to(stream);
+        let _ = response.write_to(&mut DeadlineWriter {
+            stream,
+            deadline: Instant::now() + IO_TIMEOUT,
+        });
         let _ = stream.shutdown(Shutdown::Write);
-        let _ = stream.set_read_timeout(Some(LINGER));
+        let deadline = Instant::now() + LINGER;
         let mut sink = [0u8; 4096];
         let mut drained = 0;
         while drained < LINGER_LIMIT {
-            match stream.read(&mut sink) {
+            let size = sink.len().min(LINGER_LIMIT - drained);
+            match read_before(stream, &mut sink[..size], deadline) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => drained += n,
             }
@@ -327,7 +331,11 @@ fn host_allowed(host: &str, port: u16) -> bool {
     };
     let name_ok = name == "127.0.0.1" || name.eq_ignore_ascii_case("localhost");
     let port_ok = match given_port {
-        Some(given) => given.parse::<u16>() == Ok(port),
+        Some(given) => {
+            !given.is_empty()
+                && given.bytes().all(|b| b.is_ascii_digit())
+                && given.parse::<u16>() == Ok(port)
+        }
         None => port == 80,
     };
     name_ok && port_ok
@@ -360,16 +368,34 @@ impl Head {
         ) else {
             return Err(bad());
         };
-        if method.is_empty() || !target.starts_with('/') || !version.starts_with("HTTP/1.") {
+        if method.is_empty()
+            || !method.bytes().all(is_token)
+            || !target.starts_with('/')
+            || target.bytes().any(|b| b.is_ascii_control() || b == b' ')
+            || !matches!(version, "HTTP/1.0" | "HTTP/1.1")
+        {
             return Err(bad());
         }
         let mut headers = Vec::new();
         for line in lines.filter(|line| !line.is_empty()) {
             let (name, value) = line.split_once(':').ok_or_else(bad)?;
-            if name.is_empty() || name.contains(|c: char| c.is_whitespace()) {
+            if name.is_empty()
+                || !name.bytes().all(is_token)
+                || value.bytes().any(|b| b.is_ascii_control() && b != b'\t')
+            {
                 return Err(bad());
             }
-            headers.push((name.to_ascii_lowercase(), value.trim().to_owned()));
+            let name = name.to_ascii_lowercase();
+            // These fields have one meaning per request. Never let the
+            // security check and framing silently choose the first value.
+            if matches!(
+                name.as_str(),
+                "host" | "origin" | "content-length" | "content-type"
+            ) && headers.iter().any(|(n, _)| n == &name)
+            {
+                return Err(bad());
+            }
+            headers.push((name, value.trim_matches([' ', '\t']).to_owned()));
         }
         Ok(Self {
             method: method.to_owned(),
@@ -386,16 +412,65 @@ impl Head {
     }
 }
 
+// HTTP tokens are ASCII; accepting separators or controls creates competing
+// interpretations of methods and header names.
+fn is_token(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b)
+}
+
+fn remaining(deadline: Instant) -> io::Result<Duration> {
+    deadline
+        .checked_duration_since(Instant::now())
+        .filter(|left| !left.is_zero())
+        .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "connection deadline expired"))
+}
+
+// Socket timeouts alone restart on every syscall. Recompute the remaining
+// budget so a peer cannot keep a thread alive by dribbling bytes.
+fn read_before(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> io::Result<usize> {
+    loop {
+        stream.set_read_timeout(Some(remaining(deadline)?))?;
+        match stream.read(buf) {
+            Err(err) if err.kind() == io::ErrorKind::Interrupted => {}
+            result => return result,
+        }
+    }
+}
+
+struct DeadlineWriter<'a> {
+    stream: &'a mut TcpStream,
+    deadline: Instant,
+}
+
+impl Write for DeadlineWriter<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.stream
+            .set_write_timeout(Some(remaining(self.deadline)?))?;
+        self.stream.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
+}
+
 /// The head's bytes and whatever body bytes arrived in the same read.
 type HeadAndRest = (Vec<u8>, Vec<u8>);
 
 /// Reads up to the blank line. Returns the head and whatever body bytes
 /// arrived with it, or `None` when the client sent nothing at all.
-fn read_head(stream: &mut TcpStream) -> Result<Option<HeadAndRest>, Response> {
+fn read_head(stream: &mut TcpStream, deadline: Instant) -> Result<Option<HeadAndRest>, Response> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
     loop {
-        let n = match stream.read(&mut chunk) {
+        if buf.len() == HEAD_LIMIT {
+            return Err(Response::error(
+                Status::RequestHeaderFieldsTooLarge,
+                "request head too large",
+            ));
+        }
+        let size = chunk.len().min(HEAD_LIMIT - buf.len());
+        let n = match read_before(stream, &mut chunk[..size], deadline) {
             Ok(0) => {
                 return if buf.is_empty() {
                     Ok(None)
@@ -415,18 +490,17 @@ fn read_head(stream: &mut TcpStream) -> Result<Option<HeadAndRest>, Response> {
             buf.truncate(end - 4);
             return Ok(Some((buf, rest)));
         }
-        if buf.len() > HEAD_LIMIT {
-            return Err(Response::error(
-                Status::RequestHeaderFieldsTooLarge,
-                "request head too large",
-            ));
-        }
     }
 }
 
 /// Only `Content-Length` bodies, and only up to the cap, which is checked
 /// before anything is allocated or read.
-fn read_body(stream: &mut TcpStream, head: &Head, mut body: Vec<u8>) -> Result<Vec<u8>, Response> {
+fn read_body(
+    stream: &mut TcpStream,
+    head: &Head,
+    mut body: Vec<u8>,
+    deadline: Instant,
+) -> Result<Vec<u8>, Response> {
     if head.header("transfer-encoding").is_some() {
         return Err(Response::error(
             Status::LengthRequired,
@@ -435,9 +509,14 @@ fn read_body(stream: &mut TcpStream, head: &Head, mut body: Vec<u8>) -> Result<V
     }
     let length = match head.header("content-length") {
         None => 0,
-        Some(value) => value
-            .parse::<usize>()
-            .map_err(|_| Response::error(Status::BadRequest, "bad Content-Length"))?,
+        Some(value) => {
+            if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(Response::error(Status::BadRequest, "bad Content-Length"));
+            }
+            value
+                .parse::<usize>()
+                .map_err(|_| Response::error(Status::BadRequest, "bad Content-Length"))?
+        }
     };
     if length > BODY_LIMIT {
         return Err(Response::error(
@@ -451,11 +530,16 @@ fn read_body(stream: &mut TcpStream, head: &Head, mut body: Vec<u8>) -> Result<V
             "body longer than Content-Length",
         ));
     }
-    let already = body.len();
+    let mut already = body.len();
     body.resize(length, 0);
-    stream
-        .read_exact(&mut body[already..])
-        .map_err(|_| Response::error(Status::BadRequest, "incomplete body"))?;
+    while already < length {
+        match read_before(stream, &mut body[already..], deadline) {
+            Ok(0) | Err(_) => {
+                return Err(Response::error(Status::BadRequest, "incomplete body"));
+            }
+            Ok(n) => already += n,
+        }
+    }
     Ok(body)
 }
 
@@ -665,5 +749,116 @@ mod tests {
         assert!(text.contains("\r\nConnection: close\r\n"));
         assert!(!text.to_ascii_lowercase().contains("access-control"));
         assert!(text.ends_with("\r\n\r\n{\"error\":\"method not allowed\"}"));
+    }
+
+    fn socket_pair() -> (TcpStream, TcpStream) {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (server, client)
+    }
+
+    #[test]
+    fn review_linger_has_a_total_deadline_even_when_bytes_keep_arriving() {
+        let (mut socket, mut client) = socket_pair();
+        let root = tempfile::tempdir().unwrap();
+        let server = Server {
+            root: root.path().into(),
+            port: 0,
+            log: Log::default(),
+        };
+        let (done, finished) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let start = Instant::now();
+            server.finish(
+                &mut socket,
+                "test",
+                &Response::error(Status::BadRequest, "test"),
+            );
+            done.send(start.elapsed()).unwrap();
+        });
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        client.read_to_end(&mut Vec::new()).unwrap();
+        let dribbler = std::thread::spawn(move || {
+            for _ in 0..35 {
+                if client.write_all(b"x").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        });
+        let elapsed = finished
+            .recv_timeout(Duration::from_secs(3))
+            .expect("drain deadline");
+        assert!(elapsed >= Duration::from_millis(1800));
+        assert!(elapsed < Duration::from_secs(3));
+        worker.join().unwrap();
+        dribbler.join().unwrap();
+    }
+
+    #[test]
+    fn review_linger_never_reads_more_than_its_byte_limit() {
+        let (mut socket, mut client) = socket_pair();
+        let root = tempfile::tempdir().unwrap();
+        let server = Server {
+            root: root.path().into(),
+            port: 0,
+            log: Log::default(),
+        };
+        let writer = std::thread::spawn(move || {
+            // An unaligned first read used to make the last read overshoot.
+            client.write_all(b"x").unwrap();
+            std::thread::sleep(Duration::from_millis(100));
+            client.write_all(&vec![b'x'; LINGER_LIMIT + 1024]).unwrap();
+            client.shutdown(Shutdown::Write).unwrap();
+            client.read_to_end(&mut Vec::new()).unwrap();
+        });
+        server.finish(
+            &mut socket,
+            "test",
+            &Response::error(Status::BadRequest, "test"),
+        );
+        let mut left = Vec::new();
+        socket.read_to_end(&mut left).unwrap();
+        assert!(left.len() <= LINGER_LIMIT, "drained {} bytes", left.len());
+        assert!(left.len() >= 1025, "drained only {} bytes", left.len());
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn review_head_and_body_share_one_deadline() {
+        let (mut socket, mut client) = socket_pair();
+        let deadline = Instant::now() + Duration::from_millis(300);
+        let writer = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            client
+                .write_all(b"GET / HTTP/1.1\r\nContent-Length: 1\r\n\r\n")
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(250));
+            let _ = client.write_all(b"x");
+        });
+        let (head, rest) = read_head(&mut socket, deadline).ok().unwrap().unwrap();
+        let head = Head::parse(&head).ok().unwrap();
+        let err = read_body(&mut socket, &head, rest, deadline).unwrap_err();
+        assert_eq!(err.status, Status::BadRequest);
+        writer.join().unwrap();
+    }
+
+    #[test]
+    fn review_response_write_has_a_total_deadline() {
+        let (mut socket, _client) = socket_pair();
+        let mut writer = DeadlineWriter {
+            stream: &mut socket,
+            deadline: Instant::now() + Duration::from_millis(100),
+        };
+        let start = Instant::now();
+        let err = writer.write_all(&vec![b'x'; 32 * 1024 * 1024]).unwrap_err();
+        assert!(matches!(
+            err.kind(),
+            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+        ));
+        assert!(start.elapsed() < Duration::from_secs(2));
     }
 }
