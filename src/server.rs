@@ -858,19 +858,51 @@ mod tests {
         writer.join().unwrap();
     }
 
+    /// A client that stops reading must not hold a worker. How much a kernel
+    /// will absorb before a write blocks is not a constant: one 32 MiB write
+    /// blocks on Linux and macOS and was swallowed whole by Windows loopback
+    /// autotuning, which made an earlier version of this pass on two
+    /// platforms and fail on the third. Neither version was wrong about the
+    /// guarantee; the first one measured buffers instead of it. The budget is
+    /// a clock, so this waits on the clock: keep writing until the deadline
+    /// takes the write away, which happens whether a buffer filled or not.
     #[test]
     fn review_response_write_has_a_total_deadline() {
+        // A deadline already gone: no write is attempted at all, and no
+        // socket is involved in saying so.
+        let (mut socket, _client) = socket_pair();
+        let mut spent = DeadlineWriter {
+            stream: &mut socket,
+            deadline: Instant::now(),
+        };
+        assert_eq!(
+            spent.write(b"x").unwrap_err().kind(),
+            io::ErrorKind::TimedOut
+        );
+
         let (mut socket, _client) = socket_pair();
         let mut writer = DeadlineWriter {
             stream: &mut socket,
             deadline: Instant::now() + Duration::from_millis(100),
         };
         let start = Instant::now();
-        let err = writer.write_all(&vec![b'x'; 32 * 1024 * 1024]).unwrap_err();
-        assert!(matches!(
-            err.kind(),
-            io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
-        ));
-        assert!(start.elapsed() < Duration::from_secs(2));
+        let chunk = vec![b'x'; 256 * 1024];
+        // The cap is a runaway guard, not the mechanism: once 100ms have
+        // passed the next `write` fails before it touches the socket, so a
+        // kernel with room for everything still ends the loop on time.
+        let stopped = (0..8192).find_map(|_| writer.write_all(&chunk).err());
+        let err = stopped.expect("the deadline has to end the write");
+        assert!(
+            matches!(
+                err.kind(),
+                io::ErrorKind::TimedOut | io::ErrorKind::WouldBlock
+            ),
+            "{err:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "took {:?}",
+            start.elapsed()
+        );
     }
 }

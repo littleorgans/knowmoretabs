@@ -170,13 +170,16 @@ impl Fixture {
 }
 
 /// The archive is private to the user who made it. What that sentence means
-/// is not the same on both platforms, so each asserts its own: on Unix the
-/// mode is `0700`, set when the directory is created; on Windows there is no
-/// mode and no ACL is set, so the claim is that every entry on the directory
-/// is inherited — it grants nobody anything its parent did not already grant,
-/// and `%LOCALAPPDATA%`, where the default root goes, grants only this user.
-/// `(I)` is icacls' inherited flag and is a letter, not prose, so this reads
-/// the same on a non-English Windows.
+/// differs by platform, so each arm asserts its own.
+///
+/// Unix: mode `0700`, which the archive sets.
+///
+/// Windows: there is no mode, and no access-control list is set, so the only
+/// claim that is ours is that creating the archive **grants nothing an
+/// ordinary directory in the same place would not** — asserted by making one
+/// beside it and comparing. Where that place is doing the protecting is the
+/// other half, and `no_root_flag_puts_the_archive_where_the_platform_keeps_
+/// per_user_data` pins it to `%LOCALAPPDATA%`.
 pub fn assert_private_dir(path: &Path) {
     #[cfg(unix)]
     {
@@ -190,19 +193,44 @@ pub fn assert_private_dir(path: &Path) {
     }
     #[cfg(windows)]
     {
-        let out = Command::new("icacls").arg(path).output().expect("icacls");
-        assert!(out.status.success(), "icacls failed for {}", path.display());
-        let text = String::from_utf8_lossy(&out.stdout).into_owned();
-        let entries: Vec<&str> = text.lines().filter(|l| l.contains(":(")).collect();
-        assert!(!entries.is_empty(), "icacls listed no entries: {text}");
-        assert!(
-            entries.iter().all(|line| line.contains("(I)")),
-            "{} has an access entry of its own rather than inheriting: {text}",
+        let ordinary = path.with_file_name(".knowmoretabs-acl-reference");
+        let _ = std::fs::remove_dir(&ordinary);
+        std::fs::create_dir(&ordinary).expect("reference directory");
+        let (ours, theirs) = (access_entries(path), access_entries(&ordinary));
+        std::fs::remove_dir(&ordinary).expect("remove reference directory");
+        assert_eq!(
+            ours,
+            theirs,
+            "{} grants access an ordinary directory beside it would not",
             path.display()
         );
     }
     #[cfg(not(any(unix, windows)))]
     let _ = path;
+}
+
+/// Who a directory grants what, with the directory's own name removed so
+/// that two of them can be compared. `icacls` echoes the name it was given
+/// verbatim ahead of the first entry, and that name is the one thing that
+/// must not take part in the comparison. No localised text is ever read:
+/// the entries are only compared with each other, on one machine.
+#[cfg(windows)]
+fn access_entries(path: &Path) -> Vec<String> {
+    let out = Command::new("icacls").arg(path).output().expect("icacls");
+    assert!(out.status.success(), "icacls failed for {}", path.display());
+    let text = String::from_utf8_lossy(&out.stdout).replace(&path.display().to_string(), "");
+    let mut entries: Vec<String> = text
+        .lines()
+        .filter(|line| line.contains(":("))
+        .map(|line| line.trim().to_owned())
+        .collect();
+    assert!(
+        !entries.is_empty(),
+        "icacls listed no entries for {}",
+        path.display()
+    );
+    entries.sort();
+    entries
 }
 
 pub fn read_snapshot(dir: &Path) -> serde_json::Value {

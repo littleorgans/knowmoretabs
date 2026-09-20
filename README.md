@@ -128,7 +128,10 @@ browser and profile saves nothing. Titles and timestamps do not count as change.
 
 `library.json` is written the same way a snapshot is, staged and renamed in
 one step under the archive lock, so a forget that is interrupted, or two
-that run at once, cannot lose anything. A damaged `library.json` stops
+that run at once, cannot lose anything. Unlike a snapshot it does replace an
+existing file, and on Windows that goes through the rename mode that can
+unlink a file another program is reading — so a virus scanner or a backup
+agent holding it open for a moment does not fail your `forget`. A damaged `library.json` stops
 `export`, `serve`, `forget` and `restore` with a message naming the file
 rather than quietly showing pages you had hidden.
 

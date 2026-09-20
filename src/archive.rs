@@ -262,15 +262,25 @@ pub fn read_snapshot(path: &Path) -> Result<Snapshot, Error> {
 /// change, which is what user state is. Caller holds the archive lock.
 ///
 /// Unlike [`Archive::publish`] this one does rename onto an existing name,
-/// and it is a **file**, which is the case where replacement is atomic on
-/// every platform we ship. `tempfile`'s `persist` is `rename` on Unix and
-/// `MoveFileExW` with `MOVEFILE_REPLACE_EXISTING` on Windows, and that flag
-/// is what makes the Windows call replace rather than fail with
-/// `ERROR_ALREADY_EXISTS`; bare `rename(3)` and `MoveFileW`, the two calls
-/// that would fail, are not what is being used here. Either the old bytes or
-/// the new ones are at `path` at every instant, never neither and never a
-/// mixture. A reader holding the file open cannot block it either: the
-/// standard library opens with `FILE_SHARE_DELETE`.
+/// and it is a **file**, which is the case where replacement is atomic
+/// everywhere. Either the old bytes or the new ones are at `path` at every
+/// instant, never neither and never a mixture.
+///
+/// It goes through `fs::rename` rather than `tempfile`'s `persist`, and the
+/// difference is not cosmetic. Both issue `MoveFileExW` with
+/// `MOVEFILE_REPLACE_EXISTING` on Windows, which is what makes the call
+/// replace rather than fail with `ERROR_ALREADY_EXISTS`. But that path goes
+/// through the classic `FileRenameInformation`, and replacing a destination
+/// that **any** process currently has open fails there with
+/// `ERROR_ACCESS_DENIED` — sharing flags do not help, because the target is
+/// being deleted, not shared. POSIX `rename` has no such rule. Only
+/// `fs::rename` retries with `FileRenameInfoEx` and
+/// `FILE_RENAME_FLAG_POSIX_SEMANTICS`, the flag that exists precisely to
+/// unlink an open target, which gives Windows the same behaviour as the
+/// other two. `persist` has no retry, so a virus scanner, a backup agent or
+/// an editor holding `library.json` open for a moment was enough to fail a
+/// `forget`. The staged file's own handle is closed first so that the retry
+/// can open the source for `DELETE`.
 pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut staged = tempfile::Builder::new()
@@ -284,9 +294,18 @@ pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
         .as_file()
         .sync_all()
         .map_err(Error::io("sync staged", path))?;
-    staged
-        .persist(path)
-        .map_err(|err| Error::io("replace", path)(err.error))?;
+    // `keep` also clears the temporary attribute Windows marks the file
+    // with, which the published file must not carry.
+    let (file, staged_path) = staged
+        .keep()
+        .map_err(|err| Error::io("stage beside", path)(err.error))?;
+    drop(file);
+    if let Err(source) = fs::rename(&staged_path, path) {
+        // `keep` took cleanup away from the destructor; nothing else will
+        // remove the stage now, and a failed write must leave no litter.
+        let _ = fs::remove_file(&staged_path);
+        return Err(Error::io("replace", path)(source));
+    }
     sync_dir(parent)
 }
 
@@ -355,13 +374,20 @@ mod tests {
         assert!(format_id(at) < format!("{}-2", format_id(at)));
     }
 
-    /// The privacy guarantee is not the same sentence on both platforms, so
-    /// each one asserts its own. Unix: the mode is `0700`, set by us.
-    /// Windows: there is no mode, and we cannot set an ACL without the Win32
-    /// security APIs, so the guarantee is that creating the root grants
-    /// nobody anything its parent did not already grant — which is what
-    /// makes the default root under `%LOCALAPPDATA%` private and what makes
-    /// a `--root` elsewhere only as private as where it was put.
+    /// "Private to the user" is not the same sentence on both platforms, so
+    /// each asserts its own.
+    ///
+    /// Unix: mode `0700`, which we set.
+    ///
+    /// Windows: there is no mode, and we cannot set an access-control list
+    /// without the Win32 security APIs, so the only claim that is ours to
+    /// make is **we add no access of our own** — the archive is exactly as
+    /// private as an ordinary directory created in the same place, and
+    /// `default_root` makes sure that place is under `%LOCALAPPDATA%`. That
+    /// is asserted by building an ordinary directory beside it and comparing
+    /// the two. An earlier version asserted every entry was inherited, which
+    /// was a fact about the parent rather than about us, and duly failed
+    /// under `%TEMP%`, where entries are explicit.
     #[test]
     fn open_creates_root_privately_and_is_idempotent() {
         let tmp = tempfile::tempdir().unwrap();
@@ -376,27 +402,46 @@ mod tests {
         }
         #[cfg(windows)]
         {
-            // `(I)` is icacls' flag for an inherited entry, and it is a flag
-            // letter rather than prose, so this reads the same on a
-            // non-English Windows. Every entry being inherited is the claim:
-            // creating the archive granted nobody anything, so the root is
-            // exactly as private as the directory it was created in, and
-            // `default_root` puts that directory under `%LOCALAPPDATA%`.
-            let out = std::process::Command::new("icacls")
-                .arg(&root)
-                .output()
-                .expect("icacls");
-            assert!(out.status.success(), "icacls failed");
-            let text = String::from_utf8_lossy(&out.stdout).into_owned();
-            let entries: Vec<&str> = text.lines().filter(|l| l.contains(":(")).collect();
-            assert!(!entries.is_empty(), "icacls listed no entries: {text}");
-            assert!(
-                entries.iter().all(|line| line.contains("(I)")),
-                "the archive root has an entry of its own rather than inheriting: {text}"
+            let ordinary = root.with_file_name("ordinary");
+            fs::create_dir(&ordinary).unwrap();
+            assert_eq!(
+                windows_access_entries(&root),
+                windows_access_entries(&ordinary),
+                "creating the archive granted access an ordinary directory here would not have"
             );
+            fs::remove_dir(&ordinary).unwrap();
         }
         Archive::open(&root).unwrap();
         assert!(archive.snapshot_ids().unwrap().is_empty());
+    }
+
+    /// Who a directory grants what, read back through `icacls`, with the
+    /// directory's own name removed so that two directories can be compared.
+    /// Nothing here reads the localised text beside an entry; the entries are
+    /// only ever compared with each other, on the same machine, moments apart.
+    #[cfg(windows)]
+    fn windows_access_entries(path: &Path) -> Vec<String> {
+        let out = std::process::Command::new("icacls")
+            .arg(path)
+            .output()
+            .expect("icacls");
+        assert!(out.status.success(), "icacls failed for {}", path.display());
+        // icacls echoes the name it was given, verbatim, before the first
+        // entry; that name is the one thing that must not take part in the
+        // comparison, and it is a string we already hold.
+        let text = String::from_utf8_lossy(&out.stdout).replace(&path.display().to_string(), "");
+        let mut entries: Vec<String> = text
+            .lines()
+            .filter(|line| line.contains(":("))
+            .map(|line| line.trim().to_owned())
+            .collect();
+        assert!(
+            !entries.is_empty(),
+            "icacls listed no entries for {}",
+            path.display()
+        );
+        entries.sort();
+        entries
     }
 
     #[test]
@@ -527,9 +572,14 @@ mod tests {
     }
 
     /// The other half of the rename answer: here the destination does exist
-    /// and has to be replaced. `MOVEFILE_REPLACE_EXISTING` is what makes that
-    /// work on Windows, and a reader holding the file open must not be able
-    /// to stop it — so the replacement happens with the old content open.
+    /// and has to be replaced.
+    ///
+    /// The replacement happens while a reader holds the old content open,
+    /// because that is the case where Windows used to differ and no longer
+    /// does. Classic `MoveFileExW` replacement refuses a destination anyone
+    /// has open; `fs::rename`'s POSIX-semantics retry unlinks it instead,
+    /// which is what Unix does. This test found that difference on CI and
+    /// now pins the fix.
     #[test]
     fn replace_file_swaps_content_in_one_rename_and_leaves_no_stage_behind() {
         let tmp = tempfile::tempdir().unwrap();
@@ -540,24 +590,37 @@ mod tests {
         let reader = File::open(&path).unwrap();
         replace_file(&path, b"second").unwrap();
         assert_eq!(fs::read(&path).unwrap(), b"second");
+        // What the held handle now sees is unlinked-file behaviour rather
+        // than part of the contract, so it is not asserted; that it could
+        // not block the replacement is the contract, and it just did not.
         drop(reader);
 
-        let leftovers: Vec<_> = fs::read_dir(tmp.path())
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .filter(|name| name != "state.json")
-            .collect();
-        assert!(leftovers.is_empty(), "{leftovers:?}");
+        let leftovers = |kept: &[&str]| -> Vec<String> {
+            let mut names: Vec<String> = fs::read_dir(tmp.path())
+                .unwrap()
+                .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .filter(|name| !kept.contains(&name.as_str()))
+                .collect();
+            names.sort();
+            names
+        };
+        assert!(leftovers(&["state.json"]).is_empty(), "after a replacement");
 
         // A replacement that cannot complete leaves the old bytes in place:
         // a directory in the way is the cheapest way to make rename refuse
-        // on every platform.
+        // on every platform. Cleaning up the stage afterwards is ours to do
+        // now that the rename is `fs::rename` and not a `tempfile` destructor.
         let blocked = tmp.path().join("blocked");
         replace_file(&blocked, b"original").unwrap();
         fs::remove_file(&blocked).unwrap();
         fs::create_dir(&blocked).unwrap();
         assert!(replace_file(&blocked, b"replacement").is_err());
         assert!(blocked.is_dir());
+        assert!(
+            leftovers(&["state.json", "blocked"]).is_empty(),
+            "a failed replacement left its stage behind: {:?}",
+            leftovers(&["state.json", "blocked"])
+        );
 
         // The destination's parent must exist; nothing is created above it.
         assert!(replace_file(&tmp.path().join("missing/state.json"), b"x").is_err());
