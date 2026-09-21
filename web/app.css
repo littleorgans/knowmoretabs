@@ -60,7 +60,7 @@ main { padding: 0 var(--gutter) 4rem; }
 .tools label, .tools .dd { position: relative; display: block; flex: 0 1 13rem; min-width: 8rem; }
 .tools label.q { flex: 1 1 20rem; }
 .tools input, .dd-btn { display: block; width: 100%; min-width: 0; height: 2.5rem; padding: 0 0.875rem; background: var(--bg-1); border: 1px solid transparent; border-radius: var(--radius); color: var(--ink); text-align: left; transition: background-color 0.15s var(--ease), border-color 0.15s var(--ease); }
-.tools input::placeholder { color: var(--ink-3); }
+.tools input::placeholder { color: var(--ink-2); }
 .tools input:hover, .dd-btn:hover { background: var(--bg-2); }
 .tools input:focus-visible, .dd-btn:focus-visible, .tools input[aria-expanded="true"], .dd-btn[aria-expanded="true"] { outline: 0; border-color: var(--accent); background: var(--bg); }
 .tools input[type="search"] { padding-right: 2.5rem; appearance: none; -webkit-appearance: none; }
@@ -69,7 +69,9 @@ main { padding: 0 var(--gutter) 4rem; }
 .tools label.q:focus-within kbd { opacity: 0; }
 /* pickers: Show and Sort are a button over the same menu the comboboxes use */
 .tools .dd.end { flex: 0 0 auto; min-width: 0; }
-.tools .dd-btn { display: flex; align-items: center; justify-content: space-between; gap: 0.625rem; min-width: 9.5rem; padding-right: 0.95rem; background: var(--bg-1); color: var(--ink); }
+/* a picker at its default reads like a placeholder; a chosen value reads as ink */
+.tools .dd-btn { display: flex; align-items: center; justify-content: space-between; gap: 0.625rem; min-width: 9.5rem; padding-right: 0.95rem; background: var(--bg-1); color: var(--ink-2); }
+.tools .dd-btn.set { color: var(--ink); }
 .tools .dd-btn:hover { background: var(--bg-2); }
 .dd-btn::after, .dd:has(input)::after { content: ""; flex: none; width: 0.4em; height: 0.4em; margin-top: -0.2em; border: solid var(--ink-3); border-width: 0 1.5px 1.5px 0; rotate: 45deg; pointer-events: none; }
 .dd:has(input)::after { position: absolute; right: 0.95rem; top: 50%; margin-top: -0.35em; }

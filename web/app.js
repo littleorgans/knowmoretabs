@@ -206,7 +206,8 @@ function materialise(ph) {
   strips(ol);
 }
 const materialiseAll = () => { for (const ph of [...$('list').querySelectorAll('.ph')]) materialise(ph); };
-function setSeg(id, v) { S[id] = v; const o = DD[id].options.find((x) => x.value === v); $(id).firstElementChild.textContent = o ? o.label : v; }
+const DEFAULTS = { status: '', sort: 'last' };
+function setSeg(id, v) { S[id] = v; const o = DD[id].options.find((x) => x.value === v); $(id).firstElementChild.textContent = o ? o.label : v; $(id).classList.toggle('set', v !== DEFAULTS[id]); }
 
 // ---- 4b. Dropdowns ----------------------------------------------------------
 // One menu for all four pickers. Site and Group are typeahead comboboxes (type
