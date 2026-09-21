@@ -24,6 +24,7 @@ const host = (() => {
 const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rendered: [], q: '', domain: '', group: '', status: '', sort: 'last',
             openAll: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages' };
 const FOLD = 10;                                   // rows of "Open now" shown before "show all"
+const EAGER = 300, CHUNK = 200;                    // rows rendered up front; rows per lazy placeholder after that
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = new Intl.NumberFormat();
@@ -162,19 +163,25 @@ function render() {
   // starts on screen. Any filter, or "show all", unfolds it.
   const plain = S.sort === 'last' && S.status === '' && !S.q.trim() && !S.domain.trim() && !S.group.trim();
   const fold = (n, all) => `<li class="fold"><button type="button" id="fold">${all ? `Show all ${plural(n, 'open page')}` : 'Show fewer'}</button></li>`;
-  let html = '', band = null, inBand = 0, tail = '';
+  // Large archives: the first EAGER rows are real; after that each run of up
+  // to CHUNK rows is a placeholder of the right height that turns into rows
+  // when it scrolls near (§4, lazy bands). S.rendered still lists every row.
+  let html = '', band = null, inBand = 0, tail = '', pending = 0;
+  const flush = () => { if (pending) { html += `<li class="ph" data-a="${S.rendered.length - pending}" data-b="${S.rendered.length}"></li>`; pending = 0; } };
   const nOpen = plain ? S.shown.filter((x) => x.open).length : 0;
   S.rendered = [];
   for (const p of S.shown) {
     const b = bandOf(p);
-    if (b !== band) { html += (band === null ? '' : tail + '</ol></section>') + `<section class="band">${b ? `<h3>${esc(b)}<small>${num.format(S.shown.filter((x) => bandOf(x) === b).length)}</small></h3>` : ''}<ol>`; band = b; inBand = 0; tail = ''; }
+    if (b !== band) { flush(); html += (band === null ? '' : tail + '</ol></section>') + `<section class="band">${b ? `<h3>${esc(b)}<small>${num.format(S.shown.filter((x) => bandOf(x) === b).length)}</small></h3>` : ''}<ol>`; band = b; inBand = 0; tail = ''; }
     if (plain && p.open && ++inBand > FOLD) { tail = fold(nOpen, !S.openAll); if (!S.openAll) continue; }
-    S.rendered.push(p); html += rowHTML(p);
+    S.rendered.push(p);
+    if (S.rendered.length > EAGER) { if (++pending === CHUNK) flush(); } else html += rowHTML(p);
   }
+  flush();
   const list = $('list');
   list.innerHTML = html + (band === null ? '' : tail + '</ol></section>');
-  const strips = list.querySelectorAll('.strip');                 // CSSOM, because CSP forbids style attributes
-  S.rendered.forEach((p, i) => strips[i].style.setProperty('--g', p.g));
+  strips(list);
+  for (const ph of list.querySelectorAll('.ph')) { ph.style.setProperty('--rows', ph.dataset.b - ph.dataset.a); lazy.observe(ph); }
   if (S.rendered.length && !list.querySelector('.row.cur')) list.querySelector('.row').tabIndex = 0;
   const total = S.pages.filter((p) => p.n && !p.forgotten).length, n = S.shown.length;
   // The masthead already says how many pages there are; this line speaks only when a filter narrows them.
@@ -190,6 +197,15 @@ function render() {
   document.documentElement.dataset.renderMs = ms.toFixed(1);
   console.info(`render ${S.rendered.length} rows in ${ms.toFixed(1)} ms`);
 }
+// Strip gradients go through the CSSOM because the CSP forbids style attributes.
+function strips(root) { for (const el of root.querySelectorAll('.row')) { const st = el.querySelector('.strip'); if (st && !st.style.getPropertyValue('--g')) st.style.setProperty('--g', S.pages[+el.dataset.i].g); } }
+const lazy = new IntersectionObserver((es) => { for (const e of es) if (e.isIntersecting) materialise(e.target); }, { rootMargin: '1200px 0px' });
+function materialise(ph) {
+  lazy.unobserve(ph); const ol = ph.parentElement;
+  ph.outerHTML = S.rendered.slice(+ph.dataset.a, +ph.dataset.b).map(rowHTML).join('');
+  strips(ol);
+}
+const materialiseAll = () => { for (const ph of [...$('list').querySelectorAll('.ph')]) materialise(ph); };
 function setSeg(id, v) { S[id] = v; const o = DD[id].options.find((x) => x.value === v); $(id).firstElementChild.textContent = o ? o.label : v; }
 
 // ---- 4b. Dropdowns ----------------------------------------------------------
@@ -209,8 +225,8 @@ function dropdown(id, { typeahead = false, onPick }) {
     menu.children[d.hi]?.scrollIntoView({ block: 'nearest' });
     menu.classList.remove('flip'); menu.classList.toggle('flip', menu.getBoundingClientRect().right > innerWidth - 12);   // keep it on screen
   };
-  d.show = () => { if (d.open) return; d.open = true; d.hi = typeahead ? -1 : Math.max(0, d.options.findIndex((o) => o.value === S[id])); menu.hidden = false; ctl.setAttribute('aria-expanded', 'true'); d.render(); };
-  d.hide = () => { if (!d.open) return; d.open = false; d.hi = -1; menu.hidden = true; ctl.setAttribute('aria-expanded', 'false'); };
+  d.show = () => { if (d.open) return; d.open = true; d.hi = typeahead ? -1 : Math.max(0, d.options.findIndex((o) => o.value === S[id])); menu.hidden = false; ctl.setAttribute('aria-expanded', 'true'); d.render(); showEl(menu, true); };
+  d.hide = () => { if (!d.open) return; d.open = false; d.hi = -1; showEl(menu, false); ctl.setAttribute('aria-expanded', 'false'); };
   d.pick = (o) => { d.hide(); onPick(o); };
   d.set = (options) => { d.options = options; if (d.open) d.render(); };
   ctl.addEventListener('keydown', (e) => {
@@ -242,8 +258,9 @@ function setCursor(el, focus = true) {
   if (focus) { el.focus({ preventScroll: true }); el.scrollIntoView({ block: 'nearest' }); }
 }
 function move(delta) {
-  const all = rows(); if (!all.length) return;
-  const at = all.findIndex((r) => r.classList.contains('cur'));
+  let all = rows(); if (!all.length) return;
+  let at = all.findIndex((r) => r.classList.contains('cur'));
+  if (delta > 0 && S.view === 'pages') { if (delta > 1e8) materialiseAll(); else if (at >= all.length - 1) { const ph = $('list').querySelector('.ph'); if (ph) materialise(ph); } all = rows(); at = all.findIndex((r) => r.classList.contains('cur')); }
   const next = Math.max(0, Math.min(all.length - 1, at < 0 ? (delta > 0 ? 0 : all.length - 1) : at + delta));
   setCursor(all[next]);
 }
@@ -274,8 +291,14 @@ function select(i, on, shift) {
   for (const el of $('list').querySelectorAll('.row')) { const k = +el.dataset.i, sel = S.sel.has(k); el.classList.toggle('sel', sel); el.querySelector('.pick input').checked = sel; }
   tray();
 }
+// Show or hide with a short fade: unhide, then add `in` a frame later so the
+// transition runs; on hide take `in` off and hide once it has faded.
+function showEl(el, on) {
+  if (on) { el.hidden = false; el.getBoundingClientRect(); el.classList.add('in'); }
+  else { el.classList.remove('in'); setTimeout(() => { if (!el.classList.contains('in')) el.hidden = true; }, 200); }
+}
 function tray() {
-  const t = $('tray'); t.hidden = !S.sel.size;
+  const t = $('tray'); showEl(t, !!S.sel.size);
   $('selcount').textContent = `${num.format(S.sel.size)} selected`;
   $('forget-sel').textContent = S.status === 'forgotten' ? 'Restore' : 'Forget';
   $('forget-sel').title = S.status === 'forgotten' ? 'Puts them back in the library.' : 'Hides them from the library. The snapshots themselves are never touched.';
@@ -298,8 +321,8 @@ function undo() { if (!S.undo) return; const { idxs, restore } = S.undo; S.undo 
 let toastTimer = 0;
 function toast(msg, label, act) {
   const t = $('toast'); t.textContent = msg;
-  if (label) { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = () => { act(); t.hidden = true; }; t.append(b); }
-  t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => { t.hidden = true; }, 9000);
+  if (label) { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = () => { act(); showEl(t, false); }; t.append(b); }
+  showEl(t, true); clearTimeout(toastTimer); toastTimer = setTimeout(() => showEl(t, false), 9000);
 }
 const targets = () => (S.sel.size ? [...S.sel] : S.cur >= 0 ? [S.cur] : []);
 
@@ -348,6 +371,7 @@ function reveal(i) {
   const p = S.pages[i];
   if (!S.shown.includes(p)) { clearFilters(p.forgotten ? 'forgotten' : ''); render(); }
   if (!rowOf(i)) { S.openAll = true; render(); }   // it was behind the fold
+  if (!rowOf(i)) materialiseAll();                  // or inside a lazy placeholder
   toggle(i, true); setCursor(rowOf(i)); rowOf(i).scrollIntoView({ block: 'center' });
 }
 
