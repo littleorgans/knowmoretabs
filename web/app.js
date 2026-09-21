@@ -410,6 +410,11 @@ function wire() {
   DD.status.set([{ value: '', label: 'Everything' }, { value: 'open', label: 'Open now' }, { value: 'closed', label: 'Closed' }]);
   DD.sort.set([{ value: 'last', label: 'Last seen' }, { value: 'first', label: 'First seen' }, { value: 'count', label: 'Times seen' }, { value: 'title', label: 'Title' }, { value: 'url', label: 'URL' }]);
   $('help-btn').addEventListener('click', () => $('help').showModal());
+  // Motion is the page's own setting, not the OS's: on by default, remembered here.
+  const motion = (on) => { document.documentElement.dataset.motion = on ? 'on' : 'off'; $('motion').checked = on; };
+  let saved = null; try { saved = localStorage.getItem('motion'); } catch { /* file:// without storage */ }
+  motion(saved !== 'off');
+  $('motion').addEventListener('change', (e) => { motion(e.target.checked); try { localStorage.setItem('motion', e.target.checked ? 'on' : 'off'); } catch { /* ignore */ } });
   $('reset').addEventListener('click', () => { clearFilters(); render(); });
   $('empty-clear').addEventListener('click', () => $('reset').click());
   let down = null;
@@ -456,7 +461,6 @@ async function main() {
     $('card').innerHTML = `<b>${plural(total, 'page')}</b> · ${plural(domains.size, 'site')} · ${plural(n, 'snapshot')} · ${span}`;
   }
   DD.domain.set([...domains].sort((a, b) => b[1] - a[1]).map(([d, k]) => ({ value: d, label: d, meta: plural(k, 'page') })));
-  $('group-dd').hidden = !S.groups.size;
   DD.group.set([...S.groups.values()].sort((a, b) => b.n - a.n).map((g) => ({ value: g.title, label: g.title, meta: plural(g.n, 'page') })));
   if (host.forget) {
     DD.status.set(DD.status.options.concat({ value: 'forgotten', label: 'Forgotten' }));

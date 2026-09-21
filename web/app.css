@@ -69,8 +69,8 @@ main { padding: 0 var(--gutter) 4rem; }
 .tools label.q:focus-within kbd { opacity: 0; }
 /* pickers: Show and Sort are a button over the same menu the comboboxes use */
 .tools .dd.end { flex: 0 0 auto; min-width: 0; }
-.dd-btn { display: flex; align-items: center; gap: 0.625rem; width: auto; padding-right: 0.875rem; color: var(--ink-2); background: transparent; }
-.dd-btn:hover, .dd-btn[aria-expanded="true"] { color: var(--ink); }
+.tools .dd-btn { display: flex; align-items: center; justify-content: space-between; gap: 0.625rem; min-width: 9.5rem; padding-right: 0.95rem; background: var(--bg-1); color: var(--ink); }
+.tools .dd-btn:hover { background: var(--bg-2); }
 .dd-btn::after, .dd:has(input)::after { content: ""; flex: none; width: 0.4em; height: 0.4em; margin-top: -0.2em; border: solid var(--ink-3); border-width: 0 1.5px 1.5px 0; rotate: 45deg; pointer-events: none; }
 .dd:has(input)::after { position: absolute; right: 0.95rem; top: 50%; margin-top: -0.35em; }
 .dd:has(input) input { padding-right: 2.25rem; }
@@ -87,7 +87,8 @@ main { padding: 0 var(--gutter) 4rem; }
 .tools button { flex: 0 0 auto; height: 2.5rem; padding: 0 0.75rem; background: none; border: 1px solid transparent; border-radius: var(--radius); color: var(--ink-2); transition: color 0.15s var(--ease), background-color 0.15s var(--ease); }
 .tools button:hover { color: var(--ink); background: var(--bg-1); }
 #reset[hidden] { display: block !important; visibility: hidden; }   /* keeps its width, so the search field does not jump */
-#help-btn { width: 2.5rem; padding: 0; margin-left: auto; color: var(--ink-3); font-weight: 500; }
+#help-btn { width: 2.5rem; padding: 0; background: var(--bg-1); color: var(--ink-2); font-weight: 500; }
+#help-btn:hover { background: var(--bg-2); color: var(--ink); }
 .bar { display: flex; align-items: baseline; gap: 1rem; min-height: 1.5rem; padding: 0 0.75rem; font-size: 0.8125rem; color: var(--ink-3); }
 
 /* ---- the list ---- */
@@ -211,6 +212,8 @@ dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 0.5rem 1rem; ma
 dialog dt { text-align: right; }
 dialog dd { margin: 0; color: var(--ink-2); }
 dialog p { margin: 1.25rem 0 0; }
+dialog .pref { padding-top: 1rem; border-top: 1px solid var(--line); color: var(--ink-2); }
+dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--accent); vertical-align: -1px; }
 
 /* ---- small screens: drop the strip, stack title over url ---- */
 @container (width < 44rem) {
@@ -237,4 +240,5 @@ dialog p { margin: 1.25rem 0 0; }
   .snaps th, .snaps td { white-space: normal; padding-inline: 0.3rem; }
   .snaps .bar-cell { width: auto; }
 }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition: none !important; } }
+/* motion is a page setting (the ? dialog), not the OS preference */
+[data-motion="off"] *, [data-motion="off"] *::before, [data-motion="off"] *::after { transition: none !important; }

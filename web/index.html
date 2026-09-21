@@ -24,13 +24,13 @@
 <main>
   <section id="view-pages" aria-label="Pages">
     <form class="tools" role="search" onsubmit="return false">
+      <button type="button" id="help-btn" aria-label="Keyboard shortcuts and settings" title="Keyboard shortcuts and settings (?)">?</button>
       <label class="q"><span class="sr">Search</span><input type="search" id="q" placeholder="Search titles and URLs" autocomplete="off" spellcheck="false"><kbd aria-hidden="true">/</kbd></label>
       <div class="dd" id="domain-dd"><input id="domain" role="combobox" aria-label="Site" aria-autocomplete="list" aria-expanded="false" aria-controls="domain-menu" placeholder="Any site" autocomplete="off" spellcheck="false"><ul class="menu" id="domain-menu" role="listbox" aria-label="Sites" hidden></ul></div>
       <div class="dd" id="group-dd" hidden><input id="group" role="combobox" aria-label="Group" aria-autocomplete="list" aria-expanded="false" aria-controls="group-menu" placeholder="Any group" autocomplete="off" spellcheck="false"><ul class="menu" id="group-menu" role="listbox" aria-label="Groups" hidden></ul></div>
       <div class="dd end" id="status-dd"><button type="button" id="status" class="dd-btn" aria-label="Show" aria-haspopup="listbox" aria-expanded="false" aria-controls="status-menu"><span>Everything</span></button><ul class="menu" id="status-menu" role="listbox" aria-label="Show" hidden></ul></div>
       <div class="dd end" id="sort-dd"><button type="button" id="sort" class="dd-btn" aria-label="Sort by" aria-haspopup="listbox" aria-expanded="false" aria-controls="sort-menu"><span>Last seen</span></button><ul class="menu" id="sort-menu" role="listbox" aria-label="Sort by" hidden></ul></div>
       <button type="button" id="reset" hidden>Clear</button>
-      <button type="button" id="help-btn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
     </form>
     <div class="bar"><output id="count" aria-live="polite"></output></div>
     <div id="list" class="list"></div>
@@ -73,6 +73,7 @@
     <dt><kbd>esc</kbd></dt><dd>Clear selection, then histories, then filters.</dd>
     <dt><kbd>?</kbd></dt><dd>This list.</dd>
   </dl>
+  <p class="pref"><label><input type="checkbox" id="motion" checked> Animate transitions</label></p>
   <p><button type="button" id="help-close">Close</button></p>
 </dialog>
 
