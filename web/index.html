@@ -13,7 +13,6 @@
 <a class="skip" href="#list">Skip to the pages</a>
 
 <header class="mast">
-  <p class="brand">knowmoretabs</p>
   <h1>Every tab you ever had open.</h1>
   <p class="card" id="card">Loading your library…</p>
   <nav class="views" aria-label="Views">
@@ -25,17 +24,15 @@
 <main>
   <section id="view-pages" aria-label="Pages">
     <form class="tools" role="search" onsubmit="return false">
-      <label>Search <input type="search" id="q" placeholder="Title or URL — any words, any order" autocomplete="off" spellcheck="false"></label>
-      <label>Site <input id="domain" list="domains" placeholder="Any site" autocomplete="off" spellcheck="false"><datalist id="domains"></datalist></label>
-      <label id="group-l" hidden>Group <input id="group" list="groups" placeholder="Any group" autocomplete="off" spellcheck="false"><datalist id="groups"></datalist></label>
-      <div class="seg" role="group" aria-label="Show" id="status"><button type="button" data-v="" aria-pressed="true">Everything</button><button type="button" data-v="open" aria-pressed="false">Open now</button><button type="button" data-v="closed" aria-pressed="false">Closed</button></div>
-      <div class="seg" role="group" aria-label="Sort by" id="sort"><button type="button" data-v="last" aria-pressed="true">Last seen</button><button type="button" data-v="first" aria-pressed="false">First seen</button><button type="button" data-v="count" aria-pressed="false">Times seen</button><button type="button" data-v="title" aria-pressed="false">Title</button><button type="button" data-v="url" aria-pressed="false">URL</button></div>
-      <button type="button" id="reset">Clear</button>
+      <label class="q"><span class="sr">Search</span><input type="search" id="q" placeholder="Search titles and URLs" autocomplete="off" spellcheck="false"><kbd aria-hidden="true">/</kbd></label>
+      <div class="dd" id="domain-dd"><input id="domain" role="combobox" aria-label="Site" aria-autocomplete="list" aria-expanded="false" aria-controls="domain-menu" placeholder="Any site" autocomplete="off" spellcheck="false"><ul class="menu" id="domain-menu" role="listbox" aria-label="Sites" hidden></ul></div>
+      <div class="dd" id="group-dd" hidden><input id="group" role="combobox" aria-label="Group" aria-autocomplete="list" aria-expanded="false" aria-controls="group-menu" placeholder="Any group" autocomplete="off" spellcheck="false"><ul class="menu" id="group-menu" role="listbox" aria-label="Groups" hidden></ul></div>
+      <div class="dd end" id="status-dd"><button type="button" id="status" class="dd-btn" aria-label="Show" aria-haspopup="listbox" aria-expanded="false" aria-controls="status-menu"><span>Everything</span></button><ul class="menu" id="status-menu" role="listbox" aria-label="Show" hidden></ul></div>
+      <div class="dd end" id="sort-dd"><button type="button" id="sort" class="dd-btn" aria-label="Sort by" aria-haspopup="listbox" aria-expanded="false" aria-controls="sort-menu"><span>Last seen</span></button><ul class="menu" id="sort-menu" role="listbox" aria-label="Sort by" hidden></ul></div>
+      <button type="button" id="reset" hidden>Clear</button>
+      <button type="button" id="help-btn" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
     </form>
-    <div class="bar">
-      <span><output id="count" aria-live="polite"></output> <button type="button" id="sel-all" hidden>Select all shown</button></span>
-      <p class="keys" aria-label="Keyboard shortcuts"><span><kbd>/</kbd> search</span><span><kbd>j</kbd><kbd>k</kbd> move</span><span><kbd>↵</kbd> open</span><span><kbd>space</kbd> history</span><span><kbd>x</kbd> select</span><span><kbd>f</kbd> forget</span><span><kbd>u</kbd> undo</span><span><kbd>esc</kbd> clear</span><span><kbd>?</kbd> help</span></p>
-    </div>
+    <div class="bar"><output id="count" aria-live="polite"></output></div>
     <div id="list" class="list"></div>
     <p id="empty" hidden><span id="empty-msg">Nothing matches.</span> <button type="button" id="empty-clear">Clear the search</button></p>
   </section>
@@ -55,11 +52,12 @@
 </main>
 
 <footer>
+  <p class="brand">knowmoretabs</p>
   <p id="mode-note"></p>
   <p>Nothing leaves this machine: no fonts, images, or requests are loaded from the network.</p>
 </footer>
 
-<div class="tray" id="tray" hidden><span id="selcount"></span><button type="button" id="forget-sel">Forget</button><button type="button" id="clear-sel">Clear</button><small id="tray-why"></small></div>
+<div class="tray" id="tray" hidden><span id="selcount"></span><button type="button" id="sel-all" hidden>Select all shown</button><button type="button" id="forget-sel">Forget</button><button type="button" id="clear-sel">Clear</button></div>
 <div id="toast" role="status" aria-live="polite" hidden></div>
 
 <dialog id="help" aria-labelledby="help-h">

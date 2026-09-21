@@ -132,24 +132,28 @@ function titleHTML(p) {
 }
 function rowHTML(p) {
   const s = S.snaps[p.last], y = s.date.getUTCFullYear() !== S.snaps.at(-1).date.getUTCFullYear();
-  return `<li class="row${p.open ? ' open' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
+  return `<li class="row${p.open ? ' open' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}${S.exp.has(p.i) ? ' exp' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
     `<span class="pick"><input type="checkbox" tabindex="-1" aria-label="Select"${S.sel.has(p.i) ? ' checked' : ''}></span>` +
+    `<span class="strip" title="Seen in ${p.n} of ${S.snaps.length} snapshots"></span>` +
     `<span class="body">${titleHTML(p)}<span class="u">${esc(p.addr)}</span>${grpHTML(p.grp, true)}</span>` +
-    `<span class="strip" title="Seen in ${p.n} of ${S.snaps.length} snapshots"></span><span class="n">${p.n}</span>` +
     `<time class="last" datetime="${s.captured_at}">${(y ? F.dayYear : F.day).format(s.date)}</time>` +
     `<button class="more" type="button" tabindex="-1" aria-label="History" aria-expanded="${S.exp.has(p.i)}">›</button>` +
     (S.exp.has(p.i) ? histHTML(p) : '') + '</li>';
 }
-function histHTML(p) {
+function histHTML(p, cls = 'hist in') {
   const sightings = p.seen.map(([k, w, tid, pos, g]) => { const s = S.snaps[k];
     return `<li><a href="#snapshot/${esc(s.id)}/${tid}">${F.full.format(s.date)}</a><span>window ${w} · tab ${pos + 1}</span>${grpHTML(g)}</li>`; }).reverse();
   const groups = p.gs.length ? ` · in ${p.gs.length === 1 ? 'group' : 'groups'} ${p.gs.map((t) => esc(S.groups.get(t).title)).join(', ')}` : '';
-  const act = p.forgotten ? '<button type="button" data-act="restore">Restore</button><span class="ro">Puts it back in the library.</span>'
-    : '<button type="button" data-act="forget">Forget</button><span class="ro">Hides it from the library. The snapshots themselves are never touched.</span>';
+  const act = p.forgotten ? '<button type="button" data-act="restore" title="Puts it back in the library.">Restore</button>'
+    : '<button type="button" data-act="forget" title="Hides it from the library. The snapshots themselves are never touched.">Forget</button>';
   const ro = `<span class="ro">Read-only export · to hide this page: <code>knowmoretabs forget '${esc(p.url)}'</code></span>`;
-  return `<div class="hist"><p class="full">${esc(p.url)}</p>` +
-    `<p class="sum">Seen in ${p.n} of ${S.snaps.length} snapshots · first ${F.dayYear.format(S.snaps[p.first].date)} · last ${F.dayYear.format(S.snaps[p.last].date)}${p.open ? ' · open now' : ''}${groups}</p>` +
-    `<ol>${sightings.join('')}</ol><p class="acts">${p.domain ? `<button type="button" data-act="domain">Only ${esc(p.domain)}</button>` : ''}<button type="button" data-act="copy">Copy URL</button>${host.forget ? act : ro}</p></div>`;
+  const first = F.dayYear.format(S.snaps[p.first].date), last = F.dayYear.format(S.snaps[p.last].date);
+  const only = S.domain.toLowerCase() === p.domain ? 'Clear site filter' : `Filter to ${esc(p.domain)}`;
+  const full = p.link ? `<a class="full" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.url)}">${esc(p.url)}</a>` : `<p class="full" title="${esc(p.url)}">${esc(p.url)}</p>`;
+  return `<div class="${cls}"><div class="hist-in">${full}` +
+    `<p class="sum">Seen in ${p.n} of ${plural(S.snaps.length, 'snapshot')} · ${first === last ? first : `${first} to ${last}`}${p.open ? ' · open now' : ''}${groups}</p>` +
+    `<p class="acts">${p.domain ? `<button type="button" data-act="domain">${only}</button>` : ''}<button type="button" data-act="copy">Copy URL</button>${host.forget ? act : ro}</p>` +
+    `<div class="sights"><h4>${plural(p.seen.length, 'sighting')}</h4><ol>${sightings.join('')}</ol></div></div></div>`;
 }
 function render() {
   const t0 = performance.now();
@@ -173,7 +177,10 @@ function render() {
   S.rendered.forEach((p, i) => strips[i].style.setProperty('--g', p.g));
   if (S.rendered.length && !list.querySelector('.row.cur')) list.querySelector('.row').tabIndex = 0;
   const total = S.pages.filter((p) => p.n && !p.forgotten).length, n = S.shown.length;
-  $('count').textContent = S.status === 'forgotten' ? `${plural(n, 'forgotten page')}` : n === total ? `All ${plural(total, 'page')}` : `${num.format(n)} of ${plural(total, 'page')}`;
+  // The masthead already says how many pages there are; this line speaks only when a filter narrows them.
+  const filtered = !!(S.q.trim() || S.domain.trim() || S.group.trim() || S.status);
+  $('count').textContent = S.status === 'forgotten' ? `${plural(n, 'forgotten page')}` : !filtered ? '' : `${num.format(n)} of ${plural(total, 'page')}`;
+  $('reset').hidden = !filtered;
   $('empty').hidden = n > 0;
   $('empty-msg').textContent = total ? 'Nothing matches.' : 'No pages yet.';
   $('empty-clear').hidden = !total;
@@ -183,7 +190,45 @@ function render() {
   document.documentElement.dataset.renderMs = ms.toFixed(1);
   console.info(`render ${S.rendered.length} rows in ${ms.toFixed(1)} ms`);
 }
-function setSeg(id, v) { S[id] = v; for (const b of $(id).querySelectorAll('button')) b.setAttribute('aria-pressed', b.dataset.v === v); }
+function setSeg(id, v) { S[id] = v; const o = DD[id].options.find((x) => x.value === v); $(id).firstElementChild.textContent = o ? o.label : v; }
+
+// ---- 4b. Dropdowns ----------------------------------------------------------
+// One menu for all four pickers. Site and Group are typeahead comboboxes (type
+// to narrow, arrows to move, enter to pick); Show and Sort are the same menu
+// under a button. The native datalist and select popups looked like three
+// different products, could not scroll, and could not be styled.
+const DD = {};
+function dropdown(id, { typeahead = false, onPick }) {
+  const root = $(id + '-dd'), ctl = $(id), menu = $(id + '-menu');
+  const d = { options: [], shown: [], open: false, hi: -1 };
+  d.render = () => {
+    const q = typeahead ? ctl.value.trim().toLowerCase() : '';
+    d.shown = q ? d.options.filter((o) => o.label.toLowerCase().includes(q)) : d.options;
+    menu.innerHTML = d.shown.length ? d.shown.map((o, i) => `<li role="option" id="${id}-o${i}" aria-selected="${i === d.hi}" data-i="${i}"><span>${esc(o.label)}</span>${o.meta ? `<small>${esc(o.meta)}</small>` : ''}</li>`).join('') : '<li class="none">No matches</li>';
+    ctl.setAttribute('aria-activedescendant', d.hi >= 0 ? `${id}-o${d.hi}` : '');
+    menu.children[d.hi]?.scrollIntoView({ block: 'nearest' });
+    menu.classList.remove('flip'); menu.classList.toggle('flip', menu.getBoundingClientRect().right > innerWidth - 12);   // keep it on screen
+  };
+  d.show = () => { if (d.open) return; d.open = true; d.hi = typeahead ? -1 : Math.max(0, d.options.findIndex((o) => o.value === S[id])); menu.hidden = false; ctl.setAttribute('aria-expanded', 'true'); d.render(); };
+  d.hide = () => { if (!d.open) return; d.open = false; d.hi = -1; menu.hidden = true; ctl.setAttribute('aria-expanded', 'false'); };
+  d.pick = (o) => { d.hide(); onPick(o); };
+  d.set = (options) => { d.options = options; if (d.open) d.render(); };
+  ctl.addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (k === 'ArrowDown' || k === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); if (!d.open) d.show(); d.hi = Math.max(0, Math.min(d.shown.length - 1, d.hi + (k === 'ArrowDown' ? 1 : -1))); d.render(); }
+    else if (k === 'Enter' && d.open) { e.preventDefault(); e.stopPropagation(); if (d.shown[d.hi]) d.pick(d.shown[d.hi]); else d.hide(); }
+    else if (k === 'Escape' && d.open) { e.stopPropagation(); d.hide(); }
+    else if ((k === ' ' || k === 'Enter') && !typeahead) { e.preventDefault(); e.stopPropagation(); d.open ? d.hide() : d.show(); }
+    else if (k === 'Tab') d.hide();
+  });
+  if (typeahead) { ctl.addEventListener('input', () => { d.hi = -1; d.show(); d.render(); }); ctl.addEventListener('focus', d.show); ctl.addEventListener('click', d.show); }
+  else ctl.addEventListener('click', () => (d.open ? d.hide() : d.show()));
+  ctl.addEventListener('blur', d.hide);
+  menu.addEventListener('mousedown', (e) => e.preventDefault());   // keep focus in the control
+  menu.addEventListener('click', (e) => { const li = e.target.closest('[data-i]'); if (li) d.pick(d.shown[+li.dataset.i]); });
+  document.addEventListener('pointerdown', (e) => { if (!root.contains(e.target)) d.hide(); });
+  DD[id] = d; return d;
+}
 let raf = 0;
 const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(render); };
 
@@ -202,12 +247,24 @@ function move(delta) {
   const next = Math.max(0, Math.min(all.length - 1, at < 0 ? (delta > 0 ? 0 : all.length - 1) : at + delta));
   setCursor(all[next]);
 }
+// One history open at a time: opening a row closes the other. The panel is
+// inserted collapsed and given `in` a frame later so the grid row can
+// transition open; on close `in` comes off and the node goes once it has
+// closed (or after the transition would have ended, for reduced motion).
 function toggle(i, force) {
   const el = rowOf(i); if (!el) return;
   const open = force ?? !S.exp.has(i);
-  if (open) { S.exp.add(i); if (!el.querySelector('.hist')) el.insertAdjacentHTML('beforeend', histHTML(S.pages[i])); }
-  else { S.exp.delete(i); el.querySelector('.hist')?.remove(); }
-  el.querySelector('.more').setAttribute('aria-expanded', open);
+  let h = el.querySelector('.hist');
+  if (open) {
+    for (const j of [...S.exp]) if (j !== i) toggle(j, false);
+    S.exp.add(i);
+    if (!h) { el.insertAdjacentHTML('beforeend', histHTML(S.pages[i], 'hist')); h = el.lastElementChild; h.getBoundingClientRect(); }
+    h.classList.add('in');
+  } else {
+    S.exp.delete(i);
+    if (h) { h.classList.remove('in'); setTimeout(() => { if (!h.classList.contains('in')) h.remove(); }, 260); }
+  }
+  el.querySelector('.more').setAttribute('aria-expanded', open); el.classList.toggle('exp', open);
 }
 function select(i, on, shift) {
   if (shift && S.anchor >= 0) {
@@ -221,7 +278,8 @@ function tray() {
   const t = $('tray'); t.hidden = !S.sel.size;
   $('selcount').textContent = `${num.format(S.sel.size)} selected`;
   $('forget-sel').textContent = S.status === 'forgotten' ? 'Restore' : 'Forget';
-  $('tray-why').textContent = S.status === 'forgotten' ? 'Puts them back in the library.' : 'Hides them from the library. The snapshots themselves are never touched.';
+  $('forget-sel').title = S.status === 'forgotten' ? 'Puts them back in the library.' : 'Hides them from the library. The snapshots themselves are never touched.';
+  $('list').classList.toggle('picking', S.sel.size > 0);
 }
 
 // ---- 6. Forget / restore, with undo ---------------------------------------
@@ -323,17 +381,24 @@ function keys(e) {
 function wire() {
   document.body.dataset.mode = host.mode;
   for (const id of ['q', 'domain', 'group']) $(id).addEventListener('input', (e) => { S[id] = e.target.value; schedule(); });
-  for (const id of ['status', 'sort']) $(id).addEventListener('click', (e) => { const b = e.target.closest('button'); if (b) { setSeg(id, b.dataset.v); render(); } });
+  for (const id of ['domain', 'group']) dropdown(id, { typeahead: true, onPick: (o) => { S[id] = $(id).value = o.value; render(); } });
+  for (const id of ['status', 'sort']) dropdown(id, { onPick: (o) => { setSeg(id, o.value); render(); } });
+  DD.status.set([{ value: '', label: 'Everything' }, { value: 'open', label: 'Open now' }, { value: 'closed', label: 'Closed' }]);
+  DD.sort.set([{ value: 'last', label: 'Last seen' }, { value: 'first', label: 'First seen' }, { value: 'count', label: 'Times seen' }, { value: 'title', label: 'Title' }, { value: 'url', label: 'URL' }]);
+  $('help-btn').addEventListener('click', () => $('help').showModal());
   $('reset').addEventListener('click', () => { clearFilters(); render(); });
   $('empty-clear').addEventListener('click', () => $('reset').click());
+  let down = null;
+  $('list').addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
   $('list').addEventListener('click', (e) => {
+    const dragged = down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4; down = null;
     if (e.target.id === 'fold') { S.openAll = !S.openAll; render(); if (S.openAll) setCursor(rows()[FOLD]); else $('fold').focus(); return; }
     const row = e.target.closest('.row'); if (!row) return; const i = +row.dataset.i;
     if (e.target.matches('.pick input')) return select(i, e.target.checked, e.shiftKey);
     if (e.target.closest('a')) return;
     setCursor(row, false); row.focus({ preventScroll: true });
     const act = e.target.closest('[data-act]');
-    if (!act) { if (!window.getSelection().toString()) toggle(i); return; }
+    if (!act) { if (!dragged && !e.target.closest('.hist')) toggle(i); return; }   // the panel itself is not a toggle
     const p = S.pages[i];
     if (act.dataset.act === 'domain') { S.domain = $('domain').value = S.domain === p.domain ? '' : p.domain; render(); }
     if (act.dataset.act === 'group') { const t = p.grp.title; S.group = $('group').value = S.group.toLowerCase() === t.toLowerCase() ? '' : t; render(); }
@@ -362,15 +427,15 @@ async function main() {
     $('card').innerHTML = 'Nothing here yet. Run <code>knowmoretabs save</code> to capture what is open now; the library builds itself from there.';
   } else {
     const first = S.snaps[0].date, last = S.snaps.at(-1).date, sameDay = F.dayYear.format(first) === F.dayYear.format(last);
-    const every = S.pages.filter((p) => p.n === n && !p.forgotten).length;
-    $('card').innerHTML = `<b>${plural(total, 'page')}</b> across <b>${plural(n, 'snapshot')}</b>, ${sameDay ? 'taken ' : ''}${F.dayYear.format(first)}${sameDay ? '' : ' to ' + F.dayYear.format(last)}. ` +
-      `${plural(domains.size, 'site')}${n > 1 && total ? `; ${num.format(every)} ${every === 1 ? 'page' : 'pages'} present in every snapshot` : ''}.`;
+    const sameYear = first.getUTCFullYear() === last.getUTCFullYear();
+    const span = sameDay ? F.dayYear.format(first) : `${(sameYear ? F.day : F.dayYear).format(first)} to ${F.dayYear.format(last)}`;
+    $('card').innerHTML = `<b>${plural(total, 'page')}</b> · ${plural(domains.size, 'site')} · ${plural(n, 'snapshot')} · ${span}`;
   }
-  $('domains').innerHTML = [...domains].sort((a, b) => b[1] - a[1]).map(([d, k]) => `<option value="${esc(d)}">${plural(k, 'page')}</option>`).join('');
-  $('group-l').hidden = !S.groups.size;
-  $('groups').innerHTML = [...S.groups.values()].sort((a, b) => b.n - a.n).map((g) => `<option value="${esc(g.title)}">${plural(g.n, 'page')}</option>`).join('');
+  DD.domain.set([...domains].sort((a, b) => b[1] - a[1]).map(([d, k]) => ({ value: d, label: d, meta: plural(k, 'page') })));
+  $('group-dd').hidden = !S.groups.size;
+  DD.group.set([...S.groups.values()].sort((a, b) => b.n - a.n).map((g) => ({ value: g.title, label: g.title, meta: plural(g.n, 'page') })));
   if (host.forget) {
-    $('status').insertAdjacentHTML('beforeend', '<button type="button" data-v="forgotten" aria-pressed="false">Forgotten</button>');
+    DD.status.set(DD.status.options.concat({ value: 'forgotten', label: 'Forgotten' }));
     $('mode-note').textContent = 'Live — served by knowmoretabs on this machine. Forgetting hides a page; snapshots are never changed.';
   } else {
     const f = S.stats.forgotten || 0;
