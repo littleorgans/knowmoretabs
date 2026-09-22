@@ -159,17 +159,34 @@ function degraded(s) {
 }
 
 // ---- 4. Pages view ---------------------------------------------------------
-function compute() {
+// One predicate for the list and for the pickers, so they cannot disagree.
+// `skip` names the filter a picker must ignore: the Site menu counts what the
+// *other* filters leave, which is the only count that is true when you click
+// it. Its own filter is skipped, or choosing a site would collapse the menu
+// to the site you just chose.
+function matcher(skip) {
   const words = S.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const wantForgotten = S.status === 'forgotten';
-  const d = S.domain.trim().toLowerCase(), exact = d && S.pages.some((p) => p.domain === d);
-  const g = S.group.trim().toLowerCase(), gexact = g && S.groups.has(g);
-  S.shown = S.pages.filter((p) => p.n && p.forgotten === wantForgotten && (!d || (exact ? p.domain === d : p.domain.includes(d)))
+  const d = skip === 'domain' ? '' : S.domain.trim().toLowerCase(), exact = d && S.pages.some((p) => p.domain === d);
+  const g = skip === 'group' ? '' : S.group.trim().toLowerCase(), gexact = g && S.groups.has(g);
+  return (p) => p.n && p.forgotten === wantForgotten && (!d || (exact ? p.domain === d : p.domain.includes(d)))
     && (!g || p.gs.some((t) => (gexact ? t === g : t.includes(g))))
     && (S.status !== 'open' || p.open) && (S.status !== 'closed' || !p.open)
     && (!S.preview || S.sel.has(p.i))
-    && words.every((w) => p.hay.includes(w))).sort(SORTS[S.sort]);
+    && words.every((w) => p.hay.includes(w));
 }
+function compute() { S.shown = S.pages.filter(matcher('')).sort(SORTS[S.sort]); }
+// Built when a menu opens, not on every keystroke: one pass over the pages,
+// and only for the picker you actually reached for.
+function facet(skip, key) {
+  const ok = matcher(skip), n = new Map();
+  for (const p of S.pages) if (ok(p)) for (const t of key(p)) n.set(t, (n.get(t) || 0) + 1);
+  return [...n].sort((a, b) => b[1] - a[1] || collator.compare(a[0], b[0]));
+}
+const siteOptions = () => facet('domain', (p) => (p.domain ? [p.domain] : []))
+  .map(([d, k]) => ({ value: d, label: d, meta: plural(k, 'page') }));
+const groupOptions = () => facet('group', (p) => p.gs)
+  .map(([t, k]) => ({ value: S.groups.get(t).title, label: S.groups.get(t).title, meta: plural(k, 'page') }));
 function bandOf(p) {
   if (S.sort === 'last') return p.open ? 'Open now' : F.month.format(S.snaps[p.last].date);
   if (S.sort === 'first') return F.month.format(S.snaps[p.first].date);
@@ -272,18 +289,23 @@ function setSeg(id, v) { S[id] = v; const o = DD[id].options.find((x) => x.value
 // under a button. The native datalist and select popups looked like three
 // different products, could not scroll, and could not be styled.
 const DD = {};
-function dropdown(id, { typeahead = false, onPick }) {
+function dropdown(id, { typeahead = false, onPick, options }) {
   const root = $(id + '-dd'), ctl = $(id), menu = $(id + '-menu');
   const d = { options: [], shown: [], open: false, hi: -1 };
   d.render = () => {
-    const q = typeahead ? ctl.value.trim().toLowerCase() : '';
+    // What is typed narrows the list — unless it is exactly one of the options,
+    // in which case it is the filter already applied and the menu is how you
+    // change it: offering only the site you are already on is a dead end.
+    const v = typeahead ? ctl.value.trim().toLowerCase() : '';
+    const q = v && d.options.some((o) => o.value.toLowerCase() === v) ? '' : v;
     d.shown = q ? d.options.filter((o) => o.label.toLowerCase().includes(q)) : d.options;
     menu.innerHTML = d.shown.length ? d.shown.map((o, i) => `<li role="option" id="${id}-o${i}" aria-selected="${i === d.hi}" data-i="${i}"><span>${esc(o.label)}</span>${o.meta ? `<small>${esc(o.meta)}</small>` : ''}</li>`).join('') : '<li class="none">No matches</li>';
     ctl.setAttribute('aria-activedescendant', d.hi >= 0 ? `${id}-o${d.hi}` : '');
     menu.children[d.hi]?.scrollIntoView({ block: 'nearest' });
     menu.classList.remove('flip'); menu.classList.toggle('flip', menu.getBoundingClientRect().right > innerWidth - 12);   // keep it on screen
   };
-  d.show = () => { if (d.open) return; d.open = true; d.hi = typeahead ? -1 : Math.max(0, d.options.findIndex((o) => o.value === S[id])); menu.hidden = false; ctl.setAttribute('aria-expanded', 'true'); d.render(); showEl(menu, true); };
+  d.show = () => { if (d.open) return; d.open = true; if (options) d.options = options();   // the list is of this moment, not of boot
+    d.hi = typeahead ? -1 : Math.max(0, d.options.findIndex((o) => o.value === S[id])); menu.hidden = false; ctl.setAttribute('aria-expanded', 'true'); d.render(); showEl(menu, true); };
   d.hide = () => { if (!d.open) return; d.open = false; d.hi = -1; showEl(menu, false); ctl.setAttribute('aria-expanded', 'false'); };
   d.pick = (o) => { d.hide(); onPick(o); };
   d.set = (options) => { d.options = options; if (d.open) d.render(); };
@@ -470,7 +492,8 @@ function keys(e) {
 function wire() {
   document.body.dataset.mode = host.mode;
   for (const id of ['q', 'domain', 'group']) $(id).addEventListener('input', (e) => { S[id] = e.target.value; schedule(); });
-  for (const id of ['domain', 'group']) dropdown(id, { typeahead: true, onPick: (o) => { S[id] = $(id).value = o.value; render(); } });
+  dropdown('domain', { typeahead: true, options: siteOptions, onPick: (o) => { S.domain = $('domain').value = o.value; render(); } });
+  dropdown('group', { typeahead: true, options: groupOptions, onPick: (o) => { S.group = $('group').value = o.value; render(); } });
   for (const id of ['status', 'sort']) dropdown(id, { onPick: (o) => { setSeg(id, o.value); render(); } });
   DD.status.set([{ value: '', label: 'Everything' }, { value: 'open', label: 'Open now' }, { value: 'closed', label: 'Closed' }]);
   DD.sort.set([{ value: 'last', label: 'Last seen' }, { value: 'first', label: 'First seen' }, { value: 'count', label: 'Times seen' }, { value: 'title', label: 'Title' }, { value: 'url', label: 'URL' }]);
@@ -531,8 +554,6 @@ async function main() {
     const span = sameDay ? F.dayYear.format(first) : `${(sameYear ? F.day : F.dayYear).format(first)} to ${F.dayYear.format(last)}`;
     $('card').innerHTML = `<b>${plural(total, 'page')}</b> · ${plural(domains.size, 'site')} · ${plural(n, 'snapshot')} · ${span}`;
   }
-  DD.domain.set([...domains].sort((a, b) => b[1] - a[1]).map(([d, k]) => ({ value: d, label: d, meta: plural(k, 'page') })));
-  DD.group.set([...S.groups.values()].sort((a, b) => b.n - a.n).map((g) => ({ value: g.title, label: g.title, meta: plural(g.n, 'page') })));
   if (host.forget) {
     DD.status.set(DD.status.options.concat({ value: 'forgotten', label: 'Forgotten' }));
     $('mode-note').textContent = 'Live — served by knowmoretabs on this machine. Forgetting hides a page; snapshots are never changed.';
