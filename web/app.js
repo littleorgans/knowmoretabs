@@ -25,6 +25,7 @@ const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rende
             openAll: false, preview: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages' };
 const FOLD = 10;                                   // rows of "Open now" shown before "show all"
 const EAGER = 300, CHUNK = 200;                    // rows rendered up front; rows per lazy placeholder after that
+const CELLS = 20, COL = 4;                         // the sighting strip: at most this many marks, COL px each (--col)
 const $ = (id) => document.getElementById(id);
 // ---- theme: light or dark, the OS choice until the switch is used, then remembered here.
 // Runs before first paint (the script is parser-blocking at the end of body) so there is no flash.
@@ -50,6 +51,17 @@ const fmt = (opts) => new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', ...o
 const F = { day: fmt({ day: 'numeric', month: 'short' }), dayYear: fmt({ day: 'numeric', month: 'short', year: 'numeric' }),
             month: fmt({ month: 'long', year: 'numeric' }), long: fmt({ weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' }),
             time: fmt({ hour: '2-digit', minute: '2-digit', hour12: false }), full: fmt({ day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) };
+// How old, in the largest unit that still reads true: "12m ago", "3d ago",
+// "4mo ago". Intl does the wording and the locale, so the table is all it
+// costs and nothing is fetched to say it.
+const rel = new Intl.RelativeTimeFormat(undefined, { numeric: 'always', style: 'narrow' });
+const AGO = [[60, 'minute'], [3600, 'hour'], [86400, 'day'], [604800, 'week'], [2629800, 'month'], [31557600, 'year']];
+function ago(date) {
+  const s = (Date.now() - date) / 1000;
+  if (s < 60) return 'now';                        // also covers a clock that is behind the archive
+  let i = 0; while (i + 1 < AGO.length && s >= AGO[i + 1][0]) i++;
+  return rel.format(-Math.floor(s / AGO[i][0]), AGO[i][1]);
+}
 const isForm = (el) => el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
 const plural = (n, one, many = one + 's') => `${num.format(n)} ${n === 1 ? one : many}`;
 const SORTS = {
@@ -72,7 +84,7 @@ function derive(lib) {
   S.stats = lib.stats || {};
   const P = lib.pages || [];
   S.pages = P.map((p, i) => { p = typeof p?.url === 'string' ? p : { url: '' }; return { ...p, i, seen: [], title: p.title || '', domain: p.domain || '', forgotten: !!p.forgotten,
-    hay: ((p.title || '') + ' ' + p.url).toLowerCase(), addr: p.url.replace(/^https?:\/\/(www\.)?/i, ''),
+    hay: ((p.title || '') + ' ' + p.url).toLowerCase(), addr: p.url,
     name: (p.title || p.url).replace(/^[^\p{L}\p{N}]+/u, ''), link: /^https?:\/\//i.test(p.url) }; });
   S.skipped = 0;
   S.snaps = (lib.snapshots || []).filter((s) => { const ok = s && !isNaN(new Date(s.captured_at)); if (!ok) S.skipped++; return ok; }).map((s, k) => {
@@ -83,7 +95,17 @@ function derive(lib) {
   // Each sighting keeps the group object it sat in, so a page can be in "Papers" in
   // March, "Later" in June and no group today without any per-page bookkeeping.
   for (const s of S.snaps) for (const [pi, w, pos, tid, , g] of s.tabs) S.pages[pi]?.seen.push([s.k, w, tid, pos, g == null ? null : s.groups[g] || null]);
-  const latest = S.snaps.length - 1, col = 4;
+  // The strip is the same width whatever the archive holds: at most CELLS
+  // marks, each standing for an equal run of snapshots. Up to CELLS snapshots
+  // that is one mark each, exactly as before; past it the marks stand for more
+  // rather than the row growing, and a mark the page only part-fills is drawn
+  // faint. The shape still reads as "always there", "a rhythm" or "once, back
+  // then", and a hundred snapshots take no more room than twenty.
+  const latest = S.snaps.length - 1, n = S.snaps.length;
+  const cells = Math.min(n, CELLS) || 1, cellOf = (k) => Math.floor((k * cells) / n);
+  const cap = new Array(cells).fill(0);
+  for (let k = 0; k < n; k++) cap[cellOf(k)]++;
+  const ink = (l) => (l === 1 ? 'var(--dot)' : `color-mix(in srgb,var(--dot) ${Math.round(45 + 55 * l)}%,transparent)`);
   S.groups = new Map();
   for (const p of S.pages) {
     if (!p.seen.length) { p.n = 0; continue; }      // allowed by the contract, never shown
@@ -94,15 +116,17 @@ function derive(lib) {
     p.gs = [...new Set(p.seen.map((x) => x[4] && x[4].title.toLowerCase()).filter(Boolean))];
     for (const t of p.gs) { const e = S.groups.get(t) || { title: p.seen.find((x) => x[4] && x[4].title.toLowerCase() === t)[4].title, n: 0 }; e.n++; S.groups.set(t, e); }
     S.snaps[p.first].fresh++; if (!p.open) S.snaps[p.last].gone++;
-    const stops = []; let a = ks[0], b = ks[0];        // runs of consecutive sightings → gradient stops
-    for (const k of ks.slice(1).concat(NaN)) {
-      if (k === b + 1) { b = k; continue; }
-      stops.push(`transparent ${a * col}px,var(--dot) ${a * col}px ${(b + 1) * col}px,transparent ${(b + 1) * col}px`);
-      a = b = k;
+    const hit = new Array(cells).fill(0);
+    for (const k of ks) hit[cellOf(k)]++;
+    const stops = [];                                  // runs of equally filled cells → gradient stops
+    for (let i = 0, j; i < cells; i = j) {
+      const l = hit[i] / cap[i];
+      for (j = i + 1; j < cells && hit[j] / cap[j] === l; j++);
+      if (l) stops.push(`transparent ${i * COL}px,${ink(l)} ${i * COL}px ${j * COL}px,transparent ${j * COL}px`);
     }
     p.g = `linear-gradient(90deg,${stops.join(',')})`;
   }
-  document.documentElement.style.setProperty('--n', S.snaps.length);
+  document.documentElement.style.setProperty('--cells', cells);
 }
 // The parser's per-snapshot counters (§5, always emitted, zeroed when clean),
 // plus the rows derive() could not read: a snapshot that lost tabs says so
@@ -150,12 +174,12 @@ function titleHTML(p) {
   return p.link ? `<a class="t" dir="auto" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" tabindex="-1">${inner}</a>` : `<span class="t" dir="auto">${inner}</span>`;
 }
 function rowHTML(p) {
-  const s = S.snaps[p.last], y = s.date.getUTCFullYear() !== S.snaps.at(-1).date.getUTCFullYear();
+  const s = S.snaps[p.last];
   return `<li class="row${p.open ? ' open' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}${S.exp.has(p.i) ? ' exp' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
     `<span class="pick"><input type="checkbox" tabindex="-1" aria-label="Select"${S.sel.has(p.i) ? ' checked' : ''}></span>` +
     `<span class="strip" title="Seen in ${p.n} of ${S.snaps.length} snapshots"></span>` +
     `<span class="body">${titleHTML(p)}<span class="u">${esc(p.addr)}</span>${grpHTML(p.grp, true)}</span>` +
-    `<time class="last" datetime="${s.captured_at}">${(y ? F.dayYear : F.day).format(s.date)}</time>` +
+    `<time class="last" datetime="${s.captured_at}" title="Last seen ${F.full.format(s.date)} UTC">${ago(s.date)}</time>` +
     `<button class="more" type="button" tabindex="-1" aria-label="History" aria-expanded="${S.exp.has(p.i)}">›</button>` +
     (S.exp.has(p.i) ? histHTML(p) : '') + '</li>';
 }
@@ -324,10 +348,9 @@ function tray() {
   $('preview-sel').textContent = S.preview ? 'Show everything' : 'Preview selection';
   $('preview-sel').setAttribute('aria-pressed', S.preview);
   $('preview-sel').title = S.preview ? 'Back to the full list; the selection stays.' : 'Show only the selected pages, so you can check them before forgetting.';
-  $('tray').classList.toggle('previewing', S.preview);
   $('forget-sel').textContent = S.status === 'forgotten' ? 'Restore' : 'Forget';
   $('forget-sel').title = S.status === 'forgotten' ? 'Puts them back in the library.' : 'Hides them from the library. The snapshots themselves are never touched.';
-  $('list').classList.toggle('picking', S.sel.size > 0);
+  $('forget-sel').classList.toggle('forget', S.status !== 'forgotten');   // the one coloured hover; putting a page back is not it
 }
 
 // ---- 6. Forget / restore, with undo ---------------------------------------
@@ -453,7 +476,9 @@ function wire() {
     const dragged = down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4; down = null;
     if (e.target.id === 'fold') { S.openAll = !S.openAll; render(); if (S.openAll) setCursor(rows()[FOLD]); else $('fold').focus(); return; }
     const row = e.target.closest('.row'); if (!row) return; const i = +row.dataset.i;
-    if (e.target.matches('.pick input')) return select(i, e.target.checked, e.shiftKey);
+    // the index cell is the checkbox once it shows, so the whole cell picks
+    const pick = e.target.closest('.pick');
+    if (pick) { const box = pick.querySelector('input'); if (e.target !== box) box.checked = !box.checked; return select(i, box.checked, e.shiftKey); }
     if (e.target.closest('a')) return;
     setCursor(row, false); row.focus({ preventScroll: true });
     const act = e.target.closest('[data-act]');
