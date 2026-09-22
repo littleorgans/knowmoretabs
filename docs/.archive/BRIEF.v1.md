@@ -258,11 +258,10 @@ Keep the lint under ~300 lines. It is a helper, not a product.
   change could plausibly break.
 - **Commits.** Conventional commits, one slice's worth of work per PR-sized
   branch. `main` stays green.
-- **CI.** GitHub Actions on standard GitHub-hosted runners. Linux jobs pin
-  `ubuntu-24.04` (the repository is public, so those minutes are free; pin the
-  image rather than `ubuntu-latest`, which GitHub is moving to Ubuntu 26.04).
-  macOS and Windows use `macos-latest` and `windows-latest`. Cache with
-  `Swatinem/rust-cache`.
+- **CI.** GitHub Actions on **Blacksmith runners: `blacksmith-2vcpu-ubuntu-2404`**
+  (the GitHub-hosted credit pool is exhausted — do not use `ubuntu-latest`).
+  Cache with the Blacksmith cache actions where available. macOS/Windows jobs
+  wait until slice 5.
 - **Licence.** Dual MIT OR Apache-2.0, the Rust default. Both files at root.
 - **Repo.** `github.com/littleorgans/knowmoretabs`, public, default branch
   `main`. Remote `origin` is already configured over SSH.
