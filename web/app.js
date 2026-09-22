@@ -22,10 +22,27 @@ const host = (() => {
 
 // ---- 2. State -------------------------------------------------------------
 const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rendered: [], q: '', domain: '', group: '', status: '', sort: 'last',
-            openAll: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages' };
+            openAll: false, preview: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages' };
 const FOLD = 10;                                   // rows of "Open now" shown before "show all"
 const EAGER = 300, CHUNK = 200;                    // rows rendered up front; rows per lazy placeholder after that
 const $ = (id) => document.getElementById(id);
+// ---- theme: light or dark, the OS choice until the switch is used, then remembered here.
+// Runs before first paint (the script is parser-blocking at the end of body) so there is no flash.
+const THEME = {
+  get: () => { try { return localStorage.getItem('theme'); } catch { return null; } },
+  system: () => (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
+  current: () => document.documentElement.dataset.theme || THEME.system(),
+  set(t, remember) {
+    document.documentElement.dataset.theme = t;
+    const b = $('theme'); if (b) { const to = t === 'dark' ? 'light' : 'dark'; b.setAttribute('aria-label', `Switch to ${to} mode`); b.title = `Switch to ${to} mode (t)`; }
+    if (remember) { try { localStorage.setItem('theme', t); } catch { /* file:// without storage */ } }
+  },
+  flip() {
+    const h = document.documentElement; h.classList.add('switching'); clearTimeout(THEME.t); THEME.t = setTimeout(() => h.classList.remove('switching'), 300);
+    THEME.set(THEME.current() === 'dark' ? 'light' : 'dark', true);
+  },
+};
+{ const saved = THEME.get(); if (saved === 'light' || saved === 'dark') THEME.set(saved, false); }
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const num = new Intl.NumberFormat();
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
@@ -111,6 +128,7 @@ function compute() {
   S.shown = S.pages.filter((p) => p.n && p.forgotten === wantForgotten && (!d || (exact ? p.domain === d : p.domain.includes(d)))
     && (!g || p.gs.some((t) => (gexact ? t === g : t.includes(g))))
     && (S.status !== 'open' || p.open) && (S.status !== 'closed' || !p.open)
+    && (!S.preview || S.sel.has(p.i))
     && words.every((w) => p.hay.includes(w))).sort(SORTS[S.sort]);
 }
 function bandOf(p) {
@@ -161,7 +179,7 @@ function render() {
   compute();
   // "Open now" folds to its first rows when nothing is filtered, so the archive
   // starts on screen. Any filter, or "show all", unfolds it.
-  const plain = S.sort === 'last' && S.status === '' && !S.q.trim() && !S.domain.trim() && !S.group.trim();
+  const plain = S.sort === 'last' && S.status === '' && !S.preview && !S.q.trim() && !S.domain.trim() && !S.group.trim();
   const fold = (n, all) => `<li class="fold"><button type="button" id="fold">${all ? `Show all ${plural(n, 'open page')}` : 'Show fewer'}</button></li>`;
   // Large archives: the first EAGER rows are real; after that each run of up
   // to CHUNK rows is a placeholder of the right height that turns into rows
@@ -185,13 +203,13 @@ function render() {
   if (S.rendered.length && !list.querySelector('.row.cur')) list.querySelector('.row').tabIndex = 0;
   const total = S.pages.filter((p) => p.n && !p.forgotten).length, n = S.shown.length;
   // The masthead already says how many pages there are; this line speaks only when a filter narrows them.
-  const filtered = !!(S.q.trim() || S.domain.trim() || S.group.trim() || S.status);
-  $('count').textContent = S.status === 'forgotten' ? `${plural(n, 'forgotten page')}` : !filtered ? '' : `${num.format(n)} of ${plural(total, 'page')}`;
+  const filtered = !!(S.q.trim() || S.domain.trim() || S.group.trim() || S.status || S.preview);
+  $('count').textContent = S.preview ? `Previewing ${plural(n, 'selected page')}` : S.status === 'forgotten' ? `${plural(n, 'forgotten page')}` : !filtered ? '' : `${num.format(n)} of ${plural(total, 'page')}`;
   $('reset').hidden = !filtered;
   $('empty').hidden = n > 0;
   $('empty-msg').textContent = total ? 'Nothing matches.' : 'No pages yet.';
   $('empty-clear').hidden = !total;
-  $('sel-all').hidden = !host.forget || !n;
+  $('sel-all').hidden = !host.forget || !n || S.preview;
   tray();
   const ms = performance.now() - t0;
   document.documentElement.dataset.renderMs = ms.toFixed(1);
@@ -290,8 +308,10 @@ function select(i, on, shift) {
     for (const j of order.slice(Math.min(a, b), Math.max(a, b) + 1)) on ? S.sel.add(j) : S.sel.delete(j);
   } else { on ? S.sel.add(i) : S.sel.delete(i); S.anchor = i; }
   for (const el of $('list').querySelectorAll('.row')) { const k = +el.dataset.i, sel = S.sel.has(k); el.classList.toggle('sel', sel); el.querySelector('.pick input').checked = sel; }
+  if (S.preview) { if (!S.sel.size) S.preview = false; render(); return; }
   tray();
 }
+function preview(on) { S.preview = on && S.sel.size > 0; render(); }
 // Show or hide with a short fade: unhide, then add `in` a frame later so the
 // transition runs; on hide take `in` off and hide once it has faded.
 function showEl(el, on) {
@@ -301,6 +321,10 @@ function showEl(el, on) {
 function tray() {
   const t = $('tray'); showEl(t, !!S.sel.size);
   $('selcount').textContent = `${num.format(S.sel.size)} selected`;
+  $('preview-sel').textContent = S.preview ? 'Show everything' : 'Preview selection';
+  $('preview-sel').setAttribute('aria-pressed', S.preview);
+  $('preview-sel').title = S.preview ? 'Back to the full list; the selection stays.' : 'Show only the selected pages, so you can check them before forgetting.';
+  $('tray').classList.toggle('previewing', S.preview);
   $('forget-sel').textContent = S.status === 'forgotten' ? 'Restore' : 'Forget';
   $('forget-sel').title = S.status === 'forgotten' ? 'Puts them back in the library.' : 'Hides them from the library. The snapshots themselves are never touched.';
   $('list').classList.toggle('picking', S.sel.size > 0);
@@ -311,7 +335,7 @@ async function apply(idxs, restore) {
   if (!idxs.length) return;
   if (!host.forget) { const p = S.pages[idxs[0]]; return toast(`Read-only export. In a terminal: knowmoretabs forget '${p.url}'`, 'Copy', () => navigator.clipboard.writeText(`knowmoretabs forget '${p.url}'`)); }
   for (const i of idxs) S.pages[i].forgotten = !restore;
-  S.sel.clear(); S.exp.clear(); render();
+  S.sel.clear(); S.exp.clear(); S.preview = false; render();
   const all = rows(); if (all.length) setCursor(all[Math.min(all.length - 1, Math.max(0, S.rendered.findIndex((p) => p.i >= idxs[0])))], false);
   S.undo = { idxs, restore };
   toast(`${restore ? 'Restored' : 'Forgot'} ${plural(idxs.length, 'page')}`, 'Undo', undo);
@@ -367,7 +391,7 @@ function route() {
   else if (view === 'snapshots') showView('snapshots');
   else { showView('pages'); if (a !== undefined && S.pages[a]?.n) reveal(+a); }
 }
-function clearFilters(status = '') { S.q = $('q').value = ''; S.domain = $('domain').value = ''; S.group = $('group').value = ''; setSeg('status', status); }
+function clearFilters(status = '') { S.preview = false; S.q = $('q').value = ''; S.domain = $('domain').value = ''; S.group = $('group').value = ''; setSeg('status', status); }
 function reveal(i) {
   const p = S.pages[i];
   if (!S.shown.includes(p)) { clearFilters(p.forgotten ? 'forgotten' : ''); render(); }
@@ -395,9 +419,11 @@ function keys(e) {
     case 'x': if (inRow && S.view === 'pages' && host.forget) select(+inRow.dataset.i, !S.sel.has(+inRow.dataset.i), e.shiftKey); break;
     case 'f': if (S.view === 'pages') apply(targets(), S.status === 'forgotten'); break;
     case 'u': undo(); break;
+    case 't': THEME.flip(); break;
     case '?': $('help').showModal(); break;
     case 'Escape':
-      if (!$('help').open && S.sel.size) { S.sel.clear(); select(-1, false); }
+      if (!$('help').open && S.preview) { preview(false); }
+      else if (!$('help').open && S.sel.size) { S.sel.clear(); select(-1, false); }
       else if (S.exp.size) { for (const i of [...S.exp]) toggle(i, false); }
       else if (S.view === 'pages') { $('reset').click(); }
       break;
@@ -411,6 +437,9 @@ function wire() {
   DD.status.set([{ value: '', label: 'Everything' }, { value: 'open', label: 'Open now' }, { value: 'closed', label: 'Closed' }]);
   DD.sort.set([{ value: 'last', label: 'Last seen' }, { value: 'first', label: 'First seen' }, { value: 'count', label: 'Times seen' }, { value: 'title', label: 'Title' }, { value: 'url', label: 'URL' }]);
   $('help-btn').addEventListener('click', () => $('help').showModal());
+  THEME.set(THEME.current(), false);
+  $('theme').addEventListener('click', THEME.flip);
+  matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => { if (!THEME.get()) THEME.set(THEME.system(), false); });
   // Motion is the page's own setting, not the OS's: on by default, remembered here.
   const motion = (on) => { document.documentElement.dataset.motion = on ? 'on' : 'off'; $('motion').checked = on; };
   let saved = null; try { saved = localStorage.getItem('motion'); } catch { /* file:// without storage */ }
@@ -440,6 +469,7 @@ function wire() {
   $('view-snapshot').addEventListener('focusin', (e) => { const row = e.target.closest('.row'); if (row) setCursor(row, false); });
   $('forget-sel').addEventListener('click', () => apply([...S.sel], S.status === 'forgotten'));
   $('clear-sel').addEventListener('click', () => { S.sel.clear(); select(-1, false); });
+  $('preview-sel').addEventListener('click', () => preview(!S.preview));
   $('sel-all').addEventListener('click', () => { for (const p of S.rendered) S.sel.add(p.i); select(-1, false); });
   $('help-close').addEventListener('click', () => $('help').close());
   document.addEventListener('keydown', keys);
