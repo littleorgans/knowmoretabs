@@ -163,9 +163,11 @@ main { flex: 1; }
 [data-mode="serve"] .row:is(:hover, .cur, .sel, .exp, :has(.pick input:focus-visible))::before { color: transparent; }
 /* no pointer to hover with: the checkbox is simply always the index cell */
 @media (hover: none) { .pick input { opacity: 1; } [data-mode="serve"] .row::before { color: transparent; } }
-/* the body sets the height of the row; the age aligns on its last baseline, so
-   the three grey things — address, group mark and age — sit on one line */
-.body { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 0.75rem; row-gap: 0.1rem; align-items: baseline; align-self: last baseline; min-width: 0; padding-block: 0.6rem; }
+/* the body sets the height of the row, and the age shares its first baseline:
+   title and age on one line, address and group mark on the next. Centred, the
+   age landed between the two and grazed the group mark; on the lower line it
+   was 12 px grey beside a 12 px grey URL and the two read as one string. */
+.body { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 0.75rem; row-gap: 0.1rem; align-items: baseline; align-self: baseline; min-width: 0; padding-block: 0.6rem; }
 .t { grid-column: 1 / -1; justify-self: start; color: var(--ink); font: 1rem/1.3 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .body .u { grid-column: 1; }
 .body .grp { grid-column: 2; grid-row: 2; }
@@ -183,7 +185,7 @@ main { flex: 1; }
   mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px var(--col)); }
 .row.open .strip { --dot: var(--ink); }
 .row:hover.open .strip, .row.cur.open .strip, .row.exp.open .strip { --dot: var(--bg); }
-.last { align-self: last baseline; font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; letter-spacing: 0.02em; text-align: right; }
+.last { align-self: baseline; font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; letter-spacing: 0.02em; text-align: right; }
 .more { align-self: stretch; display: grid; place-items: center; background: none; border: 0; border-left: 1px solid var(--line); padding: 0; margin: 0; width: 100%; color: inherit; font-size: 0; transition: background-color 0.15s var(--ease); }
 .more::before { content: "→"; font: 400 1.25rem/1 var(--sans); transition: transform 0.2s var(--ease); }
 .more[aria-expanded="true"]::before { transform: rotate(90deg); }
