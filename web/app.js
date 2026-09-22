@@ -25,7 +25,7 @@ const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rende
             openAll: false, preview: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages' };
 const FOLD = 10;                                   // rows of "Open now" shown before "show all"
 const EAGER = 300, CHUNK = 200;                    // rows rendered up front; rows per lazy placeholder after that
-const CELLS = 20, COL = 4;                         // the sighting strip: at most this many marks, COL px each (--col)
+const COLS = 12, COL = 4, SROWS = 4;               // the sighting strip: marks to a row, px per mark (--col), rows
 const $ = (id) => document.getElementById(id);
 // ---- theme: light or dark, the OS choice until the switch is used, then remembered here.
 // Runs before first paint (the script is parser-blocking at the end of body) so there is no flash.
@@ -95,14 +95,17 @@ function derive(lib) {
   // Each sighting keeps the group object it sat in, so a page can be in "Papers" in
   // March, "Later" in June and no group today without any per-page bookkeeping.
   for (const s of S.snaps) for (const [pi, w, pos, tid, , g] of s.tabs) S.pages[pi]?.seen.push([s.k, w, tid, pos, g == null ? null : s.groups[g] || null]);
-  // The strip is the same width whatever the archive holds: at most CELLS
-  // marks, each standing for an equal run of snapshots. Up to CELLS snapshots
-  // that is one mark each, exactly as before; past it the marks stand for more
-  // rather than the row growing, and a mark the page only part-fills is drawn
-  // faint. The shape still reads as "always there", "a rhythm" or "once, back
-  // then", and a hundred snapshots take no more room than twenty.
+  // One mark per snapshot, COLS of them to a line, wrapping downward: the
+  // strip grows in lines instead of length, so 48 snapshots fit in 48 px of
+  // row. A line on its own keeps the old tall ticks; two or more shrink to
+  // stacked bars. Past COLS × SROWS marks each one stands for an equal run of
+  // snapshots and a mark the page only part-fills is drawn faint, so the block
+  // never outgrows the row however long the archive runs.
   const latest = S.snaps.length - 1, n = S.snaps.length;
-  const cells = Math.min(n, CELLS) || 1, cellOf = (k) => Math.floor((k * cells) / n);
+  const cells = Math.min(n, COLS * SROWS) || 1;
+  const cols = Math.min(cells, COLS), lines = Math.ceil(cells / COLS);
+  const bar = lines > 1 ? 4 : 8, pitch = lines > 1 ? 6 : 8;
+  const cellOf = (k) => Math.floor((k * cells) / n);
   const cap = new Array(cells).fill(0);
   for (let k = 0; k < n; k++) cap[cellOf(k)]++;
   const ink = (l) => (l === 1 ? 'var(--dot)' : `color-mix(in srgb,var(--dot) ${Math.round(45 + 55 * l)}%,transparent)`);
@@ -118,15 +121,27 @@ function derive(lib) {
     S.snaps[p.first].fresh++; if (!p.open) S.snaps[p.last].gone++;
     const hit = new Array(cells).fill(0);
     for (const k of ks) hit[cellOf(k)]++;
-    const stops = [];                                  // runs of equally filled cells → gradient stops
-    for (let i = 0, j; i < cells; i = j) {
-      const l = hit[i] / cap[i];
-      for (j = i + 1; j < cells && hit[j] / cap[j] === l; j++);
-      if (l) stops.push(`transparent ${i * COL}px,${ink(l)} ${i * COL}px ${j * COL}px,transparent ${j * COL}px`);
+    const layers = [];                                 // one gradient per line; runs of equal fill → stops
+    for (let r = 0; r < lines; r++) {
+      const end = Math.min((r + 1) * cols, cells), stops = [];
+      for (let i = r * cols, j; i < end; i = j) {
+        const l = hit[i] / cap[i];
+        for (j = i + 1; j < end && hit[j] / cap[j] === l; j++);
+        if (l) { const a = (i - r * cols) * COL, b = (j - r * cols) * COL;
+          stops.push(`transparent ${a}px,${ink(l)} ${a}px ${b}px,transparent ${b}px`); }
+      }
+      layers.push(stops.length ? `linear-gradient(90deg,${stops.join(',')})` : 'none');
     }
-    p.g = `linear-gradient(90deg,${stops.join(',')})`;
+    p.g = layers.join(',');
   }
-  document.documentElement.style.setProperty('--cells', cells);
+  // the geometry is the archive's, not the page's, so the sheet reads it once
+  const root = document.documentElement.style;
+  root.setProperty('--sw', `${cols * COL}px`);
+  root.setProperty('--sh', `${lines * pitch - (pitch - bar)}px`);
+  root.setProperty('--sbar', `${bar}px`);
+  root.setProperty('--spitch', `${pitch}px`);
+  root.setProperty('--gs', Array.from({ length: lines }, () => `${cols * COL}px ${bar}px`).join(','));
+  root.setProperty('--gp', Array.from({ length: lines }, (_, r) => `0 ${r * pitch}px`).join(','));
 }
 // The parser's per-snapshot counters (§5, always emitted, zeroed when clean),
 // plus the rows derive() could not read: a snapshot that lost tabs says so

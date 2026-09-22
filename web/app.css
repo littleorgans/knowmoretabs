@@ -172,9 +172,15 @@ main { flex: 1; }
 .t:hover { text-decoration: underline; text-underline-offset: 0.18em; }
 .t i { color: var(--ink-3); }
 .u { font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 4ch; }
-/* one mark per snapshot until there are --cells of them, then one mark per
-   equal run of them: the strip never grows past --cells marks (see app.js) */
-.strip { width: calc(var(--cells) * var(--col)); height: 8px; background: var(--g, none), var(--line-2); mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px var(--col)); border-radius: 1px; margin-left: 0.25rem; }
+/* one mark per snapshot, twelve to a line, wrapping downward (see app.js). The
+   mask cuts the columns, the last background layer is the empty track and cuts
+   the lines, and each line of marks is a positioned gradient layer above it. */
+.strip { width: var(--sw, 0); height: var(--sh, 8px); margin-left: 0.25rem; border-radius: 1px;
+  background-image: var(--g, none), repeating-linear-gradient(180deg, var(--line-2) 0 var(--sbar, 8px), transparent var(--sbar, 8px) var(--spitch, 8px));
+  background-size: var(--gs, auto), 100% 100%;
+  background-position: var(--gp, 0 0), 0 0;
+  background-repeat: no-repeat;
+  mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px var(--col)); }
 .row.open .strip { --dot: var(--ink); }
 .row:hover.open .strip, .row.cur.open .strip, .row.exp.open .strip { --dot: var(--bg); }
 .last { align-self: last baseline; font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; letter-spacing: 0.02em; text-align: right; }
