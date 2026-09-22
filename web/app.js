@@ -25,6 +25,7 @@ const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rende
             openAll: false, preview: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages' };
 const FOLD = 10;                                   // rows of "Open now" shown before "show all"
 const EAGER = 300, CHUNK = 200;                    // rows rendered up front; rows per lazy placeholder after that
+const COLS = 12, COL = 4, SROWS = 4;               // the sighting strip: marks to a row, px per mark (--col), rows
 const $ = (id) => document.getElementById(id);
 // ---- theme: light or dark, the OS choice until the switch is used, then remembered here.
 // Runs before first paint (the script is parser-blocking at the end of body) so there is no flash.
@@ -50,6 +51,17 @@ const fmt = (opts) => new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', ...o
 const F = { day: fmt({ day: 'numeric', month: 'short' }), dayYear: fmt({ day: 'numeric', month: 'short', year: 'numeric' }),
             month: fmt({ month: 'long', year: 'numeric' }), long: fmt({ weekday: 'short', day: 'numeric', month: 'long', year: 'numeric' }),
             time: fmt({ hour: '2-digit', minute: '2-digit', hour12: false }), full: fmt({ day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false }) };
+// How old, in the largest unit that still reads true: "12m ago", "3d ago",
+// "4mo ago". Intl does the wording and the locale, so the table is all it
+// costs and nothing is fetched to say it.
+const rel = new Intl.RelativeTimeFormat(undefined, { numeric: 'always', style: 'narrow' });
+const AGO = [[60, 'minute'], [3600, 'hour'], [86400, 'day'], [604800, 'week'], [2629800, 'month'], [31557600, 'year']];
+function ago(date) {
+  const s = (Date.now() - date) / 1000;
+  if (s < 60) return 'now';                        // also covers a clock that is behind the archive
+  let i = 0; while (i + 1 < AGO.length && s >= AGO[i + 1][0]) i++;
+  return rel.format(-Math.floor(s / AGO[i][0]), AGO[i][1]);
+}
 const isForm = (el) => el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName);
 const plural = (n, one, many = one + 's') => `${num.format(n)} ${n === 1 ? one : many}`;
 const SORTS = {
@@ -72,7 +84,7 @@ function derive(lib) {
   S.stats = lib.stats || {};
   const P = lib.pages || [];
   S.pages = P.map((p, i) => { p = typeof p?.url === 'string' ? p : { url: '' }; return { ...p, i, seen: [], title: p.title || '', domain: p.domain || '', forgotten: !!p.forgotten,
-    hay: ((p.title || '') + ' ' + p.url).toLowerCase(), addr: p.url.replace(/^https?:\/\/(www\.)?/i, ''),
+    hay: ((p.title || '') + ' ' + p.url).toLowerCase(), addr: p.url,
     name: (p.title || p.url).replace(/^[^\p{L}\p{N}]+/u, ''), link: /^https?:\/\//i.test(p.url) }; });
   S.skipped = 0;
   S.snaps = (lib.snapshots || []).filter((s) => { const ok = s && !isNaN(new Date(s.captured_at)); if (!ok) S.skipped++; return ok; }).map((s, k) => {
@@ -83,7 +95,20 @@ function derive(lib) {
   // Each sighting keeps the group object it sat in, so a page can be in "Papers" in
   // March, "Later" in June and no group today without any per-page bookkeeping.
   for (const s of S.snaps) for (const [pi, w, pos, tid, , g] of s.tabs) S.pages[pi]?.seen.push([s.k, w, tid, pos, g == null ? null : s.groups[g] || null]);
-  const latest = S.snaps.length - 1, col = 4;
+  // One mark per snapshot, COLS of them to a line, wrapping downward: the
+  // strip grows in lines instead of length, so 48 snapshots fit in 48 px of
+  // row. A line on its own keeps the old tall ticks; two or more shrink to
+  // stacked bars. Past COLS × SROWS marks each one stands for an equal run of
+  // snapshots and a mark the page only part-fills is drawn faint, so the block
+  // never outgrows the row however long the archive runs.
+  const latest = S.snaps.length - 1, n = S.snaps.length;
+  const cells = Math.min(n, COLS * SROWS) || 1;
+  const cols = Math.min(cells, COLS), lines = Math.ceil(cells / COLS);
+  const bar = lines > 1 ? 4 : 8, pitch = lines > 1 ? 6 : 8;
+  const cellOf = (k) => Math.floor((k * cells) / n);
+  const cap = new Array(cells).fill(0);
+  for (let k = 0; k < n; k++) cap[cellOf(k)]++;
+  const ink = (l) => (l === 1 ? 'var(--dot)' : `color-mix(in srgb,var(--dot) ${Math.round(45 + 55 * l)}%,transparent)`);
   S.groups = new Map();
   for (const p of S.pages) {
     if (!p.seen.length) { p.n = 0; continue; }      // allowed by the contract, never shown
@@ -94,15 +119,29 @@ function derive(lib) {
     p.gs = [...new Set(p.seen.map((x) => x[4] && x[4].title.toLowerCase()).filter(Boolean))];
     for (const t of p.gs) { const e = S.groups.get(t) || { title: p.seen.find((x) => x[4] && x[4].title.toLowerCase() === t)[4].title, n: 0 }; e.n++; S.groups.set(t, e); }
     S.snaps[p.first].fresh++; if (!p.open) S.snaps[p.last].gone++;
-    const stops = []; let a = ks[0], b = ks[0];        // runs of consecutive sightings → gradient stops
-    for (const k of ks.slice(1).concat(NaN)) {
-      if (k === b + 1) { b = k; continue; }
-      stops.push(`transparent ${a * col}px,var(--dot) ${a * col}px ${(b + 1) * col}px,transparent ${(b + 1) * col}px`);
-      a = b = k;
+    const hit = new Array(cells).fill(0);
+    for (const k of ks) hit[cellOf(k)]++;
+    const layers = [];                                 // one gradient per line; runs of equal fill → stops
+    for (let r = 0; r < lines; r++) {
+      const end = Math.min((r + 1) * cols, cells), stops = [];
+      for (let i = r * cols, j; i < end; i = j) {
+        const l = hit[i] / cap[i];
+        for (j = i + 1; j < end && hit[j] / cap[j] === l; j++);
+        if (l) { const a = (i - r * cols) * COL, b = (j - r * cols) * COL;
+          stops.push(`transparent ${a}px,${ink(l)} ${a}px ${b}px,transparent ${b}px`); }
+      }
+      layers.push(stops.length ? `linear-gradient(90deg,${stops.join(',')})` : 'none');
     }
-    p.g = `linear-gradient(90deg,${stops.join(',')})`;
+    p.g = layers.join(',');
   }
-  document.documentElement.style.setProperty('--n', S.snaps.length);
+  // the geometry is the archive's, not the page's, so the sheet reads it once
+  const root = document.documentElement.style;
+  root.setProperty('--sw', `${cols * COL}px`);
+  root.setProperty('--sh', `${lines * pitch - (pitch - bar)}px`);
+  root.setProperty('--sbar', `${bar}px`);
+  root.setProperty('--spitch', `${pitch}px`);
+  root.setProperty('--gs', Array.from({ length: lines }, () => `${cols * COL}px ${bar}px`).join(','));
+  root.setProperty('--gp', Array.from({ length: lines }, (_, r) => `0 ${r * pitch}px`).join(','));
 }
 // The parser's per-snapshot counters (§5, always emitted, zeroed when clean),
 // plus the rows derive() could not read: a snapshot that lost tabs says so
@@ -120,17 +159,34 @@ function degraded(s) {
 }
 
 // ---- 4. Pages view ---------------------------------------------------------
-function compute() {
+// One predicate for the list and for the pickers, so they cannot disagree.
+// `skip` names the filter a picker must ignore: the Site menu counts what the
+// *other* filters leave, which is the only count that is true when you click
+// it. Its own filter is skipped, or choosing a site would collapse the menu
+// to the site you just chose.
+function matcher(skip) {
   const words = S.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
   const wantForgotten = S.status === 'forgotten';
-  const d = S.domain.trim().toLowerCase(), exact = d && S.pages.some((p) => p.domain === d);
-  const g = S.group.trim().toLowerCase(), gexact = g && S.groups.has(g);
-  S.shown = S.pages.filter((p) => p.n && p.forgotten === wantForgotten && (!d || (exact ? p.domain === d : p.domain.includes(d)))
+  const d = skip === 'domain' ? '' : S.domain.trim().toLowerCase(), exact = d && S.pages.some((p) => p.domain === d);
+  const g = skip === 'group' ? '' : S.group.trim().toLowerCase(), gexact = g && S.groups.has(g);
+  return (p) => p.n && p.forgotten === wantForgotten && (!d || (exact ? p.domain === d : p.domain.includes(d)))
     && (!g || p.gs.some((t) => (gexact ? t === g : t.includes(g))))
     && (S.status !== 'open' || p.open) && (S.status !== 'closed' || !p.open)
     && (!S.preview || S.sel.has(p.i))
-    && words.every((w) => p.hay.includes(w))).sort(SORTS[S.sort]);
+    && words.every((w) => p.hay.includes(w));
 }
+function compute() { S.shown = S.pages.filter(matcher('')).sort(SORTS[S.sort]); }
+// Built when a menu opens, not on every keystroke: one pass over the pages,
+// and only for the picker you actually reached for.
+function facet(skip, key) {
+  const ok = matcher(skip), n = new Map();
+  for (const p of S.pages) if (ok(p)) for (const t of key(p)) n.set(t, (n.get(t) || 0) + 1);
+  return [...n].sort((a, b) => b[1] - a[1] || collator.compare(a[0], b[0]));
+}
+const siteOptions = () => facet('domain', (p) => (p.domain ? [p.domain] : []))
+  .map(([d, k]) => ({ value: d, label: d, meta: plural(k, 'page') }));
+const groupOptions = () => facet('group', (p) => p.gs)
+  .map(([t, k]) => ({ value: S.groups.get(t).title, label: S.groups.get(t).title, meta: plural(k, 'page') }));
 function bandOf(p) {
   if (S.sort === 'last') return p.open ? 'Open now' : F.month.format(S.snaps[p.last].date);
   if (S.sort === 'first') return F.month.format(S.snaps[p.first].date);
@@ -150,12 +206,12 @@ function titleHTML(p) {
   return p.link ? `<a class="t" dir="auto" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" tabindex="-1">${inner}</a>` : `<span class="t" dir="auto">${inner}</span>`;
 }
 function rowHTML(p) {
-  const s = S.snaps[p.last], y = s.date.getUTCFullYear() !== S.snaps.at(-1).date.getUTCFullYear();
+  const s = S.snaps[p.last];
   return `<li class="row${p.open ? ' open' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}${S.exp.has(p.i) ? ' exp' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
     `<span class="pick"><input type="checkbox" tabindex="-1" aria-label="Select"${S.sel.has(p.i) ? ' checked' : ''}></span>` +
     `<span class="strip" title="Seen in ${p.n} of ${S.snaps.length} snapshots"></span>` +
     `<span class="body">${titleHTML(p)}<span class="u">${esc(p.addr)}</span>${grpHTML(p.grp, true)}</span>` +
-    `<time class="last" datetime="${s.captured_at}">${(y ? F.dayYear : F.day).format(s.date)}</time>` +
+    `<time class="last" datetime="${s.captured_at}" title="Last seen ${F.full.format(s.date)} UTC">${ago(s.date)}</time>` +
     `<button class="more" type="button" tabindex="-1" aria-label="History" aria-expanded="${S.exp.has(p.i)}">›</button>` +
     (S.exp.has(p.i) ? histHTML(p) : '') + '</li>';
 }
@@ -233,18 +289,23 @@ function setSeg(id, v) { S[id] = v; const o = DD[id].options.find((x) => x.value
 // under a button. The native datalist and select popups looked like three
 // different products, could not scroll, and could not be styled.
 const DD = {};
-function dropdown(id, { typeahead = false, onPick }) {
+function dropdown(id, { typeahead = false, onPick, options }) {
   const root = $(id + '-dd'), ctl = $(id), menu = $(id + '-menu');
   const d = { options: [], shown: [], open: false, hi: -1 };
   d.render = () => {
-    const q = typeahead ? ctl.value.trim().toLowerCase() : '';
+    // What is typed narrows the list — unless it is exactly one of the options,
+    // in which case it is the filter already applied and the menu is how you
+    // change it: offering only the site you are already on is a dead end.
+    const v = typeahead ? ctl.value.trim().toLowerCase() : '';
+    const q = v && d.options.some((o) => o.value.toLowerCase() === v) ? '' : v;
     d.shown = q ? d.options.filter((o) => o.label.toLowerCase().includes(q)) : d.options;
     menu.innerHTML = d.shown.length ? d.shown.map((o, i) => `<li role="option" id="${id}-o${i}" aria-selected="${i === d.hi}" data-i="${i}"><span>${esc(o.label)}</span>${o.meta ? `<small>${esc(o.meta)}</small>` : ''}</li>`).join('') : '<li class="none">No matches</li>';
     ctl.setAttribute('aria-activedescendant', d.hi >= 0 ? `${id}-o${d.hi}` : '');
     menu.children[d.hi]?.scrollIntoView({ block: 'nearest' });
     menu.classList.remove('flip'); menu.classList.toggle('flip', menu.getBoundingClientRect().right > innerWidth - 12);   // keep it on screen
   };
-  d.show = () => { if (d.open) return; d.open = true; d.hi = typeahead ? -1 : Math.max(0, d.options.findIndex((o) => o.value === S[id])); menu.hidden = false; ctl.setAttribute('aria-expanded', 'true'); d.render(); showEl(menu, true); };
+  d.show = () => { if (d.open) return; d.open = true; if (options) d.options = options();   // the list is of this moment, not of boot
+    d.hi = typeahead ? -1 : Math.max(0, d.options.findIndex((o) => o.value === S[id])); menu.hidden = false; ctl.setAttribute('aria-expanded', 'true'); d.render(); showEl(menu, true); };
   d.hide = () => { if (!d.open) return; d.open = false; d.hi = -1; showEl(menu, false); ctl.setAttribute('aria-expanded', 'false'); };
   d.pick = (o) => { d.hide(); onPick(o); };
   d.set = (options) => { d.options = options; if (d.open) d.render(); };
@@ -324,10 +385,9 @@ function tray() {
   $('preview-sel').textContent = S.preview ? 'Show everything' : 'Preview selection';
   $('preview-sel').setAttribute('aria-pressed', S.preview);
   $('preview-sel').title = S.preview ? 'Back to the full list; the selection stays.' : 'Show only the selected pages, so you can check them before forgetting.';
-  $('tray').classList.toggle('previewing', S.preview);
   $('forget-sel').textContent = S.status === 'forgotten' ? 'Restore' : 'Forget';
   $('forget-sel').title = S.status === 'forgotten' ? 'Puts them back in the library.' : 'Hides them from the library. The snapshots themselves are never touched.';
-  $('list').classList.toggle('picking', S.sel.size > 0);
+  $('forget-sel').classList.toggle('forget', S.status !== 'forgotten');   // the one coloured hover; putting a page back is not it
 }
 
 // ---- 6. Forget / restore, with undo ---------------------------------------
@@ -432,7 +492,8 @@ function keys(e) {
 function wire() {
   document.body.dataset.mode = host.mode;
   for (const id of ['q', 'domain', 'group']) $(id).addEventListener('input', (e) => { S[id] = e.target.value; schedule(); });
-  for (const id of ['domain', 'group']) dropdown(id, { typeahead: true, onPick: (o) => { S[id] = $(id).value = o.value; render(); } });
+  dropdown('domain', { typeahead: true, options: siteOptions, onPick: (o) => { S.domain = $('domain').value = o.value; render(); } });
+  dropdown('group', { typeahead: true, options: groupOptions, onPick: (o) => { S.group = $('group').value = o.value; render(); } });
   for (const id of ['status', 'sort']) dropdown(id, { onPick: (o) => { setSeg(id, o.value); render(); } });
   DD.status.set([{ value: '', label: 'Everything' }, { value: 'open', label: 'Open now' }, { value: 'closed', label: 'Closed' }]);
   DD.sort.set([{ value: 'last', label: 'Last seen' }, { value: 'first', label: 'First seen' }, { value: 'count', label: 'Times seen' }, { value: 'title', label: 'Title' }, { value: 'url', label: 'URL' }]);
@@ -453,7 +514,9 @@ function wire() {
     const dragged = down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4; down = null;
     if (e.target.id === 'fold') { S.openAll = !S.openAll; render(); if (S.openAll) setCursor(rows()[FOLD]); else $('fold').focus(); return; }
     const row = e.target.closest('.row'); if (!row) return; const i = +row.dataset.i;
-    if (e.target.matches('.pick input')) return select(i, e.target.checked, e.shiftKey);
+    // the index cell is the checkbox once it shows, so the whole cell picks
+    const pick = e.target.closest('.pick');
+    if (pick) { const box = pick.querySelector('input'); if (e.target !== box) box.checked = !box.checked; return select(i, box.checked, e.shiftKey); }
     if (e.target.closest('a')) return;
     setCursor(row, false); row.focus({ preventScroll: true });
     const act = e.target.closest('[data-act]');
@@ -491,8 +554,6 @@ async function main() {
     const span = sameDay ? F.dayYear.format(first) : `${(sameYear ? F.day : F.dayYear).format(first)} to ${F.dayYear.format(last)}`;
     $('card').innerHTML = `<b>${plural(total, 'page')}</b> · ${plural(domains.size, 'site')} · ${plural(n, 'snapshot')} · ${span}`;
   }
-  DD.domain.set([...domains].sort((a, b) => b[1] - a[1]).map(([d, k]) => ({ value: d, label: d, meta: plural(k, 'page') })));
-  DD.group.set([...S.groups.values()].sort((a, b) => b.n - a.n).map((g) => ({ value: g.title, label: g.title, meta: plural(g.n, 'page') })));
   if (host.forget) {
     DD.status.set(DD.status.options.concat({ value: 'forgotten', label: 'Forgotten' }));
     $('mode-note').textContent = 'Live — served by knowmoretabs on this machine. Forgetting hides a page; snapshots are never changed.';

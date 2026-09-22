@@ -21,7 +21,11 @@
   --ink-3:  light-dark(#8b8882, #6c6a66);
   --accent: light-dark(#0f0f0f, #f2f1ee);
   --link:   light-dark(#1f4fb8, #8fb3ff);
+  /* the one colour with a job: forgetting, under the pointer. A burnt earth
+     that belongs to the paper, not an alarm red. */
+  --forget: light-dark(#a8432a, #e2896c);
   --dot:    var(--ink-2);
+  --surface: var(--bg);    /* what a row is painted on; an inverted row flips it */
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
@@ -124,41 +128,64 @@ main { flex: 1; }
 .band h3, .win h3 { position: sticky; top: var(--top); z-index: 2; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin: 0; padding: 1.75rem 1.5rem 1.25rem; background: var(--bg); border-bottom: 1px solid var(--line); font-size: clamp(1.5rem, 3vw, 2.125rem); line-height: 1; font-weight: 700; letter-spacing: -0.03em; }
 .band h3 small, .win h3 small { font-size: 0.75rem; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
 .band ol, .win ol { list-style: none; margin: 0; padding: 0; container-type: inline-size; counter-reset: row; }
-.list { --pick: 0; }
-.row { counter-increment: row; display: grid; grid-template-columns: var(--idx) auto minmax(0, 1fr) 6ch var(--arrow); grid-template-rows: minmax(var(--row), auto); align-items: center; column-gap: 1.25rem; min-height: var(--row); padding: 0; border-bottom: 1px solid var(--line); content-visibility: auto; contain-intrinsic-size: auto var(--row); position: relative; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
-[data-mode="serve"] .row { grid-template-columns: var(--idx) 1rem auto minmax(0, 1fr) 6ch var(--arrow); }
+.row { counter-increment: row; display: grid; grid-template-columns: var(--idx) auto minmax(0, 1fr) 8ch var(--arrow); grid-template-rows: minmax(var(--row), auto); align-items: center; column-gap: 1.25rem; min-height: var(--row); padding: 0; border-bottom: 1px solid var(--line); content-visibility: auto; contain-intrinsic-size: auto var(--row); position: relative; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
 .row > * { min-height: 0; }
-.row::before { content: counter(row, decimal-leading-zero); align-self: stretch; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; letter-spacing: 0.04em; color: var(--ink-3); border-right: 1px solid var(--line); }
+/* the index and the checkbox share one cell: the number is the resting state,
+   the checkbox takes its place under the pointer, the cursor or a selection */
+.row::before { content: counter(row, decimal-leading-zero); grid-area: 1 / 1; align-self: stretch; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; letter-spacing: 0.04em; color: var(--ink-3); border-right: 1px solid var(--line); transition: color 0.12s var(--ease); }
+.pick { grid-area: 1 / 1; align-self: stretch; position: relative; display: grid; place-items: center; cursor: pointer; }
 [data-mode="export"] .pick { display: none; }
-.row:hover, .row.cur { background: var(--ink); color: var(--bg); --line: transparent; --ink-2: color-mix(in srgb, var(--bg) 72%, transparent); --ink-3: color-mix(in srgb, var(--bg) 55%, transparent); --line-2: color-mix(in srgb, var(--bg) 35%, transparent); --dot: var(--bg); }
-.row:hover .t, .row.cur .t, .row:hover::before, .row.cur::before, .row:hover .u, .row.cur .u, .row:hover .last, .row.cur .last { color: inherit; }
-.row:hover .u, .row.cur .u { opacity: 0.7; }
-.row:hover::before, .row.cur::before, .row:hover .more, .row.cur .more { border-color: color-mix(in srgb, var(--bg) 25%, transparent); }
+.row:hover, .row.cur:not(.target) { background: var(--ink); color: var(--bg); --line: transparent; --ink-2: color-mix(in srgb, var(--bg) 72%, transparent); --ink-3: color-mix(in srgb, var(--bg) 55%, transparent); --line-2: color-mix(in srgb, var(--bg) 35%, transparent); --dot: var(--bg); --surface: var(--ink); }
+.row:is(:hover, .cur:not(.target)) :is(.t, .u, .last), .row:is(:hover, .cur:not(.target))::before { color: inherit; }
+.row:is(:hover, .cur:not(.target)) .u { opacity: 0.7; }
+.row:is(:hover, .cur:not(.target))::before, .row:is(:hover, .cur:not(.target)) .more { border-color: color-mix(in srgb, var(--bg) 25%, transparent); }
 .row:focus-visible { outline: 2px solid var(--bg); outline-offset: -4px; }
 .row.sel { background: var(--bg-2); }
 .row.sel:hover, .row.sel.cur { background: var(--ink); }
-.row.target { background: var(--bg-2); }
+/* the tab a snapshot link points at: paper, ink text and a rule in the margin.
+   It keeps that look while it is the cursor — the row you followed the link
+   for is a row you can read — and inverts under the pointer like any other. */
+.row.target:not(:hover) { background: var(--bg-2); box-shadow: inset 2px 0 0 var(--ink); }
+.row.target:not(:hover):focus-visible { outline-color: var(--ink); }
 /* an expanded row and its drawer are one block: the row stays inverted, the
    drawer opens on bg-1 beneath it with the same ruled edges */
-.row.exp { background: var(--ink); color: var(--bg); --line: transparent; --ink-2: color-mix(in srgb, var(--bg) 72%, transparent); --ink-3: color-mix(in srgb, var(--bg) 55%, transparent); --dot: var(--bg); }
+.row.exp { background: var(--ink); color: var(--bg); --line: transparent; --ink-2: color-mix(in srgb, var(--bg) 72%, transparent); --ink-3: color-mix(in srgb, var(--bg) 55%, transparent); --dot: var(--bg); --surface: var(--ink); }
 .row.exp .t, .row.exp::before, .row.exp .u, .row.exp .last { color: inherit; }
 .row.exp::before, .row.exp .more { border-color: color-mix(in srgb, var(--bg) 25%, transparent); }
 .row > .body, .row > .n, .row > .last { user-select: none; }   /* a fast second click must toggle, not select a word */
-/* the checkbox is there for every row but only shows itself when it matters */
-.pick input { margin: 0; display: block; accent-color: var(--ink); opacity: 0; transition: opacity 0.12s var(--ease); }
-.row:hover .pick input, .row.cur .pick input, .row.sel .pick input, .list.picking .pick input, .pick input:focus-visible { opacity: 1; }
-.row:hover .pick input, .row.cur .pick input, .row.exp .pick input { accent-color: var(--bg); }
-.body { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 0.75rem; row-gap: 0.1rem; align-items: baseline; min-width: 0; padding-block: 0.6rem; }
+/* the checkbox is drawn rather than native, because it has to sit on paper and
+   on ink, and it only shows itself when it matters */
+.pick input { margin: 0; display: block; width: 0.9375rem; height: 0.9375rem; padding: 0; appearance: none; -webkit-appearance: none; background: none; border: 1.5px solid currentColor; border-radius: 0; opacity: 0; transition: opacity 0.12s var(--ease); }
+.pick input:checked { background: currentColor; }
+.pick::after { content: ""; position: absolute; left: 50%; top: 50%; width: 0.25rem; height: 0.5rem; border: solid var(--surface); border-width: 0 2px 2px 0; translate: -60% -65%; rotate: 45deg; opacity: 0; pointer-events: none; }
+.pick:has(input:checked)::after { opacity: 1; }
+.row:is(:hover, .cur, .sel, .exp) .pick input, .pick input:focus-visible { opacity: 1; }
+[data-mode="serve"] .row:is(:hover, .cur, .sel, .exp, :has(.pick input:focus-visible))::before { color: transparent; }
+/* no pointer to hover with: the checkbox is simply always the index cell */
+@media (hover: none) { .pick input { opacity: 1; } [data-mode="serve"] .row::before { color: transparent; } }
+/* the body sets the height of the row, and the age shares its first baseline:
+   title and age on one line, address and group mark on the next. Centred, the
+   age landed between the two and grazed the group mark; on the lower line it
+   was 12 px grey beside a 12 px grey URL and the two read as one string. */
+.body { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 0.75rem; row-gap: 0.1rem; align-items: baseline; align-self: baseline; min-width: 0; padding-block: 0.6rem; }
 .t { grid-column: 1 / -1; justify-self: start; color: var(--ink); font: 1rem/1.3 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .body .u { grid-column: 1; }
 .body .grp { grid-column: 2; grid-row: 2; }
 .t:hover { text-decoration: underline; text-underline-offset: 0.18em; }
 .t i { color: var(--ink-3); }
 .u { font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 4ch; }
-.strip { width: calc(var(--n) * var(--col)); height: 8px; background: var(--g, none), var(--line-2); mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px var(--col)); border-radius: 1px; margin-left: 0.25rem; }
+/* one mark per snapshot, twelve to a line, wrapping downward (see app.js). The
+   mask cuts the columns, the last background layer is the empty track and cuts
+   the lines, and each line of marks is a positioned gradient layer above it. */
+.strip { width: var(--sw, 0); height: var(--sh, 8px); margin-left: 0.25rem; border-radius: 1px;
+  background-image: var(--g, none), repeating-linear-gradient(180deg, var(--line-2) 0 var(--sbar, 8px), transparent var(--sbar, 8px) var(--spitch, 8px));
+  background-size: var(--gs, auto), 100% 100%;
+  background-position: var(--gp, 0 0), 0 0;
+  background-repeat: no-repeat;
+  mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px var(--col)); }
 .row.open .strip { --dot: var(--ink); }
 .row:hover.open .strip, .row.cur.open .strip, .row.exp.open .strip { --dot: var(--bg); }
-.last { font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; letter-spacing: 0.02em; }
+.last { align-self: baseline; font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; letter-spacing: 0.02em; text-align: right; }
 .more { align-self: stretch; display: grid; place-items: center; background: none; border: 0; border-left: 1px solid var(--line); padding: 0; margin: 0; width: 100%; color: inherit; font-size: 0; transition: background-color 0.15s var(--ease); }
 .more::before { content: "→"; font: 400 1.25rem/1 var(--sans); transition: transform 0.2s var(--ease); }
 .more[aria-expanded="true"]::before { transform: rotate(90deg); }
@@ -201,8 +228,11 @@ button.grp:hover { color: inherit; text-decoration: underline; }
 .hist ol a:hover { text-decoration-color: currentColor; }
 .hist ol span { color: var(--ink-3); }
 .hist .acts { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: -0.5rem 0 0.25rem; align-items: center; }
-.hist .acts button, .tray button, #toast button, dialog button { height: 2.125rem; padding: 0 0.875rem; background: none; border: 1px solid var(--ink); font-size: 0.8125rem; font-weight: 500; color: var(--ink); transition: background-color 0.15s var(--ease), color 0.15s var(--ease); }
-.hist .acts button:hover, .tray button:hover, #toast button:hover, dialog button:hover { background: var(--ink); color: var(--bg); }
+.hist .acts button, .tray-end button, #toast button, dialog button { height: 2.125rem; padding: 0 0.875rem; background: none; border: 1px solid var(--ink); font-size: 0.8125rem; font-weight: 500; color: var(--ink); transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease); }
+.hist .acts button:hover, .tray-end button:hover, #toast button:hover, dialog button:hover { background: var(--ink); color: var(--bg); }
+/* forgetting is the one action that takes the colour, and only under the
+   pointer: the old hover emptied the button out, which read as "don't" */
+.hist .acts button[data-act="forget"]:hover, .tray-end .primary.forget:hover { background: var(--forget); border-color: var(--forget); color: var(--bg); }
 .hist .ro { flex-basis: 100%; color: var(--ink-3); overflow-wrap: anywhere; }
 .hist .ro code { user-select: all; color: var(--ink); }
 
@@ -242,14 +272,20 @@ button.grp:hover { color: inherit; text-decoration: underline; }
 #toast { bottom: 4.5rem; }
 .tray, #toast { opacity: 0; translate: 0 8px; transition: opacity 0.18s var(--ease), translate 0.18s var(--ease); }
 .tray.in, #toast.in { opacity: 1; translate: 0 0; }
-.tray { flex-wrap: wrap; gap: 0.25rem 1rem; padding-left: 1.125rem; }
-.tray #selcount { font-weight: 600; white-space: nowrap; }
-.tray-acts { display: flex; flex-wrap: wrap; gap: 0 0.25rem; }
-.tray-acts button { height: 2.125rem; padding: 0 0.5rem; background: none; border: 0; color: var(--ink-2); font-weight: 500; }
-.tray-acts button:hover { background: none; color: var(--ink); text-decoration: underline; text-underline-offset: 0.2em; }
-.tray-acts button[aria-pressed="true"] { color: var(--ink); text-decoration: underline; text-underline-offset: 0.2em; }
-.tray button.primary { background: var(--ink); color: var(--bg); border-color: var(--ink); }
-.tray button.primary:hover { background: var(--bg); color: var(--ink); }
+/* the tray is ruled like the toolbar: ✕ and the count are cells, the two
+   actions sit in a padded end */
+.tray { flex-wrap: wrap; align-items: stretch; gap: 0; padding: 0; min-height: 2.875rem; }
+.tray > * { display: flex; align-items: center; }
+#clear-sel { width: 2.875rem; justify-content: center; padding: 0; background: none; border: 0; border-right: 1px solid var(--line-2); color: var(--ink); font-size: 0.9375rem; transition: background-color 0.15s var(--ease), color 0.15s var(--ease); }
+#clear-sel:hover { background: var(--ink); color: var(--bg); }
+.tray #selcount { padding: 0 1rem; font-weight: 600; white-space: nowrap; }
+#sel-all { padding: 0 1rem; background: none; border: 0; border-left: 1px solid var(--line-2); color: var(--ink-2); font-weight: 500; white-space: nowrap; transition: color 0.15s var(--ease); }
+#sel-all:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 0.2em; }
+.tray-end { gap: 0.375rem; padding: 0.375rem; margin-left: auto; }
+.tray-end button { white-space: nowrap; }
+.tray-end button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.tray-end .primary { background: var(--ink); color: var(--bg); }
+.tray-end .primary:hover { background: color-mix(in srgb, var(--ink) 78%, var(--bg)); border-color: transparent; }
 footer { color: var(--ink-3); font-size: 0.75rem; margin-top: auto; }
 footer .cell { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 0.25rem 2rem; }
 footer .cell:last-child { border-bottom: 0; }
@@ -268,8 +304,7 @@ dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--ink); vertical-al
 
 /* ---- small screens: drop the strip, tighten the cells ---- */
 @container (width < 44rem) {
-  .row { grid-template-columns: 2.75rem minmax(0, 1fr) 6ch 2.75rem; }
-  [data-mode="serve"] .row { grid-template-columns: 2.75rem 1rem minmax(0, 1fr) 6ch 2.75rem; }
+  .row { grid-template-columns: 2.75rem minmax(0, 1fr) 8ch 2.75rem; }
   .strip { display: none; }
   .body { padding-left: 0; }
   .hist-in { padding-left: 1.25rem; }
@@ -300,6 +335,10 @@ dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--ink); vertical-al
   .head { grid-template-columns: 1fr; padding-block: 1.75rem; }
   .snaps th, .snaps td { white-space: normal; padding-inline: 1rem; }
   .snaps .bar-cell { width: auto; }
+  /* the tray spans the screen and breaks into two lines: who is selected, then what to do */
+  .tray { width: calc(100vw - 2rem); }
+  #sel-all { margin-left: auto; border-left: 0; }
+  .tray-end { flex-basis: 100%; justify-content: flex-end; border-top: 1px solid var(--line-2); }
 }
 /* motion is a page setting (the ? dialog), not the OS preference */
 [data-motion="off"] *, [data-motion="off"] *::before, [data-motion="off"] *::after { transition: none !important; }
