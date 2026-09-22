@@ -11,10 +11,9 @@
 # to bottom, which is the same judgement slice 3 made about the HTTP layer.
 #
 # Runner rules are the ones ci.yml explains: standard GitHub-hosted runners,
-# Linux pinned to `ubuntu-24.04`. The ARM Linux binary is cross-compiled on
-# the x86-64 runner with the distribution's cross compiler and the target C
-# runtime the linker needs even though the crate has no C dependencies
-# (`gcc-aarch64-linux-gnu` does not pull the latter in on its own).
+# Linux pinned to `ubuntu-24.04` and `ubuntu-24.04-arm`. Each binary is
+# built on a runner of that architecture so it can be smoke-tested: ARM
+# Linux on `ubuntu-24.04-arm`, Intel macOS on `macos-15-intel`.
 # Actions are pinned to commit SHAs; the ref each was resolved from is in the
 # comment beside it.
 name: Release
@@ -77,14 +76,16 @@ jobs:
   build-linux:
     name: build (${{ matrix.target }})
     needs: prepare
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - x86_64-unknown-linux-gnu
-          - aarch64-unknown-linux-gnu
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
     steps:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -96,16 +97,9 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
           key: release-${{ matrix.target }}
-      - name: Install the ARM64 cross toolchain
-        if: matrix.target == 'aarch64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
-          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
       - name: Build
         run: cargo build --release --locked --target "${{ matrix.target }}"
       - name: Run the binary it built
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
         run: |
           "target/${{ matrix.target }}/release/knowmoretabs" --version
           "target/${{ matrix.target }}/release/knowmoretabs" --help > /dev/null
@@ -118,8 +112,6 @@ jobs:
           path: dist/*
           if-no-files-found: error
 
-  # The macOS runner is Apple silicon; the Intel binary is cross-compiled on
-  # it, which Apple's toolchain supports directly, and not smoke-tested.
   build-desktop:
     name: build (${{ matrix.target }})
     needs: prepare
@@ -131,13 +123,10 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             runner: macos-latest
-            smoke: true
           - target: x86_64-apple-darwin
-            runner: macos-latest
-            smoke: false
+            runner: macos-15-intel
           - target: x86_64-pc-windows-msvc
             runner: windows-latest
-            smoke: true
     defaults:
       run:
         shell: bash
@@ -170,7 +159,6 @@ jobs:
       - name: Build
         run: cargo build --release --locked --target "${{ matrix.target }}"
       - name: Run the binary it built
-        if: matrix.smoke
         run: |
           bin="target/${{ matrix.target }}/release/knowmoretabs"
           if [ "$RUNNER_OS" = Windows ]; then bin="$bin.exe"; fi

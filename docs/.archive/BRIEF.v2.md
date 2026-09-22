@@ -259,12 +259,10 @@ Keep the lint under ~300 lines. It is a helper, not a product.
 - **Commits.** Conventional commits, one slice's worth of work per PR-sized
   branch. `main` stays green.
 - **CI.** GitHub Actions on standard GitHub-hosted runners. Linux jobs pin
-  `ubuntu-24.04` and `ubuntu-24.04-arm` (the repository is public, so those
-  minutes are free; pin the image rather than `ubuntu-latest`, which GitHub
-  is moving to Ubuntu 26.04). macOS and Windows use `macos-latest` and
-  `windows-latest`. Release builds run on a runner of the target
-  architecture so each binary can be smoke-tested, including the Intel
-  macOS binary on `macos-15-intel`. Cache with `Swatinem/rust-cache`.
+  `ubuntu-24.04` (the repository is public, so those minutes are free; pin the
+  image rather than `ubuntu-latest`, which GitHub is moving to Ubuntu 26.04).
+  macOS and Windows use `macos-latest` and `windows-latest`. Cache with
+  `Swatinem/rust-cache`.
 - **Licence.** Dual MIT OR Apache-2.0, the Rust default. Both files at root.
 - **Repo.** `github.com/littleorgans/knowmoretabs`, public, default branch
   `main`. Remote `origin` is already configured over SSH.

@@ -1,10 +1,10 @@
-# All three platforms run on standard GitHub-hosted runners. The repository
-# is public, so those minutes are free. Linux jobs pin `ubuntu-24.04` rather
-# than `ubuntu-latest`: GitHub is moving the latest label to Ubuntu 26.04
-# between 19 Oct and 19 Nov 2026, and a pin keeps the image this workflow
-# was written against. rustfmt and clippy judge the source, not the
-# platform, so they run once on Linux. Actions are pinned to commit SHAs;
-# the ref each SHA was resolved from is in the comment beside it.
+# Standard GitHub-hosted runners. The repository is public, so those minutes
+# are free. Linux jobs pin `ubuntu-24.04` and `ubuntu-24.04-arm` rather than
+# `ubuntu-latest`: GitHub is moving the latest label to Ubuntu 26.04 between
+# 19 Oct and 19 Nov 2026, and a pin keeps the image this workflow was written
+# against. rustfmt and clippy judge the source, not the platform, so they
+# run once on x86-64 Linux. Actions are pinned to commit SHAs; the ref each
+# SHA was resolved from is in the comment beside it.
 name: CI
 
 on:
@@ -49,24 +49,10 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+  # Same command, same toolchain, no fmt and no clippy. `fail-fast: false`
+  # because "Windows is broken and linux-arm is fine" is the answer worth
+  # having, and cancelling the other jobs hides it.
   test:
-    name: test (linux)
-    runs-on: ubuntu-24.04
-    timeout-minutes: 20
-    steps:
-      - name: Check out
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Install the MSRV toolchain
-        uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # branch 1.89.0
-      - name: Cache Cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
-      - name: Test
-        run: cargo test --workspace --all-targets --locked
-
-  # The other two platforms. Same command, same toolchain, no fmt and no
-  # clippy. `fail-fast: false` because "Windows is broken and macOS is fine"
-  # is the answer worth having, and cancelling the other job hides it.
-  test-desktop:
     name: test (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
@@ -74,10 +60,17 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - name: linux
+            runner: ubuntu-24.04
+          - name: linux-arm
+            runner: ubuntu-24.04-arm
           - name: macos
             runner: macos-latest
           - name: windows
             runner: windows-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       # The Windows image sets `core.autocrlf=true` system-wide, which would
       # rewrite every checked-out file's line endings and so change the bytes
@@ -85,6 +78,7 @@ jobs:
       # writes LF on every platform and the repository stores LF; checkout
       # must not disagree.
       - name: Keep line endings as they are committed
+        if: runner.os == 'Windows'
         run: |
           git config --global core.autocrlf false
           git config --global core.eol lf
@@ -101,7 +95,7 @@ jobs:
       # rewrote them would ship CRLF in everything `export` writes, and
       # nothing else in the suite would notice.
       - name: Check the working tree holds the line endings it was committed with
-        shell: bash
+        if: runner.os == 'Windows'
         run: |
           if git ls-files --eol | grep 'w/crlf'; then
             echo "checkout rewrote line endings; core.autocrlf must be false"
