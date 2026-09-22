@@ -8,9 +8,14 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
   pull_request:
+
+# Pull requests are validated before merge. A merge commit on `main` does not
+# need a second run, and a newer push to the same branch supersedes an older
+# run that is still in progress.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
