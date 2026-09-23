@@ -169,9 +169,10 @@ asks which host it is; it asks whether `host.forget` exists.
 `/` search (then `↓` or `↵` jumps into the list) · `j` `k` or arrows move ·
 `↵` opens in a new tab · `space` shows or hides history · `x` selects,
 `shift`+click extends a range · `f` forgets the selection or the current row
-(restores, in the Forgotten view) · `+` or `=` tags the selection or current row · `u` undoes · `esc` clears the selection,
-then open histories, then filters · `?` opens the legend, and while it is open the
-page's keys are off (`esc` closes it). The legend lives only in that dialog,
+(restores, in the Forgotten view) · `+` or `=` tags the selection or the
+current row · `u` undoes · `esc` clears the selection, then open histories,
+then filters · `?` opens the legend, and while it is open the page's keys are
+off (`esc` closes it). The legend lives only in that dialog,
 behind the `?` key and the `?` button at the end of the toolbar; the search
 field shows a `/` hint.
 
@@ -428,12 +429,12 @@ Serve API, all same-origin, all JSON:
 | POST | `api/tags` | `{ "urls": [], "undo": {…} }` | the same response, including an inverse `undo` |
 | POST | `api/vocabulary` | `{ "create": ["…"], "retire": ["…"] }` | `{ "vocabulary": [ {"name": "…", "created_at": "…"} ] }` |
 
-For forget and restore, `urls` contains only URLs whose flag actually changed, in request order with
-repeats removed. The compatibility key (`forgotten` or `restored`) contains
-the same array. `counts` contains `changed`, `unchanged`, `unknown` (counts of
-distinct requested URLs), and `forgotten` (the total forgotten pages still
-present in the archive afterwards, matching `GET api/library`’s
-`stats.forgotten`). Unknown URLs are counted and skipped; known URLs in the
+For forget and restore, `urls` contains only URLs whose flag actually
+changed, in request order with repeats removed. The compatibility key
+(`forgotten` or `restored`) contains the same array. `counts` contains
+`changed`, `unchanged`, `unknown` (counts of distinct requested URLs), and
+`forgotten` (the total forgotten pages still present in the archive
+afterwards, matching `GET api/library`’s `stats.forgotten`). Unknown URLs are counted and skipped; known URLs in the
 same request still change. Repeated requests succeed with an empty `urls`
 array when nothing changes.
 
@@ -451,11 +452,10 @@ order. `counts` has `changed`, `unchanged` and `unknown`. `vocabulary` is the
 full active list. A newly visible name might have been revived, so the client
 refetches `api/library` to learn about affected pages outside the request.
 
-**Exact undo is additive to the original contract.** Swapping `add` and
-`remove` for the changed URLs works for one active name. It loses decisions
-for mixed multi-tag selections, and cannot restore retirement after revival.
-The response therefore also carries the previous decisions for the names it
-changed:
+**Undo is exact.** Swapping `add` and `remove` undoes a request for one
+active name, but not one that names several tags over a mixed selection, and
+not one that revived a retired name. So the response also carries `undo`, the
+previous decisions for just the pages and names it changed:
 
 ```json
 {
@@ -480,11 +480,10 @@ retired name brings it back; retiring an unknown name is ignored. Retirement
 records a time and never alters a page's decisions.
 
 All POSTs require `application/json` and use the same loopback bind, Host and
-Origin defenses. Tagging waits for the POST before updating the page. If a
-subsequent refresh fails, the saved response and undo remain, and the toast
-asks for a reload. A rejected add keeps the typed name; a failed undo can be
-retried. Forget and restore retain their optimistic update. Paths are relative,
-so the UI can be mounted under any prefix.
+Origin defenses. Forget and restore change the page at once, and a non-2xx
+makes the client revert it and say so in the toast. Tagging and the vocabulary
+wait for the answer instead (§9). Paths are relative, so the UI can be mounted
+under any prefix.
 
 ## 6. Measurements
 
@@ -598,7 +597,8 @@ and it holds two.
 - **Selecting several tags means all of them.** A picked tag moves to the
   front of the bar and inverts, like the cursor row. Its count becomes a ×,
   and clicking it again drops it. Two picked tags stay two cells, with a
-  hairline between them.
+  hairline between them. The key stays on the tag as the bar reorders; if
+  dropping it sends it past the end of the line, it goes to "36 more".
 - **Every count is a co-occurrence count.** A count is how many of the pages
   on show also carry that tag, after search, site, group, status and the
   picked tags. So with Harness picked, "Skills 47" means 47 Harness pages are
@@ -684,16 +684,18 @@ there is one, otherwise on the cursor row: the same targets `f` uses.
 **Suggestions and creating a tag.** The field suggests from the vocabulary as
 you type:
 
-- **What is offered.** Names that start with what you typed come first, then
-  names that contain it. Each group is sorted busiest first, with the library
-  count beside each name. Tags every target already has are left out.
+- **What is offered.** The name you typed exactly, in any case, comes first,
+  then names that start with it, then names that contain it. Each group is
+  sorted busiest first, with the library count beside each name. Tags every
+  target already has are left out.
 - **Creating.** A name the vocabulary lacks (matched case-insensitively) is
   offered last, as "new tag". So `↵` on a fragment finds the tag
   you meant rather than minting "Ag". Typing the exact name of an existing
   tag in any case picks that tag, in its spelling.
-- **Names.** An exact case-insensitive match comes before prefix suggestions.
-  Whitespace collapses the same way as the server. The field sends the full
-  name for validation, so Unicode names are not cut at a UTF-16 boundary.
+- **Names.** Runs of whitespace become one space, as the server does it. The
+  field has no `maxlength` and cuts nothing: the server counts the 40
+  characters (a `maxlength` counts UTF-16 units, which cuts an emoji short),
+  and a name it refuses stays in the field with its reason in the toast.
 - **Keys.** `↑` `↓` move, and `↵` adds and keeps the field open for the next
   tag; the menu comes back on typing or `↓`. `esc` closes the menu, then clears
   the field, then closes the editor and returns to the row. `↵` on an empty
@@ -706,39 +708,40 @@ you type:
 
 **Undo covers every change.** Each change is one name on some pages, and the
 toast says so: "Added Voice to 4 pages · Undo", "Removed MCP from 1 page ·
-Undo". `u` works from the keyboard. Tagging and retiring wait for the server
-before changing the page. Its answer settles the spelling and which decisions
-changed. Undo sends the exact payload in §5, so mixed selections keep their
-original tags and undoing revival restores retirement without losing historical
-memberships. The page needs no local diff or rollback. A rejected request keeps
-the input, and a failed undo remains available to retry. A successful write with
-a failed follow-up refresh stays saved and undoable; the toast says to reload.
+Undo". `u` works from the keyboard, once per press. Tagging and retiring wait
+for the server before they change the page. It is this machine and answers in
+milliseconds, and its answer settles the spelling and which pages changed, so
+the page needs no local diff and no rollback. The answer also carries the
+decisions it replaced (§5), and undo sends those back. So undoing an add on a
+mixed selection leaves alone the pages that already had the tag, and undoing a
+revival retires the name again. A failed request changes nothing, the toast
+gives the server's reason, and what you typed or could undo is still there to
+try again. If the write stands but the library cannot be reloaded after it,
+the toast says it was saved and asks for a reload.
 
 **Retiring is in a dialog, reached from the open bar.** "Retire tags…" opens
 a small dialog, like the `?` legend. It lists the vocabulary with page counts
-and a Retire button per tag, quiet until the pointer is on its line. The copy under the title
-is the reassurance, in the place where the hesitation happens: *Retiring a tag
-takes it off the bar and off every page. Nothing is deleted: the library keeps
-it, and adding it to a page again brings it back.* Retiring hides the tag
-everywhere at once. The focused button stays focused as its action changes to
-Bring back; a tag bar filter also keeps focus when its cells repaint. If clearing it moves
-the tag below the fold, focus goes to the more button. The dialog keeps the retired tag for the rest of the
-visit, struck through, with "Bring back", because the undo toast sits behind
-the modal. Bringing a tag back (from the dialog, or by typing its name on a
-page) returns it to every page that had it. Since the response covers only the
-pages in the request, the page asks for the library again whenever a name new
-to it comes back.
+and a Retire button per tag, quiet until the pointer is on its line. The copy
+under the title is the reassurance, in the place where the hesitation happens:
+*Retiring a tag takes it off the bar and off every page. Nothing is deleted:
+the library keeps it, and adding it to a page again brings it back.* Retiring
+hides the tag everywhere at once. The dialog keeps the retired tag for the
+rest of the visit, struck through, with "Bring back" on the button that had
+focus, because the undo toast sits behind the modal. Bringing a tag back
+(from the dialog, or by typing its name on a page) returns it to every page
+that had it. Since the response covers only the pages in the request, the
+page asks for the library again whenever a name new to it comes back.
 
 **Export mode shows tags and edits nothing.** The bar, the counts, the
 multi-tag filter and the chips all work from `file://`. There is no `+ tag`,
 no tray button and no Retire cell. `+` shows the exact command with a Copy
 button, the way `f` does for forget:
-`knowmoretabs tag '<url>' --add NAME`. Apostrophes in URLs are shell-quoted
-so Copy keeps the URL as one literal argument.
+`knowmoretabs tag '<url>' --add NAME`. The URL is shell-quoted, so one with
+an apostrophe still pastes as a single argument.
 
 **The host seam grows by three calls.** `host.tag(urls, add, remove)`,
-`host.undoTags(undo)` and `host.vocab(create, retire)` exist only in serve. The page asks whether
-`host.tag` exists, never which host it is.
+`host.undoTags(undo)` and `host.vocab(create, retire)` exist only in serve.
+The page asks whether `host.tag` exists, never which host it is.
 
 ### Decisions, and what was rejected
 
@@ -815,3 +818,27 @@ remaining ~11 KB of code is the feature set: the bar and its fitting, chips,
 the editor, the retire dialog with bring-back, the export path, and the
 wiring. Going further would mean cutting a feature or minifying, and the page
 ships unminified on purpose.
+
+### What was checked after review
+
+By hand, in Chrome headless at 1400, 700 and 390 px in both schemes, against
+`knowmoretabs serve` on a copy of a real archive (43 tags on 390 pages). Like
+§6 and §7 this is a record, not a suite: the page has no browser test runner,
+and a script that reaches into `S` and `host` breaks with every refactor.
+
+- The bar, chips, row editor and tray editor are pixel-identical to the
+  design handoff.
+- `↵` adds a second and third name without an arrow key; `↵` on the empty
+  field closes it and returns to the row. The tray editor, the tag bar
+  (including a picked tag folding past "N more") and the retire dialog work
+  from the keyboard alone.
+- Undoing an add or a remove on a mixed selection, and undoing a revival,
+  leaves the tag state in `library.json` as it was before the change.
+- With the server stopped, an add keeps the typed name, a × keeps the chip,
+  retiring changes nothing, and `u` works once the server is back. A held `u`
+  sends one request.
+- A reload that fails after a revival leaves the change saved and undoable.
+- Export: `+` and `f` offer the shell-quoted command with Copy. No console
+  errors in either mode.
+
+app.js is 56.9 KB with these fixes.
