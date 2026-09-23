@@ -51,7 +51,8 @@ those two excellent.
 ### Non-goals — say these out loud in the README
 
 No sync. No accounts. No cloud. No telemetry. No browser extension (for now).
-No full-text indexing of page contents. No tag taxonomy. We never touch,
+No full-text indexing of page contents. No tag hierarchy: tags are flat
+facets the owner controls, and combining them is how you narrow (slice 7). We never touch,
 close, or reorder tabs in the live browser. We never modify the browser's own
 files — we read and copy, nothing else.
 

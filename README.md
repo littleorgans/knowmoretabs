@@ -238,7 +238,7 @@ Why decrypting is not the answer is in
 ## Non-goals
 
 No sync. No accounts. No cloud. No telemetry. No browser extension (for
-now). No full-text indexing of page contents. No tag taxonomy. It never
+now). No full-text indexing of page contents. No tag hierarchy. It never
 touches, closes or reorders tabs in the live browser, and never modifies the
 browser's own files: it reads and copies, nothing else.
 
