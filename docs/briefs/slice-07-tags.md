@@ -1,8 +1,8 @@
 # Slice 7: Tags (draft for review)
 
-**Status:** draft. Nothing here is built. §8 lists the decisions the owner has
-not made yet; §7 proposes changes to `docs/BRIEF.md` that need the owner's
-approval before any code.
+**Status:** draft. Nothing here is built. §9 records what the owner has
+decided and §8 what is still open. §7 proposes changes to `docs/BRIEF.md` that
+need the owner's approval before any code.
 
 **Ships, in four parts:**
 
