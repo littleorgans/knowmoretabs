@@ -354,7 +354,7 @@ function dropdown(id, { typeahead = false, own = false, none = 'No matches', onP
     else if ((k === ' ' || k === 'Enter') && !typeahead) { e.preventDefault(); e.stopPropagation(); d.open ? d.hide() : d.show(); }
     else if (k === 'Tab') d.hide();
   });
-  if (typeahead) { ctl.addEventListener('input', () => { if (own) d.options = options(); d.hi = own && ctl.value.trim() ? 0 : -1; d.show(); d.render(); }); ctl.addEventListener('focus', d.show); ctl.addEventListener('click', d.show); }
+  if (typeahead) { ctl.addEventListener('input', () => { if (own) d.options = options(); d.show(); d.hi = own && ctl.value.trim() ? 0 : -1; d.render(); }); ctl.addEventListener('focus', d.show); ctl.addEventListener('click', d.show); }
   else ctl.addEventListener('click', () => (d.open ? d.hide() : d.show()));
   ctl.addEventListener('blur', d.hide);
   menu.addEventListener('mousedown', (e) => e.preventDefault());   // keep focus in the control
