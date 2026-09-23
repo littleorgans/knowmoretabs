@@ -132,15 +132,26 @@ database, copied before reading. There is no network. Chrome keeps about
 - GitHub topics;
 - parent tags, only where the implication always holds (e.g. DPO ⇒ Training).
 
-**Then the providers the owner names on the command line:**
+**Then the providers the owner names on the command line.** None needs an API key:
 
-- `--with classifier.dev`: zero-shot, keyless.
+- `--with codex` or `--with claude`: the agent CLI the owner already has, on the
+  owner's existing subscription.
+  - Invocations:
+    - Codex: `codex exec -m <model> -s read-only --output-schema <file> -o <out> --ephemeral`
+    - Claude: `claude -p --model <model> --tools "" --output-format json --json-schema <schema> --no-session-persistence`
+  - Each call is headless, with no tools or filesystem access, and returns JSON
+    validated against a schema.
+  - It receives a batch of pages, the vocabulary with definitions, and the
+    guidelines, and returns tags per URL.
+  - The owner's plan limits the calls; there is no per-call bill.
+  - The tool detects which CLIs are installed and names the one it uses. The
+    model is chosen with `--model` and defaults to the CLI's own default.
+  - In the lab, an LLM reading each page against written guidelines built the
+    better vocabulary and did better on pages with little text.
+- `--with classifier.dev`: zero-shot, keyless, free tier.
   - Send **one page per request**. Batching pages changed scores by up to 0.48.
   - Scores are cached per page and phrase, because with one page per request
     each label scores independently.
-- `--with openai`: needs `OPENAI_API_KEY`. The LLM reads each page against written
-  guidelines. In the lab it built the better vocabulary and did better on
-  pages with little text.
 
 **Always:**
 
@@ -172,21 +183,23 @@ database, copied before reading. There is no network. Chrome keeps about
    the future band.
 3. **README, "Nothing leaves your machine"** → "Nothing leaves your machine
    unless you run `enrich` or `tag --with …`, which say what they send and to
-   whom". `save` and `serve` stay offline.
-4. **Principle 6 ("One binary, no runtime")** holds. 7b and 7c need an HTTP
-   client with TLS in the binary (e.g. `ureq` with `rustls`). That is a new
-   dependency, not a runtime.
+   whom (your own Codex or Claude subscription, or classifier.dev)". `save` and
+   `serve` stay offline.
+4. **Principle 6 ("One binary, no runtime")** holds. 7b and classifier.dev need an
+   HTTP client with TLS in the binary (e.g. `ureq` with `rustls`), a new dependency.
+   The `codex` and `claude` providers call CLIs the owner already has installed;
+   knowmoretabs never requires them.
 
 ## 8. Decisions for the owner
 
-1. **Third-party classification.** The owner wants it, opt-in. Still open: which provider comes
-   first. The proposal is Claude through the `claude` CLI the owner already uses
-   (`claude -p`: no separate key, the owner's existing login), with the Anthropic
-   API with a key as the alternative. Opus has not yet been measured against
-   the lab's two taggers; measure it before choosing.
+1. **Which model is the default for `--with claude`,** and does Opus tag better
+   than Luna? Measure both through the headless path in §5 before choosing.
 
 ## 9. Already decided
 
+- **Model providers are the agent CLIs the owner already subscribes to** (`codex`, `claude`),
+  plus keyless classifier.dev. There are no API keys and no per-call billing. It is opt-in: the command
+  names the provider and says what it sends. Decided 2026-09-23.
 - **`save` records History signals** (§4), from the local `History` database, with no network. Decided
   2026-09-23.
 - **7a ships first** and is used for a while before 7b and 7c.
