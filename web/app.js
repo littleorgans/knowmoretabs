@@ -654,7 +654,7 @@ function reveal(i) {
 
 // ---- 9. Wiring -------------------------------------------------------------
 function keys(e) {
-  const t = e.target, k = e.key;
+  const t = e.target, k = e.key.length === 1 ? e.key.toLowerCase() : e.key;   // shift or caps lock sends "X" for x
   if (document.querySelector('dialog[open]')) return;   // dialogs are modal; esc closes them natively
   if (k === 'Escape') return stepBack(t);
   if (isForm(t)) { if ((k === 'ArrowDown' || k === 'Enter') && t.id === 'q') { e.preventDefault(); move(1); } return; }

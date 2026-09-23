@@ -168,7 +168,8 @@ asks which host it is; it asks whether `host.forget` exists.
 
 `/` search (then `↓` or `↵` jumps into the list) · `j` `k` or arrows move ·
 `↵` opens in a new tab · `space` shows or hides history · `x` selects,
-`shift`+click extends a range · `f` forgets the selection or the current row
+`shift`+`x` or `shift`+click extends a range (letter keys ignore case, so
+Caps Lock does not silence them) · `f` forgets the selection or the current row
 (restores, in the Forgotten view) · `+` or `=` tags the selection or the
 current row · `u` undoes · `esc` steps back (below) · `?` opens the legend,
 and while it is open the page's keys are off (`esc` closes it). The legend
