@@ -377,13 +377,73 @@ EDGE_PAGES = [
 ]
 
 
+# Tags (slice 7a): a flat vocabulary the owner made, forty facets, most of
+# them about the owner's work and a few about the rest of their life. Facets
+# travel in themes, which is what gives the tag bar's co-occurrence counts a
+# shape: pick Agent and Harness, Skills and MCP rise with it. Most pages carry
+# none; the tagged ones mostly carry one to four, with a long tail.
+TAG_THEMES = {
+    "agents": ["Agent", "Harness", "MCP", "Skills", "Orchestration", "Guardrails", "Tool Calling",
+               "Context", "Memory", "Worktrees", "Code Review", "Evals"],
+    "models": ["Model", "Provider", "Inference", "Training", "Evals", "Local", "Voice", "Research", "Hosting"],
+    "eng":    ["Backend", "Frontend", "DB", "Cloud", "DevOps", "Security", "Code Review", "Rust", "CLI",
+               "Testing", "Hosting", "Worktrees"],
+    "design": ["Design", "Inspiration", "Typography", "Frontend", "Keyboards"],
+    "life":   ["Reading", "Travel", "Recipes", "Shopping", "Music", "Video", "Keyboards", "Later", "Inspiration"],
+}
+TAG_KINDS = {   # which themes a kind of page is tagged from, by its host
+    "code": ["eng", "eng", "agents", "models"], "qa": ["eng"], "docs": ["eng", "agents", "models"],
+    "paper": ["models", "agents"], "blog": ["eng", "design", "agents", "models"], "tool": ["design", "eng"],
+    "video": ["life", "agents", "design"], "social": ["agents", "models", "life"], "wiki": ["life", "models"],
+    "news": ["life"], "shop": ["life"], "travel": ["life"], "food": ["life"], "media": ["life"], "misc": ["life", "eng"],
+}
+TAG_UNUSED = ["Prompt"]         # made once, never kept on a page: a 0-count tag
+
+
+def kind_of(domain):
+    """A rough reverse of World's kinds, from the host alone."""
+    for kind, hosts in (("code", ["github.com", "gitlab.com", "codeberg.org"]), ("qa", QA), ("paper", ACADEMIC),
+                        ("blog", BLOGS), ("tool", TOOLS), ("news", NEWS), ("shop", SHOPS), ("travel", TRAVEL),
+                        ("food", FOOD), ("media", MEDIA), ("social", SOCIAL)):
+        if domain in hosts:
+            return kind
+    if domain in ("youtube.com", "vimeo.com"):
+        return "video"
+    if domain.endswith("wikipedia.org"):
+        return "wiki"
+    return "docs" if domain in {d for d in DOCS} else "misc"
+
+
+def add_tags(lib, seed):
+    """Page tags and the vocabulary, in the serve/export shape. Its own RNG, so
+    the rest of the fixture does not move when this does."""
+    r = random.Random(seed * 7 + 1)
+    vocab = sorted({t for ts in TAG_THEMES.values() for t in ts}) + TAG_UNUSED
+    used = set()
+    for i, p in enumerate(lib["pages"]):
+        k = r.choices([0, 1, 2, 3, 4, 5, 6, 8, 11], [44, 14, 14, 12, 8, 4, 2, 1, 1])[0]
+        themes = TAG_KINDS[kind_of(p["domain"])]
+        tags = set()
+        main = r.choice(themes)
+        while len(tags) < k:
+            pool = TAG_THEMES[main if r.random() < 0.8 else r.choice(list(TAG_THEMES))]
+            tags.add(pool[min(int(r.expovariate(0.35)), len(pool) - 1)])   # the head of a theme is used most
+        p["tags"] = sorted(tags, key=str.lower)
+        used |= tags
+    start = datetime(2026, 3, 14, tzinfo=timezone.utc)
+    lib["vocabulary"] = [{"name": n, "created_at": (start + timedelta(days=j * 4, hours=j % 9)).strftime("%Y-%m-%dT%H:%M:%SZ")}
+                         for j, n in enumerate(t for t in vocab if t in used or t in TAG_UNUSED)]
+    lib["vocabulary"].sort(key=lambda v: v["name"].lower())
+    return lib
+
+
 def domain_of(url):
     """What the backend's `public_domain` would say: host, lowercased, no www."""
     host = (urlsplit(url).hostname or "").lower()
     return host[4:] if host.startswith("www.") else host
 
 
-def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6):
+def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6, tags=True):
     r = random.Random(seed)
     world = World(r)
     pages = []          # {url,title,domain}
@@ -526,7 +586,7 @@ def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6)
     forgotten = set(r.sample(range(head_count, len(pages)), min(forgotten_count, max(0, len(pages) - head_count))))
     for i in forgotten:
         pages[i]["forgotten"] = True
-    return {
+    lib = {
         "schema_version": 1,
         "generated_at": times[-1].strftime("%Y-%m-%dT%H:%M:%SZ"),
         "stats": {"pages": len(pages), "snapshots": len(snapshots), "domains": len({p["domain"] for p in pages}),
@@ -534,6 +594,7 @@ def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6)
         "snapshots": snapshots,
         "pages": pages,
     }
+    return add_tags(lib, seed) if tags else lib
 
 
 def to_export(lib):
@@ -566,7 +627,7 @@ def cases(seed):
     no_pages["snapshots"] = [{"id": "2026-09-20-101500Z", "captured_at": "2026-09-20T10:15:00Z", "browser": "chrome",
                               "profile": "Default", "windows": 1, "tabs_total": 0, "stats": dict(clean),
                               "groups": [], "tabs": []}]
-    one = build(seed + 1, snapshot_count=1, head_count=12)
+    one = build(seed + 1, snapshot_count=1, head_count=12, tags=False)   # before 7a: no tags, no vocabulary
     degraded = build(seed + 2, snapshot_count=5, head_count=12, forgotten_count=0)
     degraded["snapshots"][2]["stats"] = {"dropped_tabs": 3, "unknown_commands": 2, "malformed_commands": 0,
                                          "truncated_bytes": 1024, "marker_ok": False, "degraded": True}
