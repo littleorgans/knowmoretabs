@@ -29,6 +29,12 @@
     const filter = $('tb').querySelector('[data-t]');
     filter.focus(); filter.click();
     check(document.activeElement.dataset.t === filter.dataset.t, 'tag filter lost keyboard focus');
+    clearFilters(); render();
+    const last = [...$('tb').querySelectorAll('[data-t]')].at(-1).dataset.t;
+    filterTag(last); S.tagsAll = false; fitTags();
+    const picked = [...$('tb').querySelectorAll('[data-t]')].find(b => b.dataset.t === last);
+    picked.focus(); picked.click();
+    check(document.activeElement.id === 'tb-more', 'collapsed tag lost focus when it returned below the fold');
     clearFilters(); render(); vocabDialog(); $('vocab').showModal();
     const button = $('vocab-list').querySelector('button'); button.focus(); vocabDialog();
     check(document.activeElement.dataset.k === button.dataset.k, 'vocabulary update lost keyboard focus');

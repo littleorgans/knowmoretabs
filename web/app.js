@@ -478,7 +478,7 @@ function fitTags() {
 function filterTag(k) {
   const focused = $('tb').contains(document.activeElement);
   S.tags = S.tags.includes(k) ? S.tags.filter((t) => t !== k) : [...S.tags, k]; render();
-  if (focused) [...$('tb').querySelectorAll('[data-t]')].find((b) => b.dataset.t === k)?.focus();
+  if (focused) { const b = [...$('tb').querySelectorAll('[data-t]')].find((b) => b.dataset.t === k); (b?.parentElement.hidden ? $('tb-more') : b)?.focus(); }
 }
 
 // The tagger: one editor, moved onto a row's address line or above the tray's
