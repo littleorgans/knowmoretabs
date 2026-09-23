@@ -728,7 +728,10 @@ you type:
 - **Keys.** `↑` `↓` move, and `↵` adds and keeps the field open for the next
   tag; the menu comes back on typing or `↓`. `esc` closes the menu, then clears
   the field, then closes the editor and returns to the row (steps 2 to 4 of
-  §3). `↵` on an empty field closes it too.
+  §3). `↵` on an empty field closes it too. With the menu shut by `esc`, `↵`
+  adds the name as typed, since the suggestions were refused: "Ag" makes Ag,
+  an existing name in any case is that tag, and a retired one comes back.
+  (It used to do nothing: the menu took `↵` only while open.)
 - **Placement.** The menu opens under the field. When the row is too near the
   bottom of the window, the page first scrolls to make room. At the very end
   of the list the menu opens upward instead, clear of the title and URL. A tag

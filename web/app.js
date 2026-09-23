@@ -743,11 +743,13 @@ function wire() {
     else filterTag(b.dataset.t); });
   new ResizeObserver(fitTags).observe($('tagbar'));
   $('tag-sel').addEventListener('click', () => openTagger('sel'));
-  dropdown('tg', { typeahead: true, own: true, none: 'Type a name to make a tag', options: tagOptions, onPick: async (o) => { const v = $('tg').value; if ((await applyTags(tagIdxs(), [o.value], [])) !== false && $('tg').value === v) $('tg').value = ''; } });   // a failed add keeps what was typed
-  $('tg').addEventListener('keydown', (e) => {         // after the menu's keys: esc clears, then closes; ↵ on nothing closes
+  const addTag = async (name) => { const v = $('tg').value; if ((await applyTags(tagIdxs(), [name], [])) !== false && $('tg').value === v) $('tg').value = ''; };   // a failed add keeps what was typed
+  dropdown('tg', { typeahead: true, own: true, none: 'Type a name to make a tag', options: tagOptions, onPick: (o) => addTag(o.value) });
+  // After the menu's keys: esc clears, then closes; ↵ on nothing closes, and with the menu shut adds what is typed.
+  $('tg').addEventListener('keydown', (e) => {
     e.stopPropagation(); const v = $('tg').value;
-    if (e.defaultPrevented || !(e.key === 'Escape' || (e.key === 'Enter' && !v.trim()))) return;
-    e.preventDefault(); if (v) $('tg').value = ''; else closeTagger();
+    if (e.defaultPrevented || (e.key !== 'Escape' && e.key !== 'Enter')) return;
+    e.preventDefault(); if (e.key === 'Enter' && v.trim()) addTag(tagName(v)); else if (v) $('tg').value = ''; else closeTagger();
   });
   $('tg-dd').addEventListener('mousedown', (e) => { if (e.target !== $('tg')) e.preventDefault(); });   // keep focus in the field
   $('tg-dd').addEventListener('click', (e) => { const rm = e.target.closest('[data-rm]'); if (rm) applyTags(tagIdxs(), [], [S.vocab.get(rm.dataset.rm)]); });
