@@ -6,7 +6,13 @@
   const original = host.tag, originalLoad = host.load, originalVocab = host.vocab, originalUndo = host.undoTags, requests = [];
   host.tag = async (urls, add, remove) => { requests.push({urls, add, remove}); return {urls: [], tags: {}, vocabulary: [...S.vocab.values()].map(name=>({name}))}; };
   try {
-    closeTagger(); openTagger(S.rendered[0].i);
+    closeTagger();
+    const row = rowOf(S.rendered[0].i); setCursor(row);
+    row.dispatchEvent(new KeyboardEvent('keydown', {key:'=', bubbles:true, cancelable:true}));
+    check(T.on && document.activeElement === $('tg'), '= did not open the row editor');
+    $('tg').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}));
+    check(!T.on && document.activeElement === row, 'empty Enter did not close and refocus the row');
+    row.dispatchEvent(new KeyboardEvent('keydown', {key:'+', bubbles:true, cancelable:true}));
     for (const name of ['KeyboardOne', 'KeyboardTwo']) {
       $('tg').value = name; $('tg').dispatchEvent(new Event('input'));
       $('tg').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}));

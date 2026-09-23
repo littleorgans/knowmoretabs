@@ -351,7 +351,7 @@ function dropdown(id, { typeahead = false, own = false, none = 'No matches', onP
   ctl.addEventListener('keydown', (e) => {
     const k = e.key;
     if (k === 'ArrowDown' || k === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); if (!d.open) d.show(); d.hi = Math.max(0, Math.min(d.shown.length - 1, d.hi + (k === 'ArrowDown' ? 1 : -1))); d.render(); }
-    else if (k === 'Enter' && d.open) { e.preventDefault(); e.stopPropagation(); if (d.shown[d.hi]) d.pick(d.shown[d.hi]); else d.hide(); }
+    else if (k === 'Enter' && d.open) { if (own && !ctl.value.trim() && d.hi < 0) { d.hide(); return; } e.preventDefault(); e.stopPropagation(); if (d.shown[d.hi]) d.pick(d.shown[d.hi]); else d.hide(); }
     else if (k === 'Escape' && d.open) { e.preventDefault(); e.stopPropagation(); d.hide(); }
     else if ((k === ' ' || k === 'Enter') && !typeahead) { e.preventDefault(); e.stopPropagation(); d.open ? d.hide() : d.show(); }
     else if (k === 'Tab') d.hide();
