@@ -1,8 +1,8 @@
-# Slice 7: Tags (draft for review)
+# Slice 7: Tags
 
-**Status:** draft. Nothing here is built. §9 records what the owner has
-decided; §8 is for open questions (none now). §7 proposes changes to `docs/BRIEF.md` that
-need the owner's approval before any code.
+**Status:** approved 2026-09-23. Nothing here is built yet. §9 records the owner's
+decisions; §8 is for open questions. Of §7's `BRIEF.md` changes, 1 is applied; 3's
+README wording lands with 7b, when `enrich` exists.
 
 **Ships, in four parts:**
 
@@ -186,7 +186,7 @@ output of two different agents.
   ten times more than noise, and made it stricter overall unless balanced
   across tags.
 
-## 7. Proposed changes to `docs/BRIEF.md` (need approval)
+## 7. Changes to `docs/BRIEF.md` and the README (approved)
 
 1. **Non-goals:** "No tag taxonomy" → "No tag hierarchy: tags are flat facets
    the owner controls".
