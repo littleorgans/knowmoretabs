@@ -170,11 +170,33 @@ asks which host it is; it asks whether `host.forget` exists.
 `↵` opens in a new tab · `space` shows or hides history · `x` selects,
 `shift`+click extends a range · `f` forgets the selection or the current row
 (restores, in the Forgotten view) · `+` or `=` tags the selection or the
-current row · `u` undoes · `esc` clears the selection, then open histories,
-then filters · `?` opens the legend, and while it is open the page's keys are
-off (`esc` closes it). The legend lives only in that dialog,
-behind the `?` key and the `?` button at the end of the toolbar; the search
-field shows a `/` hint.
+current row · `u` undoes · `esc` steps back (below) · `?` opens the legend,
+and while it is open the page's keys are off (`esc` closes it). The legend
+lives only in that dialog, behind the `?` key and the `?` button at the end of
+the toolbar; the search field shows a `/` hint.
+
+**`esc` takes one step a press, the most local thing showing:**
+
+1. an open dialog (the legend, Retire tags) closes;
+2. an open menu (Site, Group, Show, Sort, the tag suggestions) closes;
+3. text in the focused field clears (search, Site, Group, the tag field);
+4. the tag editor, its field empty, closes and the key goes back to its row;
+5. an open history closes;
+6. the preview goes back to the full list, the selection kept;
+7. the selection clears;
+8. the filters clear, as Clear does;
+9. a field with nothing left to clear hands the key to the cursor row.
+
+Open things close before state is cleared, and the history comes before the
+preview because it belongs to one row. Where the focus is never counts as a
+step. The first version let a clicked row checkbox keep the focus, and since
+the page read any `<input>` as a text field, `esc` first "cleared" the box's
+value (`on`, invisibly), then blurred it to the body, and only the third press
+cleared the selection; every other page key was dead in between. The row now
+takes the focus when its box is clicked, as it does for any click, and a
+checkbox is not a field. Nothing `esc` hides takes the key with it: when the
+tray goes, the key goes back to the cursor row. The "Open now" fold and the
+tag bar's "N more" are views you chose, not layers, and `esc` leaves them.
 
 Rows are the tab stops. The list uses a roving tabindex: one row is
 `tabindex="0"`, the title link and the buttons inside rows are `tabindex="-1"`.
@@ -698,8 +720,8 @@ you type:
   and a name it refuses stays in the field with its reason in the toast.
 - **Keys.** `↑` `↓` move, and `↵` adds and keeps the field open for the next
   tag; the menu comes back on typing or `↓`. `esc` closes the menu, then clears
-  the field, then closes the editor and returns to the row. `↵` on an empty
-  field closes it too.
+  the field, then closes the editor and returns to the row (steps 2 to 4 of
+  §3). `↵` on an empty field closes it too.
 - **Placement.** The menu opens under the field. When the row is too near the
   bottom of the window, the page first scrolls to make room. At the very end
   of the list the menu opens upward instead, clear of the title and URL. A tag
