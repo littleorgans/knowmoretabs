@@ -14,6 +14,16 @@
       check(requests.at(-1)?.add[0] === name, `Enter did not submit ${name}`);
       check(document.activeElement === $('tg'), 'focus left editor');
     }
-    return 'PASS: successive tags submit with Enter and retain focus';
+    check(tagName('One\tTwo') === 'One Two', 'whitespace changed the name');
+    check(tagName('😀'.repeat(40)) === '😀'.repeat(40), 'Unicode name was truncated');
+    check(tagName('x'.repeat(41)).length === 41, 'overlong name was silently truncated');
+    check(!$('tg').hasAttribute('maxlength'), 'HTML limits code units instead of characters');
+    const p = S.pages.find(p => p.i !== S.cur && !p.forgotten), saved = [...p.tags], vocab = new Map(S.vocab);
+    try {
+      S.vocab.set('reviewexact', 'ReviewExact'); S.vocab.set('reviewexactly', 'ReviewExactly');
+      setTags(p, ['ReviewExactly']); $('tg').value = 'REVIEWEXACT';
+      check(tagOptions()[0]?.value === 'ReviewExact', 'a popular prefix outranked the exact name');
+    } finally { S.vocab = vocab; setTags(p, saved); }
+    return 'PASS: keyboard, exact names, whitespace and Unicode';
   } finally { host.tag = original; closeTagger(); }
 })()

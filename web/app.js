@@ -67,8 +67,8 @@ function ago(date) {
   return rel.format(-Math.floor(s / AGO[i][0]), AGO[i][1]);
 }
 const lc = (t) => t.toLowerCase();
-// A tag name as the contract takes it: no control characters, spaces collapsed, at most 40.
-const tagName = (s) => String(s).replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 40);
+// Collapse whitespace like the backend; it validates length and control characters.
+const tagName = (s) => String(s).replace(/\p{White_Space}+/gu, ' ').trim();
 // A page's tags in the vocabulary's spelling, plus the lower-case set the filter counts with.
 function setTags(p, names) {
   const m = new Map();
@@ -511,7 +511,7 @@ function tagOptions() {
   const typed = tagName($('tg').value), q = lc(typed), idxs = tagIdxs(), all = libraryCounts();
   const o = [...S.vocab].filter(([k]) => k.includes(q) && !idxs.every((i) => S.pages[i].tk.has(k)))
     .map(([k, name]) => ({ value: name, label: name, n: all.get(k) || 0, pre: k.startsWith(q), meta: plural(all.get(k) || 0, 'page') }))
-    .sort((a, b) => b.pre - a.pre || b.n - a.n || collator.compare(a.label, b.label));
+    .sort((a, b) => (lc(b.value) === q) - (lc(a.value) === q) || b.pre - a.pre || b.n - a.n || collator.compare(a.label, b.label));
   const back = S.retired?.get(q);                    // retired on this visit: the one retired name the page knows
   if (q && !S.vocab.has(q)) o.push({ value: back || typed, label: back || typed, meta: back ? 'retired · brings it back' : 'new tag' });
   return o;
