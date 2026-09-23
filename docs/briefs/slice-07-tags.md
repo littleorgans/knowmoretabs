@@ -1,7 +1,7 @@
 # Slice 7: Tags (draft for review)
 
 **Status:** draft. Nothing here is built. §9 records what the owner has
-decided and §8 what is still open. §7 proposes changes to `docs/BRIEF.md` that
+decided; §8 is for open questions (none now). §7 proposes changes to `docs/BRIEF.md` that
 need the owner's approval before any code.
 
 **Ships, in four parts:**
@@ -10,7 +10,7 @@ need the owner's approval before any code.
 |---|---|---|---|
 | 7a | Tags you set, and filtering by combining them | none | nothing |
 | 7b | `knowmoretabs enrich`: page metadata | opt-in, to the pages' own sites | the URLs you fetch |
-| 7c | `knowmoretabs tag`: suggested tags | opt-in | page text, to the provider you name |
+| 7c | `knowmoretabs tag`: suggested tags, via a prompt you run in your own agent | none | nothing: you hand the folder to your agent |
 | 7d | Learning from your decisions | as 7c | as 7c |
 
 Each part ships on its own. 7a is useful without the other three and breaks
@@ -45,10 +45,10 @@ repo, on one real library of 592 pages) established that shape.
   migration. Before 7c, a page's tags are simply its `add` set.
 - **Umbrella tags** (for example AI ⇐ any AI tag) are optional, derived, and
   never assigned. They are displayed but not stored per page.
-- **Suggestions** (7c) come with provenance: source, model, score, date and
-  vocabulary version. A page's tags are then its confirmed suggestions, plus
-  single-source suggestions shown as unconfirmed, plus the owner's additions,
-  minus the owner's removals.
+- **Suggestions** (7c) are imported from the owner's agent, with their source (the model name),
+  the date and the vocabulary version; they have no scores. A page's tags are
+  then its suggestions (confirmed when two sources agree), plus the owner's
+  additions, minus the owner's removals.
 
 ## 3. Part 7a: tags you set, offline
 
@@ -123,56 +123,68 @@ and the time in the foreground. These come from the browser's `History`
 database, copied before reading. There is no network. Chrome keeps about
 90 days of history; a snapshot keeps it for as long as the archive exists.
 
-## 5. Part 7c: `knowmoretabs tag`, suggested tags
+## 5. Part 7c: `knowmoretabs tag`, suggested tags through a prompt handoff
 
-**Rules first**, local and certain:
+knowmoretabs contains no model, no provider code and no API keys. It writes a
+prompt, and imports what comes back.
 
-- keywords in the title and description, never in README bodies (a passing
-  mention is not a topic);
-- GitHub topics;
-- parent tags, only where the implication always holds (e.g. DPO ⇒ Training).
+1. **Rules first**, local and certain, applied by the tool itself:
+   - keywords in the title and description, never in README bodies (a passing
+     mention is not a topic);
+   - GitHub topics;
+   - parent tags, only where the implication always holds (e.g. DPO ⇒ Training).
+2. **`knowmoretabs tag --prompt DIR`** writes a work folder:
+   - `prompt.md`: the owner's guidelines (tags are facets, "substantially
+     about", favour recall), the vocabulary with definitions, the exact output
+     format, and the validation the agent must run before it finishes;
+   - `pages.jsonl`: one line per page not yet tagged, with its URL, title and
+     the enriched text from 7b when there is some.
+3. **The owner runs it in any agent** (Codex, Claude Code, anything), with any
+   model: "Read `prompt.md` and carry it out."
+   - The prompt tells the agent to tag by reading, in chunks, and to write
+     only inside `DIR`.
+   - The owner chooses where the data goes; knowmoretabs sends nothing.
+4. **`knowmoretabs tag --import DIR/tags.jsonl [--source NAME]`** validates
+   before storing anything:
+   - every URL must be one the library knows;
+   - every tag must be in the vocabulary, or be a new tag the owner accepts;
+   - every line must be well formed.
 
-**Then the providers the owner names on the command line.** None needs an API key:
+   Imported tags become suggestions, stored with their source (the model
+   name the agent reports, or `--source`), the date and the vocabulary version,
+   in `~/.knowmoretabs/tags/suggested.jsonl`.
 
-- `--with codex` or `--with claude`: the agent CLI the owner already has, on the
-  owner's existing subscription.
-  - Invocations:
-    - Codex: `codex exec -m <model> -s read-only --output-schema <file> -o <out> --ephemeral`
-    - Claude: `claude -p --model <model> --tools "" --output-format json --json-schema <schema> --no-session-persistence`
-  - Each call is headless, with no tools or filesystem access, and returns JSON
-    validated against a schema.
-  - It receives a batch of pages, the vocabulary with definitions, and the
-    guidelines, and returns tags per URL.
-  - The owner's plan limits the calls; there is no per-call bill.
-  - The tool detects which CLIs are installed and names the one it uses. The
-    model is chosen with `--model` and defaults to the CLI's own default.
-  - In the lab, an LLM reading each page against written guidelines built the
-    better vocabulary and did better on pages with little text.
-- `--with classifier.dev`: zero-shot, keyless, free tier.
-  - Send **one page per request**. Batching pages changed scores by up to 0.48.
-  - Scores are cached per page and phrase, because with one page per request
-    each label scores independently.
+**Why this shape:**
+
+- The lab proved it end to end. The same brief-in, `tags.jsonl`-out handoff
+  gave 592 of 592 pages tagged, with every tag defined.
+- It works with whichever model is best next year.
+- It keeps the tool's promise literal: `tag` has no network code at all.
 
 **Always:**
 
-- only new or changed pages are processed;
+- the prompt covers only new or untagged pages;
 - nothing runs automatically;
-- every suggestion is stored with its provenance in
-  `~/.knowmoretabs/tags/suggested.jsonl`;
 - the owner's decisions override suggestions.
 
-**Review in `serve`:** each chip is one of confirmed, unconfirmed or yours, with ✓ × ↺. There is a
-"has unconfirmed tags" view, and "forget page" is available beside the tags.
+**Review in `serve`:** each chip is one of suggested, suggested by several sources, or yours, with ✓ × ↺. There is a
+"has suggested tags" view, and "forget page" is available beside the tags.
+
+**Not in the product:** classifier.dev (Jev). It served the lab as a second,
+reproducible opinion. A second source is still possible: the owner imports the
+output of two different agents.
 
 ## 6. Part 7d: learning from decisions
 
 - `knowmoretabs tag --eval`: each tag's precision and recall against the
   owner's decisions, per provider.
-- `knowmoretabs tag --propose-vocabulary`: an LLM suggests tags for pages that
-  nothing matched.
-- Later: balanced examples of confirmed decisions sent with each request.
-  Measured caution: examples shifted scores about ten times more than noise, and
-  they made the model stricter overall unless balanced across tags.
+- `knowmoretabs tag --propose-vocabulary DIR`: the same handoff with a different
+  prompt. The owner's agent proposes tags for pages that nothing matched; the owner
+  accepts them, and they are imported into the vocabulary.
+- Later: `prompt.md` includes balanced examples of the owner's confirmed and
+  removed tags. Measured caution: examples shifted a classifier's scores about
+  ten times more than noise, and made it stricter overall unless balanced
+  across tags.
 
 ## 7. Proposed changes to `docs/BRIEF.md` (need approval)
 
@@ -181,25 +193,24 @@ database, copied before reading. There is no network. Chrome keeps about
 2. **Non-goals:** "No full-text indexing of page contents" stays. 7b stores
    `<head>` metadata and a README excerpt, not page bodies. `fulltext` stays in
    the future band.
-3. **README, "Nothing leaves your machine"** → "Nothing leaves your machine
-   unless you run `enrich` or `tag --with …`, which say what they send and to
-   whom (your own Codex or Claude subscription, or classifier.dev)". `save` and
-   `serve` stay offline.
-4. **Principle 6 ("One binary, no runtime")** holds. 7b and classifier.dev need an
-   HTTP client with TLS in the binary (e.g. `ureq` with `rustls`), a new dependency.
-   The `codex` and `claude` providers call CLIs the owner already has installed;
-   knowmoretabs never requires them.
+3. **README, "Nothing leaves your machine"** stays true for knowmoretabs:
+   `save`, `serve` and `tag` send nothing. Add "unless you run `enrich`, which
+   fetches the `<head>` of pages you already visited". Say plainly that a
+   `tag --prompt` folder holds page text, and that where it goes is the owner's choice.
+4. **Principle 6 ("One binary, no runtime")** holds. Only 7b needs an HTTP
+   client with TLS in the binary (e.g. `ureq` with `rustls`), a new
+   dependency. `tag` needs none.
 
 ## 8. Decisions for the owner
 
-1. **Which model is the default for `--with claude`,** and does Opus tag better
-   than Luna? Measure both through the headless path in §5 before choosing.
+None open. New questions go here.
 
 ## 9. Already decided
 
-- **Model providers are the agent CLIs the owner already subscribes to** (`codex`, `claude`),
-  plus keyless classifier.dev. There are no API keys and no per-call billing. It is opt-in: the command
-  names the provider and says what it sends. Decided 2026-09-23.
+- **Tagging is a prompt handoff.** `tag --prompt` writes `prompt.md` and
+  `pages.jsonl`, the owner runs them in whatever harness and model they like on
+  their own subscription, and `tag --import` validates and stores the result.
+  The tool contains no model, provider code or API keys. Decided 2026-09-23.
 - **`save` records History signals** (§4), from the local `History` database, with no network. Decided
   2026-09-23.
 - **7a ships first** and is used for a while before 7b and 7c.
