@@ -117,7 +117,7 @@ It needs no token.
   behind a login and skip it; don't hide it.
 - **Flags:** `--dry-run` lists what would be fetched; `--limit N` caps a run.
 
-**Also proposed (decision 2 in §8):** `save` records the local History signals
+**Decided (§9):** `save` records the local History signals
 for each tab: the search query that led to it, the referrer, the visit count
 and the time in the foreground. These come from the browser's `History`
 database, copied before reading. There is no network. Chrome keeps about
@@ -179,18 +179,19 @@ database, copied before reading. There is no network. Chrome keeps about
 
 ## 8. Decisions for the owner
 
-1. **Is third-party classification acceptable in the shipped tool,** opt-in and
-   named at the moment of use, or must the shipped tool be local-only (rules
-   now, a local model later)?
-2. **Should `save` record History signals** (§4)? It involves no network and is
-   the cheapest gain available.
-3. **Is 7a first,** used for a while before 7b and 7c, as the brief's "earn
-   their place" suggests?
-4. **Starter vocabulary:** ship one, start empty, or bootstrap one with
-   `--propose-vocabulary`?
+1. **Third-party classification.** The owner wants it, opt-in. Still open: which provider comes
+   first. The proposal is Claude through the `claude` CLI the owner already uses
+   (`claude -p`: no separate key, the owner's existing login), with the Anthropic
+   API with a key as the alternative. Opus has not yet been measured against
+   the lab's two taggers; measure it before choosing.
 
 ## 9. Already decided
 
+- **`save` records History signals** (§4), from the local `History` database, with no network. Decided
+  2026-09-23.
+- **7a ships first** and is used for a while before 7b and 7c.
+- **New users start with an empty vocabulary.** No starter set is shipped;
+  `--propose-vocabulary` (7d) is the opt-in bootstrap.
 - **Loopback tabs** are left out at `save` and hidden in the library. This is
   on the branch `feat/save-leaves-out-localhost`.
 - **Login, signup and verification screens** are the owner's to forget. No
