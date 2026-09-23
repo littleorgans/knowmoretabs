@@ -14,6 +14,7 @@ use url::Url;
 
 use crate::archive::{self, Archive, SNAPSHOT_JSON};
 use crate::error::Error;
+use crate::local;
 use crate::model::{self, Snapshot};
 
 #[derive(Debug, Default)]
@@ -319,26 +320,11 @@ fn public_domain(raw: &str) -> Option<String> {
     let Ok(url) = Url::parse(raw) else {
         return Some(String::new());
     };
-    if url.scheme() == "file" || url.host().as_ref().is_some_and(is_local) {
+    if url.scheme() == "file" || url.host().as_ref().is_some_and(local::is_this_machine) {
         return None;
     }
     let host = url.host_str().unwrap_or("").to_lowercase();
     Some(host.strip_prefix("www.").unwrap_or(&host).to_owned())
-}
-
-/// The one machine the archive was captured on, under all its spellings:
-/// `localhost` and its RFC 6761 subdomains, the loopback ranges, and the
-/// unspecified addresses a development server binds to. None of these names
-/// a page that would still be there for whoever reads the export.
-fn is_local(host: &url::Host<&str>) -> bool {
-    match host {
-        url::Host::Domain(name) => {
-            let name = name.trim_end_matches('.').to_lowercase();
-            name == "localhost" || name.ends_with(".localhost")
-        }
-        url::Host::Ipv4(ip) => ip.is_loopback() || ip.is_unspecified(),
-        url::Host::Ipv6(ip) => ip.is_loopback() || ip.is_unspecified(),
-    }
 }
 
 #[cfg(test)]

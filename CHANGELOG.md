@@ -20,7 +20,9 @@ as what you can do that you could not before.
   verbatim copy of the session file. A snapshot is never overwritten, an
   interrupted run leaves nothing behind, and two runs at once both succeed.
   If nothing has changed since the last snapshot, nothing is saved unless you
-  say `--force`. A session record the parser does not recognise, a
+  say `--force`. Tabs on this machine (`localhost`, `127.0.0.1` and the other
+  loopback spellings) are left out of the snapshot and counted, so opening a
+  development server is never a change; the library already hid them. A session record the parser does not recognise, a
   half-written tail, or a tab with no usable page are counted and reported,
   never fatal. If Chrome's encrypted session files are newer than the
   cleartext ones this tool reads, `save` refuses with exit status 3 rather

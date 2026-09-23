@@ -18,6 +18,7 @@ mod error;
 mod export;
 mod library;
 mod library_commands;
+mod local;
 mod model;
 mod out;
 mod platform;
@@ -155,8 +156,13 @@ fn summary(snapshot: &Snapshot) -> String {
         1 => ", 1 group".to_owned(),
         n => format!(", {n} groups"),
     };
+    let excluded = match s.excluded_tabs {
+        0 => String::new(),
+        1 => " (1 localhost tab left out)".to_owned(),
+        n => format!(" ({n} localhost tabs left out)"),
+    };
     format!(
-        "{} tabs across {} window{}{groups}",
+        "{} tabs across {} window{}{groups}{excluded}",
         s.tabs,
         s.windows,
         if s.windows == 1 { "" } else { "s" }

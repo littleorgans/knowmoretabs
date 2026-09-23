@@ -65,6 +65,30 @@ fn unchanged_layout_is_skipped_unless_forced() {
 }
 
 #[test]
+fn opening_a_localhost_tab_is_not_a_change() {
+    let fx = Fixture::new();
+    fx.write_session("Default", 20, &two_tab_session());
+    assert_success(&fx.run(&[]));
+
+    let with_dev_server = SessionBuilder::new()
+        .simple_tab(1, 2, "https://example.test/one", "One")
+        .simple_tab(1, 4, "http://localhost:5173/", "Dev server")
+        .simple_tab(1, 3, "https://example.test/two", "Two")
+        .selected_tab(1, 1)
+        .marker()
+        .build();
+    fx.write_session("Default", 21, &with_dev_server);
+    let output = fx.run(&[]);
+    assert_success(&output);
+    assert!(
+        stdout(&output).starts_with("no change since "),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(fx.snapshot_dirs().len(), 1);
+}
+
+#[test]
 fn skip_compares_within_the_same_profile_only() {
     let fx = Fixture::new();
     fx.write_local_state(

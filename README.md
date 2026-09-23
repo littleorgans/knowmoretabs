@@ -77,8 +77,11 @@ Local only: it answers this machine and nothing else. Press Ctrl-C to stop.
 
 `save` reads the newest session file, copies it verbatim, and records every
 tab's URL, title, window, position, pinned state, tab group (name, colour,
-collapsed) and last-active time. A run whose window, tab and URL layout
-matches the newest snapshot saves nothing; `--force` saves anyway.
+collapsed) and last-active time. Tabs on this machine (`localhost`, its
+subdomains, and loopback addresses such as `127.0.0.1`) are left out: a
+development server is not a page you can go back to. `save` says how many it
+left out, and they never count as a change. A run whose window, tab and URL
+layout matches the newest snapshot saves nothing; `--force` saves anyway.
 
 `serve` is a page on `127.0.0.1` listing every page you have ever had open,
 once, with search, a site filter, an open-or-not filter, five sort orders,

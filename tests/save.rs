@@ -471,3 +471,78 @@ fn a_dead_stdout_still_saves_and_exits_zero() {
         assert_eq!(fx.snapshot_dirs().len(), 1, "{args:?}: nothing was saved");
     }
 }
+
+#[test]
+fn localhost_tabs_are_left_out_counted_and_leave_no_gaps() {
+    let fx = Fixture::new();
+    let (kept, local) = ((1, 1), (2, 2));
+    let session = SessionBuilder::new()
+        .simple_tab(1, 2, "https://example.test/one", "One")
+        .simple_tab(1, 3, "http://localhost:5173/", "Dev server")
+        .simple_tab(1, 4, "https://example.test/two", "Two")
+        .simple_tab(1, 5, "http://127.0.0.1:7878/#pages", "Library")
+        // The dev server is the front tab of window 1.
+        .selected_tab(1, 1)
+        // A window of nothing but this machine, between two real ones.
+        .simple_tab(2, 6, "http://[::1]:3000/", "Only local")
+        .simple_tab(3, 7, "https://example.test/three", "Three")
+        .set_tab_group(4, Some(kept))
+        .group_metadata(kept, "Reading", 1, false, None)
+        .set_tab_group(5, Some(local))
+        .group_metadata(local, "Local", 2, false, None)
+        .marker()
+        .build();
+    fx.write_session("Default", 20, &session);
+    let output = fx.run(&[]);
+    assert_success(&output);
+    assert!(
+        stdout(&output)
+            .starts_with("saved 3 tabs across 2 windows, 1 group (3 localhost tabs left out) to "),
+        "{}",
+        stdout(&output)
+    );
+
+    let snapshot = read_snapshot(&fx.snapshot_dirs()[0]);
+    let tabs: Vec<(u64, i64, &str)> = snapshot["tabs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["window"].as_u64().unwrap(),
+                t["position"].as_i64().unwrap(),
+                t["url"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        tabs,
+        [
+            (1, 0, "https://example.test/one"),
+            (1, 1, "https://example.test/two"),
+            (2, 0, "https://example.test/three"),
+        ]
+    );
+    let windows = snapshot["windows"].as_array().unwrap();
+    assert_eq!(windows.len(), 2);
+    assert_eq!(windows[0]["tabs"], 2);
+    assert!(
+        windows[0]["active_tab"].is_null(),
+        "the front tab was left out, so no kept tab is in front"
+    );
+    assert_eq!(windows[1]["number"], 2);
+    let groups = snapshot["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["title"], "Reading");
+
+    let stats = &snapshot["stats"];
+    assert_eq!(stats["excluded_tabs"], 3);
+    assert_eq!(stats["tabs"], 3);
+    assert_eq!(stats["windows"], 2);
+    assert_eq!(stats["groups"], 1);
+    assert_eq!(stats["dropped_tabs"], 0, "leaving out is not degradation");
+
+    // The browser's own file is still copied byte for byte.
+    let copied = std::fs::read(fx.snapshot_dirs()[0].join("session.snss")).unwrap();
+    assert_eq!(copied, session);
+}
