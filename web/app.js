@@ -442,7 +442,7 @@ async function apply(idxs, restore) {
   catch (e) { for (const i of idxs) S.pages[i].forgotten = restore; render(); toast(`Could not reach the server (${e.message}); nothing changed.`); }
 }
 // The last change, as the call that reverses it.
-function undo() { const f = S.undo; S.undo = null; if (f) f(); }
+function undo() { if (S.undo) return S.undo(); }
 let toastTimer = 0;
 function toast(msg, label, act) {
   const t = $('toast'); t.textContent = msg;
@@ -525,18 +525,21 @@ function readOnlyTag(i) {
 async function applyTags(idxs, add, remove) {
   if (!host.tag) return readOnlyTag(idxs[0]);
   const had = new Set(S.vocab.keys());
-  let changed;
-  try {
-    const r = await host.tag(idxs.map((i) => S.pages[i].url), add, remove);
-    if (add.some((t) => !had.has(lc(t)))) await refetchTags();   // a new name may be a retired one, back on every page that had it
-    else { setVocab(r.vocabulary || []); for (const [u, ts] of Object.entries(r.tags || {})) if (S.byUrl.has(u)) setTags(S.byUrl.get(u), ts); }
-    changed = (r.urls || []).map((u) => S.byUrl.get(u)?.i).filter((i) => i != null);
-  } catch (e) { return toast(`Nothing changed (${e.message}).`); }
-  if (changed.length) {
-    S.undo = () => applyTags(changed, remove, add);
-    toast(`${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`, 'Undo', undo);
+  let r;
+  try { r = await host.tag(idxs.map((i) => S.pages[i].url), add, remove); }
+  catch (e) { toast(`Could not update tags (${e.message}).`); return false; }
+  setVocab(r.vocabulary || []);
+  for (const [u, ts] of Object.entries(r.tags || {})) if (S.byUrl.has(u)) setTags(S.byUrl.get(u), ts);
+  const changed = (r.urls || []).map((u) => S.byUrl.get(u)?.i).filter((i) => i != null);
+  let message = `${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`;
+  if (changed.length) S.undo = () => applyTags(changed, remove, add);
+  if (add.some((t) => !had.has(lc(t)))) {
+    try { await refetchTags(); }                 // a revived name may reappear on other pages too
+    catch (e) { message += `; saved, but could not refresh the library (${e.message}). Reload to see all pages.`; }
   }
+  toast(message, changed.length ? 'Undo' : null, undo);
   retagged(idxs);
+  return true;
 }
 function setVocab(list) { S.vocab = new Map(list.filter((v) => typeof v?.name === 'string' && v.name).map((v) => [lc(v.name), v.name])); }
 async function refetchTags() {
@@ -561,13 +564,18 @@ function vocabDialog() {
 async function retire(k) {
   S.retired ||= new Map();
   const back = !S.vocab.has(k), name = back ? S.retired.get(k) : S.vocab.get(k), n = libraryCounts().get(k) || 0;
-  try {
-    const r = await host.vocab(back ? [name] : [], back ? [] : [name]);
-    if (back) await refetchTags();
-    else { setVocab(r.vocabulary || []); S.retired.set(k, name); S.tags = S.tags.filter((t) => t !== k); for (const p of S.pages) if (p.tk.has(k)) setTags(p, p.tags.filter((t) => lc(t) !== k)); }
-  } catch (e) { return toast(`Nothing changed (${e.message}).`); }
+  let r;
+  try { r = await host.vocab(back ? [name] : [], back ? [] : [name]); }
+  catch (e) { return toast(`Could not update vocabulary (${e.message}).`); }
+  setVocab(r.vocabulary || []);
+  if (!back) { S.retired.set(k, name); S.tags = S.tags.filter((t) => t !== k); for (const p of S.pages) if (p.tk.has(k)) setTags(p, p.tags.filter((t) => lc(t) !== k)); }
   S.undo = () => retire(k);
-  toast(back ? `${name} is back on ${plural(libraryCounts().get(k) || 0, 'page')}` : `Retired ${name}; ${plural(n, 'page')} no longer show it`, 'Undo', undo);
+  let refreshError = '';
+  if (back) {
+    try { await refetchTags(); }
+    catch (e) { refreshError = `; saved, but could not refresh the library (${e.message}). Reload to see all pages.`; }
+  }
+  toast((back ? `${name} is back` : `Retired ${name}; ${plural(n, 'page')} no longer show it`) + refreshError, 'Undo', undo);
   render(); if ($('vocab').open) vocabDialog();
 }
 
@@ -705,7 +713,7 @@ function wire() {
     else filterTag(b.dataset.t); });
   new ResizeObserver(fitTags).observe($('tagbar'));
   $('tag-sel').addEventListener('click', () => openTagger('sel'));
-  dropdown('tg', { typeahead: true, own: true, none: 'Type a name to make a tag', options: tagOptions, onPick: (o) => { $('tg').value = ''; applyTags(tagIdxs(), [o.value], []); } });
+  dropdown('tg', { typeahead: true, own: true, none: 'Type a name to make a tag', options: tagOptions, onPick: async (o) => { const value = $('tg').value; if (await applyTags(tagIdxs(), [o.value], []) && $('tg').value === value) $('tg').value = ''; } });
   $('tg').addEventListener('keydown', (e) => {         // after the menu's keys: esc clears, then closes; ↵ on nothing closes
     e.stopPropagation(); const v = $('tg').value;
     if (e.defaultPrevented || !(e.key === 'Escape' || (e.key === 'Enter' && !v.trim()))) return;

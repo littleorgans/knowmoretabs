@@ -3,7 +3,7 @@
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   for (let n = 0; !S.rendered.length && n < 100; n++) await new Promise(r=>setTimeout(r,50));
   check(S.rendered.length, 'library has no rendered pages');
-  const original = host.tag, requests = [];
+  const original = host.tag, originalLoad = host.load, originalVocab = host.vocab, requests = [];
   host.tag = async (urls, add, remove) => { requests.push({urls, add, remove}); return {urls: [], tags: {}, vocabulary: [...S.vocab.values()].map(name=>({name}))}; };
   try {
     closeTagger(); openTagger(S.rendered[0].i);
@@ -24,6 +24,31 @@
       setTags(p, ['ReviewExactly']); $('tg').value = 'REVIEWEXACT';
       check(tagOptions()[0]?.value === 'ReviewExact', 'a popular prefix outranked the exact name');
     } finally { S.vocab = vocab; setTags(p, saved); }
-    return 'PASS: keyboard, exact names, whitespace and Unicode';
-  } finally { host.tag = original; closeTagger(); }
+    closeTagger();
+    const page = S.pages[S.rendered[0].i], before = [...page.tags];
+    const name = 'ReviewRefreshRegression', vocabulary = [...S.vocab.values(), name].map(name => ({name}));
+    host.tag = async () => ({urls:[page.url], tags:{[page.url]:[...before, name]}, vocabulary});
+    host.load = async () => { throw new Error('refresh failed'); };
+    S.undo = null;
+    await applyTags([page.i], [name], []);
+    check(page.tags.includes(name), 'successful write was discarded after refresh failure');
+    check(S.undo && $('toast').textContent.includes('saved, but'), 'refresh failure lost undo or claimed nothing changed');
+    const retry = S.undo;
+    host.tag = async () => { throw new Error('write failed'); };
+    await undo();
+    check(S.undo === retry, 'failed undo cannot be retried');
+    openTagger(page.i); $('tg').value = 'Keep my input';
+    $('tg').dispatchEvent(new Event('input'));
+    $('tg').dispatchEvent(new KeyboardEvent('keydown', {key:'Enter', bubbles:true, cancelable:true}));
+    await new Promise(r=>setTimeout(r,30));
+    check($('tg').value === 'Keep my input', 'failed write erased the input');
+    closeTagger();
+    host.vocab = async () => ({vocabulary: vocabulary.filter(v => v.name !== name)});
+    await retire(lc(name));
+    host.vocab = async () => ({vocabulary});
+    await retire(lc(name));
+    check(S.vocab.has(lc(name)) && S.undo && $('toast').textContent.includes('saved, but'), 'revival refresh failure lost the successful write');
+    setTags(page, before);
+    return 'PASS: keyboard, names, successful writes with failed refresh, retryable undo and preserved input';
+  } finally { host.tag = original; host.load = originalLoad; host.vocab = originalVocab; closeTagger(); await refetchTags(); render(); }
 })()
