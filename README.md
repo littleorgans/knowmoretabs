@@ -94,6 +94,14 @@ Forgetting hides a page from the library. It never touches a snapshot: every
 page you forget is still in every snapshot it was ever in, and `restore`
 brings it back.
 
+Tags are yours to set, and flat: a page carries as many as it needs, and the
+meaning is in the combination. `tag` puts them on pages or takes them off, and
+`tags` lists them with how many pages carry each. A name you have not used
+before joins your vocabulary, and names match without regard to case, so
+`mcp` finds `MCP`. `tags --retire NAME` hides a tag everywhere and keeps it,
+and every page it was on, in `library.json`; adding it to a page again brings
+it back. Nothing is tagged for you.
+
 ## The rest of the command line
 
 ```
@@ -101,6 +109,8 @@ knowmoretabs list                # snapshots, newest first
 knowmoretabs export [DIR]        # the same library as a static site that opens from file://
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
+knowmoretabs tag <URL>... --add NAME --remove NAME   # tag pages, or untag them; both repeatable
+knowmoretabs tags                # your tags, with how many pages carry each; --create, --retire, --all
 ```
 
 Options, all accepted before or after the command: `--root DIR` (where the
@@ -131,7 +141,7 @@ error, and 3 when the encrypted-sessions check refused to save.
 │   └── 2026-09-20-084415Z/    # UTC, sorts as text, never rewritten
 │       ├── snapshot.json      # the tabs, windows, groups and parse statistics
 │       └── session.snss       # a verbatim copy of the browser's session file
-├── library.json               # your own state: the forgotten URLs
+├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
 ├── lock                       # held for the length of a run, so two can't collide
 └── export/                    # what `export` writes by default; rebuildable
 ```
@@ -254,8 +264,8 @@ Each of these is a recorded decision, with its reasoning in
   browsing history" prompt.
 - **Arc.** Its open tabs live in a proprietary sidebar file, not in the
   session log.
-- **Notes and tags on a page.** `library.json` is where they would go;
-  forgetting is the first use of it.
+- **Notes on a page.** `library.json` is where they would go, beside the
+  forgotten URLs and the tags.
 - **Searching page contents.** Means fetching and storing page bodies: a
   different product with a different privacy story.
 - **An index for years of snapshots.** Reading JSON into memory is instant at
