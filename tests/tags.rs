@@ -454,3 +454,66 @@ fn two_concurrent_tags_both_survive() {
         json!({"One": {"retired": false}, "Two": {"retired": false}})
     );
 }
+
+#[test]
+fn tag_writers_wait_for_the_lock_and_read_the_state_after_it() {
+    use std::io::{BufRead, BufReader};
+    use std::process::Stdio;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    for args in [
+        vec!["tag", A, "--add", "After"],
+        vec!["tags", "--create", "After"],
+    ] {
+        let fx = Fixture::new();
+        archive(&fx);
+        let lock = fs::File::options()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(fx.root.join("lock"))
+            .unwrap();
+        lock.lock().unwrap();
+        let mut child = fx
+            .command()
+            .args(&args)
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pipe = child.stderr.take().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            let mut line = String::new();
+            BufReader::new(pipe).read_line(&mut line).unwrap();
+            tx.send(line).unwrap();
+        });
+        let waiting = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(
+            waiting.contains("holds the archive; waiting"),
+            "{args:?}: {waiting}"
+        );
+        assert!(child.try_wait().unwrap().is_none());
+        assert!(!fx.root.join("library.json").exists());
+        // Publish another writer's change while we still own the lock.
+        fs::write(
+            fx.root.join("library.json"),
+            serde_json::to_vec(&json!({
+                "schema_version": 1, "forgotten": [B],
+                "tags": {B: {"add": ["Before"], "remove": []}},
+                "vocabulary": {"Before": {"created_at": "2026-01-01T00:00:00Z"}}
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        drop(lock);
+        assert_success(&child.wait_with_output().unwrap());
+        reader.join().unwrap();
+        let written = state(&fx);
+        assert_eq!(written["forgotten"], json!([B]));
+        assert_eq!(written["tags"][B]["add"], json!(["Before"]));
+        assert!(written["vocabulary"]["Before"].is_object());
+        assert!(written["vocabulary"]["After"].is_object());
+    }
+}
