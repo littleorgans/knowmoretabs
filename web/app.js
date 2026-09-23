@@ -443,8 +443,9 @@ async function apply(idxs, restore) {
   try { await (restore ? host.restore : host.forget)(idxs.map((i) => S.pages[i].url)); }
   catch (e) { for (const i of idxs) S.pages[i].forgotten = restore; render(); toast(`Could not reach the server (${e.message}); nothing changed.`); }
 }
-// The last change, as the call that reverses it.
-function undo() { if (S.undo) return S.undo(); }
+// The last change, as the call that reverses it. It is taken while it runs, so
+// a second u cannot send it twice, and put back if the server did not take it.
+async function undo() { const f = S.undo; S.undo = null; if (f && (await f()) === false) S.undo ||= f; }
 let toastTimer = 0;
 function toast(msg, label, act) {
   const t = $('toast'); t.textContent = msg;
@@ -576,7 +577,7 @@ async function retire(k) {
   const back = !S.vocab.has(k), name = back ? S.retired.get(k) : S.vocab.get(k), n = libraryCounts().get(k) || 0;
   let r;
   try { r = await host.vocab(back ? [name] : [], back ? [] : [name]); }
-  catch (e) { return toast(`Could not update vocabulary (${e.message}).`); }
+  catch (e) { toast(`Could not update vocabulary (${e.message}).`); return false; }
   setVocab(r.vocabulary || []);
   if (!back) { S.retired.set(k, name); S.tags = S.tags.filter((t) => t !== k); for (const p of S.pages) if (p.tk.has(k)) setTags(p, p.tags.filter((t) => lc(t) !== k)); }
   S.undo = () => retire(k);
@@ -657,7 +658,7 @@ function keys(e) {
     case 'x': if (inRow && S.view === 'pages' && host.forget) select(+inRow.dataset.i, !S.sel.has(+inRow.dataset.i), e.shiftKey); break;
     case 'f': if (S.view === 'pages') apply(targets(), S.status === 'forgotten'); break;
     case '+': case '=': if (S.view === 'pages') { e.preventDefault(); if (S.sel.size) openTagger('sel'); else if (rowOf(S.cur)) openTagger(S.cur); } break;
-    case 'u': undo(); break;
+    case 'u': if (!e.repeat) undo(); break;
     case 't': THEME.flip(); break;
     case '?': $('help').showModal(); break;
     case 'Escape':
