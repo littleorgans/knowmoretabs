@@ -145,7 +145,7 @@ fn human(action: Action, outcome: &Outcome) -> String {
     }
 }
 
-fn already(n: usize, what: &str) -> String {
+pub fn already(n: usize, what: &str) -> String {
     match n {
         0 => String::new(),
         1 => format!(" (1 was {what})"),
@@ -153,7 +153,7 @@ fn already(n: usize, what: &str) -> String {
     }
 }
 
-fn plural(n: usize, noun: &str) -> String {
+pub fn plural(n: usize, noun: &str) -> String {
     if n == 1 {
         format!("1 {noun}")
     } else {

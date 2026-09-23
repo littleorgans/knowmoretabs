@@ -8,7 +8,7 @@ carry a date before the tag is pushed.
 
 ## [0.1.0] — Unreleased
 
-The first release. It was built in six slices, and each one is listed below
+The first release. It was built in slices, and each one is listed below
 as what you can do that you could not before.
 
 ### Added
@@ -58,5 +58,14 @@ as what you can do that you could not before.
   silicon), Linux (x86-64 and ARM64) and Windows (x86-64) attached to each
   tagged release with SHA-256 checksums, and the crate ready for
   `cargo install`.
+- **Tag pages yourself.** `knowmoretabs tag <URL>... --add NAME --remove
+  NAME` tags pages or untags them, and `knowmoretabs tags` lists your tags
+  with how many pages carry each. A new name joins your vocabulary; names
+  match without regard to case. `tags --retire NAME` hides a tag everywhere
+  and keeps it in `library.json`, and `--create` brings it back. `serve`
+  gains `POST /api/tags` and `POST /api/vocabulary` behind the same
+  loopback, `Host` and `Origin` checks as forget, and every page in `serve`
+  and `export` carries its tags. A `library.json` from before tags reads as
+  untagged. Nothing is tagged automatically and nothing leaves the machine.
 
 [0.1.0]: https://github.com/littleorgans/knowmoretabs/releases/tag/v0.1.0

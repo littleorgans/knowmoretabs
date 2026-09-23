@@ -1,6 +1,6 @@
 //! `knowmoretabs serve` through the real binary and a raw TCP client: the
-//! three security rules, the serve-shaped contract, forget and restore over
-//! the API, and every malformed request the server must survive.
+//! three security rules, the serve-shaped contract, forget, restore and
+//! tagging over the API, and every malformed request the server must survive.
 
 mod common;
 
@@ -559,6 +559,273 @@ fn damaged_state_refuses_to_start_and_is_a_500_if_damaged_while_running() {
     let reply = server.post("/api/forget", &json!({"urls": [A]}));
     assert_eq!(reply.status, 500);
     assert_eq!(fs::read(fx.root.join("library.json")).unwrap(), b"{");
+}
+
+// --- Tags --------------------------------------------------------------------
+
+fn tags_of(library: &Value, url: &str) -> Value {
+    page(library, url)["tags"].clone()
+}
+
+fn names(vocabulary: &Value) -> Vec<&str> {
+    vocabulary
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            assert!(entry["created_at"].is_string(), "{entry}");
+            assert_eq!(entry.as_object().unwrap().len(), 2, "{entry}");
+            entry["name"].as_str().unwrap()
+        })
+        .collect()
+}
+
+#[test]
+fn tags_round_trip_and_the_swapped_request_undoes_them() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    let original = server.library();
+    assert_eq!(original["vocabulary"], json!([]));
+    for page in original["pages"].as_array().unwrap() {
+        assert_eq!(page["tags"], json!([]), "untagged is an empty list");
+    }
+
+    let reply = server.post(
+        "/api/tags",
+        &json!({"urls": [A, HIDDEN, "https://nowhere.test/"], "add": ["Harness", "mcp"]}),
+    );
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(reply.header("content-type"), Some("application/json"));
+    let body = reply.json();
+    assert_eq!(body["urls"], json!([A, HIDDEN]));
+    assert_eq!(
+        body["tags"],
+        json!({A: ["Harness", "mcp"], HIDDEN: ["Harness", "mcp"]}),
+        "a forgotten page is still a page; an unknown URL is only counted"
+    );
+    assert_eq!(names(&body["vocabulary"]), ["Harness", "mcp"]);
+    assert_eq!(
+        body["counts"],
+        json!({"changed": 2, "unchanged": 0, "unknown": 1})
+    );
+    let tagged = server.library();
+    assert_eq!(tags_of(&tagged, A), json!(["Harness", "mcp"]));
+    assert_eq!(tags_of(&tagged, B), json!([]));
+    assert_eq!(names(&tagged["vocabulary"]), ["Harness", "mcp"]);
+    assert_eq!(
+        state(&fx)["tags"][A],
+        json!({"add": ["Harness", "mcp"], "remove": []})
+    );
+
+    // The same call with the lists swapped is the undo.
+    let reply = server.post(
+        "/api/tags",
+        &json!({"urls": [A, HIDDEN], "remove": ["Harness", "MCP"]}),
+    );
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(reply.json()["tags"], json!({A: [], HIDDEN: []}));
+    let mut undone = without_generated_at(server.library());
+    // What the undo leaves behind: the vocabulary entries the add created.
+    assert_eq!(names(&undone["vocabulary"]), ["Harness", "mcp"]);
+    undone["vocabulary"] = json!([]);
+    assert_eq!(
+        undone,
+        without_generated_at(original),
+        "tag then untag is the identity"
+    );
+    assert_eq!(state(&fx)["forgotten"], json!([HIDDEN]));
+}
+
+#[test]
+fn a_bulk_tag_reports_the_pages_to_undo() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    assert_eq!(
+        server
+            .post("/api/tags", &json!({"urls": [A], "add": ["Skills"]}))
+            .status,
+        200
+    );
+    let before = without_generated_at(server.library());
+    let reply = server.post("/api/tags", &json!({"urls": [A, B, A], "add": ["skills"]}));
+    assert_eq!(reply.status, 200);
+    let body = reply.json();
+    assert_eq!(body["urls"], json!([B]), "A already had it");
+    assert_eq!(body["tags"], json!({A: ["Skills"], B: ["Skills"]}));
+    assert_eq!(
+        body["counts"],
+        json!({"changed": 1, "unchanged": 1, "unknown": 0})
+    );
+    let reply = server.post(
+        "/api/tags",
+        &json!({"urls": body["urls"], "remove": ["skills"]}),
+    );
+    assert_eq!(reply.status, 200);
+    assert_eq!(without_generated_at(server.library()), before);
+}
+
+#[test]
+fn a_retired_tag_leaves_the_library_but_not_the_state_file() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    let reply = server.post(
+        "/api/vocabulary",
+        &json!({"create": ["Harness", " Old  tag "]}),
+    );
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(names(&reply.json()["vocabulary"]), ["Harness", "Old tag"]);
+    assert_eq!(reply.json().as_object().unwrap().len(), 1);
+    assert_eq!(
+        server
+            .post(
+                "/api/tags",
+                &json!({"urls": [A, B], "add": ["old TAG", "Harness"]})
+            )
+            .status,
+        200
+    );
+
+    let reply = server.post("/api/vocabulary", &json!({"retire": ["OLD TAG", "Never"]}));
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(names(&reply.json()["vocabulary"]), ["Harness"]);
+    let library = server.library();
+    assert_eq!(names(&library["vocabulary"]), ["Harness"]);
+    assert_eq!(tags_of(&library, A), json!(["Harness"]));
+    assert_eq!(tags_of(&library, B), json!(["Harness"]));
+    let written = state(&fx);
+    assert!(written["vocabulary"]["Old tag"]["retired_at"].is_string());
+    assert_eq!(written["tags"][B]["add"], json!(["Harness", "Old tag"]));
+    assert!(
+        written["vocabulary"].get("Never").is_none(),
+        "retiring an unknown name creates nothing"
+    );
+
+    // Creating it again brings it back, on the pages that had it.
+    let reply = server.post("/api/vocabulary", &json!({"create": ["old tag"]}));
+    assert_eq!(names(&reply.json()["vocabulary"]), ["Harness", "Old tag"]);
+    assert_eq!(tags_of(&server.library(), B), json!(["Harness", "Old tag"]));
+}
+
+#[test]
+fn bad_tag_requests_are_refused_and_change_nothing() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    let before = fs::read(fx.root.join("library.json")).unwrap();
+    for (path, body, needle) in [
+        ("/api/tags", json!({"urls": [A]}), "at least one tag"),
+        (
+            "/api/tags",
+            json!({"urls": [A], "add": [], "remove": []}),
+            "at least one tag",
+        ),
+        (
+            "/api/tags",
+            json!({"urls": [A], "add": ["  "]}),
+            "it is empty",
+        ),
+        (
+            "/api/tags",
+            json!({"urls": [A], "add": ["x".repeat(41)]}),
+            "longer than 40",
+        ),
+        (
+            "/api/tags",
+            json!({"urls": [A], "add": ["a\u{0}b"]}),
+            "control character",
+        ),
+        (
+            "/api/tags",
+            json!({"urls": [A], "add": ["X"], "remove": ["x"]}),
+            "both to add and to remove",
+        ),
+        ("/api/tags", json!({"add": ["X"]}), "expected"),
+        ("/api/tags", json!({"urls": [A], "add": "X"}), "expected"),
+        ("/api/vocabulary", json!({}), "at least one tag"),
+        ("/api/vocabulary", json!({"create": [""]}), "it is empty"),
+        (
+            "/api/vocabulary",
+            json!({"create": ["X"], "retire": ["x"]}),
+            "both to create and to retire",
+        ),
+        ("/api/vocabulary", json!({"create": "X"}), "expected"),
+    ] {
+        let reply = server.post(path, &body);
+        assert_eq!(reply.status, 400, "{path} {body}: {}", reply.text());
+        let error = reply.json()["error"].as_str().unwrap().to_owned();
+        assert!(error.contains(needle), "{path} {body}: {error}");
+    }
+    let host = format!("Host: {}", server.host());
+    for path in ["/api/tags", "/api/vocabulary"] {
+        let reply = server.raw("GET", path, std::slice::from_ref(&host), b"");
+        assert_eq!(reply.status, 405);
+        assert_eq!(reply.header("allow"), Some("POST"));
+        // A form post needs no preflight, so it must never be read as JSON.
+        let body = json!({"urls": [A], "add": ["X"], "create": ["X"]}).to_string();
+        let reply = server.raw(
+            "POST",
+            path,
+            &[
+                host.clone(),
+                "Content-Type: text/plain".to_owned(),
+                format!("Content-Length: {}", body.len()),
+            ],
+            body.as_bytes(),
+        );
+        assert_eq!(reply.status, 415, "{path}");
+    }
+    assert_eq!(fs::read(fx.root.join("library.json")).unwrap(), before);
+}
+
+/// Rules 1 to 3 for the new routes. The bind is the listener's, shared by
+/// every route, and `binds_only_the_ipv4_loopback_address` holds it; what a
+/// route can get wrong on its own is the Host and Origin check, and CORS.
+#[test]
+fn foreign_host_or_origin_cannot_tag() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    let before = fs::read(fx.root.join("library.json")).unwrap();
+    for (path, body) in [
+        ("/api/tags", json!({"urls": [A], "add": ["Evil"]})),
+        ("/api/vocabulary", json!({"create": ["Evil"]})),
+    ] {
+        let body = body.to_string();
+        for (host, origin) in [
+            ("evil.example".to_owned(), None),
+            (format!("127.0.0.1.evil.example:{}", server.port), None),
+            (server.host(), Some("http://evil.example".to_owned())),
+            (server.host(), Some("null".to_owned())),
+            (
+                server.host(),
+                Some(format!("http://127.0.0.1:{}", server.port.wrapping_add(1))),
+            ),
+        ] {
+            let mut headers = vec![format!("Host: {host}")];
+            headers.extend(origin.iter().map(|o| format!("Origin: {o}")));
+            headers.push("Content-Type: application/json".to_owned());
+            headers.push(format!("Content-Length: {}", body.len()));
+            let reply = server.raw("POST", path, &headers, body.as_bytes());
+            assert_eq!(reply.status, 403, "{path} Host {host} Origin {origin:?}");
+            assert!(!reply.text().contains("vocabulary"));
+            for (name, _) in &reply.headers {
+                assert!(!name.starts_with("access-control-"), "{path} sent {name}");
+            }
+        }
+    }
+    assert_eq!(
+        fs::read(fx.root.join("library.json")).unwrap(),
+        before,
+        "a rejected request changed state"
+    );
+    let reply = server.post("/api/tags", &json!({"urls": [A], "add": ["Ours"]}));
+    assert_eq!(reply.status, 200);
+    for (name, _) in &reply.headers {
+        assert!(!name.starts_with("access-control-"), "sent {name}");
+    }
 }
 
 // --- Malformed requests -----------------------------------------------------
@@ -1124,6 +1391,8 @@ fn review_authorities_on_every_route_before_body_read() {
         "/api/library",
         "/api/forget",
         "/api/restore",
+        "/api/tags",
+        "/api/vocabulary",
         "/missing",
     ] {
         for method in ["GET", "POST", "OPTIONS"] {
@@ -1361,4 +1630,87 @@ fn review_stalled_body_and_response_never_hold_archive_lock() {
         200
     );
     assert_eq!(state(&fx)["forgotten"], json!([A, B, HIDDEN]));
+}
+
+#[test]
+fn exact_tag_undo_restores_mixed_decisions_without_overwriting_other_tags() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    server.post("/api/tags", &json!({"urls": [A, HIDDEN], "add": ["X"]}));
+    server.post("/api/tags", &json!({"urls": [B], "add": ["Y"]}));
+    let before = state(&fx);
+    let edited = server
+        .post(
+            "/api/tags",
+            &json!({"urls": [A, B, HIDDEN], "add": ["x", "y"]}),
+        )
+        .json();
+    server.post("/api/tags", &json!({"urls": [A], "add": ["Unrelated"]}));
+    let undone = server.post("/api/tags", &json!({"urls": [], "undo": edited["undo"]}));
+    assert_eq!(undone.status, 200, "{}", undone.text());
+    let mut expected = before;
+    expected["tags"][A]["add"] = json!(["Unrelated", "X"]);
+    let after = state(&fx);
+    expected["vocabulary"]["Unrelated"] = after["vocabulary"]["Unrelated"].clone();
+    assert_eq!(
+        after, expected,
+        "undo restores both decision lists, including forgotten pages"
+    );
+    let redone = server.post(
+        "/api/tags",
+        &json!({"urls": [], "undo": undone.json()["undo"]}),
+    );
+    assert_eq!(redone.status, 200);
+    assert_eq!(tags_of(&server.library(), B), json!(["X", "Y"]));
+}
+
+#[test]
+fn exact_tag_undo_restores_retirement_and_historical_page_membership() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    server.post("/api/tags", &json!({"urls": [A, HIDDEN], "add": ["Old"]}));
+    server.post("/api/vocabulary", &json!({"retire": ["Old"]}));
+    let before = state(&fx);
+    let revived = server
+        .post("/api/tags", &json!({"urls": [A, B], "add": ["OLD"]}))
+        .json();
+    assert_eq!(tags_of(&server.library(), HIDDEN), json!(["Old"]));
+    let undone = server.post("/api/tags", &json!({"urls": [], "undo": revived["undo"]}));
+    assert_eq!(undone.status, 200, "{}", undone.text());
+    assert_eq!(
+        state(&fx),
+        before,
+        "retirement time and historical assignments survive undo"
+    );
+    server.post("/api/vocabulary", &json!({"create": ["Old"]}));
+    assert_eq!(tags_of(&server.library(), A), json!(["Old"]));
+    assert_eq!(tags_of(&server.library(), B), json!([]));
+    assert_eq!(tags_of(&server.library(), HIDDEN), json!(["Old"]));
+}
+
+#[test]
+fn malformed_tag_undo_is_atomic_and_unknown_urls_are_skipped() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    server.post("/api/tags", &json!({"urls": [A], "add": ["X"]}));
+    let before = state(&fx);
+    for decisions in [
+        json!([{"url":A,"name":"X","add":false,"remove":false}, {"url":B,"name":"X","add":true,"remove":true}]),
+        json!([{"url":A,"name":"X","add":false,"remove":false}, {"url":A,"name":"x","add":true,"remove":false}]),
+        json!([{"url":A,"name":"","add":false,"remove":false}]),
+    ] {
+        let reply = server.post(
+            "/api/tags",
+            &json!({"urls":[],"undo":{"tags":decisions,"vocabulary":{}}}),
+        );
+        assert_eq!(reply.status, 400, "{}", reply.text());
+        assert_eq!(state(&fx), before);
+    }
+    let reply = server.post("/api/tags", &json!({"urls":[],"undo":{"tags":[{"url":"https://unknown.test/","name":"X","add":true,"remove":false}],"vocabulary":{}}}));
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.json()["counts"]["unknown"], 1);
+    assert_eq!(state(&fx), before);
 }

@@ -30,6 +30,7 @@
   --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --row: 3.5rem;
+  --tagline: 1.65rem;      /* what a line of chips adds to a row */
   --col: 4px;              /* one snapshot column in the sighting strip */
   --idx: 3.75rem;          /* the index cell on the left of every row */
   --arrow: 3.75rem;        /* the arrow cell on the right */
@@ -121,6 +122,27 @@ main { flex: 1; }
 .tools button:hover { color: var(--bg); background: var(--ink); }
 #reset[hidden] { display: block !important; visibility: hidden; border-right: 0; }   /* keeps its width, so the search field does not jump */
 #help-btn { width: var(--idx); padding: 0; font-weight: 600; font-size: 1rem; }
+/* ---- the tag bar: a ruled grid of equal cells under the toolbar. The label
+   takes the index column; one line shows until "N more" opens the rest. Each
+   cell is ruled on its right and bottom, and the grid runs 1 px past the bar,
+   which clips it, so the outer edges fall on the frame's own lines. ---- */
+.tagbar { display: grid; grid-template-columns: var(--idx) minmax(0, 1fr); border-bottom: 1px solid var(--line); overflow: hidden; }
+.tb-label { display: flex; align-items: center; justify-content: center; align-self: start; height: 2.75rem; border-right: 1px solid var(--line); font-size: 0.6875rem; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-3); }
+.tb-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(9rem, 1fr)); margin: 0 -1px -1px 0; padding: 0; list-style: none; }
+.tb-grid li { min-width: 0; border: solid var(--line); border-width: 0 1px 1px 0; }
+.tb-grid button { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; width: 100%; height: 2.75rem; padding: 0 1rem; background: none; border: 0; color: var(--ink); font-size: 0.8125rem; text-align: left; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
+.tb-grid button span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-grid button small { flex: none; font-size: 0.75rem; color: var(--ink-3); }
+.tb-grid button:hover { background: var(--bg-1); }
+.tb-grid button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.tb-grid button[aria-pressed="true"] small { color: inherit; opacity: 0.7; font-size: 0.875rem; }
+.tb-grid button:focus-visible { outline-offset: -3px; }
+.tb-grid .tb-end button { color: var(--ink-2); }
+.tb-grid .tb-end button:hover { color: var(--ink); }
+#tb-more::after { content: ""; flex: none; width: 0.4em; height: 0.4em; margin-top: -0.2em; border: solid var(--ink-3); border-width: 0 1.5px 1.5px 0; rotate: 45deg; transition: rotate 0.2s var(--ease), margin 0.2s var(--ease); }
+#tb-more[aria-expanded="true"]::after { rotate: 225deg; margin-top: 0.2em; }
+.tb-grid .none { grid-column: 1 / -2; padding: 0 1rem; line-height: 2.75rem; color: var(--ink-3); font-size: 0.8125rem; }   /* the last column is Retire's */
+.tb-grid .none.wide { grid-column: 1 / -1; }
 .bar { display: flex; align-items: center; gap: 1rem; min-height: 0; padding: 0 1.5rem; font-size: 0.75rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); transition: min-height 0.15s var(--ease); }
 .bar:has(output:not(:empty)) { min-height: 2.25rem; border-bottom: 1px solid var(--line); }
 
@@ -167,10 +189,12 @@ main { flex: 1; }
    title and age on one line, address and group mark on the next. Centred, the
    age landed between the two and grazed the group mark; on the lower line it
    was 12 px grey beside a 12 px grey URL and the two read as one string. */
-.body { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 0.75rem; row-gap: 0.1rem; align-items: baseline; align-self: baseline; min-width: 0; padding-block: 0.6rem; }
+.body { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; column-gap: 0.75rem; row-gap: 0.1rem; align-items: baseline; align-self: baseline; min-width: 0; padding-block: 0.6rem; }
 .t { grid-column: 1 / -1; justify-self: start; color: var(--ink); font: 1rem/1.3 var(--serif); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .body .u { grid-column: 1; }
-.body .grp { grid-column: 2; grid-row: 2; }
+.body .tags { grid-column: 2; grid-row: 2; }
+.body .tags.line { grid-column: 1 / -1; grid-row: 3; }
+.body .grp { grid-column: 3; grid-row: 2; }
 .t:hover { text-decoration: underline; text-underline-offset: 0.18em; }
 .t i { color: var(--ink-3); }
 .u { font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 4ch; }
@@ -203,8 +227,38 @@ button.grp:hover { color: inherit; text-decoration: underline; }
 .grp[data-c="yellow"] { --gc: light-dark(#d3a11c, #e8c25a); } .grp[data-c="green"] { --gc: light-dark(#3a8a4b, #6fbf7e); }
 .grp[data-c="pink"] { --gc: light-dark(#c44a8a, #e07fb4); }   .grp[data-c="purple"] { --gc: light-dark(#8a55c8, #b28ee6); }
 .grp[data-c="cyan"] { --gc: light-dark(#2e8c96, #6cc2cb); }   .grp[data-c="orange"] { --gc: light-dark(#d8772c, #f0a060); }
+/* tag chips: a line of their own under the address, ruled cells in the
+   metadata grey that invert with their row. An untagged row has no such line;
+   its "+ tag" waits at the end of the address line, holding its place so a
+   hover never moves anything, and the editor opens the line when asked. */
+.tags { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0.3rem; min-width: 0; }
+.tags.line, .body > .tagger { margin-top: 0.45rem; }
+.tag { display: inline-flex; align-items: baseline; gap: 0.3em; flex: none; margin: 0; padding: 0.05em 0.45em; font: 0.6875rem/1.4 var(--sans); color: var(--ink-2); background: none; border: 1px solid var(--line-2); white-space: nowrap; }
+button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
+.tag.n { border-color: transparent; color: var(--ink-3); }
+.tag.add { border-style: dashed; color: var(--ink-3); opacity: 0; transition: opacity 0.12s var(--ease); }
+.row:is(:hover, .cur) .tag.add, .tag.add:focus-visible { opacity: 1; }
+@media (hover: none) { .tag.add { opacity: 1; } }
+/* the tagger: on a row it takes the chips' line; on the tray, a line above the actions */
+.tagger { position: relative; display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; min-width: 0; }
+.tg-chips { display: contents; }
+.tg-field { position: relative; flex: 1 1 8rem; min-width: 6rem; }
+.tg-field input { display: block; width: 100%; height: 1.25rem; padding: 0 0.25rem; background: none; border: 0; border-bottom: 1px solid currentColor; font-size: 0.75rem; color: inherit; outline: 0; }
+.tg-field input::placeholder { color: inherit; opacity: 0.55; }
+.tag.x { padding-right: 0; color: inherit; border-color: currentColor; }
+.tag.x small { opacity: 0.65; }
+.tag.x button { align-self: stretch; margin: 0; padding: 0 0.4em; background: none; border: 0; border-left: 1px solid; border-left-color: inherit; color: inherit; font: inherit; line-height: 1; }
+.tag.x button:hover { background: color-mix(in srgb, currentColor 18%, transparent); }
+.row.tall { contain-intrinsic-size: auto calc(var(--row) + var(--tagline)); }
+.row.tagging { content-visibility: visible; }
+.row.tagging .body > .tags { display: none; }
+.body > .tagger { grid-column: 1 / -1; grid-row: 3; }
+/* the menu is on paper wherever the tagger is, so it restates the palette */
+.tagger .menu { top: calc(100% + 0.35rem); min-width: 16rem; color: var(--ink); --line: light-dark(#d9d6d0, #2c2c2c); --ink-3: light-dark(#8b8882, #6c6a66); font-size: 0.8125rem; }
+.tagger.up .menu { top: auto; bottom: calc(100% + 0.35rem); }
+.body > .tagger.up .menu { bottom: calc(100% + 3rem); }   /* clear the title and the address */
 /* a lazy placeholder: the height of the rows it stands in for */
-.ph { min-height: calc(var(--rows) * (var(--row) + 1px)); }
+.ph { min-height: calc(var(--rows) * (var(--row) + 1px) + var(--tall) * var(--tagline)); }   /* --tall: the tagged rows among them */
 /* "show all 236" at the foot of a folded Open now band */
 .fold { display: grid; grid-template-columns: var(--idx) 1fr; align-items: center; min-height: 3rem; border-bottom: 1px solid var(--line); }
 .fold::before { content: "…"; align-self: stretch; display: flex; align-items: center; justify-content: center; color: var(--ink-3); border-right: 1px solid var(--line); }
@@ -269,7 +323,7 @@ button.grp:hover { color: inherit; text-decoration: underline; }
 
 /* ---- tray, toast, footer, help ---- */
 .tray, #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 1.25rem; z-index: 5; display: flex; align-items: center; gap: 0.625rem; padding: 0.5rem 0.625rem 0.5rem 1rem; background: var(--bg); color: var(--ink); border: 1px solid var(--ink); box-shadow: 0 12px 40px light-dark(rgb(0 0 0 / 0.14), rgb(0 0 0 / 0.6)); font-size: 0.8125rem; max-width: calc(100vw - 2rem); }
-#toast { bottom: 4.5rem; }
+#toast { bottom: calc(var(--tray-h, 2.875rem) + 1.625rem); }
 .tray, #toast { opacity: 0; translate: 0 8px; transition: opacity 0.18s var(--ease), translate 0.18s var(--ease); }
 .tray.in, #toast.in { opacity: 1; translate: 0 0; }
 /* the tray is ruled like the toolbar: ✕ and the count are cells, the two
@@ -283,6 +337,8 @@ button.grp:hover { color: inherit; text-decoration: underline; }
 #sel-all:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 0.2em; }
 .tray-end { gap: 0.375rem; padding: 0.375rem; margin-left: auto; }
 .tray-end button { white-space: nowrap; }
+.tray > .tagger { flex-basis: 100%; order: -1; padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--line-2); }
+.tray:has(> .tagger:not([hidden])) { width: min(44rem, calc(100vw - 2rem)); }
 .tray-end button[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
 .tray-end .primary { background: var(--ink); color: var(--bg); }
 .tray-end .primary:hover { background: color-mix(in srgb, var(--ink) 78%, var(--bg)); border-color: transparent; }
@@ -299,6 +355,15 @@ dialog dl { display: grid; grid-template-columns: auto 1fr; gap: 0.6rem 1rem; ma
 dialog dt { text-align: right; }
 dialog dd { margin: 0; color: var(--ink-2); }
 dialog p { margin: 1.25rem 0 0; }
+dialog .lede { margin: -0.5rem 0 1rem; color: var(--ink-2); text-wrap: pretty; }
+#vocab { width: min(30rem, calc(100vw - 2rem)); max-width: none; }
+#vocab-list { max-height: min(26rem, 60vh); overflow-y: auto; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
+#vocab-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 1rem; min-height: 2.5rem; border-bottom: 1px solid var(--line); }
+#vocab-list li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#vocab-list li small { font-size: 0.75rem; color: var(--ink-3); }
+#vocab-list li button { height: 1.75rem; padding: 0 0.625rem; font-size: 0.75rem; border-color: transparent; color: var(--ink-2); }   /* quiet until the pointer is on it */
+#vocab-list li:hover button { border-color: var(--line-2); color: var(--ink); }
+#vocab-list li.off span { color: var(--ink-3); text-decoration: line-through; text-decoration-color: var(--line-2); }
 dialog .pref { padding-top: 1rem; border-top: 1px solid var(--line); color: var(--ink-2); }
 dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--ink); vertical-align: -1px; }
 
@@ -326,6 +391,8 @@ dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--ink); vertical-al
   #help-btn, label.q, #reset { border-bottom: 1px solid var(--line); }
   .tools .dd { flex: 1 1 100%; min-width: 0; border-right: 0; border-bottom: 1px solid var(--line); }
   .tools .dd.end { flex: 1 1 45%; border-bottom: 0; }
+  .tb-grid { grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr)); }
+  .tb-grid button { padding: 0 0.75rem; gap: 0.5rem; }
   #status-dd { border-right: 1px solid var(--line); }
   .tools .dd-btn { min-width: 0; }
   .tools input, .dd-btn { height: 3rem; padding-inline: 1rem; }
