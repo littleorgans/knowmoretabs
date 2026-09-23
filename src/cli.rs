@@ -74,7 +74,7 @@ pub enum Command {
         #[arg(value_name = "DIR")]
         dir: Option<PathBuf>,
     },
-    /// Serve the library on 127.0.0.1 with live forget and restore
+    /// Serve the library on 127.0.0.1 with live forget, restore and tagging
     Serve {
         /// Port to listen on; 0 picks a free one
         #[arg(long, default_value_t = DEFAULT_PORT, value_name = "N")]
@@ -94,6 +94,30 @@ pub enum Command {
         /// Forgotten URLs to bring back, each exactly as it was forgotten
         #[arg(required = true, value_name = "URL")]
         urls: Vec<String>,
+    },
+    /// Add tags to pages or take them off
+    Tag {
+        /// Page URLs, each exactly as the library shows it
+        #[arg(required = true, value_name = "URL")]
+        urls: Vec<String>,
+        /// A tag to add; a new name joins the vocabulary (repeatable)
+        #[arg(long, value_name = "NAME", required_unless_present = "remove")]
+        add: Vec<String>,
+        /// A tag to take off (repeatable)
+        #[arg(long, value_name = "NAME")]
+        remove: Vec<String>,
+    },
+    /// List the tag vocabulary with how many pages carry each tag
+    Tags {
+        /// Add a tag to the vocabulary, or bring back a retired one (repeatable)
+        #[arg(long, value_name = "NAME")]
+        create: Vec<String>,
+        /// Retire a tag: hidden everywhere, kept in library.json (repeatable)
+        #[arg(long, value_name = "NAME")]
+        retire: Vec<String>,
+        /// Include retired tags
+        #[arg(long)]
+        all: bool,
     },
 }
 
@@ -172,6 +196,40 @@ mod tests {
                 port: 0,
                 open: true
             })
+        ));
+    }
+
+    #[test]
+    fn tag_takes_urls_and_repeatable_names_and_needs_one() {
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "tag",
+            "https://a.test/",
+            "--add",
+            "Harness",
+            "https://b.test/",
+            "--add",
+            "MCP",
+            "--remove",
+            "Old",
+        ])
+        .unwrap();
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Tag { urls, add, remove })
+                if urls.len() == 2 && add == &["Harness", "MCP"] && remove == &["Old"]
+        ));
+        assert!(Cli::try_parse_from(["knowmoretabs", "tag", "https://a.test/"]).is_err());
+        assert!(Cli::try_parse_from(["knowmoretabs", "tag", "--add", "X"]).is_err());
+        assert!(
+            Cli::try_parse_from(["knowmoretabs", "tag", "https://a.test/", "--remove", "X"])
+                .is_ok()
+        );
+        let cli =
+            Cli::try_parse_from(["knowmoretabs", "tags", "--retire", "Old", "--all"]).unwrap();
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Tags { create, retire, all: true }) if create.is_empty() && retire == &["Old"]
         ));
     }
 

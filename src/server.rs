@@ -7,7 +7,7 @@
 //!      library. Owning the HTTP layer keeps the three defences (loopback
 //!      bind, Host check, Origin check) and every input bound in one file a
 //!      reviewer can read top to bottom, with no dormant dependency between
-//!      them and the socket. Six routes, one client, no keep-alive: each
+//!      them and the socket. Eight routes, one client, no keep-alive: each
 //!      connection carries one request and is closed.
 
 use std::fmt::Write as _;
@@ -18,13 +18,14 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
 use crate::library::{self, Shape};
 use crate::triage::{self, Action};
-use crate::{assets, export, out};
+use crate::{assets, export, out, tags};
 
 /// Request line plus headers, including the final CRLF CRLF. A browser's own
 /// headers fit in a few hundred bytes; the margin is for localhost cookies.
@@ -233,10 +234,14 @@ impl Server {
             ("GET", "/api/library") => self.library(),
             ("POST", "/api/forget") => self.triage(head, body, Action::Forget),
             ("POST", "/api/restore") => self.triage(head, body, Action::Restore),
+            ("POST", "/api/tags") => self.tags(head, body),
+            ("POST", "/api/vocabulary") => self.vocabulary(head, body),
             (_, "/" | "/index.html" | "/app.css" | "/app.js" | "/api/library") => {
                 Response::method_not_allowed("GET")
             }
-            (_, "/api/forget" | "/api/restore") => Response::method_not_allowed("POST"),
+            (_, "/api/forget" | "/api/restore" | "/api/tags" | "/api/vocabulary") => {
+                Response::method_not_allowed("POST")
+            }
             _ => Response::error(Status::NotFound, "no such page"),
         }
     }
@@ -274,8 +279,8 @@ impl Server {
         let archive = Archive::open(&self.root)?;
         let _lock = archive.lock(|| {})?;
         let loaded = library::load(&archive)?;
-        let forgotten = library::forgotten(&self.root)?;
-        let library = library::build(&loaded.snapshots, &forgotten, Shape::Serve);
+        let state = library::State::read(&self.root)?;
+        let library = library::build(&loaded.snapshots, &state, Shape::Serve);
         serde_json::to_vec(&library).map_err(|source| Error::Json {
             path: self.root.join(library::STATE_FILE),
             source,
@@ -283,17 +288,9 @@ impl Server {
     }
 
     fn triage(&self, head: &Head, body: &[u8], action: Action) -> Response {
-        if !head.header("content-type").is_some_and(is_json) {
-            return Response::error(Status::UnsupportedMediaType, "send application/json");
-        }
-        let request: TriageRequest = match serde_json::from_slice(body) {
+        let request: TriageRequest = match json_request(head, body, "{\"urls\":[...]}") {
             Ok(request) => request,
-            Err(err) => {
-                return Response::error(
-                    Status::BadRequest,
-                    &format!("expected {{\"urls\":[...]}}: {err}"),
-                );
-            }
+            Err(response) => return response,
         };
         match triage::apply(&self.root, &request.urls, action, false, self.log) {
             Ok(outcome) => {
@@ -315,6 +312,78 @@ impl Server {
         }
     }
 
+    /// The same request with `add` and `remove` swapped is the undo, as
+    /// forget and restore are each other's.
+    fn tags(&self, head: &Head, body: &[u8]) -> Response {
+        let expected = "{\"urls\":[...],\"add\":[...],\"remove\":[...]}";
+        let request: TagsRequest = match json_request(head, body, expected) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+        if request.add.is_empty() && request.remove.is_empty() {
+            return Response::error(Status::BadRequest, "name at least one tag to add or remove");
+        }
+        let applied = tags::apply(
+            &self.root,
+            &request.urls,
+            &request.add,
+            &request.remove,
+            false,
+            self.log,
+        );
+        match applied {
+            Ok(outcome) => {
+                let body = serde_json::json!({
+                    "urls": outcome.changed,
+                    "tags": outcome.tags,
+                    "vocabulary": outcome.vocabulary,
+                    "counts": {
+                        "changed": outcome.changed.len(),
+                        "unchanged": outcome.unchanged.len(),
+                        "unknown": outcome.unknown.len(),
+                    },
+                });
+                Response::ok("application/json", body.to_string().into_bytes())
+            }
+            Err(err) => self.refusal(&err),
+        }
+    }
+
+    fn vocabulary(&self, head: &Head, body: &[u8]) -> Response {
+        let expected = "{\"create\":[...],\"retire\":[...]}";
+        let request: VocabularyRequest = match json_request(head, body, expected) {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+        if request.create.is_empty() && request.retire.is_empty() {
+            return Response::error(
+                Status::BadRequest,
+                "name at least one tag to create or retire",
+            );
+        }
+        match tags::edit_vocabulary(
+            &self.root,
+            &request.create,
+            &request.retire,
+            false,
+            self.log,
+        ) {
+            Ok(outcome) => {
+                let body = serde_json::json!({ "vocabulary": outcome.vocabulary });
+                Response::ok("application/json", body.to_string().into_bytes())
+            }
+            Err(err) => self.refusal(&err),
+        }
+    }
+
+    /// A tag name the rules refuse is the request's fault, not the server's.
+    fn refusal(&self, err: &Error) -> Response {
+        match err {
+            Error::TagName { .. } => Response::error(Status::BadRequest, &err.to_string()),
+            _ => self.failure(err),
+        }
+    }
+
     fn failure(&self, err: &Error) -> Response {
         self.log.warn(&err.to_string());
         Response::error(Status::InternalServerError, &err.to_string())
@@ -324,6 +393,40 @@ impl Server {
 #[derive(Deserialize)]
 struct TriageRequest {
     urls: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct TagsRequest {
+    urls: Vec<String>,
+    #[serde(default)]
+    add: Vec<String>,
+    #[serde(default)]
+    remove: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct VocabularyRequest {
+    #[serde(default)]
+    create: Vec<String>,
+    #[serde(default)]
+    retire: Vec<String>,
+}
+
+/// Every POST body: JSON by its declared type, so a form post, which a page
+/// on another origin can send without a preflight, never reaches a handler.
+fn json_request<T: DeserializeOwned>(
+    head: &Head,
+    body: &[u8],
+    expected: &str,
+) -> Result<T, Response> {
+    if !head.header("content-type").is_some_and(is_json) {
+        return Err(Response::error(
+            Status::UnsupportedMediaType,
+            "send application/json",
+        ));
+    }
+    serde_json::from_slice(body)
+        .map_err(|err| Response::error(Status::BadRequest, &format!("expected {expected}: {err}")))
 }
 
 fn is_json(content_type: &str) -> bool {
