@@ -539,7 +539,6 @@ async function applyTags(idxs, add, remove, restore) {
   for (const [u, ts] of Object.entries(r.tags || {})) if (S.byUrl.has(u)) setTags(S.byUrl.get(u), ts);
   const changed = (r.urls || []).map((u) => S.byUrl.get(u)?.i).filter((i) => i != null);
   let message = `${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`;
-  if (restore) message = `Updated tags on ${plural(changed.length, 'page')}`;
   const reversible = changed.length || r.undo?.tags.length || Object.keys(r.undo?.vocabulary || {}).length;
   if (reversible) S.undo = () => applyTags(changed, remove, add, r.undo);
   if (!restore && add.some((t) => !had.has(lc(t)))) {
@@ -586,7 +585,7 @@ async function retire(k) {
     try { await refetchTags(); }
     catch (e) { refreshError = `; saved, but could not refresh the library (${e.message}). Reload to see all pages.`; }
   }
-  toast((back ? `${name} is back` : `Retired ${name}; ${plural(n, 'page')} no longer show it`) + refreshError, 'Undo', undo);
+  toast(back ? `${name} is back${refreshError || ` on ${plural(libraryCounts().get(k) || 0, 'page')}`}` : `Retired ${name}; ${plural(n, 'page')} no longer show it`, 'Undo', undo);
   render(); if ($('vocab').open) vocabDialog();
 }
 
