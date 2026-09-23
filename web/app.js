@@ -269,6 +269,8 @@ function histHTML(p, cls = 'hist in') {
 }
 function render() {
   const t0 = performance.now();
+  // The rebuild drops the focused row: note if the key was in the list (or a going tray).
+  const was = S.rendered, a = document.activeElement, held = $('list').contains(a) || (!S.sel.size && $('tray').contains(a));
   if (T.on?.row != null) closeTagger(false, false);   // the row it sits in is about to be rebuilt
   compute();
   tagbar();
@@ -296,6 +298,9 @@ function render() {
   strips(list);
   for (const ph of list.querySelectorAll('.ph')) { ph.style.setProperty('--rows', ph.dataset.b - ph.dataset.a); ph.style.setProperty('--tall', S.rendered.slice(+ph.dataset.a, +ph.dataset.b).filter((p) => p.tags.length).length); lazy.observe(ph); }
   if (S.rendered.length && !list.querySelector('.row.cur')) list.querySelector('.row').tabIndex = 0;
+  // back to the same row, or the nearest that stayed: after it, then before
+  if (held) { const live = new Set(S.rendered.map((p) => p.i)), at = was.findIndex((p) => p.i === S.cur);
+    home(live.has(S.cur) ? S.cur : [...was.slice(at + 1), ...was.slice(0, Math.max(at, 0)).reverse()].find((p) => live.has(p.i))?.i); }
   const total = S.pages.filter((p) => p.n && !p.forgotten).length, n = S.shown.length;
   // The masthead already says how many pages there are; this line speaks only when a filter narrows them.
   const filtered = !!(S.q.trim() || S.domain.trim() || S.group.trim() || S.status || S.preview || S.tags.length);
@@ -445,7 +450,6 @@ async function apply(idxs, restore) {
   if (!host.forget) return readOnly(`knowmoretabs forget ${shellQuote(S.pages[idxs[0]].url)}`);
   for (const i of idxs) S.pages[i].forgotten = !restore;
   S.sel.clear(); S.exp.clear(); S.preview = false; render();
-  const all = rows(); if (all.length) setCursor(all[Math.min(all.length - 1, Math.max(0, S.rendered.findIndex((p) => p.i >= idxs[0])))], false);
   S.undo = () => apply(idxs, !restore);
   toast(`${restore ? 'Restored' : 'Forgot'} ${plural(idxs.length, 'page')}`, 'Undo', undo);
   try { await (restore ? host.restore : host.forget)(idxs.map((i) => S.pages[i].url)); }
@@ -457,7 +461,7 @@ async function undo() { const f = S.undo; S.undo = null; if (f && (await f()) ==
 let toastTimer = 0;
 function toast(msg, label, act) {
   const t = $('toast'); t.textContent = msg;
-  if (label) { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = () => { act(); showEl(t, false); }; t.append(b); }
+  if (label) { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = () => { home(); act(); showEl(t, false); }; t.append(b); }   // the key stays in the list
   showEl(t, true); clearTimeout(toastTimer); toastTimer = setTimeout(() => showEl(t, false), 9000);
 }
 function readOnly(cmd) { toast(`Read-only export. In a terminal: ${cmd}`, 'Copy', () => navigator.clipboard.writeText(cmd)); }
@@ -512,9 +516,9 @@ function openTagger(where) {
 function closeTagger(refocus = true, rerender = true) {
   if (!T.on) return;
   const row = rowOf(T.on.row); T.on = null;
+  if (refocus && rowOf(S.cur)) setCursor(rowOf(S.cur));   // first, so the render below finds the key in the list
   $('tg-dd').hidden = true; document.body.append($('tg-dd')); row?.classList.remove('tagging');
   if (T.dirty && rerender) render();
-  if (refocus && rowOf(S.cur)) setCursor(rowOf(S.cur));
 }
 function paintTagger() {
   const idxs = tagIdxs(), n = tagCounts(idxs.map((i) => S.pages[i]));

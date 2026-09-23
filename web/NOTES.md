@@ -203,6 +203,13 @@ Rows are the tab stops. The list uses a roving tabindex: one row is
 The focused row is the cursor, so the focus ring and the cursor are the same
 thing, and a mouse click on a row moves the cursor too. "Show all" moves the
 cursor to the first newly shown row; "Show fewer" returns focus to the link.
+A repaint rebuilds the rows, so `render()` notes whether it held the focus and
+gives it back: to the same row, or if that row left (forgotten, untagged under
+a tag filter), to the nearest row that stayed, after it and then before. It
+does not scroll. So after `f` the key is on the next row, and after `u` it
+stays where it was while the page comes back above it. The tray, the toast
+and the tag editor hand the key to the cursor row as they go, never to the
+body.
 
 ## 4. Decisions, and what was rejected
 
