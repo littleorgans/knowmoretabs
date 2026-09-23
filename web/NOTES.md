@@ -750,7 +750,10 @@ and its undo says "Retired Security; 24 pages no longer show it", as the
 dialog does. The page knows a name came back because the answer's `undo`
 keeps an old retirement time for it (and `null` for one it retired); a name
 that is new to the page was not necessarily a revival, and only a revival
-needs the reload. A failed request changes nothing, the toast
+needs the reload. An answer with nothing to undo (another tab got there
+first) says nothing, as forget does with nothing to forget: the page takes
+the tags it reports, the field clears, and the last undo still stands. A
+failed request changes nothing, the toast
 gives the server's reason, and what you typed or could undo is still there to
 try again. If the write stands but the library cannot be reloaded after it,
 the toast says it was saved and asks for a reload.

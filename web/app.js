@@ -550,16 +550,18 @@ async function applyTags(idxs, add, remove, reverse) {
   setVocab(r.vocabulary || []);
   const idxsOf = (urls) => urls.map((u) => S.byUrl.get(u)).filter(Boolean).map((p) => p.i);
   for (const [u, ts] of Object.entries(r.tags || {})) if (S.byUrl.has(u)) setTags(S.byUrl.get(u), ts);
-  const changed = idxsOf(r.urls || []), inv = r.undo, reversible = inv && (inv.tags.length || Object.keys(inv.vocabulary).length);
-  if (reversible) S.undo = () => applyTags(changed, remove, add, inv);
+  const changed = idxsOf(r.urls || []), inv = r.undo, tagged = idxsOf(Object.keys(r.tags || {}));
+  // nothing to undo is nothing done (another tab got there first): quiet, as forget is
+  if (!inv || !(inv.tags.length || Object.keys(inv.vocabulary).length)) return retagged(tagged);
+  S.undo = () => applyTags(changed, remove, add, inv);
   // The inverse keeps a revived name's old retirement (null for one it retired),
   // and that happened on every page with the name, so it is said as the dialog does.
   const vs = Object.entries(inv?.vocabulary || {}), back = vs.find((v) => v[1])?.[0], gone = vs.find((v) => v[1] === null)?.[0];
   const note = back && !reverse ? await refetchTags() : '';
   toast(back ? `${back} is back${note || ` on ${plural(libraryCounts().get(lc(back)) || 0, 'page')}`}`
     : gone ? `Retired ${gone}; ${plural(before.get(lc(gone)) || 0, 'page')} no longer show it`
-    : `${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`, reversible ? 'Undo' : null, undo);
-  retagged(idxsOf(Object.keys(r.tags || {})));
+    : `${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`, 'Undo', undo);
+  retagged(tagged);
 }
 function setVocab(list) { S.vocab = new Map(list.filter((v) => typeof v?.name === 'string' && v.name).map((v) => [lc(v.name), v.name])); }
 // After a name comes back: '' or, if the reload fails, the toast's note that the write stood.
