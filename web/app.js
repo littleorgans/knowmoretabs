@@ -434,7 +434,7 @@ function tray() {
 // ---- 6. Forget / restore, with undo ---------------------------------------
 async function apply(idxs, restore) {
   if (!idxs.length) return;
-  if (!host.forget) { const p = S.pages[idxs[0]]; return toast(`Read-only export. In a terminal: knowmoretabs forget ${shellQuote(p.url)}`, 'Copy', () => navigator.clipboard.writeText(`knowmoretabs forget ${shellQuote(p.url)}`)); }
+  if (!host.forget) return readOnly(`knowmoretabs forget ${shellQuote(S.pages[idxs[0]].url)}`);
   for (const i of idxs) S.pages[i].forgotten = !restore;
   S.sel.clear(); S.exp.clear(); S.preview = false; render();
   const all = rows(); if (all.length) setCursor(all[Math.min(all.length - 1, Math.max(0, S.rendered.findIndex((p) => p.i >= idxs[0])))], false);
@@ -452,6 +452,7 @@ function toast(msg, label, act) {
   if (label) { const b = document.createElement('button'); b.type = 'button'; b.textContent = label; b.onclick = () => { act(); showEl(t, false); }; t.append(b); }
   showEl(t, true); clearTimeout(toastTimer); toastTimer = setTimeout(() => showEl(t, false), 9000);
 }
+function readOnly(cmd) { toast(`Read-only export. In a terminal: ${cmd}`, 'Copy', () => navigator.clipboard.writeText(cmd)); }
 const targets = () => (S.sel.size ? [...S.sel] : S.cur >= 0 ? [S.cur] : []);
 
 // ---- 6b. Tags --------------------------------------------------------------
@@ -479,7 +480,8 @@ function fitTags() {
 function filterTag(k) {
   const focused = $('tb').contains(document.activeElement);
   S.tags = S.tags.includes(k) ? S.tags.filter((t) => t !== k) : [...S.tags, k]; render();
-  if (focused) { const b = [...$('tb').querySelectorAll('[data-t]')].find((b) => b.dataset.t === k); (b?.parentElement.hidden ? $('tb-more') : b)?.focus(); }
+  const b = focused && $('tb').querySelector(`[data-t="${CSS.escape(k)}"]`);   // keep the key on it, or on "N more" if it folded away
+  if (b) (b.parentElement.hidden ? $('tb-more') : b).focus();
 }
 
 // The tagger: one editor, moved onto a row's address line or above the tray's
@@ -523,37 +525,34 @@ function tagOptions() {
   if (q && !S.vocab.has(q)) o.push({ value: back || typed, label: back || typed, meta: back ? 'retired · brings it back' : 'new tag' });
   return o;
 }
-function readOnlyTag(i) {
-  const p = S.pages[i], cmd = p && `knowmoretabs tag ${shellQuote(p.url)} --add NAME`;
-  if (p) toast(`Read-only export. In a terminal: ${cmd}`, 'Copy', () => navigator.clipboard.writeText(cmd));
-}
+function readOnlyTag(i) { const p = S.pages[i]; if (p) readOnly(`knowmoretabs tag ${shellQuote(p.url)} --add NAME`); }
 // One name on some pages. Like retiring it waits for the server, which has
-// the final word on spelling and on which pages changed; undo reverses those.
-async function applyTags(idxs, add, remove, restore) {
+// the final word on spelling and on which pages changed. Its answer carries
+// the decisions it replaced, and undo sends them back, exact on any selection.
+async function applyTags(idxs, add, remove, reverse) {
   if (!host.tag) return readOnlyTag(idxs[0]);
   const had = new Set(S.vocab.keys());
   let r;
-  try { r = restore ? await host.undoTags(restore) : await host.tag(idxs.map((i) => S.pages[i].url), add, remove); }
+  try { r = await (reverse ? host.undoTags(reverse) : host.tag(idxs.map((i) => S.pages[i].url), add, remove)); }
   catch (e) { toast(`Could not update tags (${e.message}).`); return false; }
   setVocab(r.vocabulary || []);
+  const idxsOf = (urls) => urls.map((u) => S.byUrl.get(u)).filter(Boolean).map((p) => p.i);
   for (const [u, ts] of Object.entries(r.tags || {})) if (S.byUrl.has(u)) setTags(S.byUrl.get(u), ts);
-  const changed = (r.urls || []).map((u) => S.byUrl.get(u)?.i).filter((i) => i != null);
-  let message = `${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`;
-  const reversible = changed.length || r.undo?.tags.length || Object.keys(r.undo?.vocabulary || {}).length;
-  if (reversible) S.undo = () => applyTags(changed, remove, add, r.undo);
-  if (!restore && add.some((t) => !had.has(lc(t)))) {
-    try { await refetchTags(); }                 // a revived name may reappear on other pages too
-    catch (e) { message += `; saved, but could not refresh the library (${e.message}). Reload to see all pages.`; }
-  }
-  toast(message, reversible ? 'Undo' : null, undo);
-  retagged(restore ? Object.keys(r.tags || {}).map((u) => S.byUrl.get(u)?.i).filter((i) => i != null) : idxs);
-  return true;
+  const changed = idxsOf(r.urls || []), inv = r.undo, reversible = inv && (inv.tags.length || Object.keys(inv.vocabulary).length);
+  if (reversible) S.undo = () => applyTags(changed, remove, add, inv);
+  const note = !reverse && add.some((t) => !had.has(lc(t))) ? await refetchTags() : '';   // a revived name is back on other pages too
+  toast(`${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}${note}`, reversible ? 'Undo' : null, undo);
+  retagged(idxsOf(Object.keys(r.tags || {})));
 }
 function setVocab(list) { S.vocab = new Map(list.filter((v) => typeof v?.name === 'string' && v.name).map((v) => [lc(v.name), v.name])); }
+// After a name comes back: '' or, if the reload fails, the toast's note that the write stood.
 async function refetchTags() {
-  const lib = await host.load();
-  setVocab(lib.vocabulary || []);
-  for (const q of lib.pages || []) if (S.byUrl.has(q.url)) setTags(S.byUrl.get(q.url), Array.isArray(q.tags) ? q.tags : []);
+  try {
+    const lib = await host.load();
+    setVocab(lib.vocabulary || []);
+    for (const q of lib.pages || []) if (S.byUrl.has(q.url)) setTags(S.byUrl.get(q.url), Array.isArray(q.tags) ? q.tags : []);
+    return '';
+  } catch (e) { return `; saved, but could not refresh the library (${e.message}). Reload to see all pages.`; }
 }
 function retagged(idxs) {
   if (!T.on) return render();
@@ -569,7 +568,7 @@ function vocabDialog() {
   const all = libraryCounts(), rows = [...S.vocab].concat([...(S.retired || [])].filter(([k]) => !S.vocab.has(k)).map(([k, name]) => [k, name, 1]));
   $('vocab-list').innerHTML = rows.sort((a, b) => collator.compare(a[1], b[1])).map(([k, name, off]) => `<li${off ? ' class="off"' : ''}><span>${esc(name)}</span>` +
     `<small>${off ? 'retired' : plural(all.get(k) || 0, 'page')}</small><button type="button" data-k="${esc(k)}">${off ? 'Bring back' : 'Retire'}</button></li>`).join('');
-  if (focused) [...$('vocab-list').querySelectorAll('[data-k]')].find((b) => b.dataset.k === focused)?.focus();
+  if (focused) $('vocab-list').querySelector(`[data-k="${CSS.escape(focused)}"]`)?.focus();
 }
 async function retire(k) {
   S.retired ||= new Map();
@@ -580,12 +579,8 @@ async function retire(k) {
   setVocab(r.vocabulary || []);
   if (!back) { S.retired.set(k, name); S.tags = S.tags.filter((t) => t !== k); for (const p of S.pages) if (p.tk.has(k)) setTags(p, p.tags.filter((t) => lc(t) !== k)); }
   S.undo = () => retire(k);
-  let refreshError = '';
-  if (back) {
-    try { await refetchTags(); }
-    catch (e) { refreshError = `; saved, but could not refresh the library (${e.message}). Reload to see all pages.`; }
-  }
-  toast(back ? `${name} is back${refreshError || ` on ${plural(libraryCounts().get(k) || 0, 'page')}`}` : `Retired ${name}; ${plural(n, 'page')} no longer show it`, 'Undo', undo);
+  const note = back ? await refetchTags() : '';
+  toast(back ? `${name} is back${note || ` on ${plural(libraryCounts().get(k) || 0, 'page')}`}` : `Retired ${name}; ${plural(n, 'page')} no longer show it`, 'Undo', undo);
   render(); if ($('vocab').open) vocabDialog();
 }
 
@@ -723,7 +718,7 @@ function wire() {
     else filterTag(b.dataset.t); });
   new ResizeObserver(fitTags).observe($('tagbar'));
   $('tag-sel').addEventListener('click', () => openTagger('sel'));
-  dropdown('tg', { typeahead: true, own: true, none: 'Type a name to make a tag', options: tagOptions, onPick: async (o) => { const value = $('tg').value; if (await applyTags(tagIdxs(), [o.value], []) && $('tg').value === value) $('tg').value = ''; } });
+  dropdown('tg', { typeahead: true, own: true, none: 'Type a name to make a tag', options: tagOptions, onPick: async (o) => { const v = $('tg').value; if ((await applyTags(tagIdxs(), [o.value], [])) !== false && $('tg').value === v) $('tg').value = ''; } });   // a failed add keeps what was typed
   $('tg').addEventListener('keydown', (e) => {         // after the menu's keys: esc clears, then closes; ↵ on nothing closes
     e.stopPropagation(); const v = $('tg').value;
     if (e.defaultPrevented || !(e.key === 'Escape' || (e.key === 'Enter' && !v.trim()))) return;
