@@ -1631,3 +1631,86 @@ fn review_stalled_body_and_response_never_hold_archive_lock() {
     );
     assert_eq!(state(&fx)["forgotten"], json!([A, B, HIDDEN]));
 }
+
+#[test]
+fn exact_tag_undo_restores_mixed_decisions_without_overwriting_other_tags() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    server.post("/api/tags", &json!({"urls": [A, HIDDEN], "add": ["X"]}));
+    server.post("/api/tags", &json!({"urls": [B], "add": ["Y"]}));
+    let before = state(&fx);
+    let edited = server
+        .post(
+            "/api/tags",
+            &json!({"urls": [A, B, HIDDEN], "add": ["x", "y"]}),
+        )
+        .json();
+    server.post("/api/tags", &json!({"urls": [A], "add": ["Unrelated"]}));
+    let undone = server.post("/api/tags", &json!({"urls": [], "undo": edited["undo"]}));
+    assert_eq!(undone.status, 200, "{}", undone.text());
+    let mut expected = before;
+    expected["tags"][A]["add"] = json!(["Unrelated", "X"]);
+    let after = state(&fx);
+    expected["vocabulary"]["Unrelated"] = after["vocabulary"]["Unrelated"].clone();
+    assert_eq!(
+        after, expected,
+        "undo restores both decision lists, including forgotten pages"
+    );
+    let redone = server.post(
+        "/api/tags",
+        &json!({"urls": [], "undo": undone.json()["undo"]}),
+    );
+    assert_eq!(redone.status, 200);
+    assert_eq!(tags_of(&server.library(), B), json!(["X", "Y"]));
+}
+
+#[test]
+fn exact_tag_undo_restores_retirement_and_historical_page_membership() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    server.post("/api/tags", &json!({"urls": [A, HIDDEN], "add": ["Old"]}));
+    server.post("/api/vocabulary", &json!({"retire": ["Old"]}));
+    let before = state(&fx);
+    let revived = server
+        .post("/api/tags", &json!({"urls": [A, B], "add": ["OLD"]}))
+        .json();
+    assert_eq!(tags_of(&server.library(), HIDDEN), json!(["Old"]));
+    let undone = server.post("/api/tags", &json!({"urls": [], "undo": revived["undo"]}));
+    assert_eq!(undone.status, 200, "{}", undone.text());
+    assert_eq!(
+        state(&fx),
+        before,
+        "retirement time and historical assignments survive undo"
+    );
+    server.post("/api/vocabulary", &json!({"create": ["Old"]}));
+    assert_eq!(tags_of(&server.library(), A), json!(["Old"]));
+    assert_eq!(tags_of(&server.library(), B), json!([]));
+    assert_eq!(tags_of(&server.library(), HIDDEN), json!(["Old"]));
+}
+
+#[test]
+fn malformed_tag_undo_is_atomic_and_unknown_urls_are_skipped() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    server.post("/api/tags", &json!({"urls": [A], "add": ["X"]}));
+    let before = state(&fx);
+    for decisions in [
+        json!([{"url":A,"name":"X","add":false,"remove":false}, {"url":B,"name":"X","add":true,"remove":true}]),
+        json!([{"url":A,"name":"X","add":false,"remove":false}, {"url":A,"name":"x","add":true,"remove":false}]),
+        json!([{"url":A,"name":"","add":false,"remove":false}]),
+    ] {
+        let reply = server.post(
+            "/api/tags",
+            &json!({"urls":[],"undo":{"tags":decisions,"vocabulary":{}}}),
+        );
+        assert_eq!(reply.status, 400, "{}", reply.text());
+        assert_eq!(state(&fx), before);
+    }
+    let reply = server.post("/api/tags", &json!({"urls":[],"undo":{"tags":[{"url":"https://unknown.test/","name":"X","add":true,"remove":false}],"vocabulary":{}}}));
+    assert_eq!(reply.status, 200);
+    assert_eq!(reply.json()["counts"]["unknown"], 1);
+    assert_eq!(state(&fx), before);
+}

@@ -312,28 +312,38 @@ impl Server {
         }
     }
 
-    /// The same request with `add` and `remove` swapped is the undo, as
-    /// forget and restore are each other's.
+    /// Normal edits and their exact undo use the same guarded write path.
     fn tags(&self, head: &Head, body: &[u8]) -> Response {
         let expected = "{\"urls\":[...],\"add\":[...],\"remove\":[...]}";
         let request: TagsRequest = match json_request(head, body, expected) {
             Ok(request) => request,
             Err(response) => return response,
         };
-        if request.add.is_empty() && request.remove.is_empty() {
+        if request.undo.is_none() && request.add.is_empty() && request.remove.is_empty() {
             return Response::error(Status::BadRequest, "name at least one tag to add or remove");
         }
-        let applied = tags::apply(
-            &self.root,
-            &request.urls,
-            &request.add,
-            &request.remove,
-            false,
-            self.log,
-        );
+        let applied = if let Some(undo) = &request.undo {
+            if !request.urls.is_empty() || !request.add.is_empty() || !request.remove.is_empty() {
+                return Response::error(
+                    Status::BadRequest,
+                    "undo cannot be combined with tag edits",
+                );
+            }
+            tags::undo(&self.root, undo, self.log)
+        } else {
+            tags::apply(
+                &self.root,
+                &request.urls,
+                &request.add,
+                &request.remove,
+                false,
+                self.log,
+            )
+        };
         match applied {
             Ok(outcome) => {
                 let body = serde_json::json!({
+                    "undo": outcome.undo,
                     "urls": outcome.changed,
                     "tags": outcome.tags,
                     "vocabulary": outcome.vocabulary,
@@ -397,6 +407,8 @@ struct TriageRequest {
 
 #[derive(Deserialize)]
 struct TagsRequest {
+    #[serde(default)]
+    undo: Option<tags::Undo>,
     urls: Vec<String>,
     #[serde(default)]
     add: Vec<String>,

@@ -6,14 +6,14 @@
 //!      take the same lock, read and atomic rewrite. One module owns the
 //!      rules (what a name may be, how case is matched, what adding and
 //!      removing do to a page's two lists) so that the CLI and the server
-//!      cannot disagree, and the same request with its lists swapped is its
-//!      undo from either side.
+//!      cannot disagree. Undo records only the decisions a request changed.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 
 use crate::archive::Archive;
 use crate::capture::Log;
@@ -110,8 +110,40 @@ fn strip(set: &mut BTreeSet<String>, name: &str) {
     set.retain(|entry| fold(entry) != folded);
 }
 
+/// The previous decisions for just the names a request changed. Newly created
+/// vocabulary entries remain, but revival restores the old retirement time.
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Undo {
+    pub tags: Vec<Decision>,
+    pub vocabulary: BTreeMap<String, Option<Timestamp>>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Decision {
+    url: String,
+    name: String,
+    add: bool,
+    remove: bool,
+}
+
+impl Decision {
+    fn read(state: &State, url: &str, name: &str) -> Self {
+        let page = state.tags.get(url);
+        let has = |set: &BTreeSet<String>| set.iter().any(|n| fold(n) == fold(name));
+        Self {
+            url: url.to_owned(),
+            name: name.to_owned(),
+            add: page.is_some_and(|p| has(&p.add)),
+            remove: page.is_some_and(|p| has(&p.remove)),
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct Outcome {
+    pub undo: Undo,
     /// Known URLs whose shown tags changed, in request order, without repeats.
     pub changed: Vec<String>,
     /// Known URLs already tagged that way; a repeated request is not an error.
@@ -130,8 +162,8 @@ pub struct Outcome {
 
 /// Adds `add` to and takes `remove` off every page in `urls`. Adding puts
 /// the name in the page's `add` list and out of its `remove` list; removing
-/// does the opposite, so the two lists never share a name and the request
-/// with the lists swapped undoes this one. Names match the vocabulary
+/// does the opposite, so the two lists never share a name. The outcome carries
+/// the previous decisions for exact undo. Names match the vocabulary
 /// without regard to case and are stored in its spelling; adding an unknown
 /// name creates it, adding a retired one brings it back, and removing a name
 /// the vocabulary has never held changes nothing. With `strict`, an unknown
@@ -181,6 +213,14 @@ pub fn apply(
         let now = now();
         let mut adding = Vec::new();
         for name in &add {
+            if let Some((spelling, term)) = state.term(name)
+                && term.retired_at.is_some()
+            {
+                outcome
+                    .undo
+                    .vocabulary
+                    .insert(spelling.to_owned(), term.retired_at);
+            }
             let (spelling, admitted) = admit(&mut state, name, now);
             match admitted {
                 Admitted::Known => {}
@@ -195,6 +235,12 @@ pub fn apply(
             .filter_map(|name| state.term(name).map(|(spelling, _)| spelling.to_owned()))
             .collect();
         for url in &pages {
+            for name in adding.iter().chain(&removing) {
+                let before = Decision::read(&state, url, name);
+                if before.add != adding.contains(name) || before.remove != removing.contains(name) {
+                    outcome.undo.tags.push(before);
+                }
+            }
             let page = state.tags.entry(url.clone()).or_default();
             let was = (page.add.clone(), page.remove.clone());
             for name in &adding {
@@ -224,6 +270,108 @@ pub fn apply(
         outcome.tags.insert(url, after);
     }
     if dirty {
+        state.write(root)?;
+    }
+    outcome.vocabulary = state.active_vocabulary();
+    Ok(outcome)
+}
+
+/// Restores touched decisions in one lock-guarded write. Unrelated names and
+/// pages survive even when another writer has changed them since the request.
+pub fn undo(root: &Path, undo: &Undo, log: Log) -> Result<Outcome, Error> {
+    let mut seen = HashSet::new();
+    for decision in &undo.tags {
+        normalize(&decision.name)?;
+        if (decision.add && decision.remove) || !seen.insert((&decision.url, fold(&decision.name)))
+        {
+            return Err(Error::TagName {
+                name: decision.name.clone(),
+                reason: "invalid undo decision",
+            });
+        }
+    }
+    let mut names = HashSet::new();
+    for name in undo.vocabulary.keys() {
+        normalize(name)?;
+        if !names.insert(fold(name)) {
+            return Err(Error::TagName {
+                name: name.clone(),
+                reason: "duplicate undo vocabulary name",
+            });
+        }
+    }
+    let archive = Archive::open(root)?;
+    let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
+    let loaded = library::load(&archive)?;
+    let known = library::known_urls(&loaded.snapshots);
+    let mut state = State::read(root)?;
+    let mut outcome = Outcome::default();
+    let mut before = BTreeMap::new();
+    let spellings = state.spellings(false);
+    for decision in &undo.tags {
+        if known.contains(decision.url.as_str()) {
+            before.insert(
+                decision.url.clone(),
+                state.page_tags(&decision.url, &spellings),
+            );
+        } else if !outcome.unknown.contains(&decision.url) {
+            outcome.unknown.push(decision.url.clone());
+        }
+    }
+    // Retirement can change pages outside the original request too.
+    if !undo.vocabulary.is_empty() {
+        for url in &known {
+            before.insert((*url).to_owned(), state.page_tags(url, &spellings));
+        }
+    }
+    for decision in &undo.tags {
+        if !known.contains(decision.url.as_str()) {
+            continue;
+        }
+        let Some((name, _)) = state.term(&decision.name) else {
+            continue;
+        };
+        let name = name.to_owned();
+        let previous = Decision::read(&state, &decision.url, &name);
+        if previous.add == decision.add && previous.remove == decision.remove {
+            continue;
+        }
+        outcome.undo.tags.push(previous);
+        let page = state.tags.entry(decision.url.clone()).or_default();
+        strip(&mut page.add, &name);
+        strip(&mut page.remove, &name);
+        if decision.add {
+            page.add.insert(name.clone());
+        }
+        if decision.remove {
+            page.remove.insert(name);
+        }
+        if page.is_empty() {
+            state.tags.remove(&decision.url);
+        }
+    }
+    for (name, retired_at) in &undo.vocabulary {
+        let Some((spelling, _)) = state.term(name) else {
+            continue;
+        };
+        let spelling = spelling.to_owned();
+        let term = state.vocabulary.get_mut(&spelling).expect("known term");
+        if term.retired_at != *retired_at {
+            outcome.undo.vocabulary.insert(spelling, term.retired_at);
+            term.retired_at = *retired_at;
+        }
+    }
+    let spellings = state.spellings(false);
+    for (url, was) in before {
+        let after = state.page_tags(&url, &spellings);
+        if after == was {
+            outcome.unchanged.push(url.clone());
+        } else {
+            outcome.changed.push(url.clone());
+        }
+        outcome.tags.insert(url, after);
+    }
+    if !outcome.undo.tags.is_empty() || !outcome.undo.vocabulary.is_empty() {
         state.write(root)?;
     }
     outcome.vocabulary = state.active_vocabulary();

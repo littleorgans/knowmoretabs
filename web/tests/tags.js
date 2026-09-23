@@ -3,7 +3,7 @@
   const check = (ok, message) => { if (!ok) throw new Error(message); };
   for (let n = 0; !S.rendered.length && n < 100; n++) await new Promise(r=>setTimeout(r,50));
   check(S.rendered.length, 'library has no rendered pages');
-  const original = host.tag, originalLoad = host.load, originalVocab = host.vocab, requests = [];
+  const original = host.tag, originalLoad = host.load, originalVocab = host.vocab, originalUndo = host.undoTags, requests = [];
   host.tag = async (urls, add, remove) => { requests.push({urls, add, remove}); return {urls: [], tags: {}, vocabulary: [...S.vocab.values()].map(name=>({name}))}; };
   try {
     closeTagger(); openTagger(S.rendered[0].i);
@@ -56,6 +56,16 @@
     await retire(lc(name));
     check(S.vocab.has(lc(name)) && S.undo && $('toast').textContent.includes('saved, but'), 'revival refresh failure lost the successful write');
     setTags(page, before);
+    host.load = originalLoad;
+    const payload = {tags: [{url:page.url, name, add:false, remove:false}], vocabulary:{}};
+    host.tag = async () => ({urls:[page.url], tags:{[page.url]:[...before, name]}, vocabulary, undo:payload});
+    let restored = false;
+    host.undoTags = async (received) => {
+      check(received === payload, 'client did not use the exact undo payload'); restored = true;
+      return {urls:[page.url], tags:{[page.url]:before}, vocabulary};
+    };
+    await applyTags([page.i], [name], []); await undo();
+    check(restored && !page.tags.includes(name), 'client fell back to a lossy swapped request');
     return 'PASS: keyboard, names, focus, successful writes with failed refresh, retryable undo and preserved input';
-  } finally { S.undo = null; $('vocab').close(); host.tag = original; host.load = originalLoad; host.vocab = originalVocab; closeTagger(); await refetchTags(); render(); }
+  } finally { S.undo = null; $('vocab').close(); host.tag = original; host.load = originalLoad; host.vocab = originalVocab; host.undoTags = originalUndo; closeTagger(); await refetchTags(); render(); }
 })()

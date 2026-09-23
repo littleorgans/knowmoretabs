@@ -18,6 +18,7 @@ const host = (() => {
     forget: (urls) => post('api/forget', { urls }),
     restore: (urls) => post('api/restore', { urls }),
     tag: (urls, add, remove) => post('api/tags', { urls, add, remove }),
+    undoTags: (undo) => post('api/tags', { urls: [], undo }),
     vocab: (create, retire) => post('api/vocabulary', { create, retire }),
   };
 })();
@@ -526,23 +527,25 @@ function readOnlyTag(i) {
 }
 // One name on some pages. Like retiring it waits for the server, which has
 // the final word on spelling and on which pages changed; undo reverses those.
-async function applyTags(idxs, add, remove) {
+async function applyTags(idxs, add, remove, restore) {
   if (!host.tag) return readOnlyTag(idxs[0]);
   const had = new Set(S.vocab.keys());
   let r;
-  try { r = await host.tag(idxs.map((i) => S.pages[i].url), add, remove); }
+  try { r = restore ? await host.undoTags(restore) : await host.tag(idxs.map((i) => S.pages[i].url), add, remove); }
   catch (e) { toast(`Could not update tags (${e.message}).`); return false; }
   setVocab(r.vocabulary || []);
   for (const [u, ts] of Object.entries(r.tags || {})) if (S.byUrl.has(u)) setTags(S.byUrl.get(u), ts);
   const changed = (r.urls || []).map((u) => S.byUrl.get(u)?.i).filter((i) => i != null);
   let message = `${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`;
-  if (changed.length) S.undo = () => applyTags(changed, remove, add);
-  if (add.some((t) => !had.has(lc(t)))) {
+  if (restore) message = `Updated tags on ${plural(changed.length, 'page')}`;
+  const reversible = changed.length || r.undo?.tags.length || Object.keys(r.undo?.vocabulary || {}).length;
+  if (reversible) S.undo = () => applyTags(changed, remove, add, r.undo);
+  if (!restore && add.some((t) => !had.has(lc(t)))) {
     try { await refetchTags(); }                 // a revived name may reappear on other pages too
     catch (e) { message += `; saved, but could not refresh the library (${e.message}). Reload to see all pages.`; }
   }
-  toast(message, changed.length ? 'Undo' : null, undo);
-  retagged(idxs);
+  toast(message, reversible ? 'Undo' : null, undo);
+  retagged(restore ? Object.keys(r.tags || {}).map((u) => S.byUrl.get(u)?.i).filter((i) => i != null) : idxs);
   return true;
 }
 function setVocab(list) { S.vocab = new Map(list.filter((v) => typeof v?.name === 'string' && v.name).map((v) => [lc(v.name), v.name])); }
