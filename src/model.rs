@@ -80,6 +80,11 @@ pub struct Stats {
     /// How often the selected navigation had to be approximated.
     pub navigation_fallbacks: u64,
     pub groups_without_metadata: u64,
+    /// Tabs on this machine (localhost, loopback addresses) that `save` left
+    /// out on purpose: a choice, not a degradation. Absent from snapshots
+    /// written before it existed, which read as zero.
+    #[serde(default)]
+    pub excluded_tabs: u64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]

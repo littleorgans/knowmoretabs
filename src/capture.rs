@@ -10,6 +10,7 @@
 //!      describe; and the unchanged-session check runs before staging, so a
 //!      no-op run leaves no trace.
 
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::archive::{Archive, SNAPSHOT_JSON};
 use crate::error::Error;
+use crate::local;
 use crate::model::{SCHEMA_VERSION, SESSION_FILE_NAME, Snapshot, Source};
 use crate::platform::{self, BrowserCandidate, Profile, SESSIONS_DIR};
 use crate::session::{self, CommandTable, Parsed};
@@ -156,6 +158,7 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
         groups: read.parsed.groups,
         tabs: read.parsed.tabs,
     };
+    leave_out_this_machine(&mut snapshot);
 
     if !opts.force {
         let previous = archive.latest_matching(
@@ -198,6 +201,80 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
         snapshot,
         also_found: located.also_found,
     })
+}
+
+/// Removes tabs on this machine (development servers, this tool's own library)
+/// and makes the rest read as if they had never been open: a window left
+/// empty is dropped and the rest renumbered, positions close up, an active
+/// tab that was removed leaves its window with none, and a group left without
+/// tabs is dropped. The unchanged-session check then sees opening or closing
+/// a localhost tab as no change at all. `session.snss` stays verbatim.
+fn leave_out_this_machine(snapshot: &mut Snapshot) {
+    let before = snapshot.tabs.len();
+    snapshot
+        .tabs
+        .retain(|tab| !local::is_this_machine_url(&tab.url));
+    let excluded = before - snapshot.tabs.len();
+    if excluded == 0 {
+        return;
+    }
+
+    // Windows that still hold a tab, or held none to begin with, keep their
+    // order and take consecutive numbers.
+    let occupied: HashSet<u32> = snapshot.tabs.iter().map(|tab| tab.window).collect();
+    snapshot
+        .windows
+        .retain(|window| window.tabs == 0 || occupied.contains(&window.number));
+    let renumber: HashMap<u32, u32> = snapshot
+        .windows
+        .iter()
+        .zip(1..)
+        .map(|(window, number)| (window.number, number))
+        .collect();
+    for tab in &mut snapshot.tabs {
+        tab.window = renumber[&tab.window];
+    }
+    snapshot.groups.retain(|group| {
+        snapshot
+            .tabs
+            .iter()
+            .any(|tab| tab.group.as_ref() == Some(&group.id))
+    });
+    for group in &mut snapshot.groups {
+        if let Some(&number) = renumber.get(&group.window) {
+            group.window = number;
+        }
+    }
+
+    // The parser sorted tabs by window and position; close the gaps in the
+    // known positions and leave unknown ones (-1) as they were.
+    let mut next: HashMap<u32, i32> = HashMap::new();
+    for tab in &mut snapshot.tabs {
+        if tab.position >= 0 {
+            let position = next.entry(tab.window).or_default();
+            tab.position = *position;
+            *position += 1;
+        }
+    }
+    let kept: HashSet<i32> = snapshot.tabs.iter().map(|tab| tab.tab_id).collect();
+    for window in &mut snapshot.windows {
+        window.number = renumber[&window.number];
+        window.tabs = u32::try_from(
+            snapshot
+                .tabs
+                .iter()
+                .filter(|t| t.window == window.number)
+                .count(),
+        )
+        .unwrap_or(u32::MAX);
+        window.active_tab = window.active_tab.filter(|id| kept.contains(id));
+    }
+
+    let stats = &mut snapshot.stats;
+    stats.windows = snapshot.windows.len() as u64;
+    stats.tabs = snapshot.tabs.len() as u64;
+    stats.groups = snapshot.groups.len() as u64;
+    stats.excluded_tabs = excluded as u64;
 }
 
 fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
