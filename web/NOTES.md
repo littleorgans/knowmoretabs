@@ -743,7 +743,14 @@ milliseconds, and its answer settles the spelling and which pages changed, so
 the page needs no local diff and no rollback. The answer also carries the
 decisions it replaced (§5), and undo sends those back. So undoing an add on a
 mixed selection leaves alone the pages that already had the tag, and undoing a
-revival retires the name again. A failed request changes nothing, the toast
+revival retires the name again. A revival is not an edit of the pages you
+tagged, so the toast does not count them: typing a retired name says
+"Security is back on 24 pages", counted over the library once it is reloaded,
+and its undo says "Retired Security; 24 pages no longer show it", as the
+dialog does. The page knows a name came back because the answer's `undo`
+keeps an old retirement time for it (and `null` for one it retired); a name
+that is new to the page was not necessarily a revival, and only a revival
+needs the reload. A failed request changes nothing, the toast
 gives the server's reason, and what you typed or could undo is still there to
 try again. If the write stands but the library cannot be reloaded after it,
 the toast says it was saved and asks for a reload.

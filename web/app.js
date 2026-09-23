@@ -543,7 +543,7 @@ function readOnlyTag(i) { const p = S.pages[i]; if (p) readOnly(`knowmoretabs ta
 // the decisions it replaced, and undo sends them back, exact on any selection.
 async function applyTags(idxs, add, remove, reverse) {
   if (!host.tag) return readOnlyTag(idxs[0]);
-  const had = new Set(S.vocab.keys());
+  const before = libraryCounts();
   let r;
   try { r = await (reverse ? host.undoTags(reverse) : host.tag(idxs.map((i) => S.pages[i].url), add, remove)); }
   catch (e) { toast(`Could not update tags (${e.message}).`); return false; }
@@ -552,8 +552,13 @@ async function applyTags(idxs, add, remove, reverse) {
   for (const [u, ts] of Object.entries(r.tags || {})) if (S.byUrl.has(u)) setTags(S.byUrl.get(u), ts);
   const changed = idxsOf(r.urls || []), inv = r.undo, reversible = inv && (inv.tags.length || Object.keys(inv.vocabulary).length);
   if (reversible) S.undo = () => applyTags(changed, remove, add, inv);
-  const note = !reverse && add.some((t) => !had.has(lc(t))) ? await refetchTags() : '';   // a revived name is back on other pages too
-  toast(`${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}${note}`, reversible ? 'Undo' : null, undo);
+  // The inverse keeps a revived name's old retirement (null for one it retired),
+  // and that happened on every page with the name, so it is said as the dialog does.
+  const vs = Object.entries(inv?.vocabulary || {}), back = vs.find((v) => v[1])?.[0], gone = vs.find((v) => v[1] === null)?.[0];
+  const note = back && !reverse ? await refetchTags() : '';
+  toast(back ? `${back} is back${note || ` on ${plural(libraryCounts().get(lc(back)) || 0, 'page')}`}`
+    : gone ? `Retired ${gone}; ${plural(before.get(lc(gone)) || 0, 'page')} no longer show it`
+    : `${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`, reversible ? 'Undo' : null, undo);
   retagged(idxsOf(Object.keys(r.tags || {})));
 }
 function setVocab(list) { S.vocab = new Map(list.filter((v) => typeof v?.name === 'string' && v.name).map((v) => [lc(v.name), v.name])); }
