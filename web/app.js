@@ -10,7 +10,7 @@ const host = (() => {
   const blob = document.getElementById('library-data');
   const text = blob ? blob.textContent.trim() : '';
   if (text) return { mode: 'export', load: async () => JSON.parse(text) };
-  const json = async (r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); };
+  const json = async (r) => { if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || 'HTTP ' + r.status); return r.json(); };
   const post = (path, body) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) }).then(json);
   return {
     mode: 'serve',
@@ -534,7 +534,8 @@ function tagOptions() {
   const opts = [...S.vocab].filter(([k]) => !has(k) && (!q || k.includes(q)))
     .map(([k, name]) => ({ name, n: all.get(k) || 0, meta: plural(all.get(k) || 0, 'page'), pre: !!q && k.startsWith(q) }))
     .sort((a, b) => b.pre - a.pre || b.n - a.n || collator.compare(a.name, b.name));
-  if (q && !S.vocab.has(q)) opts.push({ name: typed, meta: 'new tag', fresh: true });
+  const back = S.retired?.get(q);   // retired on this visit: the one case the client knows a retired name
+  if (q && !S.vocab.has(q)) opts.push({ name: back ? back.name : typed, meta: back ? 'retired · brings it back' : 'new tag', fresh: true });
   return { opts, q, already: q && S.vocab.has(q) && has(q) ? S.vocab.get(q) : '' };
 }
 function tagMenu(on) {
@@ -565,7 +566,7 @@ function readOnlyTag(idxs) {
 // keeps it when an add is undone.
 async function applyTags(idxs, add, remove) {
   if (!host.tag) return readOnlyTag(idxs);
-  const known = (t) => S.vocab.get(lc(t)) || t;
+  const known = (t) => S.vocab.get(lc(t)) || t, had = new Set(S.vocab.keys());
   add = add.map(tagName).filter(Boolean).map(known); remove = remove.map(tagName).filter(Boolean).map(known);
   const before = new Map();
   for (const i of idxs) {
@@ -577,20 +578,35 @@ async function applyTags(idxs, add, remove) {
   }
   const changed = [...before.keys()];
   if (!changed.length) return;
-  S.undo = () => applyTags(changed, remove, add);
+  const op = S.undo = () => applyTags(changed, remove, add);
   toast(add.length ? `Added ${add.join(', ')} to ${plural(changed.length, 'page')}` : `Removed ${remove.join(', ')} from ${plural(changed.length, 'page')}`, 'Undo', undo);
   retagged(changed);
   try {
     const r = await host.tag(idxs.map((i) => S.pages[i].url), add, remove);
-    if (Array.isArray(r.vocabulary)) setVocab(r.vocabulary);
+    // the server says which pages changed; undo reverses exactly those
+    if (S.undo === op && Array.isArray(r.urls)) { const exact = r.urls.map((u) => S.byUrl.get(u)?.i).filter((i) => i != null); S.undo = () => applyTags(exact, remove, add); }
     for (const [u, ts] of Object.entries(r.tags || {})) { const p = S.byUrl.get(u); if (p && Array.isArray(ts)) setTags(p, ts); }
+    if (Array.isArray(r.vocabulary)) setVocab(r.vocabulary);
+    // A name new to this page may be a retired one coming back, and a revived
+    // tag returns to every page that had it, not only these: ask again.
+    if (S.vocab.size && [...S.vocab.keys()].some((k) => !had.has(k))) {
+      await refetchTags();
+      const spelled = add.map((t) => S.vocab.get(lc(t)) || t);   // the toast speaks the vocabulary's spelling
+      if (spelled.join() !== add.join() && S.undo !== op) toast(`Added ${spelled.join(', ')} to ${plural(changed.length, 'page')}`, 'Undo', undo);
+    }
     retagged(changed);
   } catch (e) {
     for (const [i, t] of before) setTags(S.pages[i], t);
-    retagged(changed); toast(`Could not reach the server (${e.message}); nothing changed.`);
+    setVocab([...had].map((k) => ({ name: S.vocab.get(k) || k })));
+    retagged(changed); toast(`Nothing changed (${e.message}).`);
   }
 }
 function setVocab(list) { S.vocab = new Map(list.filter((v) => v?.name).map((v) => [lc(v.name), v.name])); }
+async function refetchTags() {
+  const lib = await host.load();
+  setVocab(lib.vocabulary || []);
+  for (const q of lib.pages || []) { const p = S.byUrl.get(q.url); if (p) setTags(p, Array.isArray(q.tags) ? q.tags : []); }
+}
 function retagged(idxs) {
   if (!T.on) return render();
   T.dirty = true;
@@ -620,8 +636,11 @@ async function retire(k, back) {
   local(back);
   S.undo = () => retire(k, !back);
   toast(back ? `${name} is back on ${plural(had.length, 'page')}` : `Retired ${name}; ${plural(had.length, 'page')} no longer show it`, 'Undo', undo);
-  try { const res = await host.vocab(back ? [name] : [], back ? [] : [name]); if (Array.isArray(res.vocabulary)) { setVocab(res.vocabulary); render(); if ($('vocab').open) vocabDialog(); } }
-  catch (e) { local(!back); toast(`Could not reach the server (${e.message}); nothing changed.`); }
+  try {
+    const res = await host.vocab(back ? [name] : [], back ? [] : [name]);
+    if (back) await refetchTags(); else if (Array.isArray(res.vocabulary)) setVocab(res.vocabulary);   // back: the server's word on which pages
+    render(); if ($('vocab').open) vocabDialog();
+  } catch (e) { local(!back); toast(`Nothing changed (${e.message}).`); }
 }
 
 // ---- 7. Snapshots view -----------------------------------------------------

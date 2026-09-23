@@ -357,7 +357,8 @@ dialog .lede { margin: -0.5rem 0 1rem; color: var(--ink-2); text-wrap: pretty; }
 #vocab-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 1rem; min-height: 2.5rem; border-bottom: 1px solid var(--line); }
 #vocab-list li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #vocab-list li small { font-size: 0.75rem; color: var(--ink-3); }
-#vocab-list li button { height: 1.75rem; padding: 0 0.625rem; font-size: 0.75rem; }
+#vocab-list li button { height: 1.75rem; padding: 0 0.625rem; font-size: 0.75rem; border-color: transparent; color: var(--ink-2); }   /* quiet until the pointer is on it */
+#vocab-list li:hover button { border-color: var(--line-2); color: var(--ink); }
 #vocab-list li.off span { color: var(--ink-3); text-decoration: line-through; text-decoration-color: var(--line-2); }
 #vocab-list li.none { display: block; padding: 1rem 0; color: var(--ink-2); }
 dialog .pref { padding-top: 1rem; border-top: 1px solid var(--line); color: var(--ink-2); }
@@ -388,7 +389,8 @@ dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--ink); vertical-al
   #help-btn, label.q, #reset { border-bottom: 1px solid var(--line); }
   .tools .dd { flex: 1 1 100%; min-width: 0; border-right: 0; border-bottom: 1px solid var(--line); }
   .tools .dd.end { flex: 1 1 45%; border-bottom: 0; }
-  .tb-grid { grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr)); }
+  .tb-grid { grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr)); }
+  .tb-grid button { padding: 0 0.75rem; gap: 0.5rem; }
   #status-dd { border-right: 1px solid var(--line); }
   .tools .dd-btn { min-width: 0; }
   .tools input, .dd-btn { height: 3rem; padding-inline: 1rem; }
