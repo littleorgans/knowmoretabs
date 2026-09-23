@@ -24,7 +24,14 @@
       setTags(p, ['ReviewExactly']); $('tg').value = 'REVIEWEXACT';
       check(tagOptions()[0]?.value === 'ReviewExact', 'a popular prefix outranked the exact name');
     } finally { S.vocab = vocab; setTags(p, saved); }
-    closeTagger();
+    closeTagger(); clearFilters(); S.tagsAll = true; render();
+    const filter = $('tb').querySelector('[data-t]');
+    filter.focus(); filter.click();
+    check(document.activeElement.dataset.t === filter.dataset.t, 'tag filter lost keyboard focus');
+    clearFilters(); render(); vocabDialog(); $('vocab').showModal();
+    const button = $('vocab-list').querySelector('button'); button.focus(); vocabDialog();
+    check(document.activeElement.dataset.k === button.dataset.k, 'vocabulary update lost keyboard focus');
+    $('vocab').close();
     const page = S.pages[S.rendered[0].i], before = [...page.tags];
     const name = 'ReviewRefreshRegression', vocabulary = [...S.vocab.values(), name].map(name => ({name}));
     host.tag = async () => ({urls:[page.url], tags:{[page.url]:[...before, name]}, vocabulary});
@@ -49,6 +56,6 @@
     await retire(lc(name));
     check(S.vocab.has(lc(name)) && S.undo && $('toast').textContent.includes('saved, but'), 'revival refresh failure lost the successful write');
     setTags(page, before);
-    return 'PASS: keyboard, names, successful writes with failed refresh, retryable undo and preserved input';
-  } finally { host.tag = original; host.load = originalLoad; host.vocab = originalVocab; closeTagger(); await refetchTags(); render(); }
+    return 'PASS: keyboard, names, focus, successful writes with failed refresh, retryable undo and preserved input';
+  } finally { S.undo = null; $('vocab').close(); host.tag = original; host.load = originalLoad; host.vocab = originalVocab; closeTagger(); await refetchTags(); render(); }
 })()

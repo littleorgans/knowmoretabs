@@ -473,7 +473,11 @@ function fitTags() {
   more.parentElement.hidden = fits; if (manage) manage.hidden = !fits && !S.tagsAll;
   more.textContent = fits || S.tagsAll ? 'Fewer' : `${num.format(cells.length - cols + 1)} more`;
 }
-function filterTag(k) { S.tags = S.tags.includes(k) ? S.tags.filter((t) => t !== k) : [...S.tags, k]; render(); }
+function filterTag(k) {
+  const focused = $('tb').contains(document.activeElement);
+  S.tags = S.tags.includes(k) ? S.tags.filter((t) => t !== k) : [...S.tags, k]; render();
+  if (focused) [...$('tb').querySelectorAll('[data-t]')].find((b) => b.dataset.t === k)?.focus();
+}
 
 // The tagger: one editor, moved onto a row's address line or above the tray's
 // actions, its field a dropdown() like Site. While it is open only chips and
@@ -557,9 +561,11 @@ function retagged(idxs) {
 // everywhere. The dialog keeps it for the visit with "Bring back", since the
 // undo toast sits behind the modal.
 function vocabDialog() {
+  const focused = document.activeElement?.dataset.k;
   const all = libraryCounts(), rows = [...S.vocab].concat([...(S.retired || [])].filter(([k]) => !S.vocab.has(k)).map(([k, name]) => [k, name, 1]));
   $('vocab-list').innerHTML = rows.sort((a, b) => collator.compare(a[1], b[1])).map(([k, name, off]) => `<li${off ? ' class="off"' : ''}><span>${esc(name)}</span>` +
     `<small>${off ? 'retired' : plural(all.get(k) || 0, 'page')}</small><button type="button" data-k="${esc(k)}">${off ? 'Bring back' : 'Retire'}</button></li>`).join('');
+  if (focused) [...$('vocab-list').querySelectorAll('[data-k]')].find((b) => b.dataset.k === focused)?.focus();
 }
 async function retire(k) {
   S.retired ||= new Map();
