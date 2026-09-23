@@ -21,7 +21,6 @@ web/
 ├── fixtures/generate.py    deterministic synthetic library (seed 2026) + cases
 ├── fixtures/library.json   2,166 pages · 41 snapshots · 163 sites · 8,478 sightings · 78 groups
 ├── fixtures/cases/         empty · no-pages · one-snapshot · degraded · export-forgotten
-├── tests/tags.js           browser regressions, run against a disposable serve archive
 └── NOTES.md                this file
 ```
 
