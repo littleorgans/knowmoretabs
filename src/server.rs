@@ -274,8 +274,8 @@ impl Server {
         let archive = Archive::open(&self.root)?;
         let _lock = archive.lock(|| {})?;
         let loaded = library::load(&archive)?;
-        let forgotten = library::forgotten(&self.root)?;
-        let library = library::build(&loaded.snapshots, &forgotten, Shape::Serve);
+        let state = library::State::read(&self.root)?;
+        let library = library::build(&loaded.snapshots, &state, Shape::Serve);
         serde_json::to_vec(&library).map_err(|source| Error::Json {
             path: self.root.join(library::STATE_FILE),
             source,

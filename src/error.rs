@@ -95,6 +95,10 @@ pub enum Error {
     LibraryState { path: PathBuf, reason: String },
     #[error("not in your library: {}; nothing changed", .0.join(", "))]
     NotInLibrary(Vec<String>),
+    #[error("cannot use {name:?} as a tag: {reason}; nothing changed")]
+    TagName { name: String, reason: &'static str },
+    #[error("no such tag: {}; nothing changed", .0.join(", "))]
+    UnknownTag(Vec<String>),
     #[error("cannot listen on 127.0.0.1:{port}: {source}; pass --port N to use another port")]
     Bind {
         port: u16,
@@ -129,6 +133,8 @@ impl Error {
             Self::Json { .. } => "json",
             Self::LibraryState { .. } => "library_state",
             Self::NotInLibrary(_) => "not_in_library",
+            Self::TagName { .. } => "tag_name",
+            Self::UnknownTag(_) => "unknown_tag",
             Self::Bind { .. } => "bind",
             Self::AssetMarkers => "asset_markers",
             Self::ExportDestination(_) => "export_destination",

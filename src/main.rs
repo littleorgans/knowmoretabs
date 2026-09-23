@@ -26,6 +26,7 @@ mod server;
 mod session;
 mod snss;
 mod staleness;
+mod tags;
 mod triage;
 
 use std::fmt::Write as _;
@@ -81,6 +82,14 @@ fn main() -> ExitCode {
         Some(Command::Restore { urls }) => {
             triage::command(&root, urls, triage::Action::Restore, cli.json, log)
         }
+        Some(Command::Tag { urls, add, remove }) => {
+            tags::tag_command(&root, urls, add, remove, cli.json, log)
+        }
+        Some(Command::Tags {
+            create,
+            retire,
+            all,
+        }) => tags::tags_command(&root, create, retire, *all, cli.json, log),
         _ => save(&cli, root, log),
     };
     match result {

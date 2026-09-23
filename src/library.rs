@@ -4,7 +4,7 @@
 //! why: One bad snapshot must not hide a whole archive; one repeated URL must
 //!      retain every tab sighting without repeating page metadata in the payload.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -53,15 +53,82 @@ fn usable(snapshot: &Snapshot) -> bool {
 pub const STATE_FILE: &str = "library.json";
 const STATE_SCHEMA_VERSION: u32 = 1;
 
-/// The user's own state, beside the snapshots and never inside them. Today
-/// that is the forgotten set; unknown fields are carried through a rewrite
-/// so a newer build's additions survive an older build's `forget`.
+/// The user's own state, beside the snapshots and never inside them: the
+/// forgotten set, the tags set on pages and the vocabulary they come from.
+/// Unknown fields are carried through a rewrite so a newer build's additions
+/// survive an older build's `forget`, which is also why tags did not need a
+/// new `schema_version`: an older build keeps them as it keeps any field.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct State {
     schema_version: u32,
     pub forgotten: BTreeSet<String>,
+    /// Absent reads as untagged, and empty is not written, so a library that
+    /// was never tagged keeps exactly the file an older build wrote.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tags: BTreeMap<String, PageTags>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub vocabulary: BTreeMap<String, Term>,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
+}
+
+/// What the owner decided about one page. Kept as two lists from the start
+/// so that suggested tags can arrive later without a migration: until then a
+/// page's tags are its `add` set. The lists never share a name.
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub struct PageTags {
+    #[serde(default)]
+    pub add: BTreeSet<String>,
+    #[serde(default)]
+    pub remove: BTreeSet<String>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl PageTags {
+    /// Nothing worth keeping a map entry for.
+    pub fn is_empty(&self) -> bool {
+        self.add.is_empty() && self.remove.is_empty() && self.extra.is_empty()
+    }
+}
+
+/// A vocabulary entry. Retiring records the time rather than deleting the
+/// entry, so a page's history stays readable and the name can come back.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Term {
+    pub created_at: Timestamp,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retired_at: Option<Timestamp>,
+    #[serde(flatten)]
+    extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Term {
+    pub fn new(created_at: Timestamp) -> Self {
+        Self {
+            created_at,
+            retired_at: None,
+            extra: serde_json::Map::new(),
+        }
+    }
+}
+
+/// A tag as the page and the API name it: active entries only.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct VocabularyEntry {
+    pub name: String,
+    pub created_at: Timestamp,
+}
+
+/// Tag names compare without regard to case, so "mcp" finds "MCP".
+pub fn fold(name: &str) -> String {
+    name.to_lowercase()
+}
+
+/// The one order tags are listed in, everywhere: alphabetical ignoring case,
+/// and the exact spelling only to break a tie.
+pub fn tag_order(a: &str, b: &str) -> std::cmp::Ordering {
+    fold(a).cmp(&fold(b)).then_with(|| a.cmp(b))
 }
 
 impl State {
@@ -73,6 +140,8 @@ impl State {
                 return Ok(Self {
                     schema_version: STATE_SCHEMA_VERSION,
                     forgotten: BTreeSet::new(),
+                    tags: BTreeMap::new(),
+                    vocabulary: BTreeMap::new(),
                     extra: serde_json::Map::new(),
                 });
             }
@@ -102,10 +171,58 @@ impl State {
         bytes.push(b'\n');
         archive::replace_file(&path, &bytes)
     }
-}
 
-pub fn forgotten(root: &Path) -> Result<HashSet<String>, Error> {
-    Ok(State::read(root)?.forgotten.into_iter().collect())
+    /// The vocabulary's own spelling of `name`, retired entries included.
+    pub fn term(&self, name: &str) -> Option<(&str, &Term)> {
+        let folded = fold(name);
+        self.vocabulary
+            .iter()
+            .find(|(known, _)| fold(known) == folded)
+            .map(|(known, term)| (known.as_str(), term))
+    }
+
+    /// Active entries, in tag order.
+    pub fn active_vocabulary(&self) -> Vec<VocabularyEntry> {
+        let mut entries: Vec<_> = self
+            .vocabulary
+            .iter()
+            .filter(|(_, term)| term.retired_at.is_none())
+            .map(|(name, term)| VocabularyEntry {
+                name: name.clone(),
+                created_at: term.created_at,
+            })
+            .collect();
+        entries.sort_by(|a, b| tag_order(&a.name, &b.name));
+        entries
+    }
+
+    /// Folded name to vocabulary spelling, for looking up many pages at once.
+    /// With `retired`, retired entries resolve too.
+    pub fn spellings(&self, retired: bool) -> HashMap<String, &str> {
+        self.vocabulary
+            .iter()
+            .filter(|(_, term)| retired || term.retired_at.is_none())
+            .map(|(name, _)| (fold(name), name.as_str()))
+            .collect()
+    }
+
+    /// A page's tags as the library shows them: what the owner added, in the
+    /// vocabulary's spelling and in tag order. A name `spellings` does not
+    /// resolve (retired, or never in the vocabulary) is not shown.
+    pub fn page_tags(&self, url: &str, spellings: &HashMap<String, &str>) -> Vec<String> {
+        let Some(page) = self.tags.get(url) else {
+            return Vec::new();
+        };
+        let mut tags: Vec<String> = page
+            .add
+            .iter()
+            .filter_map(|name| spellings.get(&fold(name)))
+            .map(|name| (*name).to_owned())
+            .collect();
+        tags.sort_by(|a, b| tag_order(a, b));
+        tags.dedup();
+        tags
+    }
 }
 
 /// Every URL the library would list: what `forget` may name. The same rule
@@ -134,6 +251,8 @@ pub struct Library {
     pub stats: Stats,
     snapshots: Vec<LibrarySnapshot>,
     pages: Vec<Page>,
+    /// Active tags only; per-tag counts are the page's to compute.
+    vocabulary: Vec<VocabularyEntry>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -153,6 +272,8 @@ struct Page {
     /// Absent means false, so the export shape is unchanged.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     forgotten: bool,
+    /// Always present, empty when untagged, so every page has the same shape.
+    tags: Vec<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -206,13 +327,16 @@ struct Group {
 // `page_index`, window, position, `tab_id`, pinned (0/1), `group_index_or_null`.
 type Tab = (usize, u32, usize, i32, u8, Option<usize>);
 
-pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>, shape: Shape) -> Library {
+pub fn build(snapshots: &[Snapshot], state: &State, shape: Shape) -> Library {
+    let forgotten = &state.forgotten;
+    let spellings = state.spellings(false);
     let mut library = Library {
         schema_version: 1,
         generated_at: Timestamp::now(),
         stats: Stats::default(),
         snapshots: Vec::with_capacity(snapshots.len()),
         pages: Vec::new(),
+        vocabulary: state.active_vocabulary(),
     };
     let mut page_indices = HashMap::new();
     // Which forgotten URLs the archive actually holds; a state file may name
@@ -266,6 +390,7 @@ pub fn build(snapshots: &[Snapshot], forgotten: &HashSet<String>, shape: Shape) 
                     title: String::new(),
                     domain,
                     forgotten: is_forgotten,
+                    tags: state.page_tags(&tab.url, &spellings),
                 });
                 index
             });
