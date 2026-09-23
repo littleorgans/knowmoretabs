@@ -884,3 +884,22 @@ and a script that reaches into `S` and `host` breaks with every refactor.
   errors in either mode.
 
 app.js is 56.9 KB with these fixes.
+
+### Rough edges after the merge
+
+Six fixes, each its own commit: `esc` as one ordered list (§3), focus kept on
+a row through a repaint (§3), a revival that says it is back on every page, a
+tag request that changed nothing staying quiet, `↵` adding the typed name
+after `esc` has shut the menu (all §9), and "tags" rather than "vocabulary"
+in the retire error. Checked in Chrome headless at 1400 px in both schemes
+against `knowmoretabs serve` on a fresh copy of the lab archive (43 tags on
+390 pages), with single trusted key presses sent over the DevTools protocol
+(the harness's own key command repeats each press hundreds of times) and
+real mouse clicks: every `esc` use in §3 by mouse and by keyboard alone, `f`
+and `u` in the middle, at the end and past the lazy rows, Forget from the
+history and the tray, the toast's Undo, and the three tag toasts. The list,
+the row editor and the tray are pixel-identical to the merge. Export mode
+still offers the commands, and no console errors.
+
+app.js is 58.9 KB (56.9 KB at the merge); comments are 16.7% of it (15.5%),
+most of the growth being the reasons behind where the key goes.
