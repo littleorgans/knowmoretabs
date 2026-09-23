@@ -14,6 +14,7 @@
       check(requests.at(-1)?.add[0] === name, `Enter did not submit ${name}`);
       check(document.activeElement === $('tg'), 'focus left editor');
     }
+    check(shellQuote("https://test.invalid/a'b") === "'https://test.invalid/a'\\''b'", 'CLI hint did not quote an apostrophe');
     check(tagName('One\tTwo') === 'One Two', 'whitespace changed the name');
     check(tagName('😀'.repeat(40)) === '😀'.repeat(40), 'Unicode name was truncated');
     check(tagName('x'.repeat(41)).length === 41, 'overlong name was silently truncated');

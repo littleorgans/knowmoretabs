@@ -50,6 +50,7 @@ const THEME = {
 };
 { const saved = THEME.get(); if (saved === 'light' || saved === 'dark') THEME.set(saved, false); }
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const shellQuote = (s) => "'" + String(s).replace(/'/g, "'\\''") + "'";
 const num = new Intl.NumberFormat();
 const collator = new Intl.Collator(undefined, { sensitivity: 'base', numeric: true });
 const fmt = (opts) => new Intl.DateTimeFormat(undefined, { timeZone: 'UTC', ...opts });
@@ -257,7 +258,7 @@ function histHTML(p, cls = 'hist in') {
   const groups = p.gs.length ? ` · in ${p.gs.length === 1 ? 'group' : 'groups'} ${p.gs.map((t) => esc(S.groups.get(t).title)).join(', ')}` : '';
   const act = p.forgotten ? '<button type="button" data-act="restore" title="Puts it back in the library.">Restore</button>'
     : '<button type="button" data-act="forget" title="Hides it from the library. The snapshots themselves are never touched.">Forget</button>';
-  const ro = `<span class="ro">Read-only export · to hide this page: <code>knowmoretabs forget '${esc(p.url)}'</code></span>`;
+  const ro = `<span class="ro">Read-only export · to hide this page: <code>knowmoretabs forget ${esc(shellQuote(p.url))}</code></span>`;
   const first = F.dayYear.format(S.snaps[p.first].date), last = F.dayYear.format(S.snaps[p.last].date);
   const only = S.domain.toLowerCase() === p.domain ? 'Clear site filter' : `Filter to ${esc(p.domain)}`;
   const full = p.link ? `<a class="full" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.url)}">${esc(p.url)}</a>` : `<p class="full" title="${esc(p.url)}">${esc(p.url)}</p>`;
@@ -433,7 +434,7 @@ function tray() {
 // ---- 6. Forget / restore, with undo ---------------------------------------
 async function apply(idxs, restore) {
   if (!idxs.length) return;
-  if (!host.forget) { const p = S.pages[idxs[0]]; return toast(`Read-only export. In a terminal: knowmoretabs forget '${p.url}'`, 'Copy', () => navigator.clipboard.writeText(`knowmoretabs forget '${p.url}'`)); }
+  if (!host.forget) { const p = S.pages[idxs[0]]; return toast(`Read-only export. In a terminal: knowmoretabs forget ${shellQuote(p.url)}`, 'Copy', () => navigator.clipboard.writeText(`knowmoretabs forget ${shellQuote(p.url)}`)); }
   for (const i of idxs) S.pages[i].forgotten = !restore;
   S.sel.clear(); S.exp.clear(); S.preview = false; render();
   const all = rows(); if (all.length) setCursor(all[Math.min(all.length - 1, Math.max(0, S.rendered.findIndex((p) => p.i >= idxs[0])))], false);
@@ -522,7 +523,7 @@ function tagOptions() {
   return o;
 }
 function readOnlyTag(i) {
-  const p = S.pages[i], cmd = p && `knowmoretabs tag '${p.url}' --add NAME`;
+  const p = S.pages[i], cmd = p && `knowmoretabs tag ${shellQuote(p.url)} --add NAME`;
   if (p) toast(`Read-only export. In a terminal: ${cmd}`, 'Copy', () => navigator.clipboard.writeText(cmd));
 }
 // One name on some pages. Like retiring it waits for the server, which has
