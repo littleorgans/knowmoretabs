@@ -594,7 +594,7 @@ async function retire(k) {
   const back = !S.vocab.has(k), name = back ? S.retired.get(k) : S.vocab.get(k), n = libraryCounts().get(k) || 0;
   let r;
   try { r = await host.vocab(back ? [name] : [], back ? [] : [name]); }
-  catch (e) { toast(`Could not update vocabulary (${e.message}).`); return false; }
+  catch (e) { toast(`Could not update tags (${e.message}).`); return false; }
   setVocab(r.vocabulary || []);
   if (!back) { S.retired.set(k, name); S.tags = S.tags.filter((t) => t !== k); for (const p of S.pages) if (p.tk.has(k)) setTags(p, p.tags.filter((t) => lc(t) !== k)); }
   S.undo = () => retire(k);
