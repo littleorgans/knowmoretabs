@@ -525,18 +525,7 @@ pub fn build(
             tabs,
         });
     }
-    // The library's own record wins: every written save refreshes it, and
-    // it covers pages that no save had open.
-    for page in &mut library.pages {
-        if let Some(entry) = recorded.get(&page.url) {
-            page.history = Some(page_history(
-                &page.url,
-                &entry.history,
-                shape,
-                &forgotten_referrers,
-            ));
-        }
-    }
+    apply_recorded_history(&mut library.pages, recorded, shape, &forgotten_referrers);
     name_referrers(&mut library.pages);
     library.stats.pages = library.pages.len();
     library.stats.snapshots = library.snapshots.len();
@@ -570,6 +559,20 @@ fn snapshot_groups(snapshot: &Snapshot) -> (Vec<Group>, HashMap<&str, usize>) {
         .map(|(i, group)| (group.id.as_str(), i))
         .collect();
     (groups, indices)
+}
+
+/// Prefer the library record over snapshot signals for pages it knows.
+fn apply_recorded_history(
+    pages: &mut [Page],
+    recorded: &BTreeMap<String, Entry>,
+    shape: Shape,
+    forgotten: &BTreeSet<String>,
+) {
+    for page in pages {
+        if let Some(entry) = recorded.get(&page.url) {
+            page.history = Some(page_history(&page.url, &entry.history, shape, forgotten));
+        }
+    }
 }
 
 fn page_history(
