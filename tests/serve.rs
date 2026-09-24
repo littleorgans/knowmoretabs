@@ -6,9 +6,9 @@ mod common;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{Fixture, fingerprint, stderr, write_snapshot};
 use serde_json::{Value, json};
@@ -954,37 +954,6 @@ fn unreadable_heads_and_silent_connections_do_not_stop_the_server() {
     assert_eq!(server.get("/api/library").status, 200, "still serving");
 }
 
-/// A port to hand the server when it cannot tell us the one it picked.
-/// Bound and released, so the kernel has just declared it free.
-fn free_loopback_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .expect("bind")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
-
-/// Waits for the bind by connecting, since a server with no stdout has no
-/// banner to announce it with. Gives up the moment the child exits, so a
-/// server that died on its banner is reported as that and not as a timeout.
-fn wait_until_listening(server: &mut Server) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if TcpStream::connect(("127.0.0.1", server.port)).is_ok() {
-            return;
-        }
-        if let Some(status) = server.child.try_wait().expect("try_wait") {
-            panic!("the server exited before it accepted anything: {status}");
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the server never listened on {}",
-            server.port
-        );
-        std::thread::yield_now();
-    }
-}
-
 /// The banner goes to stdout, and stdout can fail: `knowmoretabs serve |
 /// head -1` closes the pipe once it has the URL, and a full disk or a
 /// closed terminal fail the same way. `println!` panics on all of them, on
@@ -999,21 +968,32 @@ fn wait_until_listening(server: &mut Server) {
 fn stdout_that_goes_nowhere_does_not_stop_the_server() {
     let fx = Fixture::new();
     archive(&fx);
-    let port = free_loopback_port();
     let (reader, writer) = std::io::pipe().expect("pipe");
     drop(reader);
-    let mut server = Server {
-        child: fx
-            .command()
-            .args(["serve", "--port", &port.to_string()])
-            .stdout(Stdio::from(writer))
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawn serve"),
-        port,
-        url: format!("http://127.0.0.1:{port}/"),
-    };
-    wait_until_listening(&mut server);
+    let mut child = fx
+        .command()
+        .args(["--verbose", "serve", "--port", "0"])
+        .stdout(Stdio::from(writer))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn serve");
+    // Read the actual bound port after the failed stdout writes. Reserving
+    // then releasing a port let other tests take it before the child bound.
+    let mut first = String::new();
+    BufReader::new(child.stderr.take().unwrap())
+        .read_line(&mut first)
+        .unwrap();
+    let url = first
+        .trim()
+        .strip_prefix("knowmoretabs: listening on ")
+        .unwrap_or_else(|| panic!("server did not announce its listener: {first:?}"))
+        .to_owned();
+    let port = url
+        .trim_start_matches("http://127.0.0.1:")
+        .trim_end_matches('/')
+        .parse()
+        .unwrap();
+    let mut server = Server { child, port, url };
     assert_eq!(server.get("/api/library").status, 200, "serving");
     assert_eq!(
         server.post("/api/forget", &json!({"urls": [A]})).status,
