@@ -448,10 +448,13 @@ function toggle(i, force) {
     for (const j of [...S.exp]) if (j !== i) toggle(j, false);
     S.exp.add(i);
     if (!h) { el.insertAdjacentHTML('beforeend', histHTML(S.pages[i], 'hist')); h = el.lastElementChild; h.getBoundingClientRect(); }
-    h.classList.add('in');
+    h.inert = false; h.classList.add('in');
   } else {
     S.exp.delete(i);
-    if (h) { h.classList.remove('in'); setTimeout(() => { if (!h.classList.contains('in')) h.remove(); }, 260); }
+    if (h) {
+      if (h.contains(document.activeElement)) home(i);
+      h.inert = true; h.classList.remove('in'); setTimeout(() => { if (!h.classList.contains('in')) h.remove(); }, 260);
+    }
   }
   el.querySelector('.more').setAttribute('aria-expanded', open); el.classList.toggle('exp', open);
 }
