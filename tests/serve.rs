@@ -1886,6 +1886,26 @@ fn serve_shows_each_pages_newest_history_signals() {
 }
 
 #[test]
+fn a_newer_snapshot_without_history_keeps_the_last_recorded_signals() {
+    let fx = Fixture::new();
+    archive_with_history(&fx);
+    write_snapshot(
+        &fx.root,
+        "2026-04-01-000000Z",
+        "2026-04-01T00:00:00Z",
+        &[(1, A, "A without new signals")],
+    );
+    let served = Server::start(&fx).library();
+    let (exported, _) = export_to(&fx, "full", &["--with-history"]);
+    for library in [served, exported] {
+        let a = page(&library, A);
+        assert_eq!(a["title"], "A without new signals");
+        assert_eq!(a["history"]["visits"], 12);
+        assert_eq!(a["history"]["search"]["term"], "secret search");
+    }
+}
+
+#[test]
 fn export_leaves_out_searches_and_referrers_unless_asked() {
     let fx = Fixture::new();
     archive_with_history(&fx);
