@@ -903,3 +903,21 @@ fn equivalent_hosts_share_pacing_and_unicode_hosts_use_idna() {
     assert!(times[1] - times[0] >= Duration::from_millis(950));
     assert!(seen.iter().any(|r| r.host == "xn--bcher-kva.test"));
 }
+
+#[test]
+fn one_time_link_aliases_stay_home() {
+    let fx = Fixture::new();
+    let site = Site::start(routes);
+    library(
+        &fx,
+        &[
+            "http://a.test/callback?authCode=one-use",
+            "http://b.test/resource?accessKey=secret",
+            "http://c.test/password/reset/one-use",
+            "http://d.test/verify_email/one-use",
+            "http://e.test/confirmation/one-use",
+        ],
+    );
+    assert_success(&enrich(&fx, &site, &[]));
+    assert!(site.seen().is_empty(), "{:?}", site.paths());
+}
