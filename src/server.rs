@@ -74,6 +74,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
         out::line(&format!("Your library is at {url}"));
         out::line("Local only: it answers this machine and nothing else. Press Ctrl-C to stop.");
     }
+    options.log.note(&format!("listening on {url}"));
     if options.open
         && let Err(err) = open_browser(&url)
     {

@@ -83,9 +83,12 @@ files — we read and copy, nothing else.
 
 ### Deliberately not built
 
-- **SQLite.** ~50 snapshots × ~300 tabs is ~15k rows. Loading JSON into memory
-  is instant at that scale and costs zero migrations, zero corruption modes and
-  zero dependencies. It is a "future" row until a measured query is slow.
+- **SQLite *as the archive's storage*.** ~50 snapshots × ~300 tabs is ~15k
+  rows. Loading JSON into memory is instant at that scale and costs zero
+  migrations, zero corruption modes and zero dependencies. It is a "future"
+  row until a measured query is slow. `save` reads the browser's own `History`
+  database through a bundled SQLite (slice 7b). That is reading a browser
+  file, not a storage choice, and it does not bring `scale-index` forward.
 - **Async.** A localhost single-user server does not need tokio. If the chosen
   HTTP crate is blocking, that is a feature.
 - **A config file.** CLI flags plus sensible defaults. Add config only when a
@@ -178,10 +181,10 @@ Rules:
 ### Data model (shape, not final Rust)
 
 ```
-Snapshot  { id, captured_at, source, stats, tabs[] }
+Snapshot  { id, captured_at, source, stats, tabs[], history? }
 Source    { browser, profile, path, sha256, saved_at, bytes }
 Stats     { commands, unknown_commands, tabs, windows, truncated_bytes }
-Tab       { url, title, window, position, pinned, group?, tab_id }
+Tab       { url, title, window, position, pinned, group?, tab_id, history? }
 Group     { id, title, colour }                    # if recoverable
 Page      { url, title, domain, sightings[] }      # derived across snapshots
 Sighting  { snapshot_id, window, tab_id }

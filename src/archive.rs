@@ -187,8 +187,14 @@ impl Archive {
     /// A fresh staging directory beside the snapshots, on the same volume.
     pub fn stage(&self) -> Result<Staging, Error> {
         let dir = self.snapshots_dir();
-        let staging = tempfile::Builder::new()
-            .prefix(STAGING_PREFIX)
+        let mut builder = tempfile::Builder::new();
+        builder.prefix(STAGING_PREFIX);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            builder.permissions(fs::Permissions::from_mode(0o700));
+        }
+        let staging = builder
             .tempdir_in(&dir)
             .map_err(Error::io("create staging directory in", &dir))?;
         Ok(Staging { dir: staging })
@@ -446,6 +452,29 @@ mod tests {
         );
         entries.sort();
         entries
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn staging_is_private_even_inside_an_existing_public_root() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = Archive::open(tmp.path()).unwrap();
+        for dir in [tmp.path().to_path_buf(), archive.snapshots_dir()] {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let stage = archive.stage().unwrap();
+        assert_eq!(
+            fs::metadata(stage.path()).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        let path = stage.path().to_owned();
+        let unwind = std::panic::catch_unwind(move || {
+            stage.write("History", b"private browsing data").unwrap();
+            panic!("interrupted History read");
+        });
+        assert!(unwind.is_err());
+        assert!(!path.exists(), "scratch data survived unwinding");
     }
 
     #[test]

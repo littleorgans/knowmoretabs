@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+pub mod history_builder;
 pub mod session_builder;
 
 use std::path::{Path, PathBuf};
@@ -98,6 +99,11 @@ impl Fixture {
 
     pub fn profile_dir(&self, profile: &str) -> PathBuf {
         self.user_data.join(profile)
+    }
+
+    /// Where the profile's `History` database goes.
+    pub fn history_path(&self, profile: &str) -> PathBuf {
+        self.profile_dir(profile).join("History")
     }
 
     pub fn sessions_dir(&self, profile: &str) -> PathBuf {

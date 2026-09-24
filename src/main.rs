@@ -16,6 +16,7 @@ mod capture;
 mod cli;
 mod error;
 mod export;
+mod history;
 mod library;
 mod library_commands;
 mod local;
@@ -148,6 +149,7 @@ fn save(cli: &Cli, root: std::path::PathBuf, log: Log) -> Result<(), error::Erro
         profile: cli.profile.clone(),
         user_data_dir: cli.user_data_dir.clone(),
         force: cli.save_args().force,
+        history: !cli.save_args().no_history,
     };
     let outcome = capture::save(&opts, log)?;
     if cli.json {
@@ -422,6 +424,7 @@ fn json_outcome(outcome: &Outcome) -> serde_json::Value {
                 "degraded": snapshot.stats.is_degraded(),
                 "stats": snapshot.stats,
                 "source": snapshot.source,
+                "history": snapshot.history,
             },
             "also_found": also_found_json(snapshot, also_found),
         }),

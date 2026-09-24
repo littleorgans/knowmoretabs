@@ -6,9 +6,9 @@ mod common;
 
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{Ipv4Addr, Shutdown, SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::process::{Child, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{Fixture, fingerprint, stderr, write_snapshot};
 use serde_json::{Value, json};
@@ -954,37 +954,6 @@ fn unreadable_heads_and_silent_connections_do_not_stop_the_server() {
     assert_eq!(server.get("/api/library").status, 200, "still serving");
 }
 
-/// A port to hand the server when it cannot tell us the one it picked.
-/// Bound and released, so the kernel has just declared it free.
-fn free_loopback_port() -> u16 {
-    TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
-        .expect("bind")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
-
-/// Waits for the bind by connecting, since a server with no stdout has no
-/// banner to announce it with. Gives up the moment the child exits, so a
-/// server that died on its banner is reported as that and not as a timeout.
-fn wait_until_listening(server: &mut Server) {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        if TcpStream::connect(("127.0.0.1", server.port)).is_ok() {
-            return;
-        }
-        if let Some(status) = server.child.try_wait().expect("try_wait") {
-            panic!("the server exited before it accepted anything: {status}");
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the server never listened on {}",
-            server.port
-        );
-        std::thread::yield_now();
-    }
-}
-
 /// The banner goes to stdout, and stdout can fail: `knowmoretabs serve |
 /// head -1` closes the pipe once it has the URL, and a full disk or a
 /// closed terminal fail the same way. `println!` panics on all of them, on
@@ -999,21 +968,32 @@ fn wait_until_listening(server: &mut Server) {
 fn stdout_that_goes_nowhere_does_not_stop_the_server() {
     let fx = Fixture::new();
     archive(&fx);
-    let port = free_loopback_port();
     let (reader, writer) = std::io::pipe().expect("pipe");
     drop(reader);
-    let mut server = Server {
-        child: fx
-            .command()
-            .args(["serve", "--port", &port.to_string()])
-            .stdout(Stdio::from(writer))
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawn serve"),
-        port,
-        url: format!("http://127.0.0.1:{port}/"),
-    };
-    wait_until_listening(&mut server);
+    let mut child = fx
+        .command()
+        .args(["--verbose", "serve", "--port", "0"])
+        .stdout(Stdio::from(writer))
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn serve");
+    // Read the actual bound port after the failed stdout writes. Reserving
+    // then releasing a port let other tests take it before the child bound.
+    let mut first = String::new();
+    BufReader::new(child.stderr.take().unwrap())
+        .read_line(&mut first)
+        .unwrap();
+    let url = first
+        .trim()
+        .strip_prefix("knowmoretabs: listening on ")
+        .unwrap_or_else(|| panic!("server did not announce its listener: {first:?}"))
+        .to_owned();
+    let port = url
+        .trim_start_matches("http://127.0.0.1:")
+        .trim_end_matches('/')
+        .parse()
+        .unwrap();
+    let mut server = Server { child, port, url };
     assert_eq!(server.get("/api/library").status, 200, "serving");
     assert_eq!(
         server.post("/api/forget", &json!({"urls": [A]})).status,
@@ -1713,4 +1693,81 @@ fn malformed_tag_undo_is_atomic_and_unknown_urls_are_skipped() {
     assert_eq!(reply.status, 200);
     assert_eq!(reply.json()["counts"]["unknown"], 1);
     assert_eq!(state(&fx), before);
+}
+
+/// `text` with the value of every `"generated_at"` replaced by `…`: the one
+/// part of the library document that differs between two runs by design.
+fn mask_generated_at(text: &str) -> String {
+    let key = "\"generated_at\"";
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(at) = rest.find(key) {
+        let after = at + key.len();
+        let open = after + rest[after..].find('"').unwrap();
+        let close = open + 1 + rest[open + 1..].find('"').unwrap();
+        out.push_str(&rest[..=open]);
+        out.push('…');
+        rest = &rest[close..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// The library and the export as a reader receives them, every byte but the
+/// generation time.
+fn library_bytes(fx: &Fixture, export: &str) -> (String, Vec<(String, String)>) {
+    let server = Server::start(fx);
+    let reply = server.get("/api/library");
+    assert_eq!(reply.status, 200);
+    drop(server);
+    let dir = fx.home.path().join(export);
+    let output = fx.run(&["export", dir.to_str().unwrap()]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let files = fingerprint(&dir)
+        .into_iter()
+        .map(|(path, bytes, _)| {
+            (
+                path.strip_prefix(&dir).unwrap().display().to_string(),
+                mask_generated_at(&String::from_utf8(bytes).unwrap()),
+            )
+        })
+        .collect();
+    (mask_generated_at(&reply.text()), files)
+}
+
+/// History signals are recorded, not shown: `serve` and `export` are built
+/// from an explicit projection of each snapshot, and that projection must
+/// not grow a search term or a referrer until display is designed on
+/// purpose.
+#[test]
+fn history_in_the_snapshots_changes_no_byte_of_the_library_or_the_export() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let (served, exported) = library_bytes(&fx, "before");
+    assert!(served.contains("\"generated_at\":\"…\""), "{served}");
+    assert!(!exported.is_empty());
+
+    for id in ["2026-01-01-000000Z", "2026-02-01-000000Z"] {
+        let path = fx.root.join("snapshots").join(id).join("snapshot.json");
+        let mut snapshot: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        for tab in snapshot["tabs"].as_array_mut().unwrap() {
+            tab["history"] = json!({
+                "visits": 12, "typed": 3,
+                "first_visit": "2025-12-01T00:00:00Z", "last_visit": "2026-01-01T00:00:00Z",
+                "foreground_seconds": 1834,
+                "search": {"term": "secret search", "hops": 1},
+                "referrer": "https://referrer.test/private"
+            });
+        }
+        snapshot["history"] = json!({
+            "path": "/profile/History", "bytes": 4096, "schema_version": 70,
+            "newest_visit": "2026-01-01T00:00:00Z", "tabs_found": 2,
+            "unavailable": [], "error": null, "skipped_by_request": false
+        });
+        fs::write(&path, serde_json::to_vec_pretty(&snapshot).unwrap()).unwrap();
+    }
+    let (served_after, exported_after) = library_bytes(&fx, "after");
+    assert_eq!(served_after, served);
+    assert_eq!(exported_after, exported);
+    assert!(!served_after.contains("secret search") && !served_after.contains("referrer.test"));
 }

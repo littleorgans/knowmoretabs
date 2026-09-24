@@ -368,6 +368,7 @@ impl Fold {
                 group: state.group.map(|t| t.to_string()),
                 last_active: state.last_active.and_then(chrome_time),
                 window_id,
+                history: None,
             });
         }
         (tabs, group_windows, dropped)

@@ -28,6 +28,16 @@ as what you can do that you could not before.
   cleartext ones this tool reads, `save` refuses with exit status 3 rather
   than saving stale tabs as current. `--json`, `-v`, `-q`, `--root`,
   `--session` and `--profile` are all here from the start.
+- **Remember how you got to a page.** `save` records, for each tab, what the
+  browser's own History knows about its page: visits, typed visits, first and
+  last visit, time in the foreground, the search that led to it (up to three
+  links back) and the page you came from. Chrome forgets after about 90 days;
+  a snapshot keeps it, and clearing the browser's history does not reach
+  snapshots already saved. It stays in `snapshot.json` and nothing shows it
+  yet. `save` reads a copy made inside the archive and never opens the
+  browser's file; a History it cannot read costs the signals, with one
+  warning, never the snapshot. `save --no-history` skips it, and
+  `save --json` reports how many tabs it found.
 - **Read your archive offline.** `knowmoretabs export` writes a static site
   that opens from `file://` with no server and no network: every page you
   have ever had open, listed once, with search, a site filter, an open-or-not

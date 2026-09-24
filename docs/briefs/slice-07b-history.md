@@ -1,9 +1,9 @@
 # Slice 7b, part one: History signals in `save`
 
-**Status:** approved 2026-09-24. Nothing here is built yet. It settles *how*
-to build the decision recorded in `slice-07-tags.md` §4 and §9 ("`save`
-records History signals"), with measurements. §12 records the owner's
-decisions; §11 is for open questions. None of §10's changes is applied yet.
+**Status:** approved 2026-09-24, built 2026-09-24 on `feat/history-signals`.
+It settles *how* to build the decision recorded in `slice-07-tags.md` §4 and
+§9 ("`save` records History signals"), with measurements. §12 records the
+owner's decisions; §11 is for open questions. §10's changes are applied.
 
 **Ships:** each tab in `snapshot.json` carries what the browser's own
 `History` database knows about its URL: the search that led to it, the
