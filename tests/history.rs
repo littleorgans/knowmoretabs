@@ -135,11 +135,12 @@ fn search_is_the_nearest_results_page_within_three_hops() {
     let nearest = "https://example.test/nearest";
     let (fx, h) = profile_with(&[zero, one, three, four, nearest]);
 
-    let results = |term: &str| {
-        let id = h.url(&format!("https://search.example.test/?q={term}"), 1, 0, T);
+    let results_at = |term: &str, at: &str| {
+        let id = h.url(&format!("https://search.example.test/?q={term}"), 1, 0, at);
         h.search(id, term);
-        h.visit(id, T, 0, 0)
+        h.visit(id, at, 0, 0)
     };
+    let results = |term: &str| results_at(term, T);
     let page = |url: &str| h.url(url, 1, 0, T);
 
     let results_page = h.url(zero, 1, 0, T);
@@ -161,10 +162,10 @@ fn search_is_the_nearest_results_page_within_three_hops() {
     }
     h.visit(page(four), T, from, 0);
 
-    // Two visits to one page: the newer came two hops from one search, the
-    // older one hop from another. The nearer wins.
-    let near = results("near");
-    let far = results("far");
+    // Two visits to one page: the newer came two hops from a newer search,
+    // the older one hop from an older one. The nearer wins, however old.
+    let near = results_at("near", "2026-08-01T10:30:00Z");
+    let far = results_at("far", "2026-08-01T12:30:00Z");
     let middle = h.visit(page("https://example.test/f"), T, far, 0);
     let target = page(nearest);
     h.visit(target, "2026-08-01T11:00:00Z", near, 0);
