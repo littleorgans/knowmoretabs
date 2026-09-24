@@ -734,6 +734,13 @@ mod tests {
 
     use super::*;
 
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn release_hooks_are_absent() {
+        assert_eq!(test_address(), None);
+        assert_eq!(test_timeout(), None);
+    }
+
     fn url(raw: &str) -> Url {
         Url::parse(raw).unwrap()
     }

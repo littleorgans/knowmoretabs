@@ -4,6 +4,8 @@
 //! pacing, and a run interrupted halfway. Nothing here touches the internet:
 //! a debug build resolves every name to the test server.
 
+#![cfg(debug_assertions)]
+
 mod common;
 
 use std::collections::HashMap;
@@ -324,6 +326,7 @@ fn each_head_becomes_a_record() {
         ],
     );
     assert_success(&enrich(&fx, &site, &[]));
+    assert_eq!(site.seen().iter().filter(|r| r.path == "/loop").count(), 11);
     let records = records(&fx);
 
     let article = &records["http://a.test/article"];
@@ -846,4 +849,57 @@ fn redirects_share_one_timeout_budget() {
         .unwrap();
     assert_success(&output);
     assert_eq!(records(&fx)["http://a.test/start"]["reason"], "timeout");
+}
+
+#[test]
+fn proxy_environment_and_session_headers_are_ignored() {
+    let fx = Fixture::new();
+    let site = Site::start(routes);
+    let proxy = Site::start(routes);
+    library(&fx, &["http://a.test/article", "http://a.test/moved"]);
+    let mut cmd = enrich_command(&fx, &site, &[]);
+    for key in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+    ] {
+        cmd.env(key, format!("http://owner:secret@{}", proxy.address));
+    }
+    cmd.env("NO_PROXY", "").env("no_proxy", "");
+    assert_success(&cmd.output().unwrap());
+    assert!(proxy.seen().is_empty());
+    assert_eq!(site.seen().len(), 3);
+    for seen in site.seen() {
+        for key in ["authorization", "proxy-authorization", "cookie", "referer"] {
+            assert!(!seen.headers.contains_key(key), "{key}");
+        }
+    }
+}
+
+#[test]
+fn equivalent_hosts_share_pacing_and_unicode_hosts_use_idna() {
+    let fx = Fixture::new();
+    let site = Site::start(routes);
+    library(
+        &fx,
+        &[
+            "http://p.test:8080/1",
+            "http://p.test.:8081/2",
+            "http://bücher.test/page",
+        ],
+    );
+    assert_success(&enrich(&fx, &site, &[]));
+    let seen = site.seen();
+    let mut times: Vec<Instant> = seen
+        .iter()
+        .filter(|r| r.host.trim_end_matches('.') == "p.test")
+        .map(|r| r.at)
+        .collect();
+    times.sort();
+    assert_eq!(times.len(), 2);
+    assert!(times[1] - times[0] >= Duration::from_millis(950));
+    assert!(seen.iter().any(|r| r.host == "xn--bcher-kva.test"));
 }

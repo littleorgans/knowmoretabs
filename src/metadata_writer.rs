@@ -268,6 +268,27 @@ mod tests {
         assert!(raw_lines(dir.path())[2].starts_with(r#"{"url":"https://b.test/""#));
     }
 
+    #[test]
+    fn concurrent_appenders_preserve_complete_records() {
+        let dir = tempfile::tempdir().unwrap();
+        std::thread::scope(|scope| {
+            for worker in 0..8 {
+                let root = dir.path();
+                scope.spawn(move || {
+                    let mut writer = Appender::open(root).unwrap();
+                    for n in 0..16 {
+                        writer
+                            .append(&page(&format!("https://a.test/{worker}/{n}")))
+                            .unwrap();
+                    }
+                });
+            }
+        });
+        let read = metadata::read(dir.path()).unwrap();
+        assert_eq!((read.pages.len(), read.unreadable), (128, 0));
+        assert_eq!(raw_lines(dir.path()).len(), 128);
+    }
+
     #[cfg(unix)]
     #[test]
     fn the_pages_directory_is_private() {
