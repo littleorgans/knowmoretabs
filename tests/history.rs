@@ -294,7 +294,8 @@ fn referrer_is_another_page_else_the_external_referrer_and_never_this_machine() 
 fn foreground_counts_only_positive_durations() {
     let summed = "https://example.test/read";
     let unknown = "https://example.test/unknown-duration";
-    let (fx, h) = profile_with(&[summed, unknown]);
+    let zero = "https://example.test/zero-duration";
+    let (fx, h) = profile_with(&[summed, unknown, zero]);
     let id = h.url(summed, 3, 0, T);
     for micros in [5_000_000, -1_000_000, 2_500_000] {
         let v = h.visit(id, T, 0, 0);
@@ -305,9 +306,17 @@ fn foreground_counts_only_positive_durations() {
         let v = h.visit(id, T, 0, 0);
         h.foreground(v, -1_000_000);
     }
+    let id = h.url(zero, 1, 0, T);
+    let visit = h.visit(id, T, 0, 0);
+    h.foreground(visit, 0);
     drop(h);
 
     let (snapshot, _) = saved(&fx, &[]);
+    assert!(
+        tab_history(&snapshot, zero)
+            .get("foreground_seconds")
+            .is_none()
+    );
     assert_eq!(tab_history(&snapshot, summed)["foreground_seconds"], 7);
     let history = tab_history(&snapshot, unknown);
     assert_eq!(history["visits"], 2);
@@ -577,6 +586,52 @@ fn an_older_history_gives_the_signals_it_has_and_names_the_rest() {
             "context_annotations.total_foreground_duration"
         ])
     );
+}
+
+#[test]
+fn optional_columns_degrade_independently_in_an_unknown_schema() {
+    for (table, column, absent) in [
+        ("keyword_search_terms", "term", "search"),
+        ("keyword_search_terms", "url_id", "search"),
+        (
+            "context_annotations",
+            "total_foreground_duration",
+            "foreground_seconds",
+        ),
+    ] {
+        let page = "https://example.test/optional";
+        let (fx, h) = profile_with(&[page]);
+        let id = h.url(page, 2, 1, T);
+        let visit = h.visit(id, T, 0, 0);
+        h.search(id, "synthetic search");
+        h.foreground(visit, 2_000_000);
+        h.conn
+            .execute_batch(
+                "drop index keyword_search_terms_index2; drop index keyword_search_terms_index3;",
+            )
+            .unwrap();
+        h.conn.execute_batch(&format!("alter table {table} drop column {column}; update meta set value = '999' where key = 'version';")).unwrap();
+        drop(h);
+        let (snapshot, _) = saved(&fx, &[]);
+        assert!(snapshot["history"]["error"].is_null());
+        assert_eq!(snapshot["history"]["schema_version"], 999);
+        assert_eq!(
+            snapshot["history"]["unavailable"],
+            json!([format!("{table}.{column}")])
+        );
+        let signals = tab_history(&snapshot, page);
+        assert_eq!(signals["visits"], 2);
+        assert!(signals.get(absent).is_none());
+        assert!(
+            signals
+                .get(if absent == "search" {
+                    "foreground_seconds"
+                } else {
+                    "search"
+                })
+                .is_some()
+        );
+    }
 }
 
 /// Puts something, or nothing, where the profile's History goes.
