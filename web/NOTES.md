@@ -19,7 +19,7 @@ web/
 ├── app.css                 styles
 ├── app.js                  renderer and interactions (unminified)
 ├── fixtures/generate.py    deterministic synthetic library (seed 2026) + cases
-├── fixtures/library.json   2,166 pages · 41 snapshots · 163 sites · 8,478 sightings · 78 groups · 270 with History
+├── fixtures/library.json   2,166 pages · 41 snapshots · 163 sites · 8,478 sightings · 78 groups · 270 with History · 102 with suggestions
 ├── fixtures/cases/         empty · no-pages · one-snapshot · degraded · export-forgotten
 └── NOTES.md                this file
 ```
@@ -413,6 +413,9 @@ emits today.
       "domain": "github.com",                  // host, lowercased, leading "www." removed; "" for data: etc.
       "forgotten": false,                      // optional; absent means false
       "tags": ["Harness"],                     // active names, vocabulary spelling, alphabetical ignoring case; [] if untagged
+      "suggested": [                           // 7c: imported suggestions neither added nor removed; always present, [] if none
+        { "name": "Skills", "sources": ["claude-opus-5"] }                  // not shown yet: the review UI is a later pass
+      ],
       "history": {                             // optional; absent when no snapshot recorded signals for the URL
         "visits": 12, "typed": 3,              // what the browser still kept, about 90 days
         "first_visit": "2026-07-01T09:12:44Z", "last_visit": "2026-09-23T23:49:42Z",
@@ -448,6 +451,8 @@ Rules the backend must keep:
   when empty. Every page tag is an active vocabulary name. A retired name
   stays in the state file; bringing it back restores it on every page that
   had it. An older document lacking both keys reads as untagged.
+- Each page's `suggested` is always present, in serve and export alike. The
+  page ignores it until the review UI lands.
 - A page's `history` comes from the newest snapshot that recorded signals for
   its URL, and every field in it is optional. Export leaves out `search` and
   `referrer` unless `export --with-history` is given. A referrer is never a

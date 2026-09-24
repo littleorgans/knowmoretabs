@@ -437,6 +437,23 @@ def add_tags(lib, seed):
     return lib
 
 
+def add_suggested(lib, seed):
+    """Suggested tags (7c): always present, like `tags`, and on a few pages a
+    name the owner has neither added nor removed, with the sources that made
+    it. Page 0 has one, since the contract test reads its shape from page 0.
+    Its own RNG, so the rest of the fixture does not move."""
+    r = random.Random(seed * 13 + 5)
+    names = [v["name"] for v in lib["vocabulary"]]
+    for i, p in enumerate(lib["pages"]):
+        p["suggested"] = []
+        if i and r.random() > 0.05:
+            continue
+        free = [n for n in names if n not in p["tags"]]
+        for n in r.sample(free, min(len(free), r.randint(1, 2))):
+            p["suggested"].append({"name": n, "sources": r.sample(["claude-opus-5", "gpt-6-luna"], r.randint(1, 2))})
+    return lib
+
+
 STAMP = "%Y-%m-%dT%H:%M:%SZ"
 ELSEWHERE = ["https://news.ycombinator.com/item?id={n}", "https://t.co/{h}", "https://www.reddit.com/r/programming/comments/{h}/",
              "https://lobste.rs/s/{h}", "https://mastodon.social/@someone/{n}", "https://duckduckgo.com/"]
@@ -643,8 +660,8 @@ def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6,
         "snapshots": snapshots,
         "pages": pages,
     }
-    # a library from before 7a has no tags, and one from before 7b no history
-    return add_history(add_tags(lib, seed), seed) if tags else lib
+    # a library from before 7a has no tags or suggestions, and one from before 7b no history
+    return add_history(add_suggested(add_tags(lib, seed), seed), seed) if tags else lib
 
 
 def to_export(lib):
