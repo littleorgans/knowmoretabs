@@ -582,7 +582,7 @@ impl<'c> Queries<'c> {
 
 /// Chromium's `database_utils::GurlToDatabaseUrl` removes credentials.
 /// SNSS already carries canonical GURLs; preserve everything else verbatim.
-fn database_url(raw: &str) -> Cow<'_, str> {
+pub(crate) fn database_url(raw: &str) -> Cow<'_, str> {
     let Ok(mut url) = url::Url::parse(raw) else {
         return Cow::Borrowed(raw);
     };

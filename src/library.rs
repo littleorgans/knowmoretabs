@@ -14,6 +14,7 @@ use url::Url;
 
 use crate::archive::{self, Archive, SNAPSHOT_JSON};
 use crate::error::Error;
+use crate::history::database_url;
 use crate::library_history::Entry;
 use crate::local;
 use crate::model::{self, Snapshot};
@@ -438,6 +439,10 @@ pub fn build(
         pages: Vec::new(),
         vocabulary: state.active_vocabulary(),
     };
+    let forgotten_referrers = forgotten
+        .iter()
+        .map(|url| database_url(url).into_owned())
+        .collect();
     let mut page_indices = HashMap::new();
     // Which forgotten URLs the archive actually holds; a state file may name
     // URLs no surviving snapshot mentions, and those are not pages.
@@ -483,7 +488,7 @@ pub fn build(
             // Ascending snapshots make the newest signals win.
             if let Some(history) = &tab.history {
                 library.pages[index].history =
-                    Some(page_history(&tab.url, history, shape, forgotten));
+                    Some(page_history(&tab.url, history, shape, &forgotten_referrers));
             }
             // Ascending snapshots make the most recent non-empty title win.
             // Whitespace counts as empty: a blank title renders as a nameless
@@ -524,7 +529,12 @@ pub fn build(
     // it covers pages that no save had open.
     for page in &mut library.pages {
         if let Some(entry) = recorded.get(&page.url) {
-            page.history = Some(page_history(&page.url, &entry.history, shape, forgotten));
+            page.history = Some(page_history(
+                &page.url,
+                &entry.history,
+                shape,
+                &forgotten_referrers,
+            ));
         }
     }
     name_referrers(&mut library.pages);
@@ -577,12 +587,18 @@ fn page_history(
     // Capture already keeps this machine and the page itself out of
     // referrers; the rules are applied again so a snapshot saved before the
     // second (a reload named itself) or edited by hand cannot slip one in.
+    // History strips credentials, while snapshot and forgotten URLs retain
+    // them. Compare the same database identity without changing page keys.
     // An export never names a forgotten page, not even as a referrer.
     let referrer = history
         .referrer
         .as_ref()
-        .filter(|referrer| full && *referrer != url && public_domain(referrer).is_some())
-        .filter(|referrer| shape == Shape::Serve || !forgotten.contains(*referrer))
+        .filter(|referrer| {
+            full && database_url(referrer) != database_url(url) && public_domain(referrer).is_some()
+        })
+        .filter(|referrer| {
+            shape == Shape::Serve || !forgotten.contains(database_url(referrer).as_ref())
+        })
         .map(|referrer| Referrer {
             url: referrer.clone(),
             title: None,

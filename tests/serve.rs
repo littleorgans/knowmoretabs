@@ -2110,3 +2110,75 @@ fn a_damaged_record_is_reported_and_the_library_falls_back_to_snapshots() {
     assert!(output.status.success());
     assert!(stderr(&output).contains("cannot read the History record"));
 }
+
+#[test]
+fn history_referrer_privacy_uses_chromiums_credential_free_identity() {
+    let fx = Fixture::new();
+    let own = "https://user:pass@own.test/Case?q=one#section";
+    let own_stored = "https://own.test/Case?q=one#section";
+    let hidden = "https://user:pass@hidden.test/Case?q=one#section";
+    let hidden_stored = "https://hidden.test/Case?q=one#section";
+    let distinct = "https://hidden.test/Case?q=two#section";
+    write_snapshot(
+        &fx.root,
+        "2026-01-01-000000Z",
+        "2026-01-01T00:00:00Z",
+        &[
+            (1, own, "Own"),
+            (2, hidden, "Hidden"),
+            (3, A, "A"),
+            (4, B, "B"),
+        ],
+    );
+    assert!(fx.run(&["forget", hidden]).status.success());
+    let entry = |referrer: &str| {
+        json!({
+            "visits": 1, "typed": 0, "last_visit": "2026-01-01T00:00:00Z",
+            "referrer": referrer, "refreshed_at": "2026-01-01T00:00:00Z"
+        })
+    };
+    write_record(
+        &fx,
+        &json!({own: entry(own_stored), A: entry(hidden_stored), B: entry(distinct)}),
+    );
+    let (exported, _) = export_to(&fx, "export", &["--with-history"]);
+    assert!(
+        page(&exported, own)["history"].get("referrer").is_none(),
+        "self referrer"
+    );
+    assert!(
+        page(&exported, A)["history"].get("referrer").is_none(),
+        "forgotten referrer"
+    );
+    assert_eq!(page(&exported, B)["history"]["referrer"]["url"], distinct);
+    let served = Server::start(&fx).library();
+    assert!(page(&served, own)["history"].get("referrer").is_none());
+    common::assert_success(&fx.run(&["tags", "--create", "Research"]));
+    let prompt = fx.home.path().join("prompt");
+    assert!(
+        fx.run(&[
+            "tag",
+            "--prompt",
+            prompt.to_str().unwrap(),
+            "--with-history"
+        ])
+        .status
+        .success()
+    );
+    let text = fs::read_to_string(prompt.join("pages.jsonl")).unwrap();
+    let lines: Vec<Value> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    for url in [own, A] {
+        assert!(
+            lines
+                .iter()
+                .find(|p| p["url"] == url)
+                .unwrap()
+                .get("referrer")
+                .is_none()
+        );
+    }
+    assert!(!text.contains(hidden_stored));
+}
