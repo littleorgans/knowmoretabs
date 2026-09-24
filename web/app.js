@@ -289,7 +289,7 @@ function browserHTML(p) {
     const typed = !h.typed ? '' : h.typed >= h.visits ? (h.visits === 1 ? ' · typed' : ' · all typed') : ` · typed ${h.typed === 1 ? 'once' : plural(h.typed, 'time')}`;
     out += line('Visits', `${num.format(h.visits)}${when}${typed}`, 'Visits the browser still keeps, about 90 days of them. Typed means typed or picked in the address bar.');
   }
-  if (h.foreground_seconds > 0) out += line('Time on page', span(h.foreground_seconds), 'Time in the foreground, over the visits the browser timed. The visit in progress is not counted.');
+  if (Number.isFinite(h.foreground_seconds) && h.foreground_seconds >= 0) out += line('Time on page', span(h.foreground_seconds), 'Time in the foreground, over the visits the browser timed. The visit in progress is not counted.');
   return out ? `<div class="hx"><h4>Browser history</h4><dl>${out}</dl></div>` : '';
 }
 function histHTML(p, cls = 'hist in') {
