@@ -379,6 +379,48 @@ fn a_copy_taken_during_an_uncommitted_transaction_reads_the_committed_state() {
 }
 
 #[test]
+fn readonly_browser_files_are_recovered_and_copies_are_removed() {
+    let page = "https://example.test/readonly";
+    let (fx, h) = profile_with(&[page]);
+    let id = h.url(page, 1, 0, T);
+    h.visit(id, T, 0, 0);
+    h.conn
+        .execute_batch("pragma cache_size = 1; begin; update urls set visit_count = 999;")
+        .unwrap();
+    for n in 0..100 {
+        h.url(&format!("https://filler.example.test/{n}"), 1, 0, T);
+    }
+    let paths = [
+        fx.history_path("Default"),
+        fx.history_path("Default").with_file_name("History-journal"),
+    ];
+    let original: Vec<_> = paths
+        .iter()
+        .map(|path| fs::metadata(path).unwrap().permissions())
+        .collect();
+    for (path, permissions) in paths.iter().zip(&original) {
+        let mut readonly = permissions.clone();
+        readonly.set_readonly(true);
+        fs::set_permissions(path, readonly).unwrap();
+    }
+    let output = fx.run(&[]);
+    let leftovers = fx.staging_dirs();
+    for (path, permissions) in paths.iter().zip(original) {
+        fs::set_permissions(path, permissions).unwrap();
+    }
+    assert_success(&output);
+    let snapshot = read_snapshot(&fx.snapshot_dirs()[0]);
+    assert_eq!(
+        tab_history(&snapshot, page)["visits"],
+        1,
+        "{}",
+        stderr(&output)
+    );
+    assert!(leftovers.is_empty(), "read-only copies survived cleanup");
+    h.conn.execute_batch("rollback").unwrap();
+}
+
+#[test]
 fn a_wal_history_is_read_with_the_rows_only_its_wal_holds() {
     let page = "https://example.test/wal";
     let (fx, h) = profile_with(&[page]);

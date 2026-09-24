@@ -179,7 +179,11 @@ fn copy_stable(source: &Path, into: &Path) -> Result<(PathBuf, u64), String> {
                 continue;
             }
             match fs::copy(from, to) {
-                Ok(_) => {}
+                Ok(_) => {
+                    // CopyFileExW also copies the read-only attribute. Recovery
+                    // must be able to write and cleanup must be able to delete.
+                    make_copy_writable(to)?;
+                }
                 // Gone between the stat and the copy: the check below sees it.
                 Err(err) if err.kind() == ErrorKind::NotFound => {}
                 Err(err) => return Err(format!("cannot copy {}: {err}", from.display())),
@@ -199,6 +203,21 @@ fn copy_stable(source: &Path, into: &Path) -> Result<(PathBuf, u64), String> {
         "{} kept changing while it was being copied",
         source.display()
     ))
+}
+
+fn make_copy_writable(path: &Path) -> Result<(), String> {
+    let mut permissions = fs::metadata(path)
+        .map_err(|err| format!("cannot inspect copy {}: {err}", path.display()))?
+        .permissions();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(0o600);
+    }
+    #[cfg(not(unix))]
+    permissions.set_readonly(false);
+    fs::set_permissions(path, permissions)
+        .map_err(|err| format!("cannot make copy writable {}: {err}", path.display()))
 }
 
 fn states(files: &[(PathBuf, PathBuf)]) -> Result<Vec<Option<fs::Metadata>>, String> {
