@@ -579,10 +579,7 @@ impl Encoding {
 }
 
 fn utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> String {
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|pair| unit([pair[0], pair[1]]))
-        .collect();
+    let units: Vec<u16> = bytes.as_chunks::<2>().0.iter().copied().map(unit).collect();
     String::from_utf16_lossy(&units)
 }
 
