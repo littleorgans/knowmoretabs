@@ -21,7 +21,8 @@ pub fn chrome_time(at: &str) -> i64 {
     at.as_microsecond() + WINDOWS_EPOCH_OFFSET_US
 }
 
-/// Appends rows the way Chrome's history backend would. Ids are SQLite's.
+/// Appends rows the way Chrome's history backend would, with the ids the
+/// database assigns.
 pub struct HistoryBuilder {
     pub conn: Connection,
 }

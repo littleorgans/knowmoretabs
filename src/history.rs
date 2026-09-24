@@ -29,7 +29,7 @@ pub const HISTORY_FILE: &str = "History";
 /// Copied beside `History` when present, before it. The rollback journal
 /// holds the originals of pages an uncommitted transaction has already
 /// written into `History`; the WAL holds commits not yet in it. `-shm` is
-/// never copied: SQLite rebuilds it from the WAL.
+/// never copied: opening the copy rebuilds it from the WAL.
 const COMPANIONS: [&str; 2] = ["-journal", "-wal"];
 /// How far back through the visits that led to a page a search counts.
 pub const MAX_HOPS: u8 = 3;
