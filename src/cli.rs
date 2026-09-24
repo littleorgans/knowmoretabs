@@ -73,6 +73,9 @@ pub enum Command {
         /// Directory to write it to (default: <root>/export)
         #[arg(value_name = "DIR")]
         dir: Option<PathBuf>,
+        /// Include the searches that led to pages and the pages they came from
+        #[arg(long)]
+        with_history: bool,
     },
     /// Serve the library on 127.0.0.1 with live forget, restore and tagging
     Serve {
@@ -302,6 +305,26 @@ mod tests {
             Some(Command::Serve {
                 port: 0,
                 open: true
+            })
+        ));
+    }
+
+    #[test]
+    fn export_leaves_out_history_unless_asked() {
+        let cli = Cli::try_parse_from(["knowmoretabs", "export"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Export {
+                dir: None,
+                with_history: false
+            })
+        ));
+        let cli = Cli::try_parse_from(["knowmoretabs", "export", "out", "--with-history"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Export {
+                dir: Some(_),
+                with_history: true
             })
         ));
     }

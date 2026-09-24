@@ -75,8 +75,8 @@ fn main() -> ExitCode {
     warn_if_root_is_not_private(&cli, &root, roots.as_ref());
     let result = match &cli.command {
         Some(Command::List) => library_commands::list(&root, cli.json, log),
-        Some(Command::Export { dir }) => {
-            library_commands::export(&root, dir.as_deref(), cli.json, log)
+        Some(Command::Export { dir, with_history }) => {
+            library_commands::export(&root, dir.as_deref(), *with_history, cli.json, log)
         }
         Some(Command::Serve { port, open }) => server::run(&server::Options {
             root,

@@ -248,9 +248,12 @@ pub fn known_urls(snapshots: &[Snapshot]) -> HashSet<&str> {
 
 /// Whether forgotten pages are left out (an export is read-only, so a hidden
 /// page has no way back) or kept and flagged (serve has a Restore button).
+/// An export also leaves out the search that led to a page and where it came
+/// from, unless asked for: an exported folder is the copy most likely to
+/// travel (07b brief §7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Shape {
-    Export,
+    Export { with_history: bool },
     Serve,
 }
 
@@ -287,6 +290,35 @@ struct Page {
     /// Imported suggestions the owner has neither added nor removed, each
     /// with the sources that made it. Always present, like `tags`.
     suggested: Vec<Suggested>,
+    /// From the newest snapshot that recorded signals for the URL; absent
+    /// when none did, which is every page seen only before 7b.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    history: Option<PageHistory>,
+}
+
+/// A tab's `model::TabHistory`, with the referrer named as the library
+/// knows it. Counts and times cover what the browser still held then.
+#[derive(Debug, Serialize)]
+struct PageHistory {
+    visits: u64,
+    typed: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    first_visit: Option<Timestamp>,
+    last_visit: Timestamp,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    foreground_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    search: Option<model::Search>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    referrer: Option<Referrer>,
+}
+
+#[derive(Debug, Serialize)]
+struct Referrer {
+    url: String,
+    /// The referring page's title when it is itself a page in this library.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -371,23 +403,7 @@ pub fn build(
     // URLs no surviving snapshot mentions, and those are not pages.
     let mut forgotten_pages: HashSet<&str> = HashSet::new();
     for snapshot in snapshots {
-        let groups: Vec<Group> = snapshot
-            .groups
-            .iter()
-            .enumerate()
-            .map(|(id, group)| Group {
-                id,
-                title: group.title.clone().unwrap_or_default(),
-                colour: group.colour.clone(),
-                collapsed: group.collapsed,
-            })
-            .collect();
-        let group_indices: HashMap<&str, usize> = snapshot
-            .groups
-            .iter()
-            .enumerate()
-            .map(|(i, group)| (group.id.as_str(), i))
-            .collect();
+        let (groups, group_indices) = snapshot_groups(snapshot);
         let mut tabs = Vec::new();
         let mut positions = HashMap::<u32, usize>::new();
         let mut ordered_tabs: Vec<_> = snapshot.tabs.iter().collect();
@@ -407,7 +423,7 @@ pub fn build(
             let is_forgotten = forgotten.contains(&tab.url);
             if is_forgotten {
                 forgotten_pages.insert(tab.url.as_str());
-                if shape == Shape::Export {
+                if shape != Shape::Serve {
                     continue;
                 }
             }
@@ -420,9 +436,14 @@ pub fn build(
                     forgotten: is_forgotten,
                     tags: state.page_tags(&tab.url, &spellings),
                     suggested: suggested.get(&tab.url).cloned().unwrap_or_default(),
+                    history: None,
                 });
                 index
             });
+            // Ascending snapshots make the newest signals win.
+            if let Some(history) = &tab.history {
+                library.pages[index].history = Some(page_history(history, shape, forgotten));
+            }
             // Ascending snapshots make the most recent non-empty title win.
             // Whitespace counts as empty: a blank title renders as a nameless
             // row, which is worse than the older title it would replace.
@@ -458,6 +479,7 @@ pub fn build(
             tabs,
         });
     }
+    name_referrers(&mut library.pages);
     library.stats.pages = library.pages.len();
     library.stats.snapshots = library.snapshots.len();
     library.stats.domains = library
@@ -468,6 +490,77 @@ pub fn build(
         .len();
     library.stats.forgotten = forgotten_pages.len();
     library
+}
+
+/// A snapshot's groups in the contract's shape, and each group id's index.
+fn snapshot_groups(snapshot: &Snapshot) -> (Vec<Group>, HashMap<&str, usize>) {
+    let groups = snapshot
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(id, group)| Group {
+            id,
+            title: group.title.clone().unwrap_or_default(),
+            colour: group.colour.clone(),
+            collapsed: group.collapsed,
+        })
+        .collect();
+    let indices = snapshot
+        .groups
+        .iter()
+        .enumerate()
+        .map(|(i, group)| (group.id.as_str(), i))
+        .collect();
+    (groups, indices)
+}
+
+fn page_history(
+    history: &model::TabHistory,
+    shape: Shape,
+    forgotten: &BTreeSet<String>,
+) -> PageHistory {
+    let full = !matches!(
+        shape,
+        Shape::Export {
+            with_history: false
+        }
+    );
+    // Capture already keeps this machine out of referrers; the library's own
+    // rule is applied again so an older or edited snapshot cannot slip one
+    // in. An export never names a forgotten page, not even as a referrer.
+    let referrer = history
+        .referrer
+        .as_ref()
+        .filter(|url| full && public_domain(url).is_some())
+        .filter(|url| shape == Shape::Serve || !forgotten.contains(*url))
+        .map(|url| Referrer {
+            url: url.clone(),
+            title: None,
+        });
+    PageHistory {
+        visits: history.visits,
+        typed: history.typed,
+        first_visit: history.first_visit,
+        last_visit: history.last_visit,
+        foreground_seconds: history.foreground_seconds,
+        search: history.search.clone().filter(|_| full),
+        referrer,
+    }
+}
+
+/// Titles are final only once every snapshot is read, so referrers are named
+/// last, from the pages this shape carries.
+fn name_referrers(pages: &mut [Page]) {
+    let titles: HashMap<String, String> = pages
+        .iter()
+        .filter(|page| !page.title.trim().is_empty())
+        .map(|page| (page.url.clone(), page.title.clone()))
+        .collect();
+    for page in pages {
+        if let Some(referrer) = page.history.as_mut().and_then(|h| h.referrer.as_mut()) {
+            referrer.title = titles.get(&referrer.url).cloned();
+        }
+    }
 }
 
 fn public_domain(raw: &str) -> Option<String> {

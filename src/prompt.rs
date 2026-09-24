@@ -178,7 +178,14 @@ pub fn write(root: &Path, options: &PromptOptions, log: Log) -> Result<Written, 
     let spellings = state.spellings(false);
     // Export shape: forgotten pages are left out, so a page the owner hid
     // never reaches their agent.
-    let library = library::build(&loaded.snapshots, &state, &HashMap::new(), Shape::Export);
+    let library = library::build(
+        &loaded.snapshots,
+        &state,
+        &HashMap::new(),
+        Shape::Export {
+            with_history: false,
+        },
+    );
     let mut written = Written {
         vocabulary_version: tags::vocabulary_version(&state),
         tags: tags.len(),
