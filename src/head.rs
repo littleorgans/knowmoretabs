@@ -38,14 +38,98 @@ impl Head {
     }
 }
 
-/// Where the head ends in `bytes`: just past `</head`, or `<body` if the page
-/// never closed its head. `None` means more bytes are needed.
-pub fn end_of_head(bytes: &[u8]) -> Option<usize> {
-    let close = find_ci(bytes, 0, b"</head");
-    let body = find_ci(bytes, 0, b"<body");
-    match (close, body) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
+/// Incremental boundary detection keeps comments, attributes and raw text
+/// opaque even when a delimiter is split across socket reads.
+#[derive(Default)]
+pub struct Boundary {
+    tag: Option<Vec<u8>>,
+    name_done: bool,
+    quote: Option<u8>,
+    comment: bool,
+    raw: Option<Vec<u8>>,
+    tail: Vec<u8>,
+}
+
+impl Boundary {
+    pub fn feed(&mut self, bytes: &[u8]) -> bool {
+        for &byte in bytes {
+            if self.comment {
+                self.tail.push(byte);
+                if self.tail.len() > 3 {
+                    self.tail.remove(0);
+                }
+                if self.tail == b"-->" {
+                    self.comment = false;
+                    self.tail.clear();
+                }
+                continue;
+            }
+            if let Some(close) = &self.raw {
+                self.tail.push(byte.to_ascii_lowercase());
+                if self.tail.len() > close.len() + 1 {
+                    self.tail.remove(0);
+                }
+                if self.tail.starts_with(close)
+                    && self.tail.len() == close.len() + 1
+                    && (byte.is_ascii_whitespace() || matches!(byte, b'>' | b'/'))
+                {
+                    self.raw = None;
+                    self.tail.clear();
+                    if byte != b'>' {
+                        self.tag = Some(Vec::new());
+                        self.name_done = true;
+                    }
+                }
+                continue;
+            }
+            if let Some(tag) = &mut self.tag {
+                if let Some(quote) = self.quote {
+                    if byte == quote {
+                        self.quote = None;
+                    }
+                    continue;
+                }
+                if byte == b'>' {
+                    if tag == b"/head" || tag == b"body" {
+                        return true;
+                    }
+                    if [
+                        b"script".as_slice(),
+                        b"style",
+                        b"title",
+                        b"textarea",
+                        b"xmp",
+                        b"noscript",
+                        b"template",
+                    ]
+                    .contains(&tag.as_slice())
+                    {
+                        let mut close = b"</".to_vec();
+                        close.extend_from_slice(tag);
+                        self.raw = Some(close);
+                    }
+                    self.tag = None;
+                    continue;
+                }
+                if !self.name_done {
+                    if byte.is_ascii_whitespace() || (byte == b'/' && !tag.is_empty()) {
+                        self.name_done = true;
+                    } else if tag.len() < 16 {
+                        tag.push(byte.to_ascii_lowercase());
+                        if tag == b"!--" {
+                            self.comment = true;
+                            self.tag = None;
+                        }
+                    }
+                } else if matches!(byte, b'\'' | b'"') {
+                    self.quote = Some(byte);
+                }
+            } else if byte == b'<' {
+                self.tag = Some(Vec::new());
+                self.name_done = false;
+            }
+        }
+        false
     }
 }
 
@@ -166,6 +250,7 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
 fn attributes(html: &str, mut i: usize) -> (Vec<(String, String)>, usize) {
     let b = html.as_bytes();
     let mut attrs: Vec<(String, String)> = Vec::new();
+    let mut names = std::collections::HashSet::new();
     loop {
         while i < b.len() && (b[i].is_ascii_whitespace() || b[i] == b'/') {
             i += 1;
@@ -205,7 +290,7 @@ fn attributes(html: &str, mut i: usize) -> (Vec<(String, String)>, usize) {
             }
         }
         // An empty name is a stray `=`, whose value was just stepped over.
-        if !name.is_empty() && !attrs.iter().any(|(n, _)| *n == name) {
+        if !name.is_empty() && names.insert(name.clone()) {
             attrs.push((name, value.into_owned()));
         }
     }
@@ -216,7 +301,20 @@ fn attributes(html: &str, mut i: usize) -> (Vec<(String, String)>, usize) {
 fn raw_text<'a>(html: &'a str, from: usize, name: &str) -> (&'a str, usize) {
     let bytes = html.as_bytes();
     let close = format!("</{name}");
-    match find_ci(bytes, from, close.as_bytes()) {
+    let mut search = from;
+    let end = loop {
+        let Some(at) = find_ci(bytes, search, close.as_bytes()) else {
+            break None;
+        };
+        if bytes
+            .get(at + close.len())
+            .is_some_and(|b| b.is_ascii_whitespace() || matches!(b, b'>' | b'/'))
+        {
+            break Some(at);
+        }
+        search = at + close.len();
+    };
+    match end {
         Some(end) => {
             let after = find(bytes, end, b">").map_or(bytes.len(), |gt| gt + 1);
             (&html[from..end], after)
@@ -296,7 +394,7 @@ fn reference(text: &str) -> Option<(char, usize)> {
         if len == 0 {
             return None;
         }
-        let value = u32::from_str_radix(&digits[..len.min(8)], radix).unwrap_or(u32::MAX);
+        let value = u32::from_str_radix(&digits[..len], radix).unwrap_or(u32::MAX);
         let semicolon = usize::from(digits[len..].starts_with(';'));
         return Some((numeric_char(value), 1 + prefix + len + semicolon));
     }
@@ -432,6 +530,13 @@ pub fn decode(bytes: &[u8], header_charset: Option<&str>) -> Result<String, Stri
     }
     if let Some(rest) = bytes.strip_prefix(b"\xFE\xFF") {
         return Ok(utf16(rest, u16::from_be_bytes));
+    }
+    if let Some(label) = header_charset {
+        match label.trim().to_ascii_lowercase().as_str() {
+            "utf-16" | "utf-16le" => return Ok(utf16(bytes, u16::from_le_bytes)),
+            "utf-16be" => return Ok(utf16(bytes, u16::from_be_bytes)),
+            _ => {}
+        }
     }
     let declared = match header_charset {
         Some(label) => Some(label.to_owned()),
@@ -582,6 +687,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn boundaries_survive_every_byte_split() {
+        for html in [
+            "<head><!-- </head> --><title>x</title></head>",
+            "<head><meta content='</head>'><title>x</title></head>",
+            "<head><script>'</scripture></head>';</script><title>x</title></head>",
+        ] {
+            let bytes = html.as_bytes();
+            for split in 0..bytes.len() {
+                let mut boundary = Boundary::default();
+                assert!(!boundary.feed(&bytes[..split]), "{split}: {html}");
+                assert!(boundary.feed(&bytes[split..]), "{split}: {html}");
+            }
+        }
+    }
+
+    #[test]
+    fn malformed_input_and_random_bytes_finish_without_panicking() {
+        let mut seed = 0x1234_5678_u32;
+        for len in 0..4096 {
+            let bytes: Vec<u8> = (0..len % 512)
+                .map(|_| {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 17;
+                    seed ^= seed << 5;
+                    seed.to_le_bytes()[0]
+                })
+                .collect();
+            let text = decode(&bytes, None).unwrap_or_default();
+            let _ = scan(&text);
+            let _ = text_of(&text);
+            let _ = decode_entities(&text);
+            let mut boundary = Boundary::default();
+            for chunk in bytes.chunks(3) {
+                let _ = boundary.feed(chunk);
+            }
+        }
+        for html in [
+            "<!-- unclosed",
+            "<meta a='unclosed",
+            "<",
+            "</",
+            "<meta = = =>",
+            "<é/>",
+        ] {
+            let _ = scan(html);
+            let _ = text_of(html);
+        }
+        let mut huge = String::from("<meta");
+        for n in 0..30_000 {
+            use std::fmt::Write;
+            let _ = write!(huge, " a{n}=x");
+        }
+        huge.push_str(" name=description content=kept>");
+        let started = std::time::Instant::now();
+        assert_eq!(scan(&huge).meta("description"), Some("kept"));
+        assert!(started.elapsed() < std::time::Duration::from_secs(3));
+        assert_eq!(decode_entities("&#00000000065;"), "A");
+        assert_eq!(decode_entities("&#x00000000041;"), "A");
+    }
+
+    #[test]
     fn the_values_enrich_keeps_come_out_of_an_ordinary_head() {
         let head = scan(concat!(
             "<!doctype html><HTML Lang='en-GB'><head>\n",
@@ -628,9 +794,9 @@ mod tests {
 
     #[test]
     fn a_head_that_never_closes_ends_at_the_body_or_the_text() {
-        assert_eq!(end_of_head(b"<head><title>x</title><body>"), Some(22));
-        assert_eq!(end_of_head(b"<HEAD></HEAD><body>"), Some(6));
-        assert_eq!(end_of_head(b"<head><title>x</title>"), None);
+        assert!(Boundary::default().feed(b"<head><title>x</title><body>"));
+        assert!(Boundary::default().feed(b"<HEAD></HEAD><body>"));
+        assert!(!Boundary::default().feed(b"<head><title>x</title>"));
         let head = scan("<title>Unclosed");
         assert_eq!(head.title.as_deref(), Some("Unclosed"));
         let head = scan("<meta name=description content=\"cut off");
@@ -682,6 +848,16 @@ mod tests {
         assert_eq!(
             scan(&decode(http_equiv, None).unwrap()).title.as_deref(),
             Some("à")
+        );
+        let big_endian: Vec<u8> = "<title>日本</title>"
+            .encode_utf16()
+            .flat_map(u16::to_be_bytes)
+            .collect();
+        assert_eq!(
+            scan(&decode(&big_endian, Some("utf-16be")).unwrap())
+                .title
+                .as_deref(),
+            Some("日本")
         );
         let mut utf16 = vec![0xFF, 0xFE];
         for unit in "<title>é</title>".encode_utf16() {

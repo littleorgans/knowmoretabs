@@ -227,6 +227,7 @@ fn read_page(raw: &str, url: &Url, mut response: ureq::http::Response<ureq::Body
 /// Reads until the head ends (when `stop_at_head`), the cap, or the end.
 fn read_head(mut body: impl Read, cap: usize, stop_at_head: bool) -> io::Result<Vec<u8>> {
     let mut bytes = Vec::new();
+    let mut boundary = head::Boundary::default();
     let mut chunk = vec![0u8; 64 * 1024];
     while bytes.len() < cap {
         let want = chunk.len().min(cap - bytes.len());
@@ -236,10 +237,8 @@ fn read_head(mut body: impl Read, cap: usize, stop_at_head: bool) -> io::Result<
             Err(err) if err.kind() == io::ErrorKind::Interrupted => continue,
             Err(err) => return Err(err),
         };
-        // Search only what is new, plus room for a tag split across reads.
-        let from = bytes.len().saturating_sub(8);
         bytes.extend_from_slice(&chunk[..n]);
-        if stop_at_head && head::end_of_head(&bytes[from..]).is_some() {
+        if stop_at_head && boundary.feed(&chunk[..n]) {
             break;
         }
     }
@@ -849,6 +848,37 @@ mod tests {
             read_head(body.as_bytes(), HEAD_CAP, true).unwrap().len(),
             HEAD_CAP
         );
+    }
+
+    #[test]
+    fn head_boundaries_inside_markup_do_not_truncate_the_response() {
+        for prefix in [
+            "<script>const x = '</head>';",
+            "<!-- </head>",
+            "<meta content='</head>",
+            "<script>const x = '</scripture></head>';",
+        ] {
+            let close = if prefix.starts_with("<script") {
+                "</script>"
+            } else if prefix.starts_with("<!--") {
+                "-->"
+            } else {
+                "'>"
+            };
+            let page = format!(
+                "<head>{prefix}{}{close}<title>Found</title></head>{}",
+                "x".repeat(100_000),
+                "y".repeat(100_000)
+            );
+            let bytes = read_head(page.as_bytes(), HEAD_CAP, true).unwrap();
+            assert_eq!(
+                head::scan(&String::from_utf8(bytes).unwrap())
+                    .title
+                    .as_deref(),
+                Some("Found"),
+                "{prefix}"
+            );
+        }
     }
 
     /// A server that accepts, reads the request, and says nothing.
