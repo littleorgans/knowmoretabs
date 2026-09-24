@@ -452,7 +452,7 @@ and [taiki-e's action inputs and multi-platform workflow](https://github.com/tai
 |---|---|
 | `knowmoretabs-core` package | A second binary, external consumer, or separately versioned library API appears. |
 | `axum`/`tokio` | Measured need for many simultaneous clients, streaming/websockets, or an async-only dependency. |
-| SQLite/index crate | A measured archive size/query exceeds the JSON-in-memory budget, for example search becomes perceptibly slow around 100k tabs. |
+| SQLite/index crate | A measured archive size/query exceeds the JSON-in-memory budget, for example search becomes perceptibly slow around 100k tabs. `rusqlite` is already present since slice 7b, for reading the browser's `History` only; the archive does not use it. |
 | `miette`/`color-eyre` | Users need multi-span source diagnostics or an opt-in developer report mode; ordinary torn tails do not. |
 | Fuzzing corpus | A parser bug escapes the maintained property tests and an owner commits to triaging minimized corpus cases. |
 | Embedded-asset crate | The asset set becomes a generated directory tree whose file enumeration is itself more error-prone than the four macros. |

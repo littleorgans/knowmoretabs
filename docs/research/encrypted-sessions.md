@@ -235,6 +235,9 @@ source. It cannot reconstruct current windows, tab ordering, groups, pinned
 state, session boundaries, or reliable open-tab status; it also misses
 incognito/history-disabled visits and has SQLite locking/copy-consistency
 concerns. It is a different product datum, not a session-file substitute.
+(The copy-consistency concerns are settled in
+`docs/briefs/slice-07b-history.md` §3, which is how `save` reads History for
+its per-tab signals.)
 
 ## Bottom line
 
