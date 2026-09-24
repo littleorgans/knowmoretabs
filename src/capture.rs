@@ -1,5 +1,5 @@
 //! `knowmoretabs save`, end to end: find the session, refuse if stale, read
-//! it stably, parse, skip if unchanged, stage, publish.
+//! it stably, parse, skip if unchanged, read History, stage, publish.
 //!
 //! slice: capture, browsers
 //! why: The order of these steps is the product's safety story. Discovery
@@ -7,8 +7,8 @@
 //!      machine without Chrome never gets an empty archive; the lock is taken
 //!      before anything is read, so two runs never interleave; the copy is
 //!      verified stable before it is parsed, so what we archive is what we
-//!      describe; and the unchanged-session check runs before staging, so a
-//!      no-op run leaves no trace.
+//!      describe; and the unchanged-session check runs before History is
+//!      read and before staging, so a no-op run costs and leaves nothing.
 
 use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
@@ -20,6 +20,7 @@ use sha2::{Digest, Sha256};
 
 use crate::archive::{Archive, SNAPSHOT_JSON};
 use crate::error::Error;
+use crate::history;
 use crate::local;
 use crate::model::{SCHEMA_VERSION, SESSION_FILE_NAME, Snapshot, Source};
 use crate::platform::{self, BrowserCandidate, Profile, SESSIONS_DIR};
@@ -36,6 +37,8 @@ pub struct Options {
     pub profile: Option<String>,
     pub user_data_dir: Option<PathBuf>,
     pub force: bool,
+    /// Read the browser's `History` for each tab; `--no-history` clears it.
+    pub history: bool,
 }
 
 /// Where progress and warnings go. Warnings always reach stderr unless
@@ -157,6 +160,7 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
         windows: read.parsed.windows,
         groups: read.parsed.groups,
         tabs: read.parsed.tabs,
+        history: None,
     };
     leave_out_this_machine(&mut snapshot);
 
@@ -178,6 +182,16 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
             });
         }
     }
+
+    // After the unchanged check, so a skipped run reads nothing; before
+    // staging, so the History copy never shares a directory with the snapshot.
+    let profile_dir = located.profile_dir.as_deref();
+    if opts.history {
+        history::record(&mut snapshot, profile_dir, &archive);
+    } else {
+        snapshot.history = Some(history::skipped(profile_dir));
+    }
+    report_history(&snapshot, log);
 
     snapshot.id = archive.allocate_id(captured_at)?;
     let staging = archive.stage()?;
@@ -201,6 +215,37 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
         snapshot,
         also_found: located.also_found,
     })
+}
+
+/// One line whatever happened: a warning when History could not be read,
+/// because the snapshot is missing something it would otherwise have, and a
+/// note under `-v` otherwise.
+fn report_history(snapshot: &Snapshot, log: Log) {
+    let Some(source) = &snapshot.history else {
+        return;
+    };
+    if let Some(reason) = &source.error {
+        log.warn(&format!(
+            "History not read, so this snapshot has no History signals: {reason}"
+        ));
+    } else if source.skipped_by_request {
+        log.note("History not read (--no-history)");
+    } else {
+        log.note(&format!(
+            "History read from {}: {} of {} tabs found{}",
+            source
+                .path
+                .as_deref()
+                .map_or_else(String::new, |p| p.display().to_string()),
+            source.tabs_found,
+            snapshot.tabs.len(),
+            if source.unavailable.is_empty() {
+                String::new()
+            } else {
+                format!("; not available: {}", source.unavailable.join(", "))
+            }
+        ));
+    }
 }
 
 /// Removes tabs on this machine (development servers, this tool's own library)
@@ -696,7 +741,7 @@ fn read_stable(path: &Path) -> Result<(Vec<u8>, Option<std::time::SystemTime>), 
 /// the creation time, which a replaced file carries a new value of unless
 /// NTFS tunnelling preserves it — and tunnelling only ever makes this agree
 /// where it would otherwise disagree, so it costs no correctness.
-fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
+pub fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     let basic = a.len() == b.len() && a.modified().ok() == b.modified().ok();
     #[cfg(unix)]
     {
@@ -760,6 +805,7 @@ mod tests {
             profile: None,
             user_data_dir: None,
             force: false,
+            history: true,
         };
         let located = locate(&opts, Log::default()).unwrap();
         assert_eq!(located.profile_dir, Some(tmp.path().join("Profile 1")));

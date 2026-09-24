@@ -129,6 +129,9 @@ pub struct SaveArgs {
     /// Save even if the window and tab layout matches the previous snapshot
     #[arg(long)]
     pub force: bool,
+    /// Do not read the browser's History: no searches, referrers or visit counts
+    #[arg(long)]
+    pub no_history: bool,
 }
 
 impl Cli {
@@ -137,6 +140,7 @@ impl Cli {
         match &self.command {
             Some(Command::Save(args)) => SaveArgs {
                 force: args.force || self.save.force,
+                no_history: args.no_history || self.save.no_history,
             },
             _ => self.save.clone(),
         }
@@ -161,6 +165,14 @@ mod tests {
         let cli = Cli::try_parse_from(["knowmoretabs", "--root", "/r", "save"]).unwrap();
         assert_eq!(cli.root.as_deref(), Some(std::path::Path::new("/r")));
         assert!(!cli.save_args().force);
+        assert!(!cli.save_args().no_history);
+
+        for args in [
+            &["knowmoretabs", "--no-history"][..],
+            &["knowmoretabs", "save", "--no-history"],
+        ] {
+            assert!(Cli::try_parse_from(args).unwrap().save_args().no_history);
+        }
     }
 
     #[test]

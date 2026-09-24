@@ -32,6 +32,10 @@ pub struct Snapshot {
     pub windows: Vec<Window>,
     pub groups: Vec<Group>,
     pub tabs: Vec<Tab>,
+    /// Where the tabs' History signals came from, or why there are none.
+    /// Absent from snapshots written before `save` read History.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<HistorySource>,
 }
 
 /// Where the session file came from and how to recognise it again.
@@ -198,6 +202,72 @@ pub struct Tab {
     /// When the tab was last brought to the front, from Chrome's own clock.
     pub last_active: Option<Timestamp>,
     pub window_id: i32,
+    /// What the browser's `History` knew about this URL when the snapshot
+    /// was taken. Absent when History did not know the URL, was not read, or
+    /// the snapshot predates it; `Snapshot::history` says which.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub history: Option<TabHistory>,
+}
+
+/// One URL's signals from the browser's `History` database. Chrome keeps
+/// about 90 days of visits, so every count and time here covers only what it
+/// still held when the snapshot was taken.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TabHistory {
+    /// `urls.visit_count`, as Chrome stores it.
+    pub visits: u64,
+    /// `urls.typed_count`: visits typed or picked in the address bar.
+    pub typed: u64,
+    /// The earliest visit Chrome still held, not the first visit ever: older
+    /// ones have expired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_visit: Option<Timestamp>,
+    /// `urls.last_visit_time`.
+    pub last_visit: Timestamp,
+    /// Whole seconds in the foreground, summed over the visits whose time
+    /// Chrome recorded. Chrome records it when a visit ends, so the visit in
+    /// progress is never counted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub foreground_seconds: Option<u64>,
+    /// The nearest search results page among this page's visits and the
+    /// visits that led to them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub search: Option<Search>,
+    /// The page a visit to this one came from, else the address another
+    /// application said it came from. Never a page on this machine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub referrer: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Search {
+    pub term: String,
+    /// Links followed from the results page to this one: 0 when this page is
+    /// the results page, at most 3.
+    pub hops: u8,
+}
+
+/// What `save` read from the browser's `History`, once per snapshot.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistorySource {
+    /// The browser's file; `None` when the session had no profile beside it.
+    pub path: Option<PathBuf>,
+    /// Size of the copy that was read.
+    pub bytes: Option<u64>,
+    /// `meta.version`: recorded, never required.
+    pub schema_version: Option<u32>,
+    /// The newest visit in the copy: how current it was.
+    pub newest_visit: Option<Timestamp>,
+    /// Tabs that received a `history`.
+    pub tabs_found: u64,
+    /// Optional columns this database lacked, as `table.column`, so that an
+    /// absent signal reads as "not available" rather than "none".
+    pub unavailable: Vec<String>,
+    /// Why History could not be read at all; `None` when it was.
+    pub error: Option<String>,
+    /// True when `save --no-history` asked for it not to be read.
+    #[serde(default)]
+    pub skipped_by_request: bool,
 }
 
 /// The user-visible arrangement, for deciding whether anything changed.
@@ -297,5 +367,76 @@ mod tests {
         assert_eq!(snapshot.layout()[0].url, "https://example.test/");
         let back = serde_json::to_string(&snapshot).unwrap();
         assert!(back.contains("\"schema_version\":1"));
+        assert!(snapshot.history.is_none() && snapshot.tabs[0].history.is_none());
+        assert!(!back.contains("history"), "absent stays absent: {back}");
+    }
+
+    /// `Tab` as every build before slice 7b declared it.
+    #[derive(Deserialize)]
+    #[allow(dead_code)]
+    struct TabBefore {
+        tab_id: i32,
+        window: u32,
+        position: i32,
+        url: String,
+        title: String,
+        pinned: bool,
+        active: bool,
+        group: Option<String>,
+        last_active: Option<Timestamp>,
+        window_id: i32,
+    }
+
+    /// Both directions of the History fields. Written by this build, they
+    /// read back as written; read by a build that has never heard of them
+    /// (`main` before slice 7b, modelled by `TabBefore`), they are ignored like
+    /// any unknown field, and the rest of the tab reads as before.
+    #[test]
+    fn history_fields_round_trip_and_older_readers_ignore_them() {
+        let tab = r#"{"tab_id": 1, "window": 1, "position": 0, "url": "https://example.test/",
+            "title": "", "pinned": false, "active": true, "group": null,
+            "last_active": null, "window_id": 3,
+            "history": {"visits": 12, "typed": 3, "first_visit": "2026-07-01T09:12:44.123456Z",
+                        "last_visit": "2026-09-23T23:49:42Z", "foreground_seconds": 1834,
+                        "search": {"term": "example query", "hops": 1},
+                        "referrer": "https://example.test/list"}}"#;
+        let parsed: Tab = serde_json::from_str(tab).unwrap();
+        let history = parsed.history.clone().unwrap();
+        assert_eq!(history.visits, 12);
+        assert_eq!(
+            history.search,
+            Some(Search {
+                term: "example query".to_owned(),
+                hops: 1
+            })
+        );
+        let back: Tab = serde_json::from_str(&serde_json::to_string(&parsed).unwrap()).unwrap();
+        assert_eq!(back.history, parsed.history);
+
+        // Only the required fields: the optional ones are omitted, not null.
+        let sparse = TabHistory {
+            first_visit: None,
+            foreground_seconds: None,
+            search: None,
+            referrer: None,
+            ..history
+        };
+        let json = serde_json::to_value(&sparse).unwrap();
+        assert_eq!(
+            json.as_object().unwrap().keys().collect::<Vec<_>>(),
+            ["last_visit", "typed", "visits"]
+        );
+
+        let source = HistorySource {
+            path: Some(PathBuf::from("/p/History")),
+            tabs_found: 1,
+            ..HistorySource::default()
+        };
+        let back: HistorySource =
+            serde_json::from_str(&serde_json::to_string(&source).unwrap()).unwrap();
+        assert_eq!(back, source);
+
+        let before: TabBefore = serde_json::from_str(tab).unwrap();
+        assert_eq!(before.url, "https://example.test/");
     }
 }
