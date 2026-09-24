@@ -647,6 +647,37 @@ fn suggested_tags_are_served_and_the_tag_endpoint_confirms_and_dismisses_them() 
     );
 }
 
+/// The page shows what a tag means where it helps you decide, so the served
+/// vocabulary carries each definition, and leaves the key out when there is none.
+#[test]
+fn the_served_vocabulary_carries_definitions() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let output = fx.run(&[
+        "tags",
+        "--define",
+        "Harness",
+        "Agent harnesses and the code around a model",
+        "--create",
+        "Agent",
+    ]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let server = Server::start(&fx);
+    let vocabulary = server.library()["vocabulary"].clone();
+    assert_eq!(vocabulary[0]["name"], "Agent");
+    assert!(vocabulary[0].get("definition").is_none(), "{vocabulary}");
+    assert_eq!(
+        vocabulary[1]["definition"],
+        "Agent harnesses and the code around a model"
+    );
+    let reply = server.post("/api/vocabulary", &json!({"create": ["Skills"]}));
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(
+        reply.json()["vocabulary"][1]["definition"],
+        "Agent harnesses and the code around a model"
+    );
+}
+
 #[test]
 fn tags_round_trip_and_the_swapped_request_undoes_them() {
     let fx = Fixture::new();
