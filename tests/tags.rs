@@ -116,7 +116,7 @@ fn tag_writes_both_lists_and_creates_the_vocabulary() {
     assert_eq!(
         value,
         json!({
-            "changed": [A], "unchanged": [], "tags": {A: ["Harness"]},
+            "changed": [A], "unchanged": [], "dismissed": [], "tags": {A: ["Harness"]},
             "created": [], "revived": [],
         })
     );

@@ -893,6 +893,42 @@ fn missing_pages_need_partial_and_a_changed_vocabulary_keeps_the_prompts_version
 
 // --- what the library shows -------------------------------------------------
 
+/// Removing a tag a page only had as a suggestion changes no tag the owner
+/// set, but it is recorded: the suggestion is gone, and the CLI says so
+/// rather than "nothing changed".
+#[test]
+fn removing_a_suggested_tag_says_it_was_dismissed() {
+    let fx = Fixture::new();
+    archive(&fx);
+    vocabulary(&fx);
+    let file = work(&fx).join("tags.jsonl");
+    fs::create_dir_all(work(&fx)).unwrap();
+    write_answer(&file, &[answer(B, &["Skills"])]);
+    assert_success(&import(&fx, &file, &["--partial"]));
+
+    let output = fx.run(&["tag", B, "--remove", "skills"]);
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        "dismissed Skills on 1 page (it was not a tag you set there, and it will not be suggested there again)\n"
+    );
+    assert_eq!(
+        state(&fx)["tags"][B],
+        json!({"add": [], "remove": ["Skills"]})
+    );
+    assert_eq!(page(&exported(&fx), B)["suggested"], json!([]));
+
+    // The same request again changes nothing, and says that.
+    let output = fx.run(&["tag", B, "--remove", "Skills"]);
+    assert_eq!(
+        stdout(&output),
+        "already tagged that way: 1 page; nothing changed\n"
+    );
+    let value = json_run(&fx, &["tag", A, B, "--remove", "Agent"]);
+    assert_eq!(value["dismissed"], json!([A, B]));
+    assert_eq!(value["changed"], json!([]));
+}
+
 #[test]
 fn export_shows_undecided_suggestions_with_their_sources() {
     let fx = Fixture::new();
