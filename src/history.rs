@@ -11,6 +11,7 @@
 //!      rules are (three hops of search, positive foreground durations only,
 //!      join by URL) and why is `docs/briefs/slice-07b-history.md`.
 
+use std::borrow::Cow;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs;
 use std::io::ErrorKind;
@@ -429,9 +430,10 @@ impl<'c> Queries<'c> {
 
     /// `None` when History does not know the URL.
     fn signals(&mut self, url: &str) -> rusqlite::Result<Option<TabHistory>> {
+        let database_url = database_url(url);
         let Some((id, visits, typed, last_visit)) = self
             .url_row
-            .query_row([url], |row| {
+            .query_row([database_url.as_ref()], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
                     row.get::<_, i64>(1)?,
@@ -485,6 +487,20 @@ impl<'c> Queries<'c> {
             referrer,
         }))
     }
+}
+
+/// Chromium's `database_utils::GurlToDatabaseUrl` removes credentials.
+/// SNSS already carries canonical GURLs; preserve everything else verbatim.
+fn database_url(raw: &str) -> Cow<'_, str> {
+    let Ok(mut url) = url::Url::parse(raw) else {
+        return Cow::Borrowed(raw);
+    };
+    if url.username().is_empty() && url.password().is_none() {
+        return Cow::Borrowed(raw);
+    }
+    let _ = url.set_username("");
+    let _ = url.set_password(None);
+    Cow::Owned(url.into())
 }
 
 /// The first URL a query yields that is not on this machine. A referrer on

@@ -127,6 +127,24 @@ fn every_signal_is_recorded_on_each_tab_whose_url_history_knows() {
 }
 
 #[test]
+fn history_lookup_strips_credentials_but_keeps_path_query_and_fragment() {
+    let tab = "https://user:p%40ss@example.test/Case?q=one#section";
+    let stored = "https://example.test/Case?q=one#section";
+    let distinct = "https://example.test/Case?q=two#section";
+    let (fx, h) = profile_with(&[tab, stored, distinct]);
+    let id = h.url(stored, 7, 2, T);
+    h.visit(id, T, 0, 0);
+    h.url("https://example.test/Case?q=one", 99, 0, T);
+    drop(h);
+    let (snapshot, _) = saved(&fx, &[]);
+    assert_eq!(tab_history(&snapshot, tab)["visits"], 7);
+    assert_eq!(tab_history(&snapshot, tab), tab_history(&snapshot, stored));
+    assert!(tab_history(&snapshot, distinct).is_null());
+    assert_eq!(snapshot["tabs"][0]["url"], tab);
+    assert_eq!(snapshot["history"]["tabs_found"], 2);
+}
+
+#[test]
 fn search_is_the_nearest_results_page_within_three_hops() {
     let zero = "https://search.example.test/?q=zero";
     let one = "https://example.test/one-hop";
