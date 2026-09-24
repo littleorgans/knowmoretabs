@@ -1,5 +1,6 @@
 //! The browser's own `History` database, read from a private copy: what it
-//! knew about each tab's URL when the snapshot was taken.
+//! knew about each tab's URL when the snapshot was taken, and about every
+//! page in the library (`library_history.rs`).
 //!
 //! slice: capture
 //! why: Chrome keeps about 90 days of visits and then forgets them; a
@@ -74,37 +75,56 @@ pub fn skipped(profile_dir: Option<&Path>) -> HistorySource {
     }
 }
 
-/// Gives each tab whose URL History knows its signals, and the snapshot a
-/// record of where they came from. Never fails: when History cannot be read,
-/// the reason is in `error` and no tab has signals.
-pub fn record(snapshot: &mut Snapshot, profile_dir: Option<&Path>, archive: &Archive) {
-    let mut source = HistorySource {
-        path: profile_dir.map(path_in),
-        ..HistorySource::default()
+/// What one copy of History said about a set of URLs: where it came from
+/// (with `tabs_found` still zero, for the caller to count) and the signals
+/// of each URL it knows.
+#[derive(Debug, Default)]
+pub struct Reading {
+    pub source: HistorySource,
+    pub signals: HashMap<String, TabHistory>,
+}
+
+/// Copies History once and reads every URL in `urls` from the copy. Never
+/// fails: when History cannot be read, the reason is in `source.error` and
+/// there are no signals. `save` passes its tabs and the library's pages
+/// together, so that one copy serves the snapshot and `pages/history.json`.
+pub fn read_urls(profile_dir: Option<&Path>, archive: &Archive, urls: &BTreeSet<&str>) -> Reading {
+    let mut reading = Reading {
+        source: HistorySource {
+            path: profile_dir.map(path_in),
+            ..HistorySource::default()
+        },
+        signals: HashMap::new(),
     };
-    let Some(path) = source.path.clone() else {
-        source.error = Some(
+    let Some(path) = reading.source.path.clone() else {
+        reading.source.error = Some(
             "the session file is not inside a browser profile, so there is no History beside it"
                 .to_owned(),
         );
-        snapshot.history = Some(source);
-        return;
+        return reading;
     };
-    let urls: BTreeSet<&str> = snapshot.tabs.iter().map(|tab| tab.url.as_str()).collect();
-    match read(&path, archive, &urls) {
+    match read(&path, archive, urls) {
         Ok((bytes, found)) => {
-            for tab in &mut snapshot.tabs {
-                tab.history = found.signals.get(&tab.url).cloned();
-                if tab.history.is_some() {
-                    source.tabs_found += 1;
-                }
-            }
-            source.bytes = Some(bytes);
-            source.schema_version = found.schema_version;
-            source.newest_visit = found.newest_visit;
-            source.unavailable = found.unavailable;
+            reading.source.bytes = Some(bytes);
+            reading.source.schema_version = found.schema_version;
+            reading.source.newest_visit = found.newest_visit;
+            reading.source.unavailable = found.unavailable;
+            reading.signals = found.signals;
         }
-        Err(reason) => source.error = Some(reason),
+        Err(reason) => reading.source.error = Some(reason),
+    }
+    reading
+}
+
+/// Gives each tab whose URL the reading knows its signals, and the snapshot
+/// a record of where they came from.
+pub fn record(snapshot: &mut Snapshot, reading: &Reading) {
+    let mut source = reading.source.clone();
+    for tab in &mut snapshot.tabs {
+        tab.history = reading.signals.get(&tab.url).cloned();
+        if tab.history.is_some() {
+            source.tabs_found += 1;
+        }
     }
     snapshot.history = Some(source);
 }
@@ -123,6 +143,7 @@ struct Found {
 fn read(path: &Path, archive: &Archive, urls: &BTreeSet<&str>) -> Result<(u64, Found), String> {
     let scratch = archive.stage().map_err(|err| err.to_string())?;
     let (copy, bytes) = copy_stable(path, scratch.path())?;
+    warm(&copy, bytes)?;
     // Read-write, so that SQLite rolls back a hot journal or replays a WAL;
     // read-only, it refuses to do either. Never created: a copy that is not
     // there is an error, not an empty database.
@@ -142,6 +163,21 @@ fn read(path: &Path, archive: &Archive, urls: &BTreeSet<&str>) -> Result<(u64, F
     drop(conn.close());
     drop(scratch);
     result
+}
+
+/// APFS clones benefited from a sequential read in the macOS measurement.
+/// Bound this optional work: large databases would otherwise be read in full
+/// under the archive lock even when the queries touch only a few pages.
+/// Other platforms have not demonstrated a benefit.
+const WARM_LIMIT: u64 = 256 * 1024 * 1024;
+
+fn warm(copy: &Path, bytes: u64) -> Result<u64, String> {
+    if !cfg!(target_os = "macos") || bytes > WARM_LIMIT {
+        return Ok(0);
+    }
+    fs::File::open(copy)
+        .and_then(|mut file| std::io::copy(&mut file, &mut std::io::sink()))
+        .map_err(|err| format!("cannot read the copy {}: {err}", copy.display()))
 }
 
 fn unreadable(path: &Path, err: &rusqlite::Error) -> String {
@@ -548,7 +584,7 @@ impl<'c> Queries<'c> {
 
 /// Chromium's `database_utils::GurlToDatabaseUrl` removes credentials.
 /// SNSS already carries canonical GURLs; preserve everything else verbatim.
-fn database_url(raw: &str) -> Cow<'_, str> {
+pub(crate) fn database_url(raw: &str) -> Cow<'_, str> {
     let Ok(mut url) = url::Url::parse(raw) else {
         return Cow::Borrowed(raw);
     };
@@ -582,6 +618,26 @@ fn first_elsewhere(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warming_skips_large_copies_and_unmeasured_platforms() {
+        let temp = tempfile::tempdir().unwrap();
+        let copy = temp.path().join("History");
+        fs::write(&copy, [0; 4096]).unwrap();
+        assert_eq!(
+            warm(&copy, 4096).unwrap(),
+            if cfg!(target_os = "macos") { 4096 } else { 0 }
+        );
+        // A sparse 1 GiB copy: a reverted limit really reads a gigabyte here,
+        // but the assertion is about I/O performed, not a timing threshold.
+        fs::File::options()
+            .write(true)
+            .open(&copy)
+            .unwrap()
+            .set_len(1024 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(warm(&copy, 1024 * 1024 * 1024).unwrap(), 0);
+    }
 
     #[test]
     fn stable_copy_retries_changes_and_removes_vanished_companions() {

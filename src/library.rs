@@ -14,6 +14,8 @@ use url::Url;
 
 use crate::archive::{self, Archive, SNAPSHOT_JSON};
 use crate::error::Error;
+use crate::history::database_url;
+use crate::library_history::Entry;
 use crate::local;
 use crate::model::{self, Snapshot};
 use crate::suggestions::Suggested;
@@ -246,6 +248,24 @@ pub fn known_urls(snapshots: &[Snapshot]) -> HashSet<&str> {
         .collect()
 }
 
+/// The pages whose History signals a refresh looks up: those the library
+/// would list, less forgotten pages and anything that is not http(s), which
+/// History has nothing useful about.
+pub fn history_urls<'a>(
+    tabs: impl IntoIterator<Item = &'a model::Tab>,
+    forgotten: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    tabs.into_iter()
+        .map(|tab| tab.url.as_str())
+        .filter(|url| {
+            Url::parse(url).is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
+                && public_domain(url).is_some()
+                && !forgotten.contains(*url)
+        })
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 /// Whether forgotten pages are left out (an export is read-only, so a hidden
 /// page has no way back) or kept and flagged (serve has a Restore button).
 /// An export also leaves out the search that led to a page and where it came
@@ -290,8 +310,8 @@ struct Page {
     /// Imported suggestions the owner has neither added nor removed, each
     /// with the sources that made it. Always present, like `tags`.
     suggested: Vec<Suggested>,
-    /// From the newest snapshot that recorded signals for the URL; absent
-    /// when none did, which is every page seen only before 7b.
+    /// From `pages/history.json` when it has the URL, else from the newest
+    /// snapshot that recorded signals for it; absent when neither does.
     #[serde(skip_serializing_if = "Option::is_none")]
     history: Option<PageHistory>,
 }
@@ -372,18 +392,39 @@ struct Group {
 // `page_index`, window, position, `tab_id`, pinned (0/1), `group_index_or_null`.
 type Tab = (usize, u32, usize, i32, u8, Option<usize>);
 
+/// A page as a prompt lists it: its search and referrer are there only when
+/// the shape keeps them.
+pub struct Listed<'a> {
+    pub url: &'a str,
+    pub title: &'a str,
+    pub search: Option<&'a str>,
+    pub referrer: Option<&'a str>,
+}
+
 impl Library {
-    /// Each page's URL and title, in library order: what a prompt lists.
-    pub fn titles(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.pages
-            .iter()
-            .map(|page| (page.url.as_str(), page.title.as_str()))
+    /// Every page, in library order: what a prompt lists.
+    pub fn listed(&self) -> impl Iterator<Item = Listed<'_>> {
+        self.pages.iter().map(|page| {
+            let history = page.history.as_ref();
+            Listed {
+                url: &page.url,
+                title: &page.title,
+                search: history
+                    .and_then(|h| h.search.as_ref())
+                    .map(|search| search.term.as_str()),
+                referrer: history
+                    .and_then(|h| h.referrer.as_ref())
+                    .map(|referrer| referrer.url.as_str()),
+            }
+        })
     }
 }
 
-/// `suggested` is [`crate::suggestions::by_page`] over the same `state`.
+/// `suggested` is [`crate::suggestions::by_page`] over the same `state`, and
+/// `recorded` is [`crate::library_history::for_library`].
 pub fn build(
     snapshots: &[Snapshot],
+    recorded: &BTreeMap<String, Entry>,
     state: &State,
     suggested: &HashMap<String, Vec<Suggested>>,
     shape: Shape,
@@ -398,6 +439,10 @@ pub fn build(
         pages: Vec::new(),
         vocabulary: state.active_vocabulary(),
     };
+    let forgotten_referrers = forgotten
+        .iter()
+        .map(|url| database_url(url).into_owned())
+        .collect();
     let mut page_indices = HashMap::new();
     // Which forgotten URLs the archive actually holds; a state file may name
     // URLs no surviving snapshot mentions, and those are not pages.
@@ -443,7 +488,7 @@ pub fn build(
             // Ascending snapshots make the newest signals win.
             if let Some(history) = &tab.history {
                 library.pages[index].history =
-                    Some(page_history(&tab.url, history, shape, forgotten));
+                    Some(page_history(&tab.url, history, shape, &forgotten_referrers));
             }
             // Ascending snapshots make the most recent non-empty title win.
             // Whitespace counts as empty: a blank title renders as a nameless
@@ -480,6 +525,7 @@ pub fn build(
             tabs,
         });
     }
+    apply_recorded_history(&mut library.pages, recorded, shape, &forgotten_referrers);
     name_referrers(&mut library.pages);
     library.stats.pages = library.pages.len();
     library.stats.snapshots = library.snapshots.len();
@@ -515,6 +561,20 @@ fn snapshot_groups(snapshot: &Snapshot) -> (Vec<Group>, HashMap<&str, usize>) {
     (groups, indices)
 }
 
+/// Prefer the library record over snapshot signals for pages it knows.
+fn apply_recorded_history(
+    pages: &mut [Page],
+    recorded: &BTreeMap<String, Entry>,
+    shape: Shape,
+    forgotten: &BTreeSet<String>,
+) {
+    for page in pages {
+        if let Some(entry) = recorded.get(&page.url) {
+            page.history = Some(page_history(&page.url, &entry.history, shape, forgotten));
+        }
+    }
+}
+
 fn page_history(
     url: &str,
     history: &model::TabHistory,
@@ -530,12 +590,18 @@ fn page_history(
     // Capture already keeps this machine and the page itself out of
     // referrers; the rules are applied again so a snapshot saved before the
     // second (a reload named itself) or edited by hand cannot slip one in.
+    // History strips credentials, while snapshot and forgotten URLs retain
+    // them. Compare the same database identity without changing page keys.
     // An export never names a forgotten page, not even as a referrer.
     let referrer = history
         .referrer
         .as_ref()
-        .filter(|referrer| full && *referrer != url && public_domain(referrer).is_some())
-        .filter(|referrer| shape == Shape::Serve || !forgotten.contains(*referrer))
+        .filter(|referrer| {
+            full && database_url(referrer) != database_url(url) && public_domain(referrer).is_some()
+        })
+        .filter(|referrer| {
+            shape == Shape::Serve || !forgotten.contains(database_url(referrer).as_ref())
+        })
         .map(|referrer| Referrer {
             url: referrer.clone(),
             title: None,

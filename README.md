@@ -95,11 +95,21 @@ data in the browser does not clear it from snapshots already saved.
 `save --no-history` leaves it out of the snapshots it writes. If History
 cannot be read, `save` says so once and saves the tabs without it.
 
+A snapshot only has signals for the tabs open when it was taken, so the
+library also keeps its own record, `pages/history.json`, with the signals of
+every page it lists. Each `save` that writes a snapshot refreshes it from the
+same copy of History; `knowmoretabs history --refresh` does it without a save,
+and `knowmoretabs history` says how many pages it covers and when it was last
+refreshed. Forgotten pages and pages on this machine are not looked up. A page
+History has forgotten keeps the signals it had, with the date History last
+knew it. A skipped save and `save --no-history` leave the record alone.
+
 `serve` is a page on `127.0.0.1` listing every page you have ever had open,
 once, with search, a site filter, an open-or-not filter, five sort orders,
 tab groups, and each page's history: the snapshots and windows it appeared
-in and, for pages saved since `save` began reading History, the search that
-found it, the page you came from, its visits and its time on page. Select rows and forget them; undo from the toast; find them again under
+in and, for pages History knew when the library's record was last refreshed
+(or when a snapshot with signals saw them), the search that found it, the
+page you came from, its visits and its time on page. Select rows and forget them; undo from the toast; find them again under
 "Forgotten". `/` focuses search, `j` and `k` move, `f` forgets. `--port N`
 picks another port and `--open` opens your browser.
 
@@ -142,6 +152,8 @@ on. Import a second agent's answers and a tag two sources agree on shows both.
 knowmoretabs list                # snapshots, newest first
 knowmoretabs export [DIR]        # the same library as a static site that opens from file://
                                  # --with-history adds searches and the pages you came from
+knowmoretabs history             # how many library pages have History signals, and how current they are
+knowmoretabs history --refresh   # read History now and update every library page's signals
 knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
@@ -237,7 +249,8 @@ the counts.
 │       ├── snapshot.json      # the tabs, windows, groups and parse statistics
 │       └── session.snss       # a verbatim copy of the browser's session file
 ├── pages/
-│   └── metadata.jsonl         # what `enrich` fetched, one line per attempt; append-only
+│   ├── metadata.jsonl         # what `enrich` fetched, one line per attempt; append-only
+│   └── history.json           # what History last said about each page; refreshed, never drops a page
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
 ├── tags/
 │   └── suggested.jsonl        # imported suggestions, one line per page per import; append-only
@@ -275,8 +288,8 @@ inherits whatever its parent grants; `knowmoretabs` warns when you do that.
 Every snapshot is written to a temporary directory and renamed into place in
 one step, under a lock, so an interrupted run leaves the archive exactly as
 it was and two runs at once both succeed. A snapshot id that is already taken
-gets a `-2` suffix rather than being overwritten. `library.json` is written
-the same way.
+gets a `-2` suffix rather than being overwritten. `library.json` and
+`pages/history.json` are written the same way.
 
 ## What it reads, and what it tolerates
 
@@ -286,7 +299,8 @@ folds the way the browser's own session restore does. It reads and copies;
 it never modifies a browser file, and it never touches the live browser.
 The profile's `History` database is copied, with its journal or write-ahead
 log, into a scratch directory inside the archive; only the copy is opened, and
-it is deleted before `save` finishes. A skipped run does not read it at all.
+it is deleted before `save` or `history --refresh` finishes. A skipped run
+does not read it at all.
 
 The parser never fails on a file the browser can read. A record it does not
 recognise is skipped and counted; a half-written tail is counted and the

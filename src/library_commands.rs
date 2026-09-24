@@ -11,7 +11,7 @@ use serde::Serialize;
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
-use crate::{export, library, out, suggestions};
+use crate::{export, library, library_history, out, suggestions};
 
 pub fn list(root: &Path, json: bool, log: Log) -> Result<(), Error> {
     let loaded = library::load(&Archive::at(root))?;
@@ -86,8 +86,10 @@ pub fn export(
     report_skipped(&loaded, log);
     let state = library::State::read(root)?;
     let suggested = suggestions::by_page(&suggestions::read(root)?, &state);
+    let recorded = library_history::for_library(root, log);
     let library = library::build(
         &loaded.snapshots,
+        &recorded,
         &state,
         &suggested,
         library::Shape::Export { with_history },

@@ -142,6 +142,12 @@ fn history_lookup_strips_credentials_but_keeps_path_query_and_fragment() {
     assert!(tab_history(&snapshot, distinct).is_null());
     assert_eq!(snapshot["tabs"][0]["url"], tab);
     assert_eq!(snapshot["history"]["tabs_found"], 2);
+    let record: Value =
+        serde_json::from_slice(&fs::read(fx.root.join("pages/history.json")).unwrap()).unwrap();
+    assert_eq!(record["pages"].as_object().unwrap().len(), 2);
+    assert_eq!(record["pages"][tab]["visits"], 7);
+    assert_eq!(record["pages"][tab], record["pages"][stored]);
+    assert!(record["pages"].get(distinct).is_none());
 }
 
 #[test]

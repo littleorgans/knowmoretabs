@@ -41,10 +41,19 @@ as what you can do that you could not before.
   now has a "Browser history" section: the search that found it, the page you
   came from (a link to that page's own row when it is in your library), its
   visits and typed visits over the dates History still kept, and its time on
-  page. The signals come from the newest snapshot that recorded them, and a
-  page saved before History was read shows the section not at all. `export`
+  page. The signals come from the library's own record when it has the page,
+  and otherwise from the newest snapshot that recorded them. `export`
   leaves out the search and the page you came from unless you pass
   `export --with-history`, and never names a forgotten page as a referrer.
+- **History signals for every page, not just the open ones.** The library
+  keeps `pages/history.json`, what History last said about every page it
+  lists. Each `save` that writes a snapshot refreshes it from the same copy
+  of History, and `knowmoretabs history --refresh` does it on demand;
+  `knowmoretabs history` shows how many pages it covers and how current it
+  is. Forgotten pages, pages on this machine and non-web pages are not looked
+  up. A page History has forgotten keeps its earlier signals, with the date
+  History last knew it. A skipped save and `save --no-history` read nothing
+  and leave the record alone.
 - **Read your archive offline.** `knowmoretabs export` writes a static site
   that opens from `file://` with no server and no network: every page you
   have ever had open, listed once, with search, a site filter, an open-or-not
