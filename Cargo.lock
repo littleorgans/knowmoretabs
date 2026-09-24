@@ -600,6 +600,7 @@ dependencies = [
  "clap",
  "directories",
  "jiff",
+ "percent-encoding",
  "proptest",
  "rusqlite",
  "serde",

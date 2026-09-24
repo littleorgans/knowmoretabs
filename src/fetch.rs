@@ -11,7 +11,7 @@
 //!      refuses private addresses, so a public name pointing inward is caught
 //!      at the one moment it matters, the connect.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Read};
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Mutex, PoisonError};
@@ -50,11 +50,21 @@ const VALUE_CAP: usize = 2000;
 pub struct Fetcher {
     agent: ureq::Agent,
     pacer: Pacer,
+    forgotten: BTreeSet<String>,
 }
 
 impl Fetcher {
-    pub fn new() -> Self {
-        Self::with(test_timeout().unwrap_or(TIMEOUT), test_address(), PACE)
+    pub fn new(forgotten: &BTreeSet<String>) -> Self {
+        let mut fetcher = Self::with(test_timeout().unwrap_or(TIMEOUT), test_address(), PACE);
+        fetcher.forgotten = forgotten
+            .iter()
+            .filter_map(|raw| {
+                let mut url = Url::parse(raw).ok()?;
+                url.set_fragment(None);
+                Some(url.to_string())
+            })
+            .collect();
+        fetcher
     }
 
     fn with(timeout: Duration, test_address: Option<SocketAddr>, pace: Duration) -> Self {
@@ -73,6 +83,7 @@ impl Fetcher {
                 PublicOnly { test_address },
             ),
             pacer: Pacer::new(pace),
+            forgotten: BTreeSet::new(),
         }
     }
 
@@ -95,14 +106,25 @@ impl Fetcher {
                     "redirected to a private network"
                 });
             }
-            if hop > 0 && is_login_redirect(&url) {
+            if self.forgotten.contains(url.as_str()) {
+                return Line::new(raw, Outcome::Skipped).with_reason("forgotten page, not fetched");
+            }
+            if carries_token(&url) || is_search_results(&url) {
+                return Line::new(raw, Outcome::Skipped)
+                    .with_reason("token or search URL, not fetched");
+            }
+            if is_login_page(&url) || (hop > 0 && is_login_redirect(&url)) {
                 let mut record =
                     Line::new(raw, Outcome::BehindLogin).with_reason("redirected to a login page");
                 record.final_url = Some(url.to_string());
                 return record;
             }
-            self.pacer
-                .wait(&url.host_str().unwrap_or("").to_ascii_lowercase());
+            self.pacer.wait(
+                &url.host_str()
+                    .unwrap_or("")
+                    .trim_end_matches('.')
+                    .to_ascii_lowercase(),
+            );
             let response = match self.agent.get(url.as_str()).call() {
                 Ok(response) => response,
                 Err(err) => return failure(raw, &err),
@@ -423,6 +445,86 @@ pub fn is_public(ip: IpAddr) -> bool {
     }
 }
 
+/// A results page says nothing the query in its URL does not.
+pub fn is_search_results(url: &Url) -> bool {
+    let host = url
+        .host_str()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    let host = host.strip_prefix("www.").unwrap_or(&host);
+    let path = decoded_path(url).to_ascii_lowercase();
+    let has = |key: &str| url.query_pairs().any(|(k, v)| k == key && !v.is_empty());
+    let engine = |name: &str| {
+        host == name || host.starts_with(&format!("{name}.")) || host.ends_with(&format!(".{name}"))
+    };
+    if engine("google") && ["/search", "/url", "/imgres", "/webhp"].contains(&path.as_str()) {
+        return true;
+    }
+    if (engine("duckduckgo")
+        && (has("q") || path.starts_with("/html") || path.starts_with("/lite")))
+        || (engine("baidu") && path == "/s")
+        || (engine("amazon") && path == "/s")
+    {
+        return true;
+    }
+    // Most sites put their own search at `/search` or `/results` with the
+    // query in a parameter: Bing, Kagi, Brave, GitHub, YouTube, Reddit ...
+    path.split('/')
+        .any(|segment| matches!(segment.to_ascii_lowercase().as_str(), "search" | "results"))
+        && url.query().is_some_and(|q| !q.is_empty())
+}
+
+/// Query parameter names that carry a secret or a one-time value. A GET can
+/// spend a one-time link, and the value is nobody else's business anyway.
+const TOKEN_WORDS: &[&str] = &[
+    "token",
+    "code",
+    "key",
+    "apikey",
+    "secret",
+    "sig",
+    "signature",
+    "auth",
+    "session",
+    "sessionid",
+    "sid",
+    "otp",
+    "reset",
+    "verify",
+    "verification",
+    "confirm",
+    "confirmation",
+    "magic",
+    "nonce",
+    "state",
+    "password",
+    "pwd",
+    "ticket",
+    "jwt",
+    "credential",
+    "credentials",
+];
+
+/// A query parameter whose name says it carries a secret, whose value is a
+/// JSON Web Token, or credentials in the URL itself.
+pub fn carries_token(url: &Url) -> bool {
+    if !url.username().is_empty() || url.password().is_some() {
+        return true;
+    }
+    url.query_pairs().any(|(key, value)| {
+        let key = key.to_ascii_lowercase();
+        let words_match = key
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|word| TOKEN_WORDS.contains(&word));
+        words_match
+            || ["token", "secret", "password", "signature"]
+                .iter()
+                .any(|word| key.contains(word))
+            || (value.starts_with("eyJ") && value.len() > 30)
+    })
+}
+
 /// Path segments that name a sign-in, sign-up or verification screen on
 /// their own. A GET of a verification link can spend it, so these pages are
 /// never fetched.
@@ -468,13 +570,21 @@ fn is_login_redirect(url: &Url) -> bool {
     login_shaped(url, LOGIN_SEGMENTS) || login_shaped(url, REDIRECT_LOGIN_SEGMENTS)
 }
 
+fn decoded_path(url: &Url) -> std::borrow::Cow<'_, str> {
+    percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy()
+}
+
 fn login_shaped(url: &Url, words: &[&str]) -> bool {
-    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    let host = url
+        .host_str()
+        .unwrap_or("")
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
     let first_label = host.split('.').next().unwrap_or("");
     if host.contains('.') && LOGIN_HOST_LABELS.contains(&first_label) {
         return true;
     }
-    url.path_segments().into_iter().flatten().any(|segment| {
+    decoded_path(url).split('/').any(|segment| {
         let segment = segment.to_ascii_lowercase();
         let stem = segment.split('.').next().unwrap_or("");
         words.contains(&stem)
@@ -605,6 +715,7 @@ mod tests {
             "http://[fd00::1]/",
             "http://[fec0::1]/",
             "http://[feff::1]/",
+            "http://[2001::7f00:1]/",
             "http://[::127.0.0.1]/",
             "http://[2002:7f00:1::]/",
             "http://0.1.2.3/",

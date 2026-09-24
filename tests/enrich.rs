@@ -719,3 +719,67 @@ fn an_empty_or_absent_archive_has_nothing_to_fetch_and_creates_nothing() {
     assert!(!fx.root.exists());
     assert!(site.seen().is_empty());
 }
+
+#[test]
+fn redirects_cannot_spend_tokens_send_credentials_or_search() {
+    let fx = Fixture::new();
+    let site = Site::start(|_, path, _| match path {
+        "/token" => Reply::redirect(302, "http://target.test/redeem?access_token=secret"),
+        "/credentials" => Reply::redirect(302, "http://owner:secret@target.test/private"),
+        "/search" => Reply::redirect(302, "http://target.test/search?q=private"),
+        "/entry" => Reply::redirect(302, "http://target.test/%76erify-email/one-time"),
+        _ => Reply::html(page("Must not be fetched")),
+    });
+    library(
+        &fx,
+        &[
+            "http://a.test/token",
+            "http://b.test/credentials",
+            "http://c.test/search",
+            "http://d.test/entry",
+        ],
+    );
+    assert_success(&enrich(&fx, &site, &[]));
+    assert_eq!(site.seen().len(), 4, "{:?}", site.paths());
+    for seen in site.seen() {
+        assert!(!seen.headers.contains_key("authorization"));
+        assert!(!seen.headers.contains_key("cookie"));
+    }
+    let records = records(&fx);
+    assert_eq!(records["http://a.test/token"]["status"], "skipped");
+    assert_eq!(records["http://b.test/credentials"]["status"], "skipped");
+    assert_eq!(records["http://c.test/search"]["status"], "skipped");
+    assert_eq!(records["http://d.test/entry"]["status"], "behind_login");
+}
+
+#[test]
+fn a_redirect_to_a_forgotten_page_stays_home() {
+    let fx = Fixture::new();
+    let site = Site::start(|_, _, _| Reply::redirect(302, FORGOTTEN));
+    library(&fx, &["http://a.test/start", FORGOTTEN]);
+    forget(&fx, FORGOTTEN);
+    assert_success(&enrich(&fx, &site, &[]));
+    assert_eq!(site.paths(), ["a.test/start"]);
+    assert_eq!(records(&fx)["http://a.test/start"]["status"], "skipped");
+}
+
+#[test]
+fn encoded_login_and_search_paths_stay_home() {
+    let fx = Fixture::new();
+    let site = Site::start(routes);
+    library(
+        &fx,
+        &[
+            "http://a.test/%6cogin",
+            "http://b.test/%73earch?q=secret",
+            "http://owner:password@c.test/",
+            "http://d.test/?%74oken=x",
+        ],
+    );
+    assert_success(&enrich(&fx, &site, &[]));
+    assert!(site.seen().is_empty());
+    assert_eq!(
+        records(&fx)["http://a.test/%6cogin"]["status"],
+        "behind_login"
+    );
+}

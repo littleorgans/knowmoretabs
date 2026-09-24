@@ -22,7 +22,7 @@ use url::Url;
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
-use crate::fetch::{self, Fetcher};
+use crate::fetch::{self, Fetcher, carries_token, is_search_results};
 use crate::library::{self, State};
 use crate::metadata::{self, Metadata, Status};
 use crate::metadata_writer::{Appender, Line, Outcome};
@@ -198,84 +198,6 @@ fn skip_reason(url: &Url) -> Option<Skip> {
     }
 }
 
-/// A results page says nothing the query in its URL does not.
-fn is_search_results(url: &Url) -> bool {
-    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
-    let host = host.strip_prefix("www.").unwrap_or(&host);
-    let path = url.path().to_ascii_lowercase();
-    let has = |key: &str| url.query_pairs().any(|(k, v)| k == key && !v.is_empty());
-    let engine = |name: &str| {
-        host == name || host.starts_with(&format!("{name}.")) || host.ends_with(&format!(".{name}"))
-    };
-    if engine("google") && ["/search", "/url", "/imgres", "/webhp"].contains(&path.as_str()) {
-        return true;
-    }
-    if (engine("duckduckgo")
-        && (has("q") || path.starts_with("/html") || path.starts_with("/lite")))
-        || (engine("baidu") && path == "/s")
-        || (engine("amazon") && path == "/s")
-    {
-        return true;
-    }
-    // Most sites put their own search at `/search` or `/results` with the
-    // query in a parameter: Bing, Kagi, Brave, GitHub, YouTube, Reddit ...
-    url.path_segments()
-        .into_iter()
-        .flatten()
-        .any(|segment| matches!(segment.to_ascii_lowercase().as_str(), "search" | "results"))
-        && url.query().is_some_and(|q| !q.is_empty())
-}
-
-/// Query parameter names that carry a secret or a one-time value. A GET can
-/// spend a one-time link, and the value is nobody else's business anyway.
-const TOKEN_WORDS: &[&str] = &[
-    "token",
-    "code",
-    "key",
-    "apikey",
-    "secret",
-    "sig",
-    "signature",
-    "auth",
-    "session",
-    "sessionid",
-    "sid",
-    "otp",
-    "reset",
-    "verify",
-    "verification",
-    "confirm",
-    "confirmation",
-    "magic",
-    "nonce",
-    "state",
-    "password",
-    "pwd",
-    "ticket",
-    "jwt",
-    "credential",
-    "credentials",
-];
-
-/// A query parameter whose name says it carries a secret, whose value is a
-/// JSON Web Token, or credentials in the URL itself.
-fn carries_token(url: &Url) -> bool {
-    if !url.username().is_empty() || url.password().is_some() {
-        return true;
-    }
-    url.query_pairs().any(|(key, value)| {
-        let key = key.to_ascii_lowercase();
-        let words_match = key
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|word| TOKEN_WORDS.contains(&word));
-        words_match
-            || ["token", "secret", "password", "signature"]
-                .iter()
-                .any(|word| key.contains(word))
-            || (value.starts_with("eyJ") && value.len() > 30)
-    })
-}
-
 /// What a run did.
 #[derive(Debug, Default, Serialize)]
 struct Tally {
@@ -321,7 +243,7 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
     let tally = if plan.todo.is_empty() {
         Tally::default()
     } else {
-        run(root, &plan, log)?
+        run(root, &plan, &state, log)?
     };
     let seconds = started.elapsed().as_secs_f64();
     report_run(&plan, &tally, seconds, &metadata::path(root), json, log);
@@ -331,7 +253,7 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
 /// Fetches the plan: login pages recorded at once, then each host's pages
 /// in order on one of the workers, busiest hosts first so the longest queue
 /// starts earliest.
-fn run(root: &Path, plan: &Plan, log: Log) -> Result<Tally, Error> {
+fn run(root: &Path, plan: &Plan, state: &State, log: Log) -> Result<Tally, Error> {
     let appender = Mutex::new(Appender::open(root)?);
     let tally = Mutex::new(Tally::default());
     let record = |record: &Line| -> Result<(), Error> {
@@ -373,7 +295,7 @@ fn run(root: &Path, plan: &Plan, log: Log) -> Result<Tally, Error> {
     hosts.sort_by_key(|(_, items)| std::cmp::Reverse(items.len()));
     let total: usize = hosts.iter().map(|(_, items)| items.len()).sum();
     let queue = Mutex::new(hosts.into_iter().collect::<VecDeque<_>>());
-    let fetcher = Fetcher::new();
+    let fetcher = Fetcher::new(&state.forgotten);
     let done = AtomicUsize::new(0);
     let stop = AtomicBool::new(false);
     let failed: Mutex<Option<Error>> = Mutex::new(None);
