@@ -83,6 +83,16 @@ development server is not a page you can go back to. `save` says how many it
 left out, and they never count as a change. A run whose window, tab and URL
 layout matches the newest snapshot saves nothing; `--force` saves anyway.
 
+`save` also records what the browser's own History knows about each tab's
+page: how often you visited it and typed its address, when History first and
+last saw it, how long it was in the foreground, the search that led to it (up
+to three links back), and the page you came from. It stays on this machine,
+in the snapshot, and nothing shows it yet. Chrome keeps about 90 days of
+History; a snapshot keeps what it saw for good, so clearing your browsing
+data in the browser does not clear it from snapshots already saved.
+`save --no-history` leaves it out of the snapshots it writes. If History
+cannot be read, `save` says so once and saves the tabs without it.
+
 `serve` is a page on `127.0.0.1` listing every page you have ever had open,
 once, with search, a site filter, an open-or-not filter, five sort orders,
 tab groups, and each page's history of the snapshots and windows it appeared
@@ -178,6 +188,9 @@ Chromium-family browsers keep their open windows in
 `<profile>/Sessions/Session_<n>`, an append-only log that `knowmoretabs`
 folds the way the browser's own session restore does. It reads and copies;
 it never modifies a browser file, and it never touches the live browser.
+The profile's `History` database is copied, with its journal or write-ahead
+log, into a scratch directory inside the archive; only the copy is opened, and
+it is deleted before `save` finishes. A skipped run does not read it at all.
 
 The parser never fails on a file the browser can read. A record it does not
 recognise is skipped and counted; a half-written tail is counted and the
