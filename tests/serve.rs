@@ -1764,18 +1764,20 @@ fn malformed_tag_undo_is_atomic_and_unknown_urls_are_skipped() {
 
 const C: &str = "https://c.test/three";
 const D: &str = "https://d.test/four";
+const E: &str = "https://e.test/five";
 
 /// `archive`, a third snapshot with C and D, and History signals on some
 /// tabs: A's in both of its snapshots (the newer must win), a referrer that
 /// is a page (B), one that is forgotten (from B), one on this machine (from
-/// C), and none at all on D.
+/// C), one that is the page itself (E, as saved before capture dropped
+/// those), and none at all on D.
 fn archive_with_history(fx: &Fixture) {
     archive(fx);
     write_snapshot(
         &fx.root,
         "2026-03-01-000000Z",
         "2026-03-01T00:00:00Z",
-        &[(1, C, "C"), (2, D, "D")],
+        &[(1, C, "C"), (2, D, "D"), (3, E, "E")],
     );
     let signals = |visits: u64, term: &str, referrer: &str| {
         json!({
@@ -1804,6 +1806,7 @@ fn archive_with_history(fx: &Fixture) {
             C,
             signals(1, "c search", "http://localhost:3000/"),
         ),
+        ("2026-03-01-000000Z", E, signals(1, "e search", E)),
     ] {
         let path = fx.root.join("snapshots").join(id).join("snapshot.json");
         let mut snapshot: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -1876,6 +1879,8 @@ fn serve_shows_each_pages_newest_history_signals() {
     assert_eq!(c["visits"], 1);
     assert!(c.get("referrer").is_none(), "{c}");
     assert!(page(&library, D).get("history").is_none());
+    let e = &page(&library, E)["history"];
+    assert!(e.get("referrer").is_none(), "{e}");
     let text = library.to_string();
     assert!(!text.contains("older search") && !text.contains("localhost"));
 }
@@ -1930,7 +1935,7 @@ fn history_adds_only_the_page_history_to_the_library_and_the_export() {
         &before.root,
         "2026-03-01-000000Z",
         "2026-03-01T00:00:00Z",
-        &[(1, C, "C"), (2, D, "D")],
+        &[(1, C, "C"), (2, D, "D"), (3, E, "E")],
     );
     let after = Fixture::new();
     archive_with_history(&after);

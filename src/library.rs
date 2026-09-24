@@ -442,7 +442,8 @@ pub fn build(
             });
             // Ascending snapshots make the newest signals win.
             if let Some(history) = &tab.history {
-                library.pages[index].history = Some(page_history(history, shape, forgotten));
+                library.pages[index].history =
+                    Some(page_history(&tab.url, history, shape, forgotten));
             }
             // Ascending snapshots make the most recent non-empty title win.
             // Whitespace counts as empty: a blank title renders as a nameless
@@ -515,6 +516,7 @@ fn snapshot_groups(snapshot: &Snapshot) -> (Vec<Group>, HashMap<&str, usize>) {
 }
 
 fn page_history(
+    url: &str,
     history: &model::TabHistory,
     shape: Shape,
     forgotten: &BTreeSet<String>,
@@ -525,16 +527,17 @@ fn page_history(
             with_history: false
         }
     );
-    // Capture already keeps this machine out of referrers; the library's own
-    // rule is applied again so an older or edited snapshot cannot slip one
-    // in. An export never names a forgotten page, not even as a referrer.
+    // Capture already keeps this machine and the page itself out of
+    // referrers; the rules are applied again so a snapshot saved before the
+    // second (a reload named itself) or edited by hand cannot slip one in.
+    // An export never names a forgotten page, not even as a referrer.
     let referrer = history
         .referrer
         .as_ref()
-        .filter(|url| full && public_domain(url).is_some())
-        .filter(|url| shape == Shape::Serve || !forgotten.contains(*url))
-        .map(|url| Referrer {
-            url: url.clone(),
+        .filter(|referrer| full && *referrer != url && public_domain(referrer).is_some())
+        .filter(|referrer| shape == Shape::Serve || !forgotten.contains(*referrer))
+        .map(|referrer| Referrer {
+            url: referrer.clone(),
             title: None,
         });
     PageHistory {

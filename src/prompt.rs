@@ -259,7 +259,9 @@ impl PageLine {
     }
 
     /// The search and referrer from the newest snapshot that has signals
-    /// for this page. A referrer the owner has forgotten stays out.
+    /// for this page. A referrer the owner has forgotten stays out, and so
+    /// does the page itself, which snapshots saved before capture dropped it
+    /// can name.
     fn remember(&mut self, snapshots: &[Snapshot], state: &State) {
         let history = snapshots
             .iter()
@@ -275,7 +277,7 @@ impl PageLine {
             self.referrer = history
                 .referrer
                 .clone()
-                .filter(|referrer| !state.forgotten.contains(referrer));
+                .filter(|referrer| *referrer != self.url && !state.forgotten.contains(referrer));
         }
     }
 }
