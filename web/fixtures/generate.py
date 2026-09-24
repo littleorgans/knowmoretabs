@@ -16,7 +16,7 @@ fixtures/cases/*.json: the small documents the edge cases are checked against
     python3 generate.py --seed 7   # a different but equally plausible world
 """
 import argparse, json, random, re, sys
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -437,6 +437,55 @@ def add_tags(lib, seed):
     return lib
 
 
+STAMP = "%Y-%m-%dT%H:%M:%SZ"
+ELSEWHERE = ["https://news.ycombinator.com/item?id={n}", "https://t.co/{h}", "https://www.reddit.com/r/programming/comments/{h}/",
+             "https://lobste.rs/s/{h}", "https://mastodon.social/@someone/{n}", "https://duckduckgo.com/"]
+
+
+def add_history(lib, seed, recorded=3):
+    """History signals, in the serve shape, for pages seen in the last `recorded`
+    snapshots: what an archive looks like once `save` started reading History.
+    Its own RNG, so the rest of the fixture does not move. Page 0 is the
+    contract test's exemplar and every exported page must have its fields, so
+    it gets none."""
+    r = random.Random(seed * 11 + 3)
+    snaps = lib["snapshots"]
+    last = {}
+    for k, s in enumerate(snaps):
+        for t in s["tabs"]:
+            last[t[0]] = k
+    pages = lib["pages"]
+    titled = [p for p in pages if p["title"] and p["url"].startswith("https://")]
+    for i, p in enumerate(pages):
+        k = last.get(i)
+        if i == 0 or k is None or k < len(snaps) - recorded or r.random() < 0.08:
+            continue
+        seen = datetime.strptime(snaps[k]["captured_at"], STAMP).replace(tzinfo=timezone.utc)
+        visits = 1 + int(r.expovariate(0.12)) if r.random() < 0.9 else r.randint(200, 1500)
+        lastv = seen - timedelta(minutes=r.randint(1, 60 * 30))
+        h = {"visits": visits, "typed": 0 if r.random() < 0.86 else r.randint(1, max(1, min(visits, 30))),
+             "first_visit": (lastv - timedelta(days=r.uniform(0, 88)) if visits > 1 else lastv).strftime(STAMP),
+             "last_visit": lastv.strftime(STAMP)}
+        if r.random() < 0.6:
+            h["foreground_seconds"] = min(700000, int(r.lognormvariate(4.5, 2.4)))
+        words = [w for w in re.findall(r"[a-z0-9]+", p["title"].lower()) if len(w) > 2]
+        roll = r.random()
+        if words and roll < 0.22:                       # from a results page: the search and the referrer are one
+            term = " ".join(r.sample(words, min(len(words), r.randint(2, 4))))
+            h["search"] = {"term": term, "hops": 1}
+            h["referrer"] = {"url": "https://www.google.com/search?" + urlencode({"q": term})}
+        elif roll < 0.55 and titled:                    # from another page in the library
+            q = r.choice(titled)
+            if q is not p:
+                h["referrer"] = {"url": q["url"], "title": q["title"]}
+        elif roll < 0.85:                               # from somewhere the library never saw
+            h["referrer"] = {"url": r.choice(ELSEWHERE).format(n=r.randint(10**6, 10**8), h=f"{r.getrandbits(40):010x}")}
+        if words and "search" not in h and r.random() < 0.12:
+            h["search"] = {"term": " ".join(r.sample(words, min(len(words), r.randint(1, 5)))), "hops": r.choice([0, 2, 2, 3])}
+        p["history"] = h
+    return lib
+
+
 def domain_of(url):
     """What the backend's `public_domain` would say: host, lowercased, no www."""
     host = (urlsplit(url).hostname or "").lower()
@@ -594,7 +643,8 @@ def build(seed, snapshot_count=41, head_count=64, edges=True, forgotten_count=6,
         "snapshots": snapshots,
         "pages": pages,
     }
-    return add_tags(lib, seed) if tags else lib
+    # a library from before 7a has no tags, and one from before 7b no history
+    return add_history(add_tags(lib, seed), seed) if tags else lib
 
 
 def to_export(lib):
@@ -603,7 +653,10 @@ def to_export(lib):
     keep = [i for i, p in enumerate(lib["pages"]) if not p.get("forgotten")]
     renum = {old: new for new, old in enumerate(keep)}
     out = json.loads(json.dumps(lib))
-    out["pages"] = [{k: v for k, v in lib["pages"][i].items() if k != "forgotten"} for i in keep]
+    out["pages"] = [{k: v for k, v in out["pages"][i].items() if k != "forgotten"} for i in keep]
+    for p in out["pages"]:                              # without --with-history
+        for k in ("search", "referrer"):
+            p.get("history", {}).pop(k, None)
     for s in out["snapshots"]:
         s["tabs"] = [[renum[t[0]], *t[1:]] for t in s["tabs"] if t[0] in renum]
         s["tabs_total"] = len(s["tabs"])

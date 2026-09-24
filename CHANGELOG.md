@@ -33,11 +33,18 @@ as what you can do that you could not before.
   last visit, time in the foreground, the search that led to it (up to three
   links back) and the page you came from. Chrome forgets after about 90 days;
   a snapshot keeps it, and clearing the browser's history does not reach
-  snapshots already saved. It stays in `snapshot.json` and nothing shows it
-  yet. `save` reads a copy made inside the archive and never opens the
+  snapshots already saved. It stays in `snapshot.json`. `save` reads a copy made inside the archive and never opens the
   browser's file; a History it cannot read costs the signals, with one
   warning, never the snapshot. `save --no-history` skips it, and
   `save --json` reports how many tabs it found.
+- **See how you got to a page.** A page's history in `serve` and `export`
+  now has a "Browser history" section: the search that found it, the page you
+  came from (a link to that page's own row when it is in your library), its
+  visits and typed visits over the dates History still kept, and its time on
+  page. The signals come from the newest snapshot that recorded them, and a
+  page saved before History was read shows the section not at all. `export`
+  leaves out the search and the page you came from unless you pass
+  `export --with-history`, and never names a forgotten page as a referrer.
 - **Read your archive offline.** `knowmoretabs export` writes a static site
   that opens from `file://` with no server and no network: every page you
   have ever had open, listed once, with search, a site filter, an open-or-not

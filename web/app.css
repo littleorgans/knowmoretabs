@@ -281,6 +281,18 @@ button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
 .hist ol a { flex: 0 0 auto; color: var(--ink); text-decoration: underline; text-underline-offset: 0.18em; text-decoration-color: var(--line-2); }
 .hist ol a:hover { text-decoration-color: currentColor; }
 .hist ol span { color: var(--ink-3); }
+/* the browser's own record of the page: a quiet two-column list between the
+   actions and the sightings, one line per signal, cut rather than wrapped */
+.hist dl { display: grid; grid-template-columns: 9rem minmax(0, 1fr); gap: 0.3rem 0.75rem; margin: 0; }
+.hist dt { color: var(--ink-3); white-space: nowrap; }
+.hist dd { margin: 0; min-width: 0; color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hist dd q { quotes: "“" "”"; }
+.hist dd a { color: var(--ink); text-decoration: underline; text-underline-offset: 0.18em; text-decoration-color: var(--line-2); }
+.hist dd a:hover { text-decoration-color: currentColor; }
+.hist dd code { font: 0.75rem var(--mono); color: var(--ink-3); }
+.hist dd a.x:has(> code) { text-decoration: none; }
+.hist dd a.x:only-child code { color: var(--ink); }
+.hist dd a.x:hover code { color: var(--ink); text-decoration: underline; text-underline-offset: 0.2em; }
 .hist .acts { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: -0.5rem 0 0.25rem; align-items: center; }
 .hist .acts button, .tray-end button, #toast button, dialog button { height: 2.125rem; padding: 0 0.875rem; background: none; border: 1px solid var(--ink); font-size: 0.8125rem; font-weight: 500; color: var(--ink); transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease); }
 .hist .acts button:hover, .tray-end button:hover, #toast button:hover, dialog button:hover { background: var(--ink); color: var(--bg); }
@@ -374,6 +386,10 @@ dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--ink); vertical-al
   .body { padding-left: 0; }
   .hist-in { padding-left: 1.25rem; }
   .hist ol { grid-template-columns: 1fr; }
+  .hist dl { grid-template-columns: minmax(0, 1fr); row-gap: 0; }
+  .hist dd + dt { margin-top: 0.5rem; }
+  .hist dd { white-space: normal; }
+  .hist dd a.x:has(> code) { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .win .row { grid-template-columns: 2.75rem minmax(0, 1fr) auto 2.75rem; }
   .win .chip.pin { display: none; }
 }

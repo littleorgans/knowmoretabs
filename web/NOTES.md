@@ -19,7 +19,7 @@ web/
 ├── app.css                 styles
 ├── app.js                  renderer and interactions (unminified)
 ├── fixtures/generate.py    deterministic synthetic library (seed 2026) + cases
-├── fixtures/library.json   2,166 pages · 41 snapshots · 163 sites · 8,478 sightings · 78 groups
+├── fixtures/library.json   2,166 pages · 41 snapshots · 163 sites · 8,478 sightings · 78 groups · 270 with History
 ├── fixtures/cases/         empty · no-pages · one-snapshot · degraded · export-forgotten
 └── NOTES.md                this file
 ```
@@ -136,8 +136,9 @@ Pages (default)
     Row         01/[☐]  ▮▮▮░▮ strip  title over url · ●group · "3d ago"  ›
     History     inset panel: full URL · summary (incl. every group it has
     (expanded)  sat in) · Only site · Copy URL · Forget/Restore (serve) or the
-                CLI command (export) on the left; every sighting (date →
-                snapshot deep link, window, tab position, group) on the right
+                CLI command (export); browser history (found by searching,
+                came from, visits, time on page, §10); every sighting (date →
+                snapshot deep link, window, tab position, group)
 Snapshots       table: captured, windows, tabs (bar, "incomplete: …" when the
                 parse degraded), first seen here, last seen here → snapshot
 Snapshot        header (tabs, windows, groups, degradation) · windows in order ·
@@ -411,7 +412,14 @@ emits today.
       "title": "GitHub - ogham/eza: A modern alternative to ls",   // latest known; may be ""
       "domain": "github.com",                  // host, lowercased, leading "www." removed; "" for data: etc.
       "forgotten": false,                      // optional; absent means false
-      "tags": ["Harness"]                      // active names, vocabulary spelling, alphabetical ignoring case; [] if untagged
+      "tags": ["Harness"],                     // active names, vocabulary spelling, alphabetical ignoring case; [] if untagged
+      "history": {                             // optional; absent when no snapshot recorded signals for the URL
+        "visits": 12, "typed": 3,              // what the browser still kept, about 90 days
+        "first_visit": "2026-07-01T09:12:44Z", "last_visit": "2026-09-23T23:49:42Z",
+        "foreground_seconds": 1834,            // optional
+        "search": { "term": "eza ls", "hops": 1 },                            // optional; serve, or export --with-history
+        "referrer": { "url": "https://…", "title": "…" }                      // optional, as search; title only when the URL is a page here
+      }
     }
   ]
 }
@@ -440,6 +448,11 @@ Rules the backend must keep:
   when empty. Every page tag is an active vocabulary name. A retired name
   stays in the state file; bringing it back restores it on every page that
   had it. An older document lacking both keys reads as untagged.
+- A page's `history` comes from the newest snapshot that recorded signals for
+  its URL, and every field in it is optional. Export leaves out `search` and
+  `referrer` unless `export --with-history` is given. A referrer is never a
+  page on this machine, and an export never names a forgotten page as one.
+  `referrer.title` is the library's own title for that URL, when it is a page.
 - Unknown fields anywhere are ignored by the client. Add, never rename.
   Rows the client cannot read are dropped and counted, not fatal (§4).
 - The export host writes the JSON into
@@ -904,3 +917,122 @@ still offers the commands, and no console errors.
 
 app.js is 58.9 KB (56.9 KB at the merge); comments are 16.7% of it (15.5%),
 most of the growth being the reasons behind where the key goes.
+
+## 10. History signals: the drawer, not the row
+
+Since slice 7b, `save` records what the browser's own History knows about each
+tab's page (brief `slice-07b-history.md`). The library shows it in one place:
+a **Browser history** section in the history drawer, between the actions and
+the sightings. The row does not change.
+
+```
+BROWSER HISTORY
+Found by searching   “github ecc” on google.com
+Came from            Introducing System One Models – TypeSafe Blog   typesafe.ai/blog/introducing-…
+Visits               1,437 between Jul 1 and Sep 24, 2026 · typed 12 times
+Time on page         7 days 5 hours
+```
+
+It is a two-column list, labels in the metadata grey and values in ink, one
+line per signal, cut with an ellipsis rather than wrapped. Its heading is the
+same small caps as "12 sightings", so the drawer now holds two records of the
+page: the browser's and the library's. A line with nothing to say is left
+out, and a page with no signals has no section at all, so its drawer is
+exactly what it was. Below 44 rem the labels stack over their values, and a
+referrer's title wraps, with its address cut on a line of its own.
+
+- **Nothing on the row.** Signals exist only for pages seen in a snapshot
+  saved since 7b: 71 of 626 pages in the owner's archive today. A mark on the
+  row would sit on one row in nine and read as a badge ("this one has
+  something"), which the page has rejected since the bake-off, and the owner
+  had just moved the chips to their own line because the rows felt crowded.
+  The drawer is one key away (`space`). Rejected: the search term under the
+  address as a fourth line (the most useful signal, but a line on 2% of rows
+  makes the list uneven for little gain); a "typed" or visits count beside the
+  age (a score, and the age already answers "is this warm?"); a sort by
+  visits or time on page (with signals on one page in nine, the sort would
+  mostly order the pages that have none).
+- **"Found by searching", with how far away.** The term is quoted and in ink.
+  `hops` decides the rest: 0 says "this page is the results", 2 and 3 say
+  "2 links away", so a search found through a tweet two clicks back reads as
+  what it is. 1 says nothing extra. The tooltip says what the line means.
+- **The results page is said once.** When the search is one link back and the
+  referrer is that results page (its query string holds the term), the
+  referrer line goes and the search line ends "on google.com", which links to
+  the results page. On the owner's data that is 4 of 10 searches; showing
+  both said the same thing twice, the second time as a 300-character URL.
+- **Came from: a title that jumps, an address that leaves.** When the
+  referrer is itself a page in the library, its title is a link to that
+  page's row (`#pages/<i>`, the existing deep link: it reveals, opens and
+  focuses the row, and Back returns). Beside it the address is mono, grey and
+  scheme-less, and opens the page in a new tab; with no title the address is
+  the value, in ink. A referrer equal to the page itself is not shown (one in
+  the owner's archive). Only `http(s)` addresses are links.
+- **No filters from here.** A search term is not a filter: the page's search
+  matches all words in titles and URLs, and a natural-language query mostly
+  matches nothing, not even the page it found. A referrer site is not a
+  filter either, though "everything t.co sent me to" is a real question: it
+  would be a new filter with no place in the toolbar, and with one page in
+  nine carrying a referrer it would mostly return one or two rows. Both are
+  under Open, below, to revisit when more snapshots carry signals.
+- **Visits in one line.** The count, the dates History still kept ("between
+  Jul 1 and Sep 24, 2026", the year once when both share it, "on Sep 23" for
+  one day), and "typed 12 times", "typed once" or "all typed". The tooltip says
+  typed means typed or picked in the address bar, and that the browser keeps
+  about 90 days. `last_visit` is only used here: the row's age already says
+  when the library last saw the page.
+- **Time on page, not "foreground".** It is the sum of the timed visits' time
+  in front, which is what anyone calls time on page. Two units at most, in
+  words ("7 days 5 hours", "4 minutes 51 seconds"), from
+  `Intl.NumberFormat`'s unit style; `Intl.DurationFormat` is newer than the
+  Baseline the page holds to. The tooltip says the visit in progress is not
+  counted.
+- **Export.** Without `--with-history` the section shows Visits and Time on
+  page and nothing says what was left out. Serve shows everything, forgotten
+  pages included (in the Forgotten view), since it is the same trust boundary
+  that already shows every URL.
+
+The keyboard is unchanged: `space` opens the drawer, and `esc` closes it at
+step 5 of §3. The links in the section are ordinary links inside the drawer,
+like the sighting links, so they take no key of their own. The `?` legend's
+`space` line now says "Show or hide its history: where it was seen and how you
+found it."
+
+**Fixture.** `generate.py` gives pages seen in the last three snapshots
+synthetic signals (270 of 2,166), with its own seeded RNG so nothing else
+moves: a Google results page as referrer for a fifth of them, another page in
+the library or a made-up link elsewhere for most of the rest, and searches 0,
+2 and 3 links away. Page 0 has none, because the contract test reads the first
+page as the shape every exported page must have. `cases/export-forgotten.json`
+drops `search` and `referrer`, as an export does. `library.json` grew from
+566,869 to 623,264 bytes.
+
+**Size.** app.js 59,016 → 62,646 bytes (+3.6 KB); app.css 37,849 → 39,037
+bytes (+1.2 KB).
+
+**Checked** in Chrome headless against `serve` on a copy of the owner's archive
+with a fresh snapshot (71 pages with signals, 10 searches, 70 referrers):
+light and dark at 1400, 700 and 390 px with no horizontal overflow; a page
+with no signals; a search 2 links away, one merged with its Google referrer,
+and one where the page is the results; a referrer with and without a title,
+and one equal to its page; the title link jumping to the referrer's row and
+Back returning; forget from a drawer, the Forgotten view's drawer, restore;
+`export` with and without `--with-history` from `file://`; the §3 `esc` order
+around an open drawer, with single trusted key presses over the DevTools
+protocol; the site filter, a chip, the tray, preview, and tagging and undo on
+a row with signals. No console errors.
+
+### Open
+
+- **Say what an export left out.** An export without `--with-history` drops
+  searches and referrers silently. Saying so ("searches and referrers are not
+  in this export") needs the document to carry the choice, a top-level field
+  the contract does not have yet.
+- **Search the search terms.** Putting the term (and the referrer's title) into
+  what `/` matches would find "that page I found by searching X", but a row
+  could then match with nothing visible explaining why.
+- **Filter by where pages came from.** See above; worth it once most pages
+  carry a referrer.
+- **The drawer grows by up to four lines** on pages with signals, and the
+  Forget button stays where it was. If the section is read more than the
+  sightings, it could sit beside them at wide widths instead of above.
