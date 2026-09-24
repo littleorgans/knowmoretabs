@@ -8,7 +8,8 @@ snapshot of every open window and tab, and gives you a local page where you
 search everything you have ever had open, see what you keep reopening, and
 forget what you do not want. It reads your browser's own session file from
 disk to do it, so there is nothing to install in the browser. Nothing leaves
-your machine.
+your machine unless you run `enrich`, which fetches the `<head>` of pages you
+already visited.
 
 It works with Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and
 Vivaldi, on macOS, Linux and Windows.
@@ -132,6 +133,7 @@ on. Import a second agent's answers and a tag two sources agree on shows both.
 ```
 knowmoretabs list                # snapshots, newest first
 knowmoretabs export [DIR]        # the same library as a static site that opens from file://
+knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
 knowmoretabs tag <URL>... --add NAME --remove NAME   # tag pages, or untag them; both repeatable
@@ -164,6 +166,54 @@ wrong thing convincingly.
 Exit status is 0 when a snapshot was saved or nothing needed saving, 1 on an
 error, and 3 when the encrypted-sessions check refused to save.
 
+## Page metadata, if you ask for it
+
+```
+knowmoretabs enrich --dry-run    # what would be fetched, what would not and why; sends nothing
+knowmoretabs enrich --limit 30   # fetch at most 30 pages this run
+knowmoretabs enrich              # fetch every page not fetched before
+```
+
+`enrich` is the only command that sends anything anywhere, and it runs only
+when you run it. For each library page it has not fetched before, it asks the
+page's own site for it, without cookies, and reads no further than `</head>`,
+and never more than 3 MB. From the head it keeps the title, the description,
+the `og:` and `twitter:` tags, the JSON-LD types, the language and the
+canonical address. For a public GitHub repository's own page it also keeps
+the repository's topics and the start of its README, from the same page: no
+token, no account. `serve` and `export` do not show it yet; `tag --prompt`
+hands it to your tagging agent.
+
+Each attempt is appended to `pages/metadata.jsonl` as one line with its date,
+and the newest line for a page is the one that counts. A page that was
+attempted, including a failed fetch or a page behind a login, is not fetched
+again unless you pass `--refetch`. Interrupting a run keeps every page it had
+already recorded.
+
+What a site sees is one request for the page's address from your IP address,
+with a user agent that names knowmoretabs. There are no cookies, no referrer
+and no proxy taken from your environment. At most one request a second goes
+to any one site, and a few sites are fetched at once. HTTPS uses TLS built
+into the binary with its own copy of the Mozilla root certificates, so a
+certificate authority installed only on your system, such as a company's, is
+not trusted.
+
+What is never fetched:
+
+- pages you have forgotten;
+- this machine and the private network: addresses such as `192.168.1.1`,
+  names such as `nas.local` or a bare `wiki`, and any name that resolves to
+  such an address, checked again on every redirect;
+- search results pages, whose query is already in the address;
+- addresses whose query carries something that looks like a token or a
+  password, because fetching a one-time link can spend it.
+
+Sign-in, sign-up and verification screens are recorded as behind a login
+without being fetched, and so is a page that redirects to one or that is only
+a sign-in form. None of this hides a page from your library; forgetting it is
+your call. `--dry-run` lists every page and the reason, and `--json` reports
+the counts.
+
 ## Where the data lives
 
 | Platform | Archive root |
@@ -177,6 +227,8 @@ error, and 3 when the encrypted-sessions check refused to save.
 │   └── 2026-09-20-084415Z/    # UTC, sorts as text, never rewritten
 │       ├── snapshot.json      # the tabs, windows, groups and parse statistics
 │       └── session.snss       # a verbatim copy of the browser's session file
+├── pages/
+│   └── metadata.jsonl         # what `enrich` fetched, one line per attempt; append-only
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
 ├── tags/
 │   └── suggested.jsonl        # imported suggestions, one line per page per import; append-only
@@ -188,11 +240,14 @@ error, and 3 when the encrypted-sessions check refused to save.
 with a `schema_version`; it is the source of truth and readable in any
 editor. Everything under `export/` is derived and can be deleted.
 
-Nothing leaves the machine. The tool makes no network requests of any kind.
-A `tag --prompt` folder is the one thing made to be handed on: it holds the
-addresses and titles of pages in your library, and their searches and
-referrers if you ask for them. It is created private to you, and where it
-goes, and which agent and model provider read it, is your choice.
+Nothing leaves the machine unless you run `enrich`. `save`, `serve`,
+`export` and the tag commands make no network requests of any kind; `enrich`
+is the only code that does, and what it sends is described above. A
+`tag --prompt` folder is the one thing made to be handed on: it holds the
+addresses and titles of pages in your library, what `enrich` recorded about
+them if you ran it, and their searches and referrers if you ask for them. It
+is created private to you, and where it goes, and which agent and model
+provider read it, is your choice.
 `serve` binds `127.0.0.1` only, refuses any request whose `Host` is not
 `127.0.0.1` or `localhost` with its own port, which is what stops a web page
 reaching it through DNS rebinding, refuses any request carrying another

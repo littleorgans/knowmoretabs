@@ -97,6 +97,26 @@ pub enum Command {
     },
     /// Add tags to pages or take them off, or get suggestions from an agent you run
     Tag(TagArgs),
+    /// Fetch the <head> of library pages, without cookies, and record what they say about themselves
+    #[command(
+        long_about = "Fetches the <head> of each library page that has no metadata yet, without cookies, \
+and appends what it finds to <root>/pages/metadata.jsonl: title, description, og: and twitter: tags, \
+JSON-LD types, language and canonical URL, and for public GitHub repositories their topics and README. \
+This sends the URLs it fetches to their own sites. Forgotten pages, the private network, search results \
+and URLs that carry a token are never fetched; login screens are recorded as behind a login, not fetched. \
+One request a second per site."
+    )]
+    Enrich {
+        /// List what would be fetched and what would not, and why; send nothing
+        #[arg(long)]
+        dry_run: bool,
+        /// Fetch at most N pages this run
+        #[arg(long, value_name = "N")]
+        limit: Option<usize>,
+        /// Fetch pages again, even those fetched before
+        #[arg(long)]
+        refetch: bool,
+    },
     /// List the tag vocabulary with how many pages carry each tag
     Tags {
         /// Add a tag to the vocabulary, or bring back a retired one (repeatable)
@@ -394,6 +414,39 @@ mod tests {
         );
         assert_eq!(pairs(imply), [("DPO".into(), "Training".into())]);
         assert!(Cli::try_parse_from(["knowmoretabs", "tags", "--define", "DPO"]).is_err());
+    }
+
+    #[test]
+    fn enrich_takes_its_three_flags_and_the_global_ones() {
+        let cli = Cli::try_parse_from(["knowmoretabs", "enrich"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Enrich {
+                dry_run: false,
+                limit: None,
+                refetch: false
+            })
+        ));
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "--json",
+            "enrich",
+            "--dry-run",
+            "--limit",
+            "30",
+            "--refetch",
+        ])
+        .unwrap();
+        assert!(cli.json);
+        assert!(matches!(
+            cli.command,
+            Some(Command::Enrich {
+                dry_run: true,
+                limit: Some(30),
+                refetch: true
+            })
+        ));
+        assert!(Cli::try_parse_from(["knowmoretabs", "enrich", "--limit", "x"]).is_err());
     }
 
     #[test]

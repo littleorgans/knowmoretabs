@@ -95,5 +95,19 @@ as what you can do that you could not before.
   NAME TEXT` gives a tag a definition, shown by `tags` and given to the
   agent, and `tags --imply CHILD PARENT` records a parent rule the import
   applies. `knowmoretabs` still contains no model and sends nothing.
+- **Page metadata, if you ask for it.** `knowmoretabs enrich` fetches the
+  `<head>` of each library page not fetched before, without cookies, and
+  appends what it says about itself to `pages/metadata.jsonl`: title,
+  description, `og:` and `twitter:` tags, JSON-LD types, language and
+  canonical address, and for a public GitHub repository its topics and the
+  start of its README. It never fetches forgotten pages, this machine or the
+  private network (checked on every redirect and at the connection), search
+  results, or addresses carrying a token; sign-in, sign-up and verification
+  screens, and pages that redirect to one, are recorded as behind a login and
+  stay in the library. One request a second per site, a few sites at once,
+  reading no more than 3 MB; `--dry-run` lists what would be fetched and why
+  the rest would not, `--limit N` caps a run, and `--refetch` fetches again,
+  including failed attempts. It is the only command that sends
+  anything, and the README says what.
 
 [0.1.0]: https://github.com/littleorgans/knowmoretabs/releases/tag/v0.1.0
