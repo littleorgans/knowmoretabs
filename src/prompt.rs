@@ -178,7 +178,14 @@ pub fn write(root: &Path, options: &PromptOptions, log: Log) -> Result<Written, 
     let spellings = state.spellings(false);
     // Export shape: forgotten pages are left out, so a page the owner hid
     // never reaches their agent.
-    let library = library::build(&loaded.snapshots, &state, &HashMap::new(), Shape::Export);
+    let library = library::build(
+        &loaded.snapshots,
+        &state,
+        &HashMap::new(),
+        Shape::Export {
+            with_history: false,
+        },
+    );
     let mut written = Written {
         vocabulary_version: tags::vocabulary_version(&state),
         tags: tags.len(),
@@ -252,7 +259,9 @@ impl PageLine {
     }
 
     /// The search and referrer from the newest snapshot that has signals
-    /// for this page. A referrer the owner has forgotten stays out.
+    /// for this page. A referrer the owner has forgotten stays out, and so
+    /// does the page itself, which snapshots saved before capture dropped it
+    /// can name.
     fn remember(&mut self, snapshots: &[Snapshot], state: &State) {
         let history = snapshots
             .iter()
@@ -268,7 +277,7 @@ impl PageLine {
             self.referrer = history
                 .referrer
                 .clone()
-                .filter(|referrer| !state.forgotten.contains(referrer));
+                .filter(|referrer| *referrer != self.url && !state.forgotten.contains(referrer));
         }
     }
 }

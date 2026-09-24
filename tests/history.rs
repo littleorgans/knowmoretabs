@@ -209,6 +209,8 @@ fn referrer_is_another_page_else_the_external_referrer_and_never_this_machine() 
     let opened = "https://example.test/opened";
     let both = "https://example.test/both";
     let itself = "https://example.test/itself";
+    let reload_says_itself = "https://example.test/reload-says-itself";
+    let mail_then_reload = "https://example.test/mail-then-reload";
     let (fx, h) = profile_with(&[
         reloaded,
         external,
@@ -218,6 +220,8 @@ fn referrer_is_another_page_else_the_external_referrer_and_never_this_machine() 
         opened,
         both,
         itself,
+        reload_says_itself,
+        mail_then_reload,
     ]);
     let visit_to = |url: &str| {
         let id = h.url(url, 1, 0, T);
@@ -266,6 +270,19 @@ fn referrer_is_another_page_else_the_external_referrer_and_never_this_machine() 
     let id = h.url(itself, 2, 0, at2);
     let first = h.visit(id, at1, 0, 0);
     h.visit(id, at2, first, 0);
+
+    // Chrome records a reload's external referrer as the page itself (seen
+    // on 278 URLs of a real profile). That is not where the page came from.
+    let id = h.url(reload_says_itself, 2, 0, at2);
+    for at in [at1, at2] {
+        let reload = h.visit(id, at, 0, 0);
+        h.external_referrer(reload, reload_says_itself);
+    }
+    let id = h.url(mail_then_reload, 2, 0, at2);
+    let from_mail = h.visit(id, at1, 0, 0);
+    h.external_referrer(from_mail, "https://mail.example.test/inbox?id=8");
+    let reload = h.visit(id, at2, 0, 0);
+    h.external_referrer(reload, mail_then_reload);
     drop(h);
 
     let (snapshot, _) = saved(&fx, &[]);
@@ -288,6 +305,11 @@ fn referrer_is_another_page_else_the_external_referrer_and_never_this_machine() 
     assert_eq!(referrer(both), Some(json!("https://example.test/link")));
     assert_eq!(referrer(itself), None, "a page does not refer to itself");
     assert!(tab_history(&snapshot, itself).is_object());
+    assert_eq!(referrer(reload_says_itself), None);
+    assert_eq!(
+        referrer(mail_then_reload),
+        Some(json!("https://mail.example.test/inbox?id=8"))
+    );
 }
 
 #[test]

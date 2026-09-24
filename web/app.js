@@ -251,6 +251,47 @@ function rowHTML(p) {
     `<button class="more" type="button" tabindex="-1" aria-label="History" aria-expanded="${S.exp.has(p.i)}">›</button>` +
     (S.exp.has(p.i) ? histHTML(p) : '') + '</li>';
 }
+// How long, in the largest unit and the one under it if it is not zero:
+// "7 days 4 hours", "12 minutes", "32 seconds".
+const SPAN = [[86400, 'day'], [3600, 'hour'], [60, 'minute'], [1, 'second']].map(([n, unit]) => [n, new Intl.NumberFormat(undefined, { style: 'unit', unit, unitDisplay: 'long' })]);
+function span(s) {
+  const parts = [];
+  for (const [n, f] of SPAN) { const k = Math.floor(s / n); if (k) { parts.push(f.format(k)); s -= k * n; } else if (parts.length) break; if (parts.length === 2) break; }
+  return parts.join(' ') || 'under a second';
+}
+const norm = (t) => String(t).toLowerCase().replace(/\s+/g, ' ').trim();
+// What the browser's own History said about the page when it was last saved
+// (NOTES §10). Absent for pages seen only before it was recorded, and an
+// export leaves out the search and the referrer unless asked for them.
+function browserHTML(p) {
+  const h = p.history; if (!h || typeof h !== 'object') return '';
+  const line = (dt, dd, title = '') => `<dt>${dt}</dt><dd${title ? ` title="${esc(title)}"` : ''}>${dd}</dd>`;
+  const ext = (url, text) => (/^https?:\/\//i.test(url) ? `<a class="x" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${text}</a>` : `<span class="x">${text}</span>`);
+  const date = (t) => { const d = new Date(t); return t == null || isNaN(d) ? '' : F.dayYear.format(d); };
+  let ref = h.referrer && typeof h.referrer.url === 'string' && h.referrer.url !== p.url ? h.referrer : null, out = '';
+  const term = typeof h.search?.term === 'string' && h.search.term.trim() ? h.search.term : '', hops = +h.search?.hops || 0;
+  if (term) {
+    // One link from a results page that is also the referrer: say it once, as "on google.com".
+    let on = '';
+    if (hops === 1 && ref) { try { const u = new URL(ref.url); if ([...u.searchParams.values()].some((v) => norm(v) === norm(term))) { on = ` on ${ext(ref.url, esc(u.hostname.replace(/^www\./, '')))}`; ref = null; } } catch { /* not a URL */ } }
+    const where = hops === 0 ? ' · this page is the results' : hops > 1 ? ` · ${hops} links away` : '';
+    out += line('Found by searching', `<q>${esc(term)}</q>${on}${where}`, `${term}\nThe nearest search results page${hops ? `, ${plural(hops, 'link')} before this page` : ''}.`);
+  }
+  if (ref) {
+    const q = S.byUrl.get(ref.url), title = ref.title || q?.title;
+    const shown = ref.url.replace(/^https?:\/\/(www\.)?/i, '');
+    out += line('Came from', (q?.n && title ? `<a href="#pages/${q.i}" title="Show it in the library">${esc(title)}</a> ` : '') + ext(ref.url, `<code>${esc(shown)}</code>`), ref.url);
+  }
+  if (h.visits) {
+    const f = new Date(h.first_visit), l = new Date(h.last_visit), last = date(h.last_visit);
+    const first = date(h.first_visit) && (f.getUTCFullYear() === l.getUTCFullYear() ? F.day : F.dayYear).format(f);
+    const when = first && last && date(h.first_visit) !== last ? ` between ${first} and ${last}` : !last ? '' : first || h.visits === 1 ? ` on ${last}` : `, the last on ${last}`;
+    const typed = !h.typed ? '' : h.typed >= h.visits ? (h.visits === 1 ? ' · typed' : ' · all typed') : ` · typed ${h.typed === 1 ? 'once' : plural(h.typed, 'time')}`;
+    out += line('Visits', `${num.format(h.visits)}${when}${typed}`, 'Visits the browser still keeps, about 90 days of them. Typed means typed or picked in the address bar.');
+  }
+  if (Number.isFinite(h.foreground_seconds) && h.foreground_seconds >= 0) out += line('Time on page', span(h.foreground_seconds), 'Time in the foreground, over the visits the browser timed. The visit in progress is not counted.');
+  return out ? `<div class="hx"><h4>Browser history</h4><dl>${out}</dl></div>` : '';
+}
 function histHTML(p, cls = 'hist in') {
   const sightings = p.seen.map(([k, w, tid, pos, g]) => { const s = S.snaps[k];
     return `<li><a href="#snapshot/${esc(s.id)}/${tid}">${F.full.format(s.date)}</a><span>window ${w} · tab ${pos + 1}</span>${grpHTML(g)}</li>`; }).reverse();
@@ -265,7 +306,7 @@ function histHTML(p, cls = 'hist in') {
   return `<div class="${cls}"><div class="hist-in">${full}` +
     `<p class="sum">Seen in ${p.n} of ${plural(S.snaps.length, 'snapshot')} · ${first === last ? first : `${first} to ${last}`}${p.open ? ' · open now' : ''}${groups}${tagged}</p>` +
     `<p class="acts">${p.domain ? `<button type="button" data-act="domain">${only}</button>` : ''}<button type="button" data-act="copy">Copy URL</button>${host.forget ? act : ro}</p>` +
-    `<div class="sights"><h4>${plural(p.seen.length, 'sighting')}</h4><ol>${sightings.join('')}</ol></div></div></div>`;
+    browserHTML(p) + `<div class="sights"><h4>${plural(p.seen.length, 'sighting')}</h4><ol>${sightings.join('')}</ol></div></div></div>`;
 }
 function render() {
   const t0 = performance.now();
@@ -407,10 +448,13 @@ function toggle(i, force) {
     for (const j of [...S.exp]) if (j !== i) toggle(j, false);
     S.exp.add(i);
     if (!h) { el.insertAdjacentHTML('beforeend', histHTML(S.pages[i], 'hist')); h = el.lastElementChild; h.getBoundingClientRect(); }
-    h.classList.add('in');
+    h.inert = false; h.classList.add('in');
   } else {
     S.exp.delete(i);
-    if (h) { h.classList.remove('in'); setTimeout(() => { if (!h.classList.contains('in')) h.remove(); }, 260); }
+    if (h) {
+      if (h.contains(document.activeElement)) home(i);
+      h.inert = true; h.classList.remove('in'); setTimeout(() => { if (!h.classList.contains('in')) h.remove(); }, 260);
+    }
   }
   el.querySelector('.more').setAttribute('aria-expanded', open); el.classList.toggle('exp', open);
 }
@@ -717,7 +761,12 @@ function wire() {
     const pick = e.target.closest('.pick');
     // and the row keeps the key; a focused box would swallow the page's keys
     if (pick) { const box = pick.querySelector('input'); if (e.target !== box) box.checked = !box.checked; row.focus({ preventScroll: true }); return select(i, box.checked, e.shiftKey); }
-    if (e.target.closest('a')) return;
+    const link = e.target.closest('a');
+    if (link) {
+      // Back from a drawer's deep link returns to the row that opened it.
+      if (link.getAttribute('href')?.startsWith('#') && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) history.replaceState(null, '', `#pages/${i}`);
+      return;
+    }
     setCursor(row, false); row.focus({ preventScroll: true });
     const act = e.target.closest('[data-act]');
     if (!act) { if (!dragged && !e.target.closest('.hist')) toggle(i); return; }   // the panel itself is not a toggle

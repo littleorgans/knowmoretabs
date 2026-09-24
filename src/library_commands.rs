@@ -73,7 +73,13 @@ struct Exported<'a> {
     skipped_snapshots: usize,
 }
 
-pub fn export(root: &Path, destination: Option<&Path>, json: bool, log: Log) -> Result<(), Error> {
+pub fn export(
+    root: &Path,
+    destination: Option<&Path>,
+    with_history: bool,
+    json: bool,
+    log: Log,
+) -> Result<(), Error> {
     let archive = Archive::open(root)?;
     let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
     let loaded = library::load(&archive)?;
@@ -84,7 +90,7 @@ pub fn export(root: &Path, destination: Option<&Path>, json: bool, log: Log) -> 
         &loaded.snapshots,
         &state,
         &suggested,
-        library::Shape::Export,
+        library::Shape::Export { with_history },
     );
     let default_destination = root.join("export");
     let destination = destination.unwrap_or(&default_destination);

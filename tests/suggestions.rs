@@ -461,6 +461,15 @@ fn enriched_text_goes_in_and_history_only_when_asked() {
         "visits": 3, "typed": 0, "last_visit": "2026-01-01T00:00:00Z",
         "search": {"term": "agent harness", "hops": 1}, "referrer": "https://ref.test/"
     });
+    // C names itself, as a reload did in snapshots saved before capture
+    // dropped that.
+    for tab in snapshot["tabs"].as_array_mut().unwrap() {
+        if tab["url"] == C {
+            tab["history"] = json!({
+                "visits": 2, "typed": 0, "last_visit": "2026-01-01T00:00:00Z", "referrer": C
+            });
+        }
+    }
     fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
     write_snapshot(
         &fx.root,
@@ -538,6 +547,8 @@ fn enriched_text_goes_in_and_history_only_when_asked() {
         pages[1].get("referrer").is_none(),
         "a forgotten referrer stays out"
     );
+    assert_eq!(pages[2]["url"], C);
+    assert!(pages[2].get("referrer").is_none(), "nor the page itself");
     let prompt = fs::read_to_string(with.join("prompt.md")).unwrap();
     assert!(prompt.contains("- `search`: ") && prompt.contains("- `referrer`: "));
     assert_eq!(

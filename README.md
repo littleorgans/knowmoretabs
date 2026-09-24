@@ -88,7 +88,8 @@ layout matches the newest snapshot saves nothing; `--force` saves anyway.
 page: how often you visited it and typed its address, when History first and
 last saw it, how long it was in the foreground, the search that led to it (up
 to three links back), and the page you came from. It stays on this machine,
-in the snapshot, and nothing shows it yet. Chrome keeps about 90 days of
+in the snapshot, and the library shows it under each page's history (see
+below). Chrome keeps about 90 days of
 History; a snapshot keeps what it saw for good, so clearing your browsing
 data in the browser does not clear it from snapshots already saved.
 `save --no-history` leaves it out of the snapshots it writes. If History
@@ -96,14 +97,21 @@ cannot be read, `save` says so once and saves the tabs without it.
 
 `serve` is a page on `127.0.0.1` listing every page you have ever had open,
 once, with search, a site filter, an open-or-not filter, five sort orders,
-tab groups, and each page's history of the snapshots and windows it appeared
-in. Select rows and forget them; undo from the toast; find them again under
+tab groups, and each page's history: the snapshots and windows it appeared
+in and, for pages saved since `save` began reading History, the search that
+found it, the page you came from, its visits and its time on page. Select rows and forget them; undo from the toast; find them again under
 "Forgotten". `/` focuses search, `j` and `k` move, `f` forgets. `--port N`
 picks another port and `--open` opens your browser.
 
 Forgetting hides a page from the library. It never touches a snapshot: every
 page you forget is still in every snapshot it was ever in, and `restore`
 brings it back.
+
+`export` writes the same library as files, and leaves out the search that led
+to each page and the page you came from, because an exported folder is the
+copy most likely to be sent somewhere. Visits, typed visits and time on page
+stay. `export --with-history` puts the two back. Either way an export never
+names a forgotten page, not even as where another page came from.
 
 Tags are yours to set, and flat: a page carries as many as it needs, and the
 meaning is in the combination. `tag` puts them on pages or takes them off, and
@@ -133,6 +141,7 @@ on. Import a second agent's answers and a tag two sources agree on shows both.
 ```
 knowmoretabs list                # snapshots, newest first
 knowmoretabs export [DIR]        # the same library as a static site that opens from file://
+                                 # --with-history adds searches and the pages you came from
 knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
