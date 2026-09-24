@@ -30,8 +30,6 @@ use crate::metadata_writer::{Line, Outcome};
 
 /// `YouTube`'s meta tags start about 0.7 MB into its pages.
 pub const HEAD_CAP: usize = 3 * 1024 * 1024;
-/// A repository page is read whole: its README is in the body.
-pub const REPO_PAGE_CAP: usize = 4 * 1024 * 1024;
 pub const MAX_REDIRECTS: usize = 10;
 pub const TIMEOUT: Duration = Duration::from_secs(15);
 /// One request per second to any one host.
@@ -51,6 +49,7 @@ pub struct Fetcher {
     agent: ureq::Agent,
     pacer: Pacer,
     forgotten: BTreeSet<String>,
+    timeout: Duration,
 }
 
 impl Fetcher {
@@ -84,12 +83,14 @@ impl Fetcher {
             ),
             pacer: Pacer::new(pace),
             forgotten: BTreeSet::new(),
+            timeout,
         }
     }
 
     /// Fetches one page and says what came of it. Never fails: a failure is
     /// a record too.
     pub fn fetch(&self, raw: &str) -> Line {
+        let deadline = Instant::now() + self.timeout;
         let Ok(mut url) = Url::parse(raw) else {
             return Line::new(raw, Outcome::Error).with_reason("not a valid URL");
         };
@@ -119,13 +120,27 @@ impl Fetcher {
                 record.final_url = Some(url.to_string());
                 return record;
             }
-            self.pacer.wait(
+            if !self.pacer.wait(
                 &url.host_str()
                     .unwrap_or("")
                     .trim_end_matches('.')
                     .to_ascii_lowercase(),
-            );
-            let response = match self.agent.get(url.as_str()).call() {
+                deadline,
+            ) {
+                return Line::new(raw, Outcome::Error).with_reason("timeout");
+            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Line::new(raw, Outcome::Error).with_reason("timeout");
+            }
+            let response = match self
+                .agent
+                .get(url.as_str())
+                .config()
+                .timeout_global(Some(remaining))
+                .build()
+                .call()
+            {
                 Ok(response) => response,
                 Err(err) => return failure(raw, &err),
             };
@@ -183,8 +198,22 @@ fn read_page(raw: &str, url: &Url, mut response: ureq::http::Response<ureq::Body
             Line::new(raw, Outcome::Skipped).with_reason(format!("not HTML ({mime})")),
         );
     }
+    if response
+        .headers()
+        .get_all("content-encoding")
+        .iter()
+        .any(|value| {
+            !value
+                .to_str()
+                .is_ok_and(|v| v.trim().eq_ignore_ascii_case("identity"))
+        })
+    {
+        return with_response(
+            Line::new(raw, Outcome::Error).with_reason("unsupported content encoding"),
+        );
+    }
     let repo = github::is_repo_page(url);
-    let cap = if repo { REPO_PAGE_CAP } else { HEAD_CAP };
+    let cap = HEAD_CAP;
     let bytes = match read_head(response.body_mut().as_reader(), cap, !repo) {
         Ok(bytes) => bytes,
         Err(err) => {
@@ -199,6 +228,11 @@ fn read_page(raw: &str, url: &Url, mut response: ureq::http::Response<ureq::Body
             );
         }
     };
+    if text.len() > HEAD_CAP {
+        return with_response(
+            Line::new(raw, Outcome::Error).with_reason("decoded head exceeds 3 MB"),
+        );
+    }
     let found = head::scan(&text);
     if is_sign_in_page(&found) {
         let mut record =
@@ -605,15 +639,19 @@ impl Pacer {
         }
     }
 
-    fn wait(&self, host: &str) {
+    fn wait(&self, host: &str, deadline: Instant) -> bool {
         let slot = {
             let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
             let now = Instant::now();
             let slot = next.get(host).map_or(now, |at| (*at).max(now));
+            if slot >= deadline {
+                return false;
+            }
             next.insert(host.to_owned(), slot + self.interval);
             slot
         };
         std::thread::sleep(slot.saturating_duration_since(Instant::now()));
+        Instant::now() < deadline
     }
 }
 
@@ -809,13 +847,13 @@ mod tests {
     fn the_pacer_spaces_one_host_and_leaves_others_alone() {
         let pacer = Arc::new(Pacer::new(Duration::from_millis(200)));
         let start = Instant::now();
-        pacer.wait("a.test");
-        pacer.wait("b.test");
+        pacer.wait("a.test", start + TIMEOUT);
+        pacer.wait("b.test", start + TIMEOUT);
         assert!(start.elapsed() < Duration::from_millis(150));
         let threads: Vec<_> = (0..2)
             .map(|_| {
                 let pacer = Arc::clone(&pacer);
-                std::thread::spawn(move || pacer.wait("a.test"))
+                std::thread::spawn(move || pacer.wait("a.test", start + TIMEOUT))
             })
             .collect();
         for thread in threads {

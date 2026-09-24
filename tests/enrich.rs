@@ -783,3 +783,67 @@ fn encoded_login_and_search_paths_stay_home() {
         "behind_login"
     );
 }
+
+#[test]
+fn hostile_responses_respect_caps_and_encodings() {
+    let fx = Fixture::new();
+    let site = Site::start(|host, path, _| {
+        if host == "github.com" {
+            return Reply::html(format!(
+                "{}<title>Too late</title>",
+                " ".repeat(3 * 1024 * 1024 + 1)
+            ));
+        }
+        match path {
+            "/encoded" => Reply {
+                headers: vec![
+                    ("Content-Type", "text/html".into()),
+                    ("Content-Encoding", "gzip".into()),
+                ],
+                ..Reply::html("<title>Not actually decoded</title>")
+            },
+            "/expanded" => Reply {
+                headers: vec![("Content-Type", "text/html; charset=windows-1252".into())],
+                ..Reply::html(vec![0x80; 1_100_000])
+            },
+            _ => Reply {
+                headers: vec![("X-Large", "a".repeat(70_000))],
+                ..Reply::html(page("Too many headers"))
+            },
+        }
+    });
+    library(
+        &fx,
+        &[
+            "http://github.com/owner/repo",
+            "http://a.test/encoded",
+            "http://b.test/expanded",
+            "http://c.test/headers",
+        ],
+    );
+    assert_success(&enrich(&fx, &site, &[]));
+    for record in records(&fx).values() {
+        assert_eq!(record["status"], "error", "{record}");
+    }
+}
+
+#[test]
+fn redirects_share_one_timeout_budget() {
+    let fx = Fixture::new();
+    let site = Site::start(|_, path, _| {
+        let mut reply = if path == "/start" {
+            Reply::redirect(302, "http://b.test/finish")
+        } else {
+            Reply::html(page("Late"))
+        };
+        reply.stall = Some(Duration::from_millis(200));
+        reply
+    });
+    library(&fx, &["http://a.test/start"]);
+    let output = enrich_command(&fx, &site, &[])
+        .env("KNOWMORETABS_TEST_TIMEOUT_MS", "300")
+        .output()
+        .unwrap();
+    assert_success(&output);
+    assert_eq!(records(&fx)["http://a.test/start"]["reason"], "timeout");
+}
