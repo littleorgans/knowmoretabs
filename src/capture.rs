@@ -185,13 +185,13 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
 
     // After the unchanged check, so a skipped run reads nothing; before
     // staging, so the History copy never shares a directory with the snapshot.
-    let profile_dir = located.profile_dir.as_deref();
-    if opts.history {
-        history::record(&mut snapshot, profile_dir, &archive);
-    } else {
-        snapshot.history = Some(history::skipped(profile_dir));
-    }
-    report_history(&snapshot, log);
+    add_history(
+        &mut snapshot,
+        opts.history,
+        located.profile_dir.as_deref(),
+        &archive,
+        log,
+    );
 
     snapshot.id = archive.allocate_id(captured_at)?;
     let staging = archive.stage()?;
@@ -217,10 +217,23 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
     })
 }
 
-/// One line whatever happened: a warning when History could not be read,
-/// because the snapshot is missing something it would otherwise have, and a
-/// note under `-v` otherwise.
-fn report_history(snapshot: &Snapshot, log: Log) {
+/// Reads History into the snapshot, or records that `--no-history` asked
+/// for it not to be, and says which in one line: a warning when History
+/// could not be read, because the snapshot is missing something it would
+/// otherwise have, and a note under `-v` otherwise. Reading and saying so are
+/// one step, so that no run reads History without the note.
+fn add_history(
+    snapshot: &mut Snapshot,
+    read: bool,
+    profile_dir: Option<&Path>,
+    archive: &Archive,
+    log: Log,
+) {
+    if read {
+        history::record(snapshot, profile_dir, archive);
+    } else {
+        snapshot.history = Some(history::skipped(profile_dir));
+    }
     let Some(source) = &snapshot.history else {
         return;
     };
