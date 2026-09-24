@@ -754,7 +754,7 @@ fn read_stable(path: &Path) -> Result<(Vec<u8>, Option<std::time::SystemTime>), 
 /// the creation time. NTFS tunnelling can preserve that on replacement, and
 /// write times may lag while a writer stays open, so this is a best-effort
 /// change detector, not a proof of identity. History also compares a second
-/// copy on Windows before opening either copy with SQLite.
+/// copy on Windows before opening either copy with `SQLite`.
 pub fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     let basic = a.len() == b.len() && a.modified().ok() == b.modified().ok();
     #[cfg(unix)]

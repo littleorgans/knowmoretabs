@@ -149,10 +149,9 @@ fn unreadable(path: &Path, err: &rusqlite::Error) -> String {
 }
 
 /// Copies `History` and whichever companions exist into `into`, companions
-/// first, and proves none of the three moved while it did: their length and
-/// modification time, and the file's identity, are the same before and
-/// after. Three attempts, as for the session file. Returns the copy and its
-/// size.
+/// first, checking their metadata before and after. Windows also compares
+/// a second copy because write timestamps can lag while Chrome stays open.
+/// Three attempts, as for the session file. Returns the copy and its size.
 fn copy_stable(source: &Path, into: &Path) -> Result<(PathBuf, u64), String> {
     copy_stable_with(source, into, cfg!(windows), |from, to| fs::copy(from, to))
 }
@@ -196,7 +195,7 @@ fn copy_stable_with(
                     // must be able to write and cleanup must be able to delete.
                     make_copy_writable(to)?;
                 }
-                // Gone between the stat and the copy: the check below sees it.
+                // A missing copy must retry even if the source reappears.
                 Err(err) if err.kind() == ErrorKind::NotFound => complete = false,
                 Err(err) => return Err(format!("cannot copy {}: {err}", from.display())),
             }
