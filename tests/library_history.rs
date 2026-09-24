@@ -219,6 +219,7 @@ fn a_page_history_has_forgotten_keeps_its_entry_and_when_it_was_last_seen() {
     drop(h);
     let first = json_run(&fx, &["history", "--refresh"]);
     assert_eq!(first["refreshed"]["kept"], 0);
+    assert_eq!(first["source"]["tabs_found"], first["refreshed"]["found"]);
     let before = record(&fx);
     assert_eq!(urls(&before), [OLDER, OLDEST]);
 

@@ -206,11 +206,12 @@ pub fn refresh_command(opts: &capture::Options, json: bool, log: Log) -> Result<
     archive.clean_stale_staging()?;
     let pending = prepare(&opts.root, &archive, &[])?;
     let urls: BTreeSet<&str> = pending.urls.iter().map(String::as_str).collect();
-    let reading = history::read_urls(profile_dir.as_deref(), &archive, &urls);
+    let mut reading = history::read_urls(profile_dir.as_deref(), &archive, &urls);
     if let Some(reason) = &reading.source.error {
         return Err(Error::HistoryUnreadable(reason.clone()));
     }
     let refreshed = pending.finish(&opts.root, &reading, Timestamp::now())?;
+    reading.source.tabs_found = refreshed.found as u64;
     if json {
         out::json(&serde_json::json!({
             "refreshed": refreshed,
