@@ -1,9 +1,9 @@
 # Slice 7b, part one: History signals in `save`
 
-**Status:** draft for approval, 2026-09-24. Nothing here is built. It settles
-*how* to build the decision recorded in `slice-07-tags.md` §4 and §9 ("`save`
-records History signals"), with measurements. §11 holds only what is still
-open.
+**Status:** approved 2026-09-24. Nothing here is built yet. It settles *how*
+to build the decision recorded in `slice-07-tags.md` §4 and §9 ("`save`
+records History signals"), with measurements. §12 records the owner's
+decisions; §11 is for open questions. None of §10's changes is applied yet.
 
 **Ships:** each tab in `snapshot.json` carries what the browser's own
 `History` database knows about its URL: the search that led to it, the
@@ -19,7 +19,7 @@ needs no SQLite, so neither should wait for the other.
 
 Measured on the owner's Chrome 153 (`Default` profile, `History` schema 70),
 for the 73 tabs open at the time and for all 649 URLs in `~/.knowmoretabs`.
-The commands are in §12.
+The commands are in §13.
 
 | Field | Source | Rule | Open tabs | Library |
 |---|---|---|---|---|
@@ -147,7 +147,7 @@ can rely on linking, and linking the system library elsewhere would make the
 `bundled` compiles one pinned SQLite into the executable on all five targets.
 The costs are real and stated above: +1.75 MB, +13 s on a clean release
 build, and 269k lines of C (the amalgamation) inside a crate that forbids
-`unsafe` in its own code. The owner decides whether to accept them (§11.1).
+`unsafe` in its own code. The owner accepted them (§12).
 
 **This is not SQLite as storage.** `BRIEF.md`'s "Deliberately not built:
 SQLite" is about the archive, and it stands. Snapshots stay JSON. Nothing is
@@ -368,12 +368,13 @@ and the proposed defaults:
 - **Chrome's "Clear browsing data" does not reach the archive.** Signals
   recorded before the clear stay. The README must say this next to the line
   that says what `save` records.
-- **Proposed defaults for later, when signals are shown:**
+- **Defaults for later, when signals are shown:**
   - `serve` shows them: it is the same trust boundary that already shows every URL.
   - `export` leaves out `search` and `referrer` unless asked for: an exported
-    folder is the artefact most likely to be copied somewhere else (§11.3).
-  - `tag --prompt` (7c) puts search terms into `pages.jsonl` only when asked
-    for, because that folder goes to the owner's agent and its model provider.
+    folder is the artefact most likely to be copied somewhere else. Decided
+    (§12): `--with-history` puts them back.
+  - Proposed, for 7c: `tag --prompt` puts search terms into `pages.jsonl`
+    only when asked for, because that folder goes to the owner's agent and its model provider.
     The lab found "found by searching" useful for tagging, so it needs a flag
     rather than a ban.
 
@@ -395,9 +396,6 @@ today (`tests/common/session_builder.rs`).
   regenerated from anything in the repository, and would drift from Chrome's
   DDL without anyone noticing.
 
-If §11.1 goes the other way, the hand-written reader would still need these
-files written by a real SQLite, which means rusqlite as a dev-dependency.
-
 ## 9. Scope and acceptance
 
 **In scope:**
@@ -413,7 +411,7 @@ files written by a real SQLite, which means rusqlite as a dev-dependency.
   portability problem it solves (slice 5's rule for new dependencies).
 - README: what `save` now records, that it stays local, and that clearing the
   browser's history does not clear the archive.
-- If §11.2 is yes: `save --no-history`.
+- `save --no-history` (§12), which skips History and records that it did.
 
 **Out of scope:** showing the signals anywhere (`serve`, `export`, `list`),
 `enrich` and all network code, 7c's prompt, the tab-id join,
@@ -455,10 +453,12 @@ immutable), non-Chromium browsers, and any SQLite in the archive.
     model round-trip test gains a `history` case).
 11. `GET /api/library` and `export` output are byte-identical with and without
     `history` in the snapshots.
-12. CI is green on all four test runners and the five release targets with
+12. `save --no-history` copies nothing, writes no per-tab `history`, and the
+    snapshot-level `history` says it was skipped by request.
+13. CI is green on all four test runners and the five release targets with
     `bundled` SQLite, and `cargo xtask slices --check` passes.
 
-## 10. Changes to `docs/BRIEF.md` and the research docs (on approval)
+## 10. Changes to `docs/BRIEF.md` and the research docs (approved)
 
 1. **Deliberately not built, SQLite:** "SQLite *as the archive's storage*."
    Add: "`save` reads the browser's own `History` database through a bundled
@@ -473,23 +473,26 @@ immutable), non-Chromium browsers, and any SQLite in the archive.
 
 ## 11. Decisions for the owner
 
-1. **Accept `rusqlite` with `bundled` SQLite:** +1.75 MB (+67%) on the
-   binary, +13 s on a clean release build, 7 runtime packages and 269k lines
-   of C. **Recommended: yes**, for the §2 reasons. The alternative is
-   about 900 lines of hand-written file-format and recovery code that still
-   needs rusqlite to test.
-2. **`save --no-history`.** The decision says `save` records the signals.
-   Without a flag, someone who does not want search terms kept has no way to
-   stop it short of not using `save`. **Recommended: add it.** It costs one
-   flag and one `if`, and it is off by default, so the decision stands.
-3. **When display lands, `export` leaves out `search` and `referrer` unless
-   `--with-history` is given.** **Recommended: yes** (§7). Deciding it now
-   means nobody has to design the display around it later.
-4. **Search depth: 3 hops, with `hops` recorded,** rather than the lab's 1.
-   It finds 159 of the library's searches rather than 99, and the extra
-   finds were on topic in 11 of 12 checked. **Recommended: 3.**
+None open. New questions go here.
 
-## 12. Measurements, and how to repeat them
+## 12. Already decided
+
+- **`rusqlite` with `bundled` SQLite** reads History, for the §2 reasons:
+  +1.75 MB (+67%) on the binary, +13 s on a clean release build, 7 runtime
+  packages and 269k lines of C, against about 900 lines of hand-written
+  file-format and recovery code that would still need rusqlite to test.
+  Decided 2026-09-24.
+- **`save --no-history`** skips History entirely. Recording stays the
+  default, so the §4 decision in the tags brief stands; the flag is the only
+  way to keep search terms out of an archive nobody can edit. Decided
+  2026-09-24.
+- **Once the signals are shown, `export` leaves out `search` and `referrer`
+  unless `--with-history` is given** (§7). Decided 2026-09-24.
+- **`search` looks up to 3 hops back, and records `hops`,** rather than the
+  lab's 1: 159 of the library's searches rather than 99, and the extra finds
+  were on topic in 11 of 12 checked. Decided 2026-09-24.
+
+## 13. Measurements, and how to repeat them
 
 All reads were of copies under `/tmp/kmt-hist` (mode 0700). The live
 profile's files were copied, never opened. Only counts were written down; no
@@ -534,7 +537,7 @@ option), `history_backend.cc` (`kCommitIntervalSeconds = 10`), `features.cc`
 `exclusive_database_file_lock_ = false`), all from
 `chromium.googlesource.com/chromium/src/+/refs/heads/main`, read 2026-09-24.
 
-## 13. Not verified
+## 14. Not verified
 
 - **Linux and Windows.** No `History` was copied on either. `std::fs::copy`
   uses `copy_file_range` on Linux and `CopyFileExW` on Windows. Chrome's
