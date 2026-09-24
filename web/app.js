@@ -267,7 +267,7 @@ function browserHTML(p) {
   const h = p.history; if (!h || typeof h !== 'object') return '';
   const line = (dt, dd, title = '') => `<dt>${dt}</dt><dd${title ? ` title="${esc(title)}"` : ''}>${dd}</dd>`;
   const ext = (url, text) => (/^https?:\/\//i.test(url) ? `<a class="x" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${text}</a>` : `<span class="x">${text}</span>`);
-  const date = (t) => { const d = new Date(t); return isNaN(d) ? '' : F.dayYear.format(d); };
+  const date = (t) => { const d = new Date(t); return t == null || isNaN(d) ? '' : F.dayYear.format(d); };
   let ref = h.referrer && typeof h.referrer.url === 'string' && h.referrer.url !== p.url ? h.referrer : null, out = '';
   const term = typeof h.search?.term === 'string' && h.search.term.trim() ? h.search.term : '', hops = +h.search?.hops || 0;
   if (term) {
