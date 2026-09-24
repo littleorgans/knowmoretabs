@@ -186,9 +186,8 @@ hands it to your tagging agent.
 
 Each attempt is appended to `pages/metadata.jsonl` as one line with its date,
 and the newest line for a page is the one that counts. A page that was
-fetched, or found behind a login, is not fetched again unless you pass
-`--refetch`. A page whose last attempt failed is tried again on the next run,
-after the pages never tried. Interrupting a run keeps every page it had
+attempted, including a failed fetch or a page behind a login, is not fetched
+again unless you pass `--refetch`. Interrupting a run keeps every page it had
 already recorded.
 
 What a site sees is one request for the page's address from your IP address,

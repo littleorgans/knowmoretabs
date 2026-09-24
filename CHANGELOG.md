@@ -106,8 +106,8 @@ as what you can do that you could not before.
   screens, and pages that redirect to one, are recorded as behind a login and
   stay in the library. One request a second per site, a few sites at once,
   reading no more than 3 MB; `--dry-run` lists what would be fetched and why
-  the rest would not, `--limit N` caps a run, `--refetch` fetches again, and
-  a failed page is retried next run. It is the only command that sends
+  the rest would not, `--limit N` caps a run, and `--refetch` fetches again,
+  including failed attempts. It is the only command that sends
   anything, and the README says what.
 
 [0.1.0]: https://github.com/littleorgans/knowmoretabs/releases/tag/v0.1.0

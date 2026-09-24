@@ -24,7 +24,7 @@ use crate::capture::Log;
 use crate::error::Error;
 use crate::fetch::{self, Fetcher, carries_token, is_search_results};
 use crate::library::{self, State};
-use crate::metadata::{self, Metadata, Status};
+use crate::metadata::{self, Metadata};
 use crate::metadata_writer::{Appender, Line, Outcome};
 use crate::model::Snapshot;
 use crate::out;
@@ -68,8 +68,6 @@ impl Skip {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Why {
     New,
-    /// The last attempt failed; its reason.
-    Retry(String),
     Refetch,
     /// A sign-in, sign-up or verification screen: recorded, never fetched.
     Login,
@@ -79,7 +77,6 @@ impl Why {
     fn label(&self) -> String {
         match self {
             Self::New => "new".to_owned(),
-            Self::Retry(reason) => format!("retry, last time: {reason}"),
             Self::Refetch => "refetch".to_owned(),
             Self::Login => "login page: recorded as behind_login, not fetched".to_owned(),
         }
@@ -130,14 +127,12 @@ impl Plan {
     }
 }
 
-/// Library pages newest sighting first, then the rules, then what is
-/// already known. New pages come before retries, so that `--limit` spends
-/// its budget on pages never tried.
+/// Library pages newest sighting first, excluding prior attempts unless
+/// the owner explicitly asks to fetch them again.
 fn plan(snapshots: &[Snapshot], state: &State, known: &Metadata, options: Options) -> Plan {
     let library = library::known_urls(snapshots);
     let mut seen = HashSet::new();
     let mut plan = Plan::default();
-    let (mut fresh, mut retries) = (Vec::new(), Vec::new());
     let tabs = snapshots.iter().rev().flat_map(|s| s.tabs.iter());
     for tab in tabs {
         let raw = tab.url.as_str();
@@ -156,13 +151,12 @@ fn plan(snapshots: &[Snapshot], state: &State, known: &Metadata, options: Option
         }
         let Some(url) = parsed else { continue };
         let why = match known.pages.get(raw) {
-            Some(record) if !options.refetch && record.status != Status::Error => {
+            Some(_) if !options.refetch => {
                 plan.already_fetched += 1;
                 continue;
             }
             _ if fetch::is_login_page(&url) => Why::Login,
-            Some(_) if options.refetch => Why::Refetch,
-            Some(record) => Why::Retry(record.reason.clone().unwrap_or_default()),
+            Some(_) => Why::Refetch,
             None => Why::New,
         };
         let item = Item {
@@ -170,14 +164,8 @@ fn plan(snapshots: &[Snapshot], state: &State, known: &Metadata, options: Option
             host: url.host_str().unwrap_or("").to_ascii_lowercase(),
             why,
         };
-        if matches!(item.why, Why::Retry(_)) {
-            retries.push(item);
-        } else {
-            fresh.push(item);
-        }
+        plan.todo.push(item);
     }
-    plan.todo = fresh;
-    plan.todo.append(&mut retries);
     if let Some(limit) = options.limit {
         plan.more = plan.todo.len().saturating_sub(limit);
         plan.todo.truncate(limit);

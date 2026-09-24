@@ -535,7 +535,7 @@ fn dry_run_says_what_and_why_and_sends_nothing() {
 }
 
 #[test]
-fn limits_never_refetch_retries_and_refetch() {
+fn limits_and_refetch_require_explicit_permission_for_every_repeat() {
     let fx = Fixture::new();
     let site = Site::start(routes);
     library(
@@ -556,22 +556,21 @@ fn limits_never_refetch_retries_and_refetch() {
     assert_eq!(lines(&fx).len(), 4);
     let requests = site.seen().len();
 
-    // Only the failure is tried again.
+    // Even an error records an attempt; another request needs --refetch.
     let output = enrich(&fx, &site, &["--json"]);
     assert_success(&output);
     let json: Value = serde_json::from_str(&stdout(&output)).unwrap();
-    assert_eq!(json["fetched"], 1);
-    assert_eq!(json["errors"]["HTTP 404"], 1);
-    assert_eq!(json["not_fetched"]["already fetched"], 3);
-    assert_eq!(site.seen().len(), requests + 1);
-    assert_eq!(site.seen().last().unwrap().path, "/gone");
+    assert_eq!(json["fetched"], 0);
+    assert_eq!(json["errors"], serde_json::json!({}));
+    assert_eq!(json["not_fetched"]["already fetched"], 4);
+    assert_eq!(site.seen().len(), requests);
 
     let output = enrich(&fx, &site, &["--refetch", "--json"]);
     assert_success(&output);
     let json: Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(json["fetched"], 4);
     assert_eq!(json["ok"], 3);
-    assert_eq!(lines(&fx).len(), 9, "append-only: nothing rewritten");
+    assert_eq!(lines(&fx).len(), 8, "append-only: nothing rewritten");
 }
 
 #[test]
