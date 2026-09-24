@@ -450,15 +450,9 @@ fn locate(opts: &Options, log: Log) -> Result<Located, Error> {
 
     candidates.sort_by(platform::candidate_cmp);
     let winner = candidates.pop().expect("checked non-empty");
-    // The browser used most recently is the one to refuse on, not to route
-    // around: a stale winner means the user's real session is unreadable, and
-    // saving the runner-up would present another browser as that session.
-    if let Some(reason) = winner.stale {
-        return Err(Error::Stale {
-            profile: winner.profile.path,
-            reason,
-        });
-    }
+    // Keep the same winner for History even when its sessions are encrypted.
+    // Only save needs cleartext sessions; it checks staleness before opening
+    // the archive, without falling back to a different browser.
     let also_found = candidates;
     let profile = winner.profile.clone();
     let user_data = profile

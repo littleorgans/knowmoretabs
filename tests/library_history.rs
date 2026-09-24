@@ -537,3 +537,41 @@ fn the_browsers_files_are_untouched_and_no_copy_is_left_anywhere() {
     }
     assert_eq!(urls(&record(&fx)), [OLDER, OLDEST, OPEN]);
 }
+
+#[test]
+fn refresh_reads_history_even_when_the_selected_sessions_are_encrypted() {
+    let (fx, h) = library_and_browser();
+    drop(h);
+    let clear = fx.sessions_dir("Default").join("Session_20");
+    let encrypted_dir = fx.profile_dir("Default").join("Sessions_Encrypted");
+    fs::create_dir_all(&encrypted_dir).unwrap();
+    let encrypted = encrypted_dir.join("Session_21");
+    fs::write(&encrypted, b"SNSS\x05\0\0\0").unwrap();
+    let now = SystemTime::now();
+    fs::File::options()
+        .write(true)
+        .open(&clear)
+        .unwrap()
+        .set_modified(now - Duration::from_secs(600))
+        .unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&encrypted)
+        .unwrap()
+        .set_modified(now)
+        .unwrap();
+    for remove_clear in [false, true] {
+        if remove_clear {
+            fs::remove_file(&clear).unwrap();
+        }
+        assert_eq!(fx.run(&["save", "--force"]).status.code(), Some(3));
+        for selector in [&[][..], &["--browser", "chrome"][..]] {
+            let mut args = vec!["history", "--refresh"];
+            args.extend_from_slice(selector);
+            let report = json_run(&fx, &args);
+            assert_eq!(report["refreshed"]["found"], 2);
+            assert_eq!(urls(&record(&fx)), [OLDER, OLDEST]);
+            assert_eq!(fx.snapshot_dirs().len(), 2);
+        }
+    }
+}
