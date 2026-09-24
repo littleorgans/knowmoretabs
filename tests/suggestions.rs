@@ -318,7 +318,11 @@ fn the_prompt_carries_the_model_the_vocabulary_the_format_and_a_runnable_check()
         !prompt.contains("- `search`") && !prompt.contains("- `description`"),
         "only fields that occur are explained"
     );
-    assert!(!prompt.contains('\\'), "no stray escapes");
+    // Paths are the only lines that may hold a backslash: Windows separates with one.
+    let mut prose = prompt
+        .lines()
+        .filter(|line| !line.starts_with("Your work folder is") && !line.contains(" --root "));
+    assert!(!prose.any(|line| line.contains('\\')), "no stray escapes");
 
     let vocabulary: Value =
         serde_json::from_slice(&fs::read(dir.join("vocabulary.json")).unwrap()).unwrap();
