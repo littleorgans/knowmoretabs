@@ -186,6 +186,12 @@ impl Pending {
 fn write(path: &Path, recorded: &Recorded) -> Result<(), Error> {
     if let Some(dir) = path.parent() {
         archive::create_private_dir(dir).map_err(Error::io("create", dir))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+                .map_err(Error::io("protect", dir))?;
+        }
     }
     let mut bytes = serde_json::to_vec_pretty(recorded).map_err(|source| Error::Json {
         path: path.to_path_buf(),

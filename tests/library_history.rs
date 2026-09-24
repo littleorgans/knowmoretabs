@@ -599,3 +599,21 @@ fn refresh_reads_history_even_when_the_selected_sessions_are_encrypted() {
         }
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn a_refresh_protects_an_existing_pages_directory() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let (fx, h) = library_and_browser();
+    drop(h);
+    let pages = fx.root.join("pages");
+    fs::create_dir(&pages).unwrap();
+    fs::set_permissions(&pages, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_success(&fx.run(&["history", "--refresh"]));
+    common::assert_private_dir(&pages);
+    assert_eq!(
+        fs::metadata(record_path(&fx)).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+}
