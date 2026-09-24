@@ -111,6 +111,19 @@ as what you can do that you could not before.
   NAME TEXT` gives a tag a definition, shown by `tags` and given to the
   agent, and `tags --imply CHILD PARENT` records a parent rule the import
   applies. `knowmoretabs` still contains no model and sends nothing.
+- **Review suggested tags in the library.** Each row shows its suggestions
+  after your own tags, dashed and a step quieter, with one mark per source
+  that suggested them, so a tag two agents agree on reads apart from a
+  single guess. They count in the tag bar and match its filters until you
+  decide. In `serve`, clicking a suggestion or pressing `+` opens the tag
+  editor, where each one has ✓ to confirm and × to dismiss, a page with
+  several has "Confirm all", and "Forget page" sits beside them for pages not
+  worth keeping. On a selection the tray's editor confirms or dismisses a
+  name on every selected page that carries it. The toast's Undo and `u`
+  bring a suggestion back. Show ▸ "Has suggested tags" lists the pages still
+  waiting. `GET /api/library` now gives each tag its `definition`, which the
+  page shows on the tag bar, in the retire dialog and on suggestions. An
+  export shows suggestions but cannot decide them.
 - **Page metadata, if you ask for it.** `knowmoretabs enrich` fetches the
   `<head>` of each library page not fetched before, without cookies, and
   appends what it says about itself to `pages/metadata.jsonl`: title,

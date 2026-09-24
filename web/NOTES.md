@@ -19,7 +19,7 @@ web/
 ├── app.css                 styles
 ├── app.js                  renderer and interactions (unminified)
 ├── fixtures/generate.py    deterministic synthetic library (seed 2026) + cases
-├── fixtures/library.json   2,166 pages · 41 snapshots · 163 sites · 8,478 sightings · 78 groups · 270 with History · 102 with suggestions
+├── fixtures/library.json   2,166 pages · 41 snapshots · 163 sites · 8,478 sightings · 78 groups · 270 with History · 102 with suggestions · 5 defined tags
 ├── fixtures/cases/         empty · no-pages · one-snapshot · degraded · export-forgotten
 └── NOTES.md                this file
 ```
@@ -128,7 +128,8 @@ Pages (default)
   Toolbar       Search (title+URL, all words, any order; `/` hint inside)
                 Site (text field with datalist, exact site or substring)
                 Group (same, hidden when the archive has no groups)
-                Show ▾ Everything | Open now | Closed | Forgotten (serve only)
+                Show ▾ Everything | Open now | Closed | Has suggested tags (when
+                       there are any) | Forgotten (serve only)
                 Sort ▾ Last seen | First seen | Times seen | Title | URL
                 Clear (only while a filter is set) · ? (opens the legend)
   Bar           "104 of 2,160 pages", only while a filter is set
@@ -182,7 +183,8 @@ the toolbar; the search field shows a `/` hint.
 1. an open dialog (the legend, Retire tags) closes;
 2. an open menu (Site, Group, Show, Sort, the tag suggestions) closes;
 3. text in the focused field clears (search, Site, Group, the tag field);
-4. the tag editor, its field empty, closes and the key goes back to its row;
+4. the tag editor, its field empty, closes and the key goes back to its row
+   (from one of its buttons, a chip's ✓ or ×, it closes at once);
 5. an open history closes;
 6. the preview goes back to the full list, the selection kept;
 7. the selection clears;
@@ -404,7 +406,8 @@ emits today.
     }
   ],
   "vocabulary": [                              // active names; alphabetical ignoring case; always present
-    { "name": "Harness", "created_at": "2026-09-24T10:00:00Z" }
+    { "name": "Harness", "created_at": "2026-09-24T10:00:00Z",
+      "definition": "agent harnesses: the code that runs a model in a loop with tools" }   // definition optional
   ],
   "pages": [                                   // one entry per distinct URL, any order
     {
@@ -414,7 +417,7 @@ emits today.
       "forgotten": false,                      // optional; absent means false
       "tags": ["Harness"],                     // active names, vocabulary spelling, alphabetical ignoring case; [] if untagged
       "suggested": [                           // 7c: imported suggestions neither added nor removed; always present, [] if none
-        { "name": "Skills", "sources": ["claude-opus-5"] }                  // not shown yet: the review UI is a later pass
+        { "name": "Skills", "sources": ["claude-opus-5"] }                  // one or more sources; §11
       ],
       "history": {                             // optional; absent when no snapshot recorded signals for the URL
         "visits": 12, "typed": 3,              // what the browser still kept, about 90 days
@@ -451,8 +454,9 @@ Rules the backend must keep:
   when empty. Every page tag is an active vocabulary name. A retired name
   stays in the state file; bringing it back restores it on every page that
   had it. An older document lacking both keys reads as untagged.
-- Each page's `suggested` is always present, in serve and export alike. The
-  page ignores it until the review UI lands.
+- Each page's `suggested` is always present, in serve and export alike, and
+  holds only active names the owner has neither added nor removed. A
+  vocabulary entry's `definition` is present only when the owner gave one.
 - A page's `history` comes from the newest snapshot that recorded signals for
   its URL, and every field in it is optional. Export leaves out `search` and
   `referrer` unless `export --with-history` is given. A referrer is never a
@@ -1041,3 +1045,210 @@ a row with signals. No console errors.
 - **The drawer grows by up to four lines** on pages with signals, and the
   Forget button stays where it was. If the section is read more than the
   sightings, it could sit beside them at wide widths instead of above.
+
+## 11. Suggested tags: review in the chip line and the editor
+
+Since 7c, `tag --import` stores what an owner's agent suggested, and every
+page carries `suggested: [{name, sources}]` (§5): active names the owner has
+neither added nor removed. The owner's view is settled (brief §1, §2): tags
+are flat facets they control, recall is favoured, and review mostly removes
+wrong tags. So a suggestion is treated as a tag until it is decided, marked
+so the owner can see what they have not yet looked at, and decided in the
+editor 7a already built. Nothing new sits on the row, and nothing moves on
+hover.
+
+**Three states on the chip line, told apart by line and weight.**
+
+```
+Agent   ┆MCP ▮▮┆   ┆Harness ▮┆
+yours    suggested by several   suggested by one
+```
+
+- **Yours:** a solid hairline, as in 7a.
+- **Suggested:** the same chip with a dashed outline, in `--ink-3`, a step
+  quieter than yours.
+- **Suggested by several sources:** dashed, but in `--ink-2`, as loud as
+  yours. The brief calls these confirmed; the page never uses that word for
+  them, because ✓ is what confirms.
+- **One mark per source** follows the name: 2 px bars on a 4 px pitch, one,
+  two or three of them (three stands for three or more). It is the sighting
+  strip's language, one mark per snapshot, and it says how much agreement
+  there is without a number or a badge. The tooltip names the sources
+  ("Suggested by jev and luna") and gives the tag's definition, which is
+  what you judge a suggestion against.
+
+Order: your tags, then suggestions from several sources, then single ones,
+alphabetical within each. The filter's picked tags still go last. The first
+suggestion keeps 0.35 rem of air from your last chip, so the two groups read
+as two. The 8-chip and 80-character cap counts both groups; the "+N" tooltip
+marks the suggested ones. A row with only suggestions gets the chip line,
+and the `tall` estimate counts it. The drawer's summary adds "· suggested
+MCP, Harness".
+
+Colour does no work here. One accent, no badges, no red, and the dashed
+outline and marks invert with the row like everything else.
+
+**Review happens in the tag editor.** In serve, clicking a suggestion opens
+the editor on its row, as `+ tag` does (in export it filters, like your
+chips). The editor lists your tags with ×, then each suggestion with ✓
+(confirm: add it, so it is yours) and × (dismiss: remove it, so it is never
+suggested again). A page with two or more suggestions ends the line with
+"Confirm all". "Forget page" follows, since review is where a login screen
+or a dead page turns up (brief §5: "forget page beside the tags"). It is
+quiet and takes the burnt earth on hover, like the drawer's Forget. The row
+being edited is inverted, so it takes the other scheme's earth, which keeps
+its contrast.
+
+- **The menu stays shut** when the editor opens on pages with suggestions.
+  Reviewing comes first, and a 44-tag menu dropping over the rows below was
+  in the way. Typing or `↓` brings it back, as after `esc`.
+- **Keyboard.** `+` opens the editor. `←` from the empty field steps back
+  along its buttons (Forget page, Confirm all, then each chip's ×, ✓), and
+  `←` `→` move between them. `↵` or `space` presses one. After ✓ or × the
+  key moves to the same button on the next suggestion, so `↵ ↵ ↵` dismisses
+  a run of them. `u` undoes from a button, and `esc` closes the editor from
+  one (§3, step 4). Other page keys are off while a button has the key.
+- **On the tray**, the editor lists the selection's suggestions, each with
+  how many selected pages carry it ("Agent 2"), busiest first. ✓ and × act
+  only on the pages that carry it. Dismissing on the rest would record a
+  decision about a tag nobody suggested there.
+- **The toast says what happened:** "Confirmed MCP on 1 page", "Dismissed
+  Voice on 3 pages", counted from the decisions the server reports as
+  changed. A dismissal changes no visible tag, so `urls` would say 0. Undo
+  says "Harness is suggested again on 1 page", and undoing that confirms or
+  dismisses again.
+
+**How the page knows what is still a suggestion.** The server's rule is
+"suggested, and neither added nor removed". The page keeps each page's
+suggestions as loaded (`sg`), and the names decided on this visit (`gone`).
+Every tag request already returns the exact decisions it replaced (§5,
+`undo`). So after a request, each decision in it is made (added to `gone`),
+and after an undo each one it restores to neither-added-nor-removed is
+unmade (taken out of `gone`), which shows the suggestion again. That is
+exact for everything this tab does, with no new endpoint and no refetch. A
+revival already refetches the library, and now reloads suggestions with it.
+Retiring a tag hides its suggestions too, as the server does.
+
+**The tag bar and filters count suggestions.** A page's tags, for filtering
+and counting, are yours plus its suggestions (`p.all`). This is the brief's
+model (§2: "its suggestions … plus the owner's additions, minus the owner's
+removals") and the owner's recall-first view. It also makes review a
+filtering job: pick Harness and every page tagged or suggested Harness is
+there to confirm or clear. The count stays a single number, so the bar
+reads as before. Its tooltip splits it: "132 pages tagged Harness, all
+suggested", "173 pages tagged Agent, 171 of them suggested". Rejected: two
+numbers per cell (noise on every cell, for a split the chips already show
+row by row); counting only yours (after an import, the bar would be empty
+while 385 rows carried chips, and a filter would hide exactly the pages
+waiting for review). The retire dialog counts the same way, since retiring
+hides suggestions too. The editor's own chips count only yours, because ×
+there removes a tag you set.
+
+**"Has suggested tags" is a Show option,** between Closed and Forgotten, and
+only offered when the library has suggestions. The count line says "385
+pages with suggested tags", as the Forgotten view says "6 forgotten pages".
+Forgotten pages are left out, as in every view except Forgotten. It is a
+Show option and not a toggle beside the tag bar, because Show is where the
+page already keeps "which pages", and it takes a filter and `esc` the same
+way. A row that runs out of suggestions leaves the view when the editor
+closes, not while you are in it (§9).
+
+**Definitions.** `GET api/library` now gives each vocabulary entry its
+`definition` when there is one (`tags --define`). The backend change is one
+optional field on `VocabularyEntry`, so `api/tags` and `api/vocabulary`
+answers carry it too. The page shows it where it helps a decision: the
+tooltip of a tag bar cell, of your chips and of suggestions, and in the
+retire dialog as a grey line under the name, cut to one line with the whole
+text as the tooltip.
+
+**Export is read-only.** Suggestions show with the same dashes, marks and
+tooltips, count in the bar, and "Has suggested tags" works. Clicking one
+filters. There is no ✓ or × anywhere, and `+` offers the
+`knowmoretabs tag '<url>' --add NAME` command, which is also how a
+suggestion is confirmed from a terminal.
+
+### Rejected
+
+- **✓ × on every suggestion at rest.** One click fewer, but every row with
+  suggestions (two in three in the owner's archive) would carry two more
+  controls per chip, all the time. 7a rejected × on hover for the same
+  reason: it shifts widths or costs width always.
+- **Clicking a suggestion to filter, in serve.** Consistent with your
+  chips, but a suggestion is a question, and answering it is what the click
+  is for. The tag bar still filters by it. Export, which cannot answer,
+  filters.
+- **A "Confirm all" on the tray.** A selection's pages carry different
+  suggestions, and one request adds the same names to every page it names.
+  So it would be one request per page, and undo covers one request. Per
+  name it stays one request, and exact.
+- **Opacity or colour for suggestions.** Opacity fades the text too far on
+  an inverted row. A tint would be a second accent.
+- **A number for sources ("MCP 2").** It reads as a count of pages, which
+  is what numbers mean on the tag bar and in the tray editor.
+
+### Fixture
+
+`generate.py` gives five tags a definition (Harness, MCP, Skills, Evals,
+Voice), and not Agent, the first, so the contract test, which reads the
+first entry's fields as required, keeps `definition` optional. Nothing else
+moves. `tests/serve.rs` checks that the served vocabulary carries a
+definition, and leaves the key out when there is none.
+
+### Size and speed
+
+app.js 63,068 → 70,396 bytes (+7.3 KB): the chip states, the editor's
+review buttons and their keys, the decision bookkeeping, the toasts,
+definitions, and the view. app.css 39,037 → 40,292 bytes (+1.3 KB). On the
+lab archive (562 rows, 385 with suggestions, 822 suggestion chips rendered),
+a render is 14.8 ms and boot to first render 120 ms, over `fetch`. The
+fixture from `file://` renders in 17.1 ms.
+
+### Checked
+
+In Chrome headless against `serve` on copies of the owner's archive, with
+the lab's facet vocabulary (44 active tags, each defined, Usage & Cost
+retired), suggestions from two models imported with the real
+`tag --import --accept-new --partial` (jev with tags on 354 pages, luna on
+343), and six decisions set by hand. Keys were sent as single
+trusted presses over the DevTools protocol, since the harness's own key
+command repeated `u` 870 times.
+
+- Light and dark at 1400, 700 and 390 px, the list and the open editor. No
+  horizontal overflow, no console errors.
+- One row by keyboard: `+`, `←` to a ×, `↵` dismisses and moves to the
+  next ×, `u` brings it back, `↵` on ✓ confirms, `esc` closes. After each
+  step, `library.json`'s `add` and `remove` matched the toast.
+- One row by mouse: click a suggestion, ✓, ×, the toast's Undo, Confirm
+  all, and its undo, restoring the page exactly.
+- Four selected rows: ✓ Model added it to all four, × Provider removed it
+  from the three that carried it and recorded nothing on the fourth, and
+  undo restored all three.
+- Retiring a mostly suggested tag hid it from 132 pages and the bar.
+  Bringing it back restored them.
+- Tag names, a source and a definition carrying `<img onerror>`, `<svg
+  onload>`, `<script>` and quotes render as text everywhere: chips, editor,
+  bar, drawer summary, dialog, tooltips, toast. Serve and export alike.
+- Export: marked, filterable, no ✓ ×, `+` offers the command.
+- Still working: the `esc` order (field, editor from a chip, history,
+  selection, filters), `f` and `u`, Forget from the drawer and restore from
+  the Forgotten view, and the drawer's Browser history section (on a copy
+  of the history-view archive, since the owner's own has no snapshot with
+  signals yet).
+
+### Open
+
+- **Phones and the chip line estimate.** At 390 px a row's chips often wrap
+  to two lines. Offscreen rows are estimated at one chip line, so a row
+  scrolled to can move as the rows above it render (measured: 348 → 921 px
+  a second after opening). This is 7a's estimate; suggestions put chip lines
+  on most rows, which makes it show. A second `--tagline` under 40 rem, or
+  estimating by chip count, would fix it.
+- **Touch targets.** ✓ and × are chip-sized, about 16 px. Fine with a
+  pointer, small on a phone.
+- **Should agreement be the default for filters?** If single-source
+  suggestions prove mostly wrong, the bar could count only agreed ones and
+  yours. That is one predicate (`setSug`).
+- **"Untagged" view.** Still open from §9's follow-ups; "Has suggested tags"
+  covers the review backlog, not pages nothing suggested anything for.
+- **Tray size.** Selecting hundreds of pages lists every suggested name in
+  the tray editor, which wraps and grows. It has not been capped.

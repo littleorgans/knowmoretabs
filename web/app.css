@@ -236,6 +236,15 @@ button.grp:hover { color: inherit; text-decoration: underline; }
 .tag { display: inline-flex; align-items: baseline; gap: 0.3em; flex: none; margin: 0; padding: 0.05em 0.45em; font: 0.6875rem/1.4 var(--sans); color: var(--ink-2); background: none; border: 1px solid var(--line-2); white-space: nowrap; }
 button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
 .tag.n { border-color: transparent; color: var(--ink-3); }
+/* a suggestion is dashed and a step quieter than yours; one from several
+   sources is as loud as yours. After the name, one mark per source, as the
+   strip draws one per snapshot. The first one keeps a little air from yours. */
+.tag.s { border-style: dashed; color: var(--ink-3); }
+.tag.s:is(.s2, .s3) { color: var(--ink-2); }
+.tag:not(.s) + .tag.s { margin-left: 0.35rem; }
+.tag .src { align-self: center; width: 2px; height: 0.6em; background: repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 4px); opacity: 0.8; }
+.tag.s2 .src { width: 6px; }
+.tag.s3 .src { width: 10px; }
 .tag.add { border-style: dashed; color: var(--ink-3); opacity: 0; transition: opacity 0.12s var(--ease); }
 .row:is(:hover, .cur) .tag.add, .tag.add:focus-visible { opacity: 1; }
 @media (hover: none) { .tag.add { opacity: 1; } }
@@ -249,6 +258,14 @@ button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
 .tag.x small { opacity: 0.65; }
 .tag.x button { align-self: stretch; margin: 0; padding: 0 0.4em; background: none; border: 0; border-left: 1px solid; border-left-color: inherit; color: inherit; font: inherit; line-height: 1; }
 .tag.x button:hover { background: color-mix(in srgb, currentColor 18%, transparent); }
+.tag.x.s { color: inherit; border-style: dashed; }
+.tag.x.s button { border-left-style: dashed; }
+.tag.all { border-color: transparent; color: inherit; opacity: 0.75; }
+.tag.all:hover { opacity: 1; text-decoration: underline; text-underline-offset: 0.2em; }
+.tag.fg { margin-left: 0.6rem; }
+/* the one coloured hover, as on the drawer's Forget; the row being edited is
+   inverted, so it takes the other scheme's earth */
+.tag.fg:hover { color: light-dark(#e2896c, #a8432a); }
 .row.tall { contain-intrinsic-size: auto calc(var(--row) + var(--tagline)); }
 .row.tagging { content-visibility: visible; }
 .row.tagging .body > .tags { display: none; }
@@ -372,6 +389,7 @@ dialog .lede { margin: -0.5rem 0 1rem; color: var(--ink-2); text-wrap: pretty; }
 #vocab-list { max-height: min(26rem, 60vh); overflow-y: auto; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--line); }
 #vocab-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 1rem; min-height: 2.5rem; border-bottom: 1px solid var(--line); }
 #vocab-list li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#vocab-list li span small { display: block; margin: -0.1rem 0 0.4rem; overflow: hidden; text-overflow: ellipsis; color: var(--ink-3); font-size: 0.75rem; }   /* the definition */
 #vocab-list li small { font-size: 0.75rem; color: var(--ink-3); }
 #vocab-list li button { height: 1.75rem; padding: 0 0.625rem; font-size: 0.75rem; border-color: transparent; color: var(--ink-2); }   /* quiet until the pointer is on it */
 #vocab-list li:hover button { border-color: var(--line-2); color: var(--ink); }
