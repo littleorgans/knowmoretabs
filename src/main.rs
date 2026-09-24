@@ -14,13 +14,18 @@ mod archive;
 mod assets;
 mod capture;
 mod cli;
+mod enrich;
 mod error;
 mod export;
+mod fetch;
+mod github;
+mod head;
 mod history;
 mod library;
 mod library_commands;
 mod local;
 mod metadata;
+mod metadata_writer;
 mod model;
 mod out;
 mod platform;
@@ -104,6 +109,20 @@ fn main() -> ExitCode {
             };
             tags::tags_command(&root, &edit, *all, cli.json, log)
         }
+        Some(Command::Enrich {
+            dry_run,
+            limit,
+            refetch,
+        }) => enrich::command(
+            &root,
+            enrich::Options {
+                dry_run: *dry_run,
+                limit: *limit,
+                refetch: *refetch,
+            },
+            cli.json,
+            log,
+        ),
         _ => save(&cli, root, log),
     };
     match result {

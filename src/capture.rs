@@ -56,6 +56,14 @@ impl Log {
         }
     }
 
+    /// How far a long run has got. Not a warning, but shown under the same
+    /// rule: always, unless `-q`.
+    pub fn progress(self, message: &str) {
+        if !self.quiet {
+            emit(message);
+        }
+    }
+
     pub fn note(self, message: &str) {
         if self.verbose {
             emit(message);

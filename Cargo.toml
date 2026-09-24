@@ -45,6 +45,13 @@ serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
+# The HTTP client for `enrich`, the one command that sends anything. `rustls`
+# with its bundled Mozilla roots, so TLS is compiled in on every platform and
+# no system OpenSSL, certificate store or proxy is involved; no cookie jar,
+# no gzip, no charset tables (src/fetch.rs, src/head.rs). A tilde pin because
+# the resolver hook that refuses private addresses is in ureq's `unversioned`
+# module, which may change in a minor release.
+ureq = { version = "~3.4", default-features = false, features = ["rustls"] }
 url = "2.5"
 
 [dev-dependencies]
