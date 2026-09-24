@@ -99,6 +99,19 @@ pub enum Error {
     TagName { name: String, reason: &'static str },
     #[error("no such tag: {}; nothing changed", .0.join(", "))]
     UnknownTag(Vec<String>),
+    #[error("cannot use that definition for {name:?}: {reason}; nothing changed")]
+    TagDefinition { name: String, reason: &'static str },
+    #[error(
+        "your vocabulary has no tags, so there is nothing to suggest; create the tags you want first, each with what it means: knowmoretabs tags --define NAME \"what it covers\""
+    )]
+    EmptyVocabulary,
+    #[error("cannot write a prompt into {}: {reason}; choose a new or empty folder outside the archive", path.display())]
+    PromptFolder { path: PathBuf, reason: &'static str },
+    #[error("{} has {}; nothing stored: {}", path.display(), crate::triage::plural(problems.len(), "problem"), summarize(problems))]
+    Import {
+        path: PathBuf,
+        problems: Vec<String>,
+    },
     #[error("cannot listen on 127.0.0.1:{port}: {source}; pass --port N to use another port")]
     Bind {
         port: u16,
@@ -135,6 +148,10 @@ impl Error {
             Self::NotInLibrary(_) => "not_in_library",
             Self::TagName { .. } => "tag_name",
             Self::UnknownTag(_) => "unknown_tag",
+            Self::TagDefinition { .. } => "tag_definition",
+            Self::EmptyVocabulary => "empty_vocabulary",
+            Self::PromptFolder { .. } => "prompt_folder",
+            Self::Import { .. } => "import",
             Self::Bind { .. } => "bind",
             Self::AssetMarkers => "asset_markers",
             Self::ExportDestination(_) => "export_destination",
@@ -162,9 +179,26 @@ impl Error {
             Self::Stale { profile, reason } => {
                 Some(format!("{reason} (profile {})", profile.display()))
             }
+            Self::Import { problems, .. } => Some(problems.join("\n")),
             _ => None,
         }
     }
+}
+
+/// An import's problems, as many as a person or an agent fixing the file
+/// can use at once. `--json` carries every one of them in `detail`.
+fn summarize(problems: &[String]) -> String {
+    const SHOWN: usize = 20;
+    let mut text = problems
+        .iter()
+        .take(SHOWN)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("; ");
+    if problems.len() > SHOWN {
+        let _ = write!(text, "; and {} more", problems.len() - SHOWN);
+    }
+    text
 }
 
 /// The failure as one JSON object, for the document `--json` writes to

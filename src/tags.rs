@@ -72,13 +72,13 @@ fn disjoint(first: &[String], second: &[String], reason: &'static str) -> Result
 }
 
 /// Vocabulary times are whole seconds, like the snapshot ids beside them.
-fn now() -> Timestamp {
+pub fn now() -> Timestamp {
     let now = Timestamp::now();
     Timestamp::from_second(now.as_second()).unwrap_or(now)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Admitted {
+pub enum Admitted {
     Known,
     Created,
     Revived,
@@ -86,7 +86,7 @@ enum Admitted {
 
 /// The vocabulary's spelling of `name`, after putting it there or bringing
 /// it back from retirement if need be.
-fn admit(state: &mut State, name: &str, now: Timestamp) -> (String, Admitted) {
+pub fn admit(state: &mut State, name: &str, now: Timestamp) -> (String, Admitted) {
     let folded = fold(name);
     if let Some((spelling, term)) = state
         .vocabulary
@@ -378,11 +378,27 @@ pub fn undo(root: &Path, undo: &Undo, log: Log) -> Result<Outcome, Error> {
     Ok(outcome)
 }
 
+/// What one `tags` command, or one `POST /api/vocabulary`, asks of the
+/// vocabulary. The pairs are (tag, definition) and (child, parent).
+#[derive(Debug, Default)]
+pub struct VocabularyEdit {
+    pub create: Vec<String>,
+    pub retire: Vec<String>,
+    pub define: Vec<(String, String)>,
+    pub imply: Vec<(String, String)>,
+    pub unimply: Vec<(String, String)>,
+}
+
 #[derive(Debug, Default)]
 pub struct VocabularyOutcome {
     pub created: Vec<String>,
     pub revived: Vec<String>,
     pub retired: Vec<String>,
+    /// Tags whose definition this request set, changed or cleared.
+    pub defined: Vec<String>,
+    /// (child, parent) rules this request added or took away.
+    pub implied: Vec<(String, String)>,
+    pub unimplied: Vec<(String, String)>,
     /// Named to retire but never in the vocabulary. The CLI refuses these;
     /// the API ignores them, since there is nothing to retire.
     pub unknown: Vec<String>,
@@ -390,19 +406,192 @@ pub struct VocabularyOutcome {
     pub vocabulary: Vec<VocabularyEntry>,
 }
 
-/// Creates and retires vocabulary entries. Creating a retired name brings
-/// it back; retiring records the time and never touches a page, so a page
-/// tagged with a retired name shows it again the day it comes back.
+/// A definition is read by a tagging agent as one line of a list, so it is
+/// one paragraph: whitespace collapsed, at most this many characters.
+pub const DEFINITION_LIMIT: usize = 500;
+
+/// The stored spelling of a definition; empty means "no definition".
+fn definition(name: &str, raw: &str) -> Result<Option<String>, Error> {
+    let text = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    let reason = if text.chars().count() > DEFINITION_LIMIT {
+        "it is longer than 500 characters"
+    } else if text.chars().any(char::is_control) {
+        "it contains a control character"
+    } else {
+        return Ok((!text.is_empty()).then_some(text));
+    };
+    Err(Error::TagDefinition {
+        name: name.to_owned(),
+        reason,
+    })
+}
+
+/// Normalized pairs, first of each (folded) pair kept.
+fn pairs(raw: &[(String, String)]) -> Result<Vec<(String, String)>, Error> {
+    let mut seen = HashSet::new();
+    let mut pairs = Vec::new();
+    for (child, parent) in raw {
+        let (child, parent) = (normalize(child)?, normalize(parent)?);
+        if fold(&child) == fold(&parent) {
+            return Err(Error::TagName {
+                name: child,
+                reason: "a tag cannot imply itself",
+            });
+        }
+        if seen.insert((fold(&child), fold(&parent))) {
+            pairs.push((child, parent));
+        }
+    }
+    Ok(pairs)
+}
+
+/// Whether `from` reaches `to` through `implies`, in any number of steps.
+fn reaches(state: &State, from: &str, to: &str) -> bool {
+    let target = fold(to);
+    let mut stack = vec![fold(from)];
+    let mut seen = HashSet::new();
+    while let Some(name) = stack.pop() {
+        if name == target {
+            return true;
+        }
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        if let Some((_, term)) = state.term(&name) {
+            stack.extend(term.implies.iter().map(|parent| fold(parent)));
+        }
+    }
+    false
+}
+
+/// `names` and every active tag they imply, directly or through another,
+/// in the vocabulary's spelling and tag order. Parent rules are the one rule
+/// the tool applies itself: the owner declared that they always hold.
+pub fn with_parents(state: &State, names: &[String]) -> Vec<String> {
+    let active = state.spellings(false);
+    let mut out: Vec<String> = Vec::new();
+    let mut seen = HashSet::new();
+    let mut stack: Vec<String> = names.iter().rev().cloned().collect();
+    while let Some(name) = stack.pop() {
+        let folded = fold(&name);
+        if !seen.insert(folded.clone()) {
+            continue;
+        }
+        let Some(spelling) = active.get(&folded) else {
+            continue;
+        };
+        out.push((*spelling).to_owned());
+        if let Some((_, term)) = state.term(spelling) {
+            stack.extend(term.implies.iter().cloned());
+        }
+    }
+    out.sort_by(|a, b| tag_order(a, b));
+    out
+}
+
+/// The vocabulary a tagging agent was shown, as twelve hex digits: the
+/// start of the SHA-256 of the active tags in tag order, each with its
+/// definition and its parents. Computed, never stored, so two prompts from
+/// the same vocabulary carry the same version and any change a tagger could
+/// act on (a tag, a definition, a rule) gives a new one. Retired tags and
+/// creation times are not part of it.
+pub fn vocabulary_version(state: &State) -> String {
+    use sha2::{Digest, Sha256};
+    let active = state.spellings(false);
+    let mut terms: Vec<(&String, &Term)> = state
+        .vocabulary
+        .iter()
+        .filter(|(_, term)| term.retired_at.is_none())
+        .collect();
+    terms.sort_by(|(a, _), (b, _)| tag_order(a, b));
+    let canonical: Vec<serde_json::Value> = terms
+        .into_iter()
+        .map(|(name, term)| {
+            let mut parents: Vec<&str> = term
+                .implies
+                .iter()
+                .filter_map(|parent| active.get(&fold(parent)).copied())
+                .collect();
+            parents.sort_by(|a, b| tag_order(a, b));
+            serde_json::json!([name, term.definition.as_deref().unwrap_or(""), parents])
+        })
+        .collect();
+    let digest = Sha256::digest(serde_json::Value::Array(canonical).to_string().as_bytes());
+    format!("{digest:x}")[..12].to_owned()
+}
+
+/// Takes parent rules away, then adds them. A rule that would close a loop
+/// is refused.
+fn relate(
+    state: &mut State,
+    imply: &[(String, String)],
+    unimply: &[(String, String)],
+    outcome: &mut VocabularyOutcome,
+) -> Result<(), Error> {
+    for (child, parent) in unimply {
+        let (Some((child, _)), Some((parent, _))) = (state.term(child), state.term(parent)) else {
+            continue;
+        };
+        let (child, parent) = (child.to_owned(), parent.to_owned());
+        let term = state.vocabulary.get_mut(&child).expect("known term");
+        let before = term.implies.len();
+        term.implies.retain(|name| fold(name) != fold(&parent));
+        if term.implies.len() != before {
+            outcome.unimplied.push((child, parent));
+        }
+    }
+    for (child, parent) in imply {
+        let (Some((child, child_term)), Some((parent, _))) =
+            (state.term(child), state.term(parent))
+        else {
+            continue;
+        };
+        if child_term.implies.iter().any(|p| fold(p) == fold(parent)) {
+            continue;
+        }
+        let (child, parent) = (child.to_owned(), parent.to_owned());
+        if reaches(state, &parent, &child) {
+            return Err(Error::TagName {
+                name: child,
+                reason: "it would imply itself through its parents",
+            });
+        }
+        let term = state.vocabulary.get_mut(&child).expect("known term");
+        term.implies.insert(parent.clone());
+        outcome.implied.push((child, parent));
+    }
+    Ok(())
+}
+
+/// Creates, retires, defines and relates vocabulary entries. Creating a
+/// retired name brings it back; retiring records the time and never touches
+/// a page, so a page tagged with a retired name shows it again the day it
+/// comes back. Defining a name the vocabulary lacks creates it, as typing a
+/// new name does. A parent rule needs both names in the vocabulary and may
+/// not close a loop.
 pub fn edit_vocabulary(
     root: &Path,
-    create: &[String],
-    retire: &[String],
+    edit: &VocabularyEdit,
     strict: bool,
     log: Log,
 ) -> Result<VocabularyOutcome, Error> {
-    let create = names(create)?;
-    let retire = names(retire)?;
+    let create = names(&edit.create)?;
+    let retire = names(&edit.retire)?;
     disjoint(&create, &retire, "it is named both to create and to retire")?;
+    let mut define = Vec::new();
+    for (name, text) in &edit.define {
+        let name = normalize(name)?;
+        let text = definition(&name, text)?;
+        define.push((name, text));
+    }
+    let defined_names: Vec<String> = define.iter().map(|(name, _)| name.clone()).collect();
+    disjoint(
+        &defined_names,
+        &retire,
+        "it is named both to define and to retire",
+    )?;
+    let imply = pairs(&edit.imply)?;
+    let unimply = pairs(&edit.unimply)?;
     let archive = Archive::open(root)?;
     let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
     let mut state = State::read(root)?;
@@ -423,17 +612,46 @@ pub fn edit_vocabulary(
             None => outcome.unknown.push(name.clone()),
         }
     }
+    for (child, parent) in imply.iter().chain(&unimply) {
+        for name in [child, parent] {
+            if state.term(name).is_none()
+                && !create
+                    .iter()
+                    .chain(&defined_names)
+                    .any(|n| fold(n) == fold(name))
+                && !outcome.unknown.contains(name)
+            {
+                outcome.unknown.push(name.clone());
+            }
+        }
+    }
     if strict && !outcome.unknown.is_empty() {
         return Err(Error::UnknownTag(outcome.unknown));
     }
-    for name in &create {
+    for name in create.iter().chain(&defined_names) {
         match admit(&mut state, name, now) {
             (_, Admitted::Known) => {}
             (spelling, Admitted::Created) => outcome.created.push(spelling),
             (spelling, Admitted::Revived) => outcome.revived.push(spelling),
         }
     }
-    if !(outcome.created.is_empty() && outcome.revived.is_empty() && outcome.retired.is_empty()) {
+    for (name, text) in define {
+        let (spelling, _) = state.term(&name).expect("admitted above");
+        let spelling = spelling.to_owned();
+        let term = state.vocabulary.get_mut(&spelling).expect("known term");
+        if term.definition != text {
+            term.definition = text;
+            outcome.defined.push(spelling);
+        }
+    }
+    relate(&mut state, &imply, &unimply, &mut outcome)?;
+    let changed = !(outcome.created.is_empty()
+        && outcome.revived.is_empty()
+        && outcome.retired.is_empty()
+        && outcome.defined.is_empty()
+        && outcome.implied.is_empty()
+        && outcome.unimplied.is_empty());
+    if changed {
         state.write(root)?;
     }
     outcome.vocabulary = state.active_vocabulary();
@@ -493,86 +711,150 @@ fn human_tag(outcome: &Outcome) -> String {
 }
 
 /// `knowmoretabs tags`: the vocabulary with how many pages in the library
-/// carry each tag, after any `--create` and `--retire`.
+/// carry each tag, and what each means, after any edits.
 pub fn tags_command(
     root: &Path,
-    create: &[String],
-    retire: &[String],
+    edit: &VocabularyEdit,
     all: bool,
     json: bool,
     log: Log,
 ) -> Result<(), Error> {
-    let edited = if create.is_empty() && retire.is_empty() {
-        None
+    let edited = if edit.create.is_empty()
+        && edit.retire.is_empty()
+        && edit.define.is_empty()
+        && edit.imply.is_empty()
+        && edit.unimply.is_empty()
+    {
+        VocabularyOutcome::default()
     } else {
-        Some(edit_vocabulary(root, create, retire, true, log)?)
+        edit_vocabulary(root, edit, true, log)?
     };
     let loaded = library::load(&Archive::at(root))?;
     let state = State::read(root)?;
     let counts = page_counts(&state, &library::known_urls(&loaded.snapshots));
-    let mut listed: Vec<(&String, &Term)> = state
+    let mut listed: Vec<Listed> = state
         .vocabulary
         .iter()
         .filter(|(_, term)| all || term.retired_at.is_none())
+        .map(|(name, term)| {
+            let mut parents: Vec<String> = term
+                .implies
+                .iter()
+                .map(|parent| {
+                    state
+                        .term(parent)
+                        .map_or(parent.as_str(), |(s, _)| s)
+                        .to_owned()
+                })
+                .collect();
+            parents.sort_by(|a, b| tag_order(a, b));
+            Listed {
+                name,
+                term,
+                pages: counts.get(&fold(name)).copied().unwrap_or(0),
+                parents,
+            }
+        })
         .collect();
-    listed.sort_by(|(a, _), (b, _)| tag_order(a, b));
-    let count = |name: &str| counts.get(&fold(name)).copied().unwrap_or(0);
-    let edited = edited.unwrap_or_default();
+    listed.sort_by(|a, b| tag_order(a.name, b.name));
     if json {
-        let vocabulary: Vec<_> = listed
-            .iter()
-            .map(|(name, term)| {
-                let mut entry = serde_json::json!({
-                    "name": name, "created_at": term.created_at, "pages": count(name),
-                });
-                if let Some(retired_at) = term.retired_at {
-                    entry["retired_at"] = serde_json::json!(retired_at);
-                }
-                entry
-            })
-            .collect();
-        out::json(&serde_json::json!({
-            "vocabulary": vocabulary,
-            "created": edited.created,
-            "revived": edited.revived,
-            "retired": edited.retired,
-        }));
-        return Ok(());
+        out::json(&json_listing(&listed, &edited, &vocabulary_version(&state)));
+    } else if !log.quiet {
+        out::block(&human_listing(&listed, &edited));
     }
-    if log.quiet {
-        return Ok(());
-    }
+    Ok(())
+}
+
+/// One row of `tags`.
+struct Listed<'a> {
+    name: &'a str,
+    term: &'a Term,
+    pages: usize,
+    parents: Vec<String>,
+}
+
+fn json_listing(listed: &[Listed], edited: &VocabularyOutcome, version: &str) -> serde_json::Value {
+    let vocabulary: Vec<_> = listed
+        .iter()
+        .map(|row| {
+            let mut entry = serde_json::json!({
+                "name": row.name, "created_at": row.term.created_at, "pages": row.pages,
+            });
+            if let Some(retired_at) = row.term.retired_at {
+                entry["retired_at"] = serde_json::json!(retired_at);
+            }
+            if let Some(definition) = &row.term.definition {
+                entry["definition"] = serde_json::json!(definition);
+            }
+            if !row.parents.is_empty() {
+                entry["implies"] = serde_json::json!(row.parents);
+            }
+            entry
+        })
+        .collect();
+    serde_json::json!({
+        "vocabulary": vocabulary,
+        "version": version,
+        "created": edited.created,
+        "revived": edited.revived,
+        "retired": edited.retired,
+        "defined": edited.defined,
+        "implied": edited.implied,
+        "unimplied": edited.unimplied,
+    })
+}
+
+/// What changed, then one line per tag: its page count, its name, and what
+/// it means when the owner has said.
+fn human_listing(listed: &[Listed], edited: &VocabularyOutcome) -> String {
+    let mut text = String::new();
     let mut changes = Vec::new();
     for (verb, names) in [
         ("created", &edited.created),
         ("brought back", &edited.revived),
         ("retired", &edited.retired),
+        ("defined", &edited.defined),
     ] {
         if !names.is_empty() {
             changes.push(format!("{verb} {}", names.join(", ")));
         }
     }
+    for (child, parent) in &edited.implied {
+        changes.push(format!("{child} now implies {parent}"));
+    }
+    for (child, parent) in &edited.unimplied {
+        changes.push(format!("{child} no longer implies {parent}"));
+    }
     if !changes.is_empty() {
-        out::line(&changes.join("; "));
+        let _ = writeln!(text, "{}", changes.join("; "));
     }
     if listed.is_empty() {
-        out::line("No tags yet; add one with `knowmoretabs tag <URL> --add NAME`.");
-        return Ok(());
+        text.push_str("No tags yet; add one with `knowmoretabs tag <URL> --add NAME`.\n");
+        return text;
     }
     let width = listed
         .iter()
-        .map(|(name, _)| count(name).to_string().len())
+        .map(|row| row.pages.to_string().len())
         .max()
         .unwrap_or(1);
-    for (name, term) in &listed {
-        let retired = if term.retired_at.is_some() {
-            "  (retired)"
-        } else {
-            ""
-        };
-        out::line(&format!("{:>width$}  {name}{retired}", count(name)));
+    for row in listed {
+        let _ = write!(text, "{:>width$}  {}", row.pages, row.name);
+        if row.term.retired_at.is_some() {
+            text.push_str("  (retired)");
+        }
+        let mut about = row.term.definition.clone().unwrap_or_default();
+        if !row.parents.is_empty() {
+            if !about.is_empty() {
+                about.push(' ');
+            }
+            let _ = write!(about, "(implies {})", row.parents.join(", "));
+        }
+        if !about.is_empty() {
+            let _ = write!(text, " — {about}");
+        }
+        text.push('\n');
     }
-    Ok(())
+    text
 }
 
 /// Pages the library shows, per folded tag name, retired tags included so

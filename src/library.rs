@@ -16,6 +16,7 @@ use crate::archive::{self, Archive, SNAPSHOT_JSON};
 use crate::error::Error;
 use crate::local;
 use crate::model::{self, Snapshot};
+use crate::suggestions::Suggested;
 
 #[derive(Debug, Default)]
 pub struct Loaded {
@@ -99,6 +100,13 @@ pub struct Term {
     pub created_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub retired_at: Option<Timestamp>,
+    /// What the tag means, in the owner's words: what a tagging agent reads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition: Option<String>,
+    /// Parent tags that always hold when this one does (DPO implies
+    /// Training). Applied to imported suggestions, never to a page directly.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub implies: BTreeSet<String>,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -108,6 +116,8 @@ impl Term {
         Self {
             created_at,
             retired_at: None,
+            definition: None,
+            implies: BTreeSet::new(),
             extra: serde_json::Map::new(),
         }
     }
@@ -274,6 +284,9 @@ struct Page {
     forgotten: bool,
     /// Always present, empty when untagged, so every page has the same shape.
     tags: Vec<String>,
+    /// Imported suggestions the owner has neither added nor removed, each
+    /// with the sources that made it. Always present, like `tags`.
+    suggested: Vec<Suggested>,
 }
 
 #[derive(Debug, Serialize)]
@@ -327,7 +340,22 @@ struct Group {
 // `page_index`, window, position, `tab_id`, pinned (0/1), `group_index_or_null`.
 type Tab = (usize, u32, usize, i32, u8, Option<usize>);
 
-pub fn build(snapshots: &[Snapshot], state: &State, shape: Shape) -> Library {
+impl Library {
+    /// Each page's URL and title, in library order: what a prompt lists.
+    pub fn titles(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.pages
+            .iter()
+            .map(|page| (page.url.as_str(), page.title.as_str()))
+    }
+}
+
+/// `suggested` is [`crate::suggestions::by_page`] over the same `state`.
+pub fn build(
+    snapshots: &[Snapshot],
+    state: &State,
+    suggested: &HashMap<String, Vec<Suggested>>,
+    shape: Shape,
+) -> Library {
     let forgotten = &state.forgotten;
     let spellings = state.spellings(false);
     let mut library = Library {
@@ -391,6 +419,7 @@ pub fn build(snapshots: &[Snapshot], state: &State, shape: Shape) -> Library {
                     domain,
                     forgotten: is_forgotten,
                     tags: state.page_tags(&tab.url, &spellings),
+                    suggested: suggested.get(&tab.url).cloned().unwrap_or_default(),
                 });
                 index
             });
