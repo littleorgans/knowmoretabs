@@ -469,13 +469,16 @@ impl<'c> Queries<'c> {
                  where child.url = ?1 and parent.url != ?1
                  order by child.visit_time desc, parent.id = child.from_visit desc"
             ))?,
+            // A reload's external referrer is the page itself, which is not
+            // where it came from; the next one back is.
             external: schema
                 .has(EXTERNAL_REFERRER)
                 .then(|| {
                     conn.prepare(
-                        "select external_referrer_url from visits
-                         where url = ?1 and external_referrer_url != ''
-                         order by visit_time desc",
+                        "select v.external_referrer_url from visits v
+                         join urls u on u.id = v.url
+                         where v.url = ?1 and v.external_referrer_url not in ('', u.url)
+                         order by v.visit_time desc",
                     )
                 })
                 .transpose()?,
