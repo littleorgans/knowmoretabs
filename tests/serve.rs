@@ -580,6 +580,73 @@ fn names(vocabulary: &Value) -> Vec<&str> {
         .collect()
 }
 
+/// Suggestions come from `tag --import`; the page confirms one with the
+/// existing add, dismisses one with remove, and the exact undo brings it
+/// back as a suggestion.
+#[test]
+fn suggested_tags_are_served_and_the_tag_endpoint_confirms_and_dismisses_them() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let output = fx.run(&["tags", "--create", "Harness", "--create", "Agent"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let file = fx.home.path().join("tags.jsonl");
+    let lines = [
+        json!({"url": A, "tags": ["Harness", "Agent"], "source": "model-one"}),
+        json!({"url": HIDDEN, "tags": ["Agent"], "source": "model-one"}),
+        json!({"url": B, "tags": [], "source": "model-one"}),
+    ];
+    fs::write(&file, lines.map(|line| format!("{line}\n")).concat()).unwrap();
+    let output = fx.run(&["tag", "--import", file.to_str().unwrap()]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    fs::write(
+        &file,
+        format!(
+            "{}\n",
+            json!({"url": A, "tags": ["agent"], "source": "model-two"})
+        ),
+    )
+    .unwrap();
+    let output = fx.run(&["tag", "--import", file.to_str().unwrap()]);
+    assert!(output.status.success(), "{}", stderr(&output));
+
+    let server = Server::start(&fx);
+    let library = server.library();
+    assert_eq!(
+        page(&library, A)["suggested"],
+        json!([
+            {"name": "Agent", "sources": ["model-one", "model-two"]},
+            {"name": "Harness", "sources": ["model-one"]},
+        ])
+    );
+    assert_eq!(tags_of(&library, A), json!([]), "a suggestion is not a tag");
+    assert_eq!(
+        page(&library, HIDDEN)["suggested"],
+        json!([{"name": "Agent", "sources": ["model-one"]}]),
+        "serve keeps forgotten pages, and theirs"
+    );
+    assert_eq!(page(&library, B)["suggested"], json!([]));
+    assert_eq!(names(&library["vocabulary"]), ["Agent", "Harness"]);
+
+    // Confirm one and dismiss the other.
+    let reply = server.post(
+        "/api/tags",
+        &json!({"urls": [A], "add": ["Agent"], "remove": ["Harness"]}),
+    );
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    let undo = reply.json()["undo"].clone();
+    let decided = server.library();
+    assert_eq!(tags_of(&decided, A), json!(["Agent"]));
+    assert_eq!(page(&decided, A)["suggested"], json!([]));
+
+    let reply = server.post("/api/tags", &json!({"undo": undo, "urls": []}));
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(
+        without_generated_at(server.library()),
+        without_generated_at(library),
+        "the undo brings both suggestions back"
+    );
+}
+
 #[test]
 fn tags_round_trip_and_the_swapped_request_undoes_them() {
     let fx = Fixture::new();

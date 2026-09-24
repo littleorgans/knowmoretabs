@@ -20,13 +20,16 @@ mod history;
 mod library;
 mod library_commands;
 mod local;
+mod metadata;
 mod model;
 mod out;
 mod platform;
+mod prompt;
 mod server;
 mod session;
 mod snss;
 mod staleness;
+mod suggestions;
 mod tags;
 mod triage;
 
@@ -83,20 +86,58 @@ fn main() -> ExitCode {
         Some(Command::Restore { urls }) => {
             triage::command(&root, urls, triage::Action::Restore, cli.json, log)
         }
-        Some(Command::Tag { urls, add, remove }) => {
-            tags::tag_command(&root, urls, add, remove, cli.json, log)
-        }
+        Some(Command::Tag(args)) => tag(&root, args, cli.json, log),
         Some(Command::Tags {
             create,
             retire,
+            define,
+            imply,
+            unimply,
             all,
-        }) => tags::tags_command(&root, create, retire, *all, cli.json, log),
+        }) => {
+            let edit = tags::VocabularyEdit {
+                create: create.clone(),
+                retire: retire.clone(),
+                define: cli::pairs(define),
+                imply: cli::pairs(imply),
+                unimply: cli::pairs(unimply),
+            };
+            tags::tags_command(&root, &edit, *all, cli.json, log)
+        }
         _ => save(&cli, root, log),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => fail(&err, &cli),
     }
+}
+
+/// The three forms of `tag`, which clap has already kept apart.
+fn tag(
+    root: &std::path::Path,
+    args: &cli::TagArgs,
+    json: bool,
+    log: Log,
+) -> Result<(), error::Error> {
+    if let Some(dir) = &args.prompt.dir {
+        let options = prompt::PromptOptions {
+            dir,
+            all: args.prompt.all,
+            with_history: args.prompt.with_history,
+        };
+        return prompt::prompt_command(root, &options, json, log);
+    }
+    if let Some(file) = &args.import.file {
+        let options = suggestions::ImportOptions {
+            file,
+            source: args.import.source.as_deref(),
+            accept_new: args.import.accept_new,
+            partial: args.import.partial,
+            dry_run: args.import.dry_run,
+        };
+        return suggestions::import_command(root, &options, json, log);
+    }
+    tags::tag_command(root, &args.urls, &args.add, &args.remove, json, log)
 }
 
 /// The one way a command ends badly, so there is one answer to which stream

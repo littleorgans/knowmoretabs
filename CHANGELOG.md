@@ -77,5 +77,23 @@ as what you can do that you could not before.
   loopback, `Host` and `Origin` checks as forget, and every page in `serve`
   and `export` carries its tags. A `library.json` from before tags reads as
   untagged. Nothing is tagged automatically and nothing leaves the machine.
+- **Suggested tags, from an agent you choose.** `knowmoretabs tag --prompt
+  DIR` writes a work folder for any agent (Claude Code, Codex, anything):
+  `prompt.md` carries how you tag (flat facets, broad tags, no exclusions,
+  "substantially about", favour recall), what each tag means, the exact
+  answer format and a check the agent runs before it finishes; `pages.jsonl`
+  lists the pages that show none of your tags and have no answer yet,
+  never a forgotten one, with searches and referrers only under
+  `--with-history`. `knowmoretabs tag --import DIR/tags.jsonl` checks every
+  line (known pages, known tags, one line per page, one source) and stores
+  nothing unless the whole file passes; `--dry-run` only checks,
+  `--accept-new` creates tags the vocabulary lacks, `--partial` allows
+  unanswered pages and `--source` names the model. Answers are kept in
+  `tags/suggested.jsonl` with their source, date and vocabulary version, and
+  every page in `serve` and `export` gains `suggested`: the tags suggested
+  and not yet added or removed by you, each with its sources. `tags --define
+  NAME TEXT` gives a tag a definition, shown by `tags` and given to the
+  agent, and `tags --imply CHILD PARENT` records a parent rule the import
+  applies. `knowmoretabs` still contains no model and sends nothing.
 
 [0.1.0]: https://github.com/littleorgans/knowmoretabs/releases/tag/v0.1.0

@@ -79,7 +79,7 @@ fn check_destination(root: &Path, destination: &Path) -> Result<(), Error> {
 }
 
 /// Resolve existing ancestors (including symlinks) before creating any output.
-fn resolve_destination(path: &Path) -> Result<std::path::PathBuf, Error> {
+pub fn resolve_destination(path: &Path) -> Result<std::path::PathBuf, Error> {
     let absolute =
         std::path::absolute(path).map_err(Error::io("resolve export directory", path))?;
     let mut resolved = std::path::PathBuf::new();

@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -95,18 +95,8 @@ pub enum Command {
         #[arg(required = true, value_name = "URL")]
         urls: Vec<String>,
     },
-    /// Add tags to pages or take them off
-    Tag {
-        /// Page URLs, each exactly as the library shows it
-        #[arg(required = true, value_name = "URL")]
-        urls: Vec<String>,
-        /// A tag to add; a new name joins the vocabulary (repeatable)
-        #[arg(long, value_name = "NAME", required_unless_present = "remove")]
-        add: Vec<String>,
-        /// A tag to take off (repeatable)
-        #[arg(long, value_name = "NAME")]
-        remove: Vec<String>,
-    },
+    /// Add tags to pages or take them off, or get suggestions from an agent you run
+    Tag(TagArgs),
     /// List the tag vocabulary with how many pages carry each tag
     Tags {
         /// Add a tag to the vocabulary, or bring back a retired one (repeatable)
@@ -115,10 +105,95 @@ pub enum Command {
         /// Retire a tag: hidden everywhere, kept in library.json (repeatable)
         #[arg(long, value_name = "NAME")]
         retire: Vec<String>,
+        /// Say what a tag means, for you and for a tagging agent; "" clears it (repeatable)
+        #[arg(long, num_args = 2, value_names = ["NAME", "TEXT"], action = ArgAction::Append)]
+        define: Vec<String>,
+        /// Whenever CHILD is suggested, suggest PARENT too, e.g. DPO Training (repeatable)
+        #[arg(long, num_args = 2, value_names = ["CHILD", "PARENT"], action = ArgAction::Append)]
+        imply: Vec<String>,
+        /// Take a parent rule away (repeatable)
+        #[arg(long, num_args = 2, value_names = ["CHILD", "PARENT"], action = ArgAction::Append)]
+        unimply: Vec<String>,
         /// Include retired tags
         #[arg(long)]
         all: bool,
     },
+}
+
+/// `tag` has three forms: tag pages yourself, write a prompt for an agent,
+/// or import what the agent wrote. Clap keeps them apart.
+#[derive(Debug, Args, Default)]
+pub struct TagArgs {
+    /// Page URLs, each exactly as the library shows it
+    #[arg(
+        value_name = "URL",
+        required_unless_present_any = ["prompt", "import"],
+        conflicts_with_all = ["prompt", "import"]
+    )]
+    pub urls: Vec<String>,
+    /// A tag to add; a new name joins the vocabulary (repeatable)
+    #[arg(
+        long,
+        value_name = "NAME",
+        required_unless_present_any = ["remove", "prompt", "import"],
+        conflicts_with_all = ["prompt", "import"]
+    )]
+    pub add: Vec<String>,
+    /// A tag to take off (repeatable)
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["prompt", "import"])]
+    pub remove: Vec<String>,
+    #[command(flatten)]
+    pub prompt: PromptArgs,
+    #[command(flatten)]
+    pub import: ImportArgs,
+}
+
+#[derive(Debug, Args, Default)]
+pub struct PromptArgs {
+    /// Write a work folder (prompt.md, pages.jsonl) for an agent you run, covering pages not yet tagged
+    #[arg(
+        long = "prompt",
+        id = "prompt",
+        value_name = "DIR",
+        conflicts_with = "import"
+    )]
+    pub dir: Option<PathBuf>,
+    /// With --prompt: every page in the library, tagged or not
+    #[arg(long, requires = "prompt", conflicts_with_all = ["import", "urls", "add", "remove"])]
+    pub all: bool,
+    /// With --prompt: include the searches and referrers History recorded
+    #[arg(long, requires = "prompt", conflicts_with_all = ["import", "urls", "add", "remove"])]
+    pub with_history: bool,
+}
+
+#[derive(Debug, Args, Default)]
+pub struct ImportArgs {
+    /// Validate an agent's tags.jsonl and store it as suggested tags
+    #[arg(long = "import", id = "import", value_name = "FILE")]
+    pub file: Option<PathBuf>,
+    /// With --import: who made the suggestions, instead of the file's "source"
+    #[arg(long, value_name = "NAME", requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove"])]
+    pub source: Option<String>,
+    /// With --import: create tags the vocabulary does not have
+    #[arg(long, requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove"])]
+    pub accept_new: bool,
+    /// With --import: allow pages from the prompt to be missing
+    #[arg(long, requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove"])]
+    pub partial: bool,
+    /// With --import: validate and report; store nothing
+    #[arg(long, requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove"])]
+    pub dry_run: bool,
+}
+
+/// `--define A x --define B y` as (A, x), (B, y).
+pub fn pairs(values: &[String]) -> Vec<(String, String)> {
+    values
+        .chunks(2)
+        .filter_map(|pair| match pair {
+            [a, b] => Some((a.clone(), b.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The port the frontend's stand-in used, so a bookmark from then still works.
@@ -228,7 +303,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &cli.command,
-            Some(Command::Tag { urls, add, remove })
+            Some(Command::Tag(TagArgs { urls, add, remove, prompt: PromptArgs { dir: None, .. }, import: ImportArgs { file: None, .. } }))
                 if urls.len() == 2 && add == &["Harness", "MCP"] && remove == &["Old"]
         ));
         assert!(Cli::try_parse_from(["knowmoretabs", "tag", "https://a.test/"]).is_err());
@@ -241,8 +316,84 @@ mod tests {
             Cli::try_parse_from(["knowmoretabs", "tags", "--retire", "Old", "--all"]).unwrap();
         assert!(matches!(
             &cli.command,
-            Some(Command::Tags { create, retire, all: true }) if create.is_empty() && retire == &["Old"]
+            Some(Command::Tags { create, retire, all: true, .. }) if create.is_empty() && retire == &["Old"]
         ));
+    }
+
+    #[test]
+    fn tag_prompt_and_import_are_their_own_forms() {
+        let parse = |args: &[&str]| {
+            let mut all = vec!["knowmoretabs", "tag"];
+            all.extend_from_slice(args);
+            Cli::try_parse_from(all)
+        };
+        let cli = parse(&["--prompt", "/w", "--with-history", "--all"]).unwrap();
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Tag(TagArgs {
+                prompt: PromptArgs { dir: Some(_), with_history: true, all: true }, urls, ..
+            })) if urls.is_empty()
+        ));
+        let cli = parse(&[
+            "--import",
+            "/w/tags.jsonl",
+            "--source",
+            "m",
+            "--accept-new",
+            "--partial",
+            "--dry-run",
+        ])
+        .unwrap();
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Tag(TagArgs {
+                import: ImportArgs {
+                    file: Some(_),
+                    source: Some(_),
+                    accept_new: true,
+                    partial: true,
+                    dry_run: true
+                },
+                ..
+            }))
+        ));
+        for bad in [
+            &["--prompt", "/w", "--import", "/f"][..],
+            &["https://a.test/", "--prompt", "/w"],
+            &["--prompt", "/w", "--add", "X"],
+            &["--prompt", "/w", "--dry-run"],
+            &["--import", "/f", "--with-history"],
+            &["https://a.test/", "--add", "X", "--source", "m"],
+            &["--all"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "tags",
+            "--define",
+            "DPO",
+            "Direct preference",
+            "--define",
+            "X",
+            "",
+            "--imply",
+            "DPO",
+            "Training",
+        ])
+        .unwrap();
+        let Some(Command::Tags { define, imply, .. }) = &cli.command else {
+            panic!("not tags");
+        };
+        assert_eq!(
+            pairs(define),
+            [
+                ("DPO".into(), "Direct preference".into()),
+                ("X".into(), String::new())
+            ]
+        );
+        assert_eq!(pairs(imply), [("DPO".into(), "Training".into())]);
+        assert!(Cli::try_parse_from(["knowmoretabs", "tags", "--define", "DPO"]).is_err());
     }
 
     #[test]

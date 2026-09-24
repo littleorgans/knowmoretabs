@@ -25,7 +25,7 @@ use crate::capture::Log;
 use crate::error::Error;
 use crate::library::{self, Shape};
 use crate::triage::{self, Action};
-use crate::{assets, export, out, tags};
+use crate::{assets, export, out, suggestions, tags};
 
 /// Request line plus headers, including the final CRLF CRLF. A browser's own
 /// headers fit in a few hundred bytes; the margin is for localhost cookies.
@@ -281,7 +281,8 @@ impl Server {
         let _lock = archive.lock(|| {})?;
         let loaded = library::load(&archive)?;
         let state = library::State::read(&self.root)?;
-        let library = library::build(&loaded.snapshots, &state, Shape::Serve);
+        let suggested = suggestions::by_page(&suggestions::read(&self.root)?, &state);
+        let library = library::build(&loaded.snapshots, &state, &suggested, Shape::Serve);
         serde_json::to_vec(&library).map_err(|source| Error::Json {
             path: self.root.join(library::STATE_FILE),
             source,
@@ -372,13 +373,12 @@ impl Server {
                 "name at least one tag to create or retire",
             );
         }
-        match tags::edit_vocabulary(
-            &self.root,
-            &request.create,
-            &request.retire,
-            false,
-            self.log,
-        ) {
+        let edit = tags::VocabularyEdit {
+            create: request.create,
+            retire: request.retire,
+            ..tags::VocabularyEdit::default()
+        };
+        match tags::edit_vocabulary(&self.root, &edit, false, self.log) {
             Ok(outcome) => {
                 let body = serde_json::json!({ "vocabulary": outcome.vocabulary });
                 Response::ok("application/json", body.to_string().into_bytes())

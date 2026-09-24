@@ -110,7 +110,22 @@ meaning is in the combination. `tag` puts them on pages or takes them off, and
 before joins your vocabulary, and names match without regard to case, so
 `mcp` finds `MCP`. `tags --retire NAME` hides a tag everywhere and keeps it,
 and every page it was on, in `library.json`; adding it to a page again brings
-it back. Nothing is tagged for you.
+it back. `tags --define NAME TEXT` says what a tag means, and
+`tags --imply DPO Training` records a parent rule that always holds.
+
+Nothing is tagged for you without asking, and `knowmoretabs` contains no model
+and makes no request to one. Instead it hands the work to an agent you choose:
+`tag --prompt DIR` writes a folder with `prompt.md` (how you tag, what each of
+your tags means, the exact answer format, and a check to run before
+finishing) and `pages.jsonl` (every page not yet tagged). Open Claude Code,
+Codex or any other agent in that folder and say "Read prompt.md and carry it
+out." It writes `tags.jsonl`; `tag --import DIR/tags.jsonl` checks every line
+against your library and vocabulary, refuses the whole file if anything is
+wrong, and otherwise stores the answers as suggestions, with the model's name,
+the date and the vocabulary version. Your own tags are never changed:
+`serve` and `export` list each page's suggestions beside its tags, with the
+sources that made them, and a suggestion you add or remove is yours from then
+on. Import a second agent's answers and a tag two sources agree on shows both.
 
 ## The rest of the command line
 
@@ -121,7 +136,18 @@ knowmoretabs forget <URL>...     # hide pages from the library; the snapshots ke
 knowmoretabs restore <URL>...    # bring them back
 knowmoretabs tag <URL>... --add NAME --remove NAME   # tag pages, or untag them; both repeatable
 knowmoretabs tags                # your tags, with how many pages carry each; --create, --retire, --all
+knowmoretabs tags --define NAME TEXT   # what a tag means, for you and for a tagging agent
+knowmoretabs tag --prompt DIR    # a work folder for an agent: prompt.md and the pages not yet tagged
+knowmoretabs tag --import FILE   # check an agent's tags.jsonl and store it as suggestions; --dry-run
 ```
+
+`tag --prompt` covers pages that show none of your tags and have no imported
+answer yet; `--all` covers every page, for a second opinion or after changing
+the vocabulary. Forgotten pages are never in it. `--with-history` adds the
+searches and referrers History recorded. `tag --import` refuses a tag your
+vocabulary lacks unless you pass `--accept-new`, and a prompt's page with no
+answer unless you pass `--partial`; `--source NAME` names the model when the
+file does not.
 
 Options, all accepted before or after the command: `--root DIR` (where the
 archive lives), `--browser NAME`, `--profile NAME` (a profile directory or its
@@ -152,6 +178,8 @@ error, and 3 when the encrypted-sessions check refused to save.
 │       ├── snapshot.json      # the tabs, windows, groups and parse statistics
 │       └── session.snss       # a verbatim copy of the browser's session file
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
+├── tags/
+│   └── suggested.jsonl        # imported suggestions, one line per page per import; append-only
 ├── lock                       # held for the length of a run, so two can't collide
 └── export/                    # what `export` writes by default; rebuildable
 ```
@@ -161,6 +189,10 @@ with a `schema_version`; it is the source of truth and readable in any
 editor. Everything under `export/` is derived and can be deleted.
 
 Nothing leaves the machine. The tool makes no network requests of any kind.
+A `tag --prompt` folder is the one thing made to be handed on: it holds the
+addresses and titles of pages in your library, and their searches and
+referrers if you ask for them. It is created private to you, and where it
+goes, and which agent and model provider read it, is your choice.
 `serve` binds `127.0.0.1` only, refuses any request whose `Host` is not
 `127.0.0.1` or `localhost` with its own port, which is what stops a web page
 reaching it through DNS rebinding, refuses any request carrying another
