@@ -674,14 +674,16 @@ views and deep links only. A deep link that has to reveal a hidden page
 clears the tags along with the other filters. Clear and `esc` clear them too,
 and a tag filter unfolds "Open now", like any other filter.
 
-**Chips get a line of their own under the address.** A tagged row has three
-lines: the title (with the age on its baseline), the URL (with the group mark
-at its end, where it always was), and then the chips. The chips are aligned
-with the title and URL text, 0.45 rem below the URL, so they read as a line
-and not as part of the address. An untagged row keeps its two lines and its
-height, 61 px at 1400; a tagged row is 88 px. The first version put the chips
-at the end of the URL line. The owner found that crowded, and the owner was
-right: the URL, chips and group mark were competing for one line.
+**Chips get a line of their own under the address, on every row.** A row has
+three lines: the title (with the age on its baseline), the URL (with the
+group mark at its end, where it always was), and then the chips. The chips
+are aligned with the title and URL text, 0.55 rem below the URL, so they read
+as a line and not as part of the address. Every row is 92 px at 1400, tagged
+or not. The first version put the chips at the end of the URL line. The owner
+found that crowded, and the owner was right: the URL, chips and group mark
+were competing for one line. Later the owner asked for more room in and
+between chips: 0.15 rem by 0.6 rem inside, 0.5 rem between (0.45 rem between
+wrapped lines), the same for all three states in §11.
 
 - **The cap is 8 chips or 80 characters, then "+N".** The old cap of 4 chips or
   30 characters was set by the width left over on the URL line, and a line of
@@ -698,22 +700,29 @@ right: the URL, chips and group mark were competing for one line.
   its group. It never opens the drawer.
 - **Narrow screens.** The chip line wraps, so on a phone a heavily tagged row
   can take a fourth line.
-- **Offscreen rows and placeholders.** Tagged rows carry a `tall` class, so
-  `content-visibility` estimates them at their real height. The lazy
-  placeholders count the tagged rows they stand for (`--tall` × `--tagline`),
-  so scrolling into them does not jump.
+- **Offscreen rows and placeholders.** `content-visibility` lays an offscreen
+  row out at an estimate, and a row that renders taller moves the page under
+  the reader: at 390 px, where chips wrap, a row scrolled to used to move
+  573 px a second later. The estimate is now the layout's own. One rendered
+  one-line row gives every row's height (`--h1`), a row on screen that wraps
+  gives a further line (`--hl`), and `app.js` works out how many lines each
+  row's chips take, from their text widths (a canvas, in the chips' font,
+  once per name) at the chip line's width: `data-x` on a row, `--x` summed on
+  a lazy placeholder. It is measured again on each render, when the list
+  changes width, and when the measured row changes height (the serif titles
+  finish loading after the first render and add 5 px to every row). Measured
+  on the lab archive (562 rows) at 390, 700 and 1400 px: a row jumped to
+  moves by at most 1 px, and every row's estimate is within 3 px of its
+  rendered height (it was 5 to 32 px off on every row).
 
 **`+ tag` and the tagger: one editor, moved to where it is needed.** On a
-tagged row, a dashed `+` ends the chip line. An untagged row has no chip line,
-and the owner asked that it not reserve one, so its `+ tag` waits at the end
-of the URL line, before the group mark. It shows under the pointer and on the
-cursor row. The rest of the time it is transparent but keeps its place, so a
-hover never moves anything; at most a very long URL ellipsises a few
-characters earlier. A chip line that appeared on hover would make the row
-jump under the pointer, which is exactly what hover must not do. Clicking
-`+ tag`, or pressing `+`, opens the editor, and that does give the row its
-third line. That growth is the answer to an action you took, the same kind of
-disclosure as the history drawer, not motion on hover.
+tagged row, a dashed `+` ends the chip line. On an untagged row `+ tag` starts
+it, left-aligned under the title and URL. It used to wait at the far end of
+the URL line, where the owner found it "lost in space", and a chip line that
+appeared on hover would make the row jump under the pointer. So every row has
+the line, and the rows share one height. `+ tag` shows under the pointer, on
+the cursor row and on focus; the rest of the time it is transparent but keeps
+its place. Clicking it, or pressing `+`, opens the editor in that line.
 
 `+` (or `=`, the same key unshifted) opens the editor on the selection if
 there is one, otherwise on the cursor row: the same targets `f` uses.
@@ -1081,9 +1090,9 @@ Order: your tags, then suggestions from several sources, then single ones,
 alphabetical within each. The filter's picked tags still go last. The first
 suggestion keeps 0.35 rem of air from your last chip, so the two groups read
 as two. The 8-chip and 80-character cap counts both groups; the "+N" tooltip
-marks the suggested ones. A row with only suggestions gets the chip line,
-and the `tall` estimate counts it. The drawer's summary adds "· suggested
-MCP, Harness".
+marks the suggested ones, and the row-height estimate counts suggestions'
+widths with the rest (§9). The drawer's summary adds "· suggested MCP,
+Harness".
 
 Colour does no work here. One accent, no badges, no red, and the dashed
 outline and marks invert with the row like everything else.
@@ -1237,12 +1246,20 @@ command repeated `u` 870 times.
 
 ### Open
 
-- **Phones and the chip line estimate.** At 390 px a row's chips often wrap
-  to two lines. Offscreen rows are estimated at one chip line, so a row
-  scrolled to can move as the rows above it render (measured: 348 → 921 px
-  a second after opening). This is 7a's estimate; suggestions put chip lines
-  on most rows, which makes it show. A second `--tagline` under 40 rem, or
-  estimating by chip count, would fix it.
+- **Opening the editor scrolls the page (for the editor's redesign).** The
+  owner saw the row jump up when `+` is clicked, leaving the pointer over the
+  next row, and both rows inverted. The cause is `openTagger()`: before
+  focusing the field it runs `scrollBy(0, row.bottom + 360 − innerHeight)`
+  to make room for the tag menu under the row (§9, "Placement"). Measured at
+  1400 px: a row whose top was at 776 px scrolled 229 px, one at 590 px
+  scrolled 43 px, exactly that formula. The row's height did not change
+  (92 → 92 px), and the row-height estimates play no part (a jump to a row
+  now moves it at most 1 px). The scroll runs even when the menu then stays
+  shut, which it does on any page with suggestions. The page moves under a
+  still pointer, so the next row takes `:hover` while the edited row keeps
+  `.cur`, and both render inverted. The editor is being redesigned, so this
+  is left to that redesign. It needs either no scroll or a menu placed
+  without one, such as opening upward (`.tagger.up`).
 - **Touch targets.** ✓ and × are chip-sized, about 16 px. Fine with a
   pointer, small on a phone.
 - **Should agreement be the default for filters?** If single-source

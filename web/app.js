@@ -95,7 +95,6 @@ const and = new Intl.ListFormat(undefined, { type: 'conjunction' });
 const def = (k) => (S.defs.get(k) ? `\n${S.defs.get(k)}` : '');
 const sugTitle = (k, src, then = '') => `Suggested${src.length ? ` by ${and.format(src)}` : ''}${then}${def(k)}`;
 const TICKS = '<i class="src" aria-hidden="true"></i>';
-const lined = (p) => p.tags.length || p.sug.length;   // a row with chips has a line of them
 const isForm = (el) => el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.type !== 'checkbox';   // a box is not typed into
 const plural = (n, one, many = one + 's') => `${num.format(n)} ${n === 1 ? one : many}`;
 const SORTS = {
@@ -254,20 +253,26 @@ function titleHTML(p) {
 // first, then suggestions, dashed, each with a mark per source. The filter's
 // own tags go last, since every row shown has them. In serve a suggestion
 // opens the editor, where it is confirmed or dismissed; in export it filters.
-function tagsHTML(p) {
+function chipsOf(p) {
   const on = new Set(S.tags), list = [...p.tags.map((name) => ({ k: lc(name), name })), ...p.sug].sort((a, b) => on.has(a.k) - on.has(b.k));
   let k = 0, used = 0;
   while (k < list.length && k < TAGMAX && (k === 0 || used + list[k].name.length <= TAGCH)) used += list[k++].name.length;
+  return { on, list, k };
+}
+// Every row has the line, so rows share a height and a hover moves nothing: an
+// untagged row's holds only "+ tag", at its start.
+function tagsHTML(p) {
+  const { on, list, k } = chipsOf(p);
   const chips = list.slice(0, k).map(({ k: t, name, src }) => { const f = on.has(t) ? 'Stop filtering by' : 'Only pages tagged', rev = src && host.tag && !on.has(t);
     return `<button type="button" class="tag${src ? ` s s${Math.min(3, src.length) || 1}` : ''}${on.has(t) ? ' on' : ''}" tabindex="-1" data-act="${rev ? 'tag' : 'tagf'}" data-t="${esc(t)}" ` +
       `title="${esc(src ? sugTitle(t, src, rev ? '. Click to confirm or dismiss it' : `. ${f} ${name}`) : `${f} ${name}${def(t)}`)}">${esc(name)}${src ? TICKS : ''}</button>`; }).join('');
   const more = k < list.length ? `<span class="tag n" title="${esc(list.slice(k).map((t) => t.name + (t.src ? ' (suggested)' : '')).join(', '))}">+${list.length - k}</span>` : '';
   const add = host.tag ? `<button type="button" class="tag add" tabindex="-1" data-act="tag" aria-label="Add a tag" title="Add or remove tags (+)">${list.length ? '+' : '+ tag'}</button>` : '';
-  return `<span class="tags${list.length ? ' line' : ''}">${chips}${more}${add}</span>`;
+  return `<span class="tags">${chips}${more}${add}</span>`;
 }
 function rowHTML(p) {
   const s = S.snaps[p.last];
-  return `<li class="row${p.open ? ' open' : ''}${lined(p) ? ' tall' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}${S.exp.has(p.i) ? ' exp' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
+  return `<li class="row${p.open ? ' open' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}${S.exp.has(p.i) ? ' exp' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
     `<span class="pick"><input type="checkbox" tabindex="-1" aria-label="Select"${S.sel.has(p.i) ? ' checked' : ''}></span>` +
     `<span class="strip" title="Seen in ${p.n} of ${S.snaps.length} snapshots"></span>` +
     `<span class="body">${titleHTML(p)}<span class="u">${esc(p.addr)}</span>${tagsHTML(p)}${grpHTML(p.grp, true)}</span>` +
@@ -361,7 +366,8 @@ function render() {
   const list = $('list');
   list.innerHTML = html + (band === null ? '' : tail + '</ol></section>');
   strips(list);
-  for (const ph of list.querySelectorAll('.ph')) { ph.style.setProperty('--rows', ph.dataset.b - ph.dataset.a); ph.style.setProperty('--tall', S.rendered.slice(+ph.dataset.a, +ph.dataset.b).filter(lined).length); lazy.observe(ph); }
+  for (const ph of list.querySelectorAll('.ph')) { ph.style.setProperty('--rows', ph.dataset.b - ph.dataset.a); lazy.observe(ph); }
+  fitRows();
   if (S.rendered.length && !list.querySelector('.row.cur')) list.querySelector('.row').tabIndex = 0;
   // back to the same row, or the nearest that stayed: after it, then before
   if (held) { const live = new Set(S.rendered.map((p) => p.i)), at = was.findIndex((p) => p.i === S.cur);
@@ -386,7 +392,49 @@ const lazy = new IntersectionObserver((es) => { for (const e of es) if (e.isInte
 function materialise(ph) {
   lazy.unobserve(ph); const ol = ph.parentElement;
   ph.outerHTML = S.rendered.slice(+ph.dataset.a, +ph.dataset.b).map(rowHTML).join('');
-  strips(ol);
+  strips(ol); fitRows(ol);
+}
+// Offscreen rows are laid out at an estimate (content-visibility), and a row
+// that renders taller than its estimate moves the page under the reader.
+// Every row has one line of chips, so one rendered row gives the height of
+// all of them (--h1) and a chip gives each further line (--hl). What varies
+// is how many lines a row's chips wrap to: that comes from their text widths
+// (measured once per name, on a canvas, in the chips' font) at the chip
+// line's width, as `data-x` on a row and `--x` summed on a placeholder.
+// Measured again on each render, and when the list or a row changes size.
+const FIT = { w: 0, words: new Map() };
+function measure() {
+  const t = [...$('list').querySelectorAll('.row:not(.exp):not(.tagging) .tags')].find((x) => x.checkVisibility({ contentVisibilityAuto: true }) && x.offsetHeight < 1.5 * x.firstElementChild?.offsetHeight);
+  if (!t) return;
+  const c = t.firstElementChild, cs = getComputedStyle(c), ts = getComputedStyle(t), px = (v) => parseFloat(v) || 0;
+  if (FIT.font !== cs.font) { FIT.font = cs.font; FIT.words.clear(); (FIT.ctx ||= document.createElement('canvas').getContext('2d')).font = cs.font; }
+  const sep = $('list').querySelector('.tag:not(.s) + .tag.s');
+  Object.assign(FIT, { w: t.getBoundingClientRect().width, gap: px(ts.columnGap), in: px(cs.columnGap), sep: sep ? px(getComputedStyle(sep).marginLeft) : FIT.sep || 0,
+    pad: px(cs.paddingLeft) + px(cs.paddingRight) + px(cs.borderLeftWidth) + px(cs.borderRightWidth) });
+  const row = t.closest('.row'), root = document.documentElement.style;
+  // A further line from a row on screen that wraps (lines snap to whole pixels), else from a chip and the gap.
+  const lines = (x) => new Set([...x.children].map((e) => e.offsetTop)).size;
+  const t2 = [...$('list').querySelectorAll('.row[data-x]:not(.exp):not(.tagging) .tags')].find((x) => x.checkVisibility({ contentVisibilityAuto: true }) && lines(x) > 1);
+  FIT.h1 = row.clientHeight; root.setProperty('--h1', `${FIT.h1}px`);
+  root.setProperty('--hl', `${t2 ? (t2.offsetHeight - t.offsetHeight) / (lines(t2) - 1) : c.getBoundingClientRect().height + px(ts.rowGap)}px`);
+  // The row it measured is watched: a face that finishes loading later (the serif titles) changes every row.
+  FIT.ro ||= new ResizeObserver(([e]) => { if (e.target.clientHeight !== FIT.h1 && e.target.isConnected) fitRows(); });
+  FIT.ro.disconnect(); FIT.ro.observe(row);
+}
+const textW = (s) => FIT.words.get(s) ?? FIT.words.set(s, FIT.ctx.measureText(s).width).get(s);
+function extra(p) {   // the lines of chips past the first, as tagsHTML lays them out
+  const { list, k } = chipsOf(p), ws = list.slice(0, k).map((t, j) => textW(t.name) + FIT.pad + (t.src ? FIT.in + 4 * (Math.min(3, t.src.length) || 1) - 2 + (j && !list[j - 1].src ? FIT.sep : 0) : 0));
+  if (k < list.length) ws.push(textW(`+${list.length - k}`) + FIT.pad);
+  if (host.tag) ws.push(textW(list.length ? '+' : '+ tag') + FIT.pad);
+  let x = 0, n = 0;
+  for (const w of ws) if (x && x + FIT.gap + w > FIT.w) { n++; x = w; } else x += (x && FIT.gap) + w;
+  return Math.min(n, 8);
+}
+function fitRows(root = $('list')) {
+  if (root === $('list')) measure();
+  if (!FIT.w) return;
+  for (const el of root.querySelectorAll('.band .row')) { const x = extra(S.pages[+el.dataset.i]); if (x) el.dataset.x = x; else delete el.dataset.x; }
+  for (const ph of root.querySelectorAll('.ph')) ph.style.setProperty('--x', S.rendered.slice(+ph.dataset.a, +ph.dataset.b).reduce((n, p) => n + extra(p), 0));
 }
 const materialiseAll = () => { for (const ph of [...$('list').querySelectorAll('.ph')]) materialise(ph); };
 const DEFAULTS = { status: '', sort: 'last' };
@@ -857,6 +905,7 @@ function wire() {
     else if (b.id === 'tb-manage') { vocabDialog(); $('vocab').showModal(); }
     else filterTag(b.dataset.t); });
   new ResizeObserver(fitTags).observe($('tagbar'));
+  new ResizeObserver(([e]) => { if (e.contentRect.width !== FIT.lw) { FIT.lw = e.contentRect.width; fitRows(); } }).observe($('list'));
   $('tag-sel').addEventListener('click', () => openTagger('sel'));
   const addTag = async (name) => { const v = $('tg').value; if ((await applyTags(tagIdxs(), [name], [])) !== false && $('tg').value === v) $('tg').value = ''; };   // a failed add keeps what was typed
   dropdown('tg', { typeahead: true, own: true, none: 'Type a name to make a tag', options: tagOptions, onPick: (o) => addTag(o.value) });
