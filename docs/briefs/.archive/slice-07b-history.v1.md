@@ -575,14 +575,8 @@ over it, inside a 0700 `pages/`. It is not append-only.
 
 **When.** Every `save` that writes a snapshot, `--force` included, looks up
 its tabs and every library page in **one** copy of History, and merges the
-pages after the snapshot is published. These are two atomic writes, not
-one transaction: death between them leaves a valid snapshot and the previous
-record. A skipped save does not repair it; `history --refresh`, `save --force`,
-or the next written save does. Until then the record still takes precedence
-for URLs it already holds; absent entries fall back to snapshots. `knowmoretabs history --refresh` does
-the same without a save. It selects the same profile even when its session
-files are encrypted: History is independent of session encryption. `save`
-still refuses stale cleartext sessions. The name was free, and `history` with a flag fits
+pages after the snapshot is published. `knowmoretabs history --refresh` does
+the same without a save. The name was free, and `history` with a flag fits
 beside `tags --create`. A bare `knowmoretabs history` reports what the file
 holds. A skipped save reads nothing, and `save --no-history` touches neither
 the snapshot nor the file. Looked up: every URL the library lists, except
@@ -606,10 +600,7 @@ run).
 and otherwise from the newest snapshot with signals. The projection is
 unchanged: `refreshed_at` and `source` never reach `/api/library` or an
 export. Export's rules apply as before: no search or referrer without
-`--with-history`, and no self, this-machine or forgotten referrers. Self and forgotten
-referrers are compared using Chromium's credential-free History identity;
-page keys, paths, queries and fragments are preserved. Serve keeps forgotten
-pages flagged for Restore, and can name them as referrers.
+`--with-history`, and no self, this-machine or forgotten referrers.
 `tag --prompt --with-history` now reads searches and referrers from the same
 library projection, with the export's rules, rather than from snapshots on its
 own.
@@ -630,12 +621,8 @@ looked up, release build, Apple M2 Max.
 The process spent about 0.2 s of CPU either way. Straight after the copy it
 waited on the disk: a clone shares the original's blocks but none of its
 cache, so every B-tree page a lookup touched was a separate read. Reading the
-copy through once, sequentially, improved that measurement. `history.rs`
-now does this only on macOS and only up to 256 MiB. This is an optional
-optimization, not a required read of every database byte. Its memory buffer
-is bounded, but an unbounded read would add I/O proportional to the entire
-History while holding the archive lock; other platforms have no demonstrated
-benefit. With a warm cache a per-URL `urls` lookup costs 28 µs, so round trips
+copy through once, sequentially, fixed that, and it is what `history.rs` now
+does. With a warm cache a per-URL `urls` lookup costs 28 µs, so round trips
 are not the cost, and batching them (a temp table, `IN` chunks) would not
 change the pages read. The remaining time is mostly the three-hop search walk,
 which is real work. The per-URL statements stay.
@@ -650,13 +637,3 @@ the browser's files untouched and no copy left in the archive or the temp
 directory; the library preferring the record and falling back; export privacy
 for signals from the record; the prompt reading the record.
 
-
-**Backfill review measurements.** On a throwaway copy of the same archive,
-release runs reproduced 0/582 → 567/582 served pages with signals. Five
-refreshes took 0.238–0.381 s (median 0.243 s). The original archive was not
-written, and the throwaway copy was deleted. A synthetic 1,074,982,912-byte
-History with 567 indexed URLs and an unrelated blob table took 0.688/0.234/
-0.233 s with the unbounded pre-read, versus 0.415/0.041/0.040 s when it was
-skipped. These are macOS measurements, not cold-storage or Linux/Windows
-benchmarks. The 256 MiB cutoff retains the demonstrated 149 MB case and bounds
-optional I/O; it is not a measured optimum.

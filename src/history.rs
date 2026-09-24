@@ -143,7 +143,7 @@ struct Found {
 fn read(path: &Path, archive: &Archive, urls: &BTreeSet<&str>) -> Result<(u64, Found), String> {
     let scratch = archive.stage().map_err(|err| err.to_string())?;
     let (copy, bytes) = copy_stable(path, scratch.path())?;
-    warm(&copy)?;
+    warm(&copy, bytes)?;
     // Read-write, so that SQLite rolls back a hot journal or replays a WAL;
     // read-only, it refuses to do either. Never created: a copy that is not
     // there is an error, not an empty database.
@@ -165,16 +165,18 @@ fn read(path: &Path, archive: &Archive, urls: &BTreeSet<&str>) -> Result<(u64, F
     result
 }
 
-/// Reads the copy through once, in order, before the queries read it at random.
-/// A copy that is a clone (APFS, and btrfs or XFS on Linux) shares the
-/// original's blocks but none of its cache, so each page the lookups touch
-/// was a separate read from disk: 0.49 s for 567 URLs on a 149 MB History,
-/// and 0.04 s plus 0.17 s with this first. Where the copy was written byte by
-/// byte its pages are already cached and this costs a read from memory.
-fn warm(copy: &Path) -> Result<(), String> {
+/// APFS clones benefited from a sequential read in the macOS measurement.
+/// Bound this optional work: large databases would otherwise be read in full
+/// under the archive lock even when the queries touch only a few pages.
+/// Other platforms have not demonstrated a benefit.
+const WARM_LIMIT: u64 = 256 * 1024 * 1024;
+
+fn warm(copy: &Path, bytes: u64) -> Result<u64, String> {
+    if !cfg!(target_os = "macos") || bytes > WARM_LIMIT {
+        return Ok(0);
+    }
     fs::File::open(copy)
         .and_then(|mut file| std::io::copy(&mut file, &mut std::io::sink()))
-        .map(drop)
         .map_err(|err| format!("cannot read the copy {}: {err}", copy.display()))
 }
 
@@ -616,6 +618,26 @@ fn first_elsewhere(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warming_skips_large_copies_and_unmeasured_platforms() {
+        let temp = tempfile::tempdir().unwrap();
+        let copy = temp.path().join("History");
+        fs::write(&copy, [0; 4096]).unwrap();
+        assert_eq!(
+            warm(&copy, 4096).unwrap(),
+            if cfg!(target_os = "macos") { 4096 } else { 0 }
+        );
+        // A sparse 1 GiB copy: a reverted limit really reads a gigabyte here,
+        // but the assertion is about I/O performed, not a timing threshold.
+        fs::File::options()
+            .write(true)
+            .open(&copy)
+            .unwrap()
+            .set_len(1024 * 1024 * 1024)
+            .unwrap();
+        assert_eq!(warm(&copy, 1024 * 1024 * 1024).unwrap(), 0);
+    }
 
     #[test]
     fn stable_copy_retries_changes_and_removes_vanished_companions() {
