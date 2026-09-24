@@ -758,7 +758,12 @@ function wire() {
     const pick = e.target.closest('.pick');
     // and the row keeps the key; a focused box would swallow the page's keys
     if (pick) { const box = pick.querySelector('input'); if (e.target !== box) box.checked = !box.checked; row.focus({ preventScroll: true }); return select(i, box.checked, e.shiftKey); }
-    if (e.target.closest('a')) return;
+    const link = e.target.closest('a');
+    if (link) {
+      // Back from a drawer's deep link returns to the row that opened it.
+      if (link.getAttribute('href')?.startsWith('#') && !e.metaKey && !e.ctrlKey && !e.shiftKey && !e.altKey) history.replaceState(null, '', `#pages/${i}`);
+      return;
+    }
     setCursor(row, false); row.focus({ preventScroll: true });
     const act = e.target.closest('[data-act]');
     if (!act) { if (!dragged && !e.target.closest('.hist')) toggle(i); return; }   // the panel itself is not a toggle
