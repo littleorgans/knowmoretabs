@@ -25,7 +25,7 @@ use crate::capture::Log;
 use crate::error::Error;
 use crate::library::{self, Shape};
 use crate::triage::{self, Action};
-use crate::{assets, export, out, suggestions, tags};
+use crate::{assets, export, library_history, out, suggestions, tags};
 
 /// Request line plus headers, including the final CRLF CRLF. A browser's own
 /// headers fit in a few hundred bytes; the margin is for localhost cookies.
@@ -64,6 +64,9 @@ pub fn run(options: &Options) -> Result<(), Error> {
     // A damaged state file is refused here, at the terminal, rather than as
     // a 500 the page can only describe as "HTTP 500".
     library::State::read(&options.root)?;
+    // A damaged History record only costs the signals it held, so it is a
+    // warning, given once here rather than on every request.
+    library_history::for_library(&options.root, options.log);
     let url = format!("http://127.0.0.1:{port}/");
     // Through `out`: the banner is written after the port is bound and
     // accepting, and on the main thread, so a `println!` that panicked on a
@@ -282,7 +285,21 @@ impl Server {
         let loaded = library::load(&archive)?;
         let state = library::State::read(&self.root)?;
         let suggested = suggestions::by_page(&suggestions::read(&self.root)?, &state);
-        let library = library::build(&loaded.snapshots, &state, &suggested, Shape::Serve);
+        // Quiet: a damaged record was reported once, when `serve` started.
+        let recorded = library_history::for_library(
+            &self.root,
+            Log {
+                quiet: true,
+                verbose: false,
+            },
+        );
+        let library = library::build(
+            &loaded.snapshots,
+            &recorded,
+            &state,
+            &suggested,
+            Shape::Serve,
+        );
         serde_json::to_vec(&library).map_err(|source| Error::Json {
             path: self.root.join(library::STATE_FILE),
             source,

@@ -4,6 +4,8 @@
 It settles *how* to build the decision recorded in `slice-07-tags.md` §4 and
 §9 ("`save` records History signals"), with measurements. §12 records the
 owner's decisions; §11 is for open questions. §10's changes are applied.
+§15 adds the library's own record, `pages/history.json`, built 2026-09-24 on
+`feat/history-backfill`.
 
 **Ships:** each tab in `snapshot.json` carries what the browser's own
 `History` database knows about its URL: the search that led to it, the
@@ -297,7 +299,8 @@ so it gets no History and says so.
   that), and missing `Option` fields read as `None`. A bump would be
   actively harmful: `library::usable` treats any version other than 1 as
   unreadable, so every build before this one would hide every new snapshot.
-- **Why not a sidecar `history.json`:** it would be written and published in
+- **Why not a sidecar `history.json`** (inside a snapshot; the library-level
+  `pages/history.json` of §15 is a different file): it would be written and published in
   the same atomic rename, so immutability gives no reason to split. It would
   leave one snapshot described by two files, which cuts against "`snapshot.json`
   is THE source of truth". It would buy nothing for privacy either: forgetting
@@ -336,7 +339,8 @@ them free), with 27,633 URLs and 59,552 visits from 2026-06-25 to
 | Remove the copy | < 1 ms |
 
 That is **about 0.3 s per written snapshot**, held under the archive lock,
-and nothing for a skipped one. Per-query split for 300 URLs: `urls` lookup
+and nothing for a skipped one. (§15 remeasures with the library's pages
+added, and finds the cold cache of a cloned copy was most of it.) Per-query split for 300 URLs: `urls` lookup
 27 ms, first/last visit 55 ms, foreground 47 ms, search walk 28 ms,
 referrer 26 ms, external referrer 9 ms. Nothing dominates, so no batching is
 needed. A cold byte copy on a spinning disk would add about a second. That
@@ -550,3 +554,86 @@ option), `history_backend.cc` (`kCommitIntervalSeconds = 10`), `features.cc`
 - **The version-to-milestone mapping** for schemas 49, 51 and 66 was not
   looked up. The Edge profile shows all three had shipped by August 2025.
 - **A cold byte copy on slow storage.**
+
+## 15. The library's own record (`pages/history.json`)
+
+**Why.** A snapshot's signals cover the tabs open during that save, and
+snapshots never change, so most pages never got any. It was 71 of 626 on the
+owner's archive as reported when this was asked for. The copy measured below
+had 0 of 582 served pages, because none of its 9 snapshots was saved after
+7b. Chrome's History holds about 90 days for every URL, so the library keeps
+a refreshed view beside the snapshots. The orchestrator decided the points
+below on the owner's behalf, 2026-09-24.
+
+**The file.** `<root>/pages/history.json`, one JSON document:
+`{"schema_version": 1, "updated_at", "source", "pages": {url: entry}}`.
+`source` has a snapshot's `history` shape (§5), with `tabs_found` counting
+the library pages found. Each entry is a tab's `history` plus `refreshed_at`,
+the latest refresh whose copy of History knew the URL. It is written like
+`library.json`: under the archive lock, staged beside the file and renamed
+over it, inside a 0700 `pages/`. It is not append-only.
+
+**When.** Every `save` that writes a snapshot, `--force` included, looks up
+its tabs and every library page in **one** copy of History, and merges the
+pages after the snapshot is published. `knowmoretabs history --refresh` does
+the same without a save. The name was free, and `history` with a flag fits
+beside `tags --create`. A bare `knowmoretabs history` reports what the file
+holds. A skipped save reads nothing, and `save --no-history` touches neither
+the snapshot nor the file. Looked up: every URL the library lists, except
+forgotten pages, pages on this machine and anything that is not http(s).
+
+**Merge, never drop.** A page History knows gets its new signals and
+`refreshed_at`. A page it no longer knows (expired or cleared) keeps its
+entry, so an entry older than `updated_at` is visibly stale. A forgotten
+page's entry is kept but not refreshed.
+
+**Failure.** In `save`, History that cannot be read keeps its single
+warning (§9, acceptance 8) and the file is not touched. So is a library or
+record that cannot be read, which adds one warning and costs no snapshot. In
+`history --refresh`, reading History is the whole command, so failing to is
+exit status 1. A record this build cannot read is never overwritten: that
+would drop every page History has forgotten. The library falls back to
+snapshots and warns once (`serve` at start, `export` and `tag --prompt` per
+run).
+
+**The library** takes a page's `history` from the file when it has the URL,
+and otherwise from the newest snapshot with signals. The projection is
+unchanged: `refreshed_at` and `source` never reach `/api/library` or an
+export. Export's rules apply as before: no search or referrer without
+`--with-history`, and no self, this-machine or forgotten referrers.
+`tag --prompt --with-history` now reads searches and referrers from the same
+library projection, with the export's rules, rather than from snapshots on its
+own.
+
+**Cost, measured** on the owner's Chrome `Default` History (148,930,560 B)
+through the tool's own copy, with a throwaway copy of the archive: 567 URLs
+looked up, release build, Apple M2 Max.
+
+| Step | Time |
+|---|---|
+| Copy `History` + `-journal` (APFS clone) | 1.7–2.8 ms |
+| Queries, per URL as in §6, straight after the copy | 477–516 ms |
+| Of which, per statement | `urls` 76, first visit 112, foreground 95, search 100, referrer 98, external 1 ms |
+| Read the copy through once, in order, first | 38–41 ms |
+| Queries after that read | 163–168 ms (`urls` 16, first visit 19, foreground 18, search 82, referrer 27, external 1 ms) |
+| Whole `history --refresh`, wall clock | 0.50–0.53 s before, 0.23–0.24 s after |
+
+The process spent about 0.2 s of CPU either way. Straight after the copy it
+waited on the disk: a clone shares the original's blocks but none of its
+cache, so every B-tree page a lookup touched was a separate read. Reading the
+copy through once, sequentially, fixed that, and it is what `history.rs` now
+does. With a warm cache a per-URL `urls` lookup costs 28 µs, so round trips
+are not the cost, and batching them (a temp table, `IN` chunks) would not
+change the pages read. The remaining time is mostly the three-hop search walk,
+which is real work. The per-URL statements stay.
+
+**Tests** (`tests/library_history.rs`, and in `tests/serve.rs` and
+`tests/suggestions.rs`): every library page looked up by a written save and by
+`--force`; forgotten, loopback, non-http(s) pages skipped; merge-never-drop
+with `refreshed_at`; `history --refresh` and its failure; `--no-history`; a
+skipped save; a History that cannot be read; a damaged record; the lock and a
+library read after it; a private `pages/` with nothing left beside the file;
+the browser's files untouched and no copy left in the archive or the temp
+directory; the library preferring the record and falling back; export privacy
+for signals from the record; the prompt reading the record.
+

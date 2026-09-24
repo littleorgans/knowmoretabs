@@ -559,6 +559,68 @@ fn enriched_text_goes_in_and_history_only_when_asked() {
 }
 
 #[test]
+fn the_prompt_takes_history_from_the_library_record_first() {
+    let fx = Fixture::new();
+    archive(&fx);
+    vocabulary(&fx);
+    let path = fx.root.join("snapshots/2026-01-01-000000Z/snapshot.json");
+    let mut snapshot: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for tab in snapshot["tabs"].as_array_mut().unwrap() {
+        if tab["url"] == A || tab["url"] == B {
+            tab["history"] = json!({
+                "visits": 1, "typed": 0, "last_visit": "2026-01-01T00:00:00Z",
+                "search": {"term": "snapshot search", "hops": 1}, "referrer": "https://snapshot.test/"
+            });
+        }
+    }
+    fs::write(&path, serde_json::to_vec(&snapshot).unwrap()).unwrap();
+    let entry = |term: &str, referrer: &str| {
+        json!({"visits": 4, "typed": 0, "last_visit": "2026-09-01T00:00:00Z",
+               "search": {"term": term, "hops": 0}, "referrer": referrer,
+               "refreshed_at": "2026-09-01T00:00:00Z"})
+    };
+    fs::create_dir_all(fx.root.join("pages")).unwrap();
+    let record = json!({
+        "schema_version": 1, "updated_at": "2026-09-01T00:00:00Z",
+        "source": {"path": null, "bytes": null, "schema_version": null, "newest_visit": null,
+                   "tabs_found": 3, "unavailable": [], "error": null, "skipped_by_request": false},
+        "pages": {
+            A: entry("record  search", "https://record.test/"),
+            C: entry("c search", HIDDEN),
+            HIDDEN: entry("hidden search", A),
+        }
+    });
+    fs::write(fx.root.join("pages/history.json"), record.to_string()).unwrap();
+
+    let with = fx.home.path().join("with");
+    assert_success(&fx.run(&["tag", "--prompt", with.to_str().unwrap(), "--with-history"]));
+    let pages = jsonl(&with.join("pages.jsonl"));
+    let line = |url: &str| pages.iter().find(|p| p["url"] == url).unwrap().clone();
+    assert_eq!(line(A)["search"], "record search");
+    assert_eq!(line(A)["referrer"], "https://record.test/");
+    assert_eq!(
+        line(B)["search"],
+        "snapshot search",
+        "no entry: the snapshot's"
+    );
+    assert_eq!(line(C)["search"], "c search");
+    assert!(
+        line(C).get("referrer").is_none(),
+        "a forgotten referrer stays out"
+    );
+    let text = fs::read_to_string(with.join("pages.jsonl")).unwrap();
+    assert!(!text.contains("hidden"), "{text}");
+
+    let without = fx.home.path().join("without");
+    assert_success(&fx.run(&["tag", "--prompt", without.to_str().unwrap()]));
+    let text = fs::read_to_string(without.join("pages.jsonl")).unwrap();
+    assert!(
+        !text.contains("search") && !text.contains("record.test"),
+        "{text}"
+    );
+}
+
+#[test]
 fn the_folder_must_be_new_or_empty_and_outside_the_archive() {
     let fx = Fixture::new();
     archive(&fx);

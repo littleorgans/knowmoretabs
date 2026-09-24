@@ -23,6 +23,7 @@ mod head;
 mod history;
 mod library;
 mod library_commands;
+mod library_history;
 mod local;
 mod metadata;
 mod metadata_writer;
@@ -123,6 +124,12 @@ fn main() -> ExitCode {
             cli.json,
             log,
         ),
+        Some(Command::History { refresh: true }) => {
+            library_history::refresh_command(&capture_options(&cli, root), cli.json, log)
+        }
+        Some(Command::History { refresh: false }) => {
+            library_history::status_command(&root, cli.json, log)
+        }
         _ => save(&cli, root, log),
     };
     match result {
@@ -201,8 +208,9 @@ fn warn_if_root_is_not_private(cli: &Cli, root: &std::path::Path, roots: Option<
     }
 }
 
-fn save(cli: &Cli, root: std::path::PathBuf, log: Log) -> Result<(), error::Error> {
-    let opts = Options {
+/// Where to find the browser, from the global flags, and what `save` does.
+fn capture_options(cli: &Cli, root: std::path::PathBuf) -> Options {
+    Options {
         root,
         session: cli.session.clone(),
         browser: cli.browser.clone(),
@@ -210,7 +218,11 @@ fn save(cli: &Cli, root: std::path::PathBuf, log: Log) -> Result<(), error::Erro
         user_data_dir: cli.user_data_dir.clone(),
         force: cli.save_args().force,
         history: !cli.save_args().no_history,
-    };
+    }
+}
+
+fn save(cli: &Cli, root: std::path::PathBuf, log: Log) -> Result<(), error::Error> {
+    let opts = capture_options(cli, root);
     let outcome = capture::save(&opts, log)?;
     if cli.json {
         out::json(&json_outcome(&outcome));

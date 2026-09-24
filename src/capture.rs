@@ -10,7 +10,7 @@
 //!      describe; and the unchanged-session check runs before History is
 //!      read and before staging, so a no-op run costs and leaves nothing.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -21,6 +21,7 @@ use sha2::{Digest, Sha256};
 use crate::archive::{Archive, SNAPSHOT_JSON};
 use crate::error::Error;
 use crate::history;
+use crate::library_history;
 use crate::local;
 use crate::model::{SCHEMA_VERSION, SESSION_FILE_NAME, Snapshot, Source};
 use crate::platform::{self, BrowserCandidate, Profile, SESSIONS_DIR};
@@ -193,13 +194,7 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
 
     // After the unchanged check, so a skipped run reads nothing; before
     // staging, so the History copy never shares a directory with the snapshot.
-    add_history(
-        &mut snapshot,
-        opts.history,
-        located.profile_dir.as_deref(),
-        &archive,
-        log,
-    );
+    let refresh = add_history(&mut snapshot, opts, &located, &archive, log);
 
     snapshot.id = archive.allocate_id(captured_at)?;
     let staging = archive.stage()?;
@@ -218,6 +213,10 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
         }
     }
     let path = archive.publish(staging, &snapshot.id)?;
+    // After the snapshot is safe, from the copy it was read from.
+    if let Some(refresh) = refresh {
+        refresh.finish(&opts.root, captured_at, log);
+    }
     Ok(Outcome::Saved {
         path,
         snapshot,
@@ -225,48 +224,83 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
     })
 }
 
+const REFRESH_FAILED: &str = "History signals for the library not updated";
+
+/// A reading of History for the library's record, merged once the snapshot
+/// it came with is published.
+struct Refresh {
+    pending: library_history::Pending,
+    reading: history::Reading,
+}
+
+impl Refresh {
+    fn finish(self, root: &Path, at: Timestamp, log: Log) {
+        match self.pending.finish(root, &self.reading, at) {
+            Ok(refreshed) => log.note(&library_history::describe(&refreshed)),
+            Err(err) => log.warn(&format!("{REFRESH_FAILED}: {err}")),
+        }
+    }
+}
+
 /// Reads History into the snapshot, or records that `--no-history` asked
 /// for it not to be, and says which in one line: a warning when History
 /// could not be read, because the snapshot is missing something it would
 /// otherwise have, and a note under `-v` otherwise. Reading and saying so are
 /// one step, so that no run reads History without the note.
+///
+/// The library's pages are looked up in the same copy, so the library is
+/// read first; a library that cannot be read costs the refresh, never the
+/// snapshot. Returns the refresh when there is one to finish.
 fn add_history(
     snapshot: &mut Snapshot,
-    read: bool,
-    profile_dir: Option<&Path>,
+    opts: &Options,
+    located: &Located,
     archive: &Archive,
     log: Log,
-) {
-    if read {
-        history::record(snapshot, profile_dir, archive);
-    } else {
+) -> Option<Refresh> {
+    let profile_dir = located.profile_dir.as_deref();
+    if !opts.history {
         snapshot.history = Some(history::skipped(profile_dir));
+        log.note("History not read (--no-history)");
+        return None;
     }
-    let Some(source) = &snapshot.history else {
-        return;
-    };
+    let pending = library_history::prepare(&opts.root, archive, &snapshot.tabs)
+        .inspect_err(|err| log.warn(&format!("{REFRESH_FAILED}: {err}")))
+        .ok();
+    let urls: BTreeSet<&str> = snapshot
+        .tabs
+        .iter()
+        .map(|tab| tab.url.as_str())
+        .chain(
+            pending
+                .iter()
+                .flat_map(|p| p.urls.iter().map(String::as_str)),
+        )
+        .collect();
+    let reading = history::read_urls(profile_dir, archive, &urls);
+    history::record(snapshot, &reading);
+    let source = &reading.source;
     if let Some(reason) = &source.error {
         log.warn(&format!(
             "History not read, so this snapshot has no History signals: {reason}"
         ));
-    } else if source.skipped_by_request {
-        log.note("History not read (--no-history)");
-    } else {
-        log.note(&format!(
-            "History read from {}: {} of {} tabs found{}",
-            source
-                .path
-                .as_deref()
-                .map_or_else(String::new, |p| p.display().to_string()),
-            source.tabs_found,
-            snapshot.tabs.len(),
-            if source.unavailable.is_empty() {
-                String::new()
-            } else {
-                format!("; not available: {}", source.unavailable.join(", "))
-            }
-        ));
+        return None;
     }
+    log.note(&format!(
+        "History read from {}: {} of {} tabs found{}",
+        source
+            .path
+            .as_deref()
+            .map_or_else(String::new, |p| p.display().to_string()),
+        snapshot.history.as_ref().map_or(0, |h| h.tabs_found),
+        snapshot.tabs.len(),
+        if source.unavailable.is_empty() {
+            String::new()
+        } else {
+            format!("; not available: {}", source.unavailable.join(", "))
+        }
+    ));
+    pending.map(|pending| Refresh { pending, reading })
 }
 
 /// Removes tabs on this machine (development servers, this tool's own library)
@@ -341,6 +375,12 @@ fn leave_out_this_machine(snapshot: &mut Snapshot) {
     stats.tabs = snapshot.tabs.len() as u64;
     stats.groups = snapshot.groups.len() as u64;
     stats.excluded_tabs = excluded as u64;
+}
+
+/// The profile directory `save` would read, found the same way: where
+/// `history --refresh` finds History.
+pub fn profile_dir(opts: &Options, log: Log) -> Result<Option<PathBuf>, Error> {
+    Ok(locate(opts, log)?.profile_dir)
 }
 
 fn locate(opts: &Options, log: Log) -> Result<Located, Error> {

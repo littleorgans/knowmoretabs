@@ -124,6 +124,10 @@ pub enum Error {
     AssetMarkers,
     #[error("cannot export into {}; choose a directory outside the archive's source data", .0.display())]
     ExportDestination(PathBuf),
+    #[error("cannot read the History record {}: {reason}; remove it and run knowmoretabs history --refresh to rebuild it", path.display())]
+    HistoryRecord { path: PathBuf, reason: String },
+    #[error("History not read, so nothing was refreshed: {0}")]
+    HistoryUnreadable(String),
 }
 
 impl Error {
@@ -155,6 +159,8 @@ impl Error {
             Self::Bind { .. } => "bind",
             Self::AssetMarkers => "asset_markers",
             Self::ExportDestination(_) => "export_destination",
+            Self::HistoryRecord { .. } => "history_record",
+            Self::HistoryUnreadable(_) => "history_unreadable",
         }
     }
 

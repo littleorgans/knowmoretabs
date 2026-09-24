@@ -120,6 +120,18 @@ One request a second per site."
         #[arg(long)]
         refetch: bool,
     },
+    /// Show the History signals the library keeps for its pages, or refresh them
+    #[command(
+        long_about = "Shows what <root>/pages/history.json holds: how many library pages have History \
+signals, when they were last refreshed, and how many History has since forgotten. With --refresh, copies \
+the browser's History privately into the archive, as save does, and looks up every page in the library, \
+except forgotten pages and pages on this machine. A page History no longer knows keeps its earlier signals."
+    )]
+    History {
+        /// Read History now and update every library page's signals
+        #[arg(long)]
+        refresh: bool,
+    },
     /// List the tag vocabulary with how many pages carry each tag
     Tags {
         /// Add a tag to the vocabulary, or bring back a retired one (repeatable)
@@ -470,6 +482,24 @@ mod tests {
             })
         ));
         assert!(Cli::try_parse_from(["knowmoretabs", "enrich", "--limit", "x"]).is_err());
+    }
+
+    #[test]
+    fn history_shows_by_default_and_refreshes_when_asked() {
+        let cli = Cli::try_parse_from(["knowmoretabs", "history"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::History { refresh: false })
+        ));
+        let cli =
+            Cli::try_parse_from(["knowmoretabs", "history", "--refresh", "--profile", "Work"])
+                .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::History { refresh: true })
+        ));
+        assert_eq!(cli.profile.as_deref(), Some("Work"));
+        assert!(Cli::try_parse_from(["knowmoretabs", "history", "--no-history"]).is_err());
     }
 
     #[test]

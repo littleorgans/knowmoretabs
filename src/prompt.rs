@@ -24,10 +24,9 @@ use crate::capture::Log;
 use crate::error::Error;
 use crate::library::{self, Shape, State, Term, fold, tag_order};
 use crate::metadata::{self, Status};
-use crate::model::Snapshot;
 use crate::suggestions::{self, PAGES_FILE, VOCABULARY_FILE};
 use crate::triage::plural;
-use crate::{out, tags};
+use crate::{library_history, out, tags};
 
 pub const PROMPT_FILE: &str = "prompt.md";
 pub const ANSWER_FILE: &str = "tags.jsonl";
@@ -177,13 +176,16 @@ pub fn write(root: &Path, options: &PromptOptions, log: Log) -> Result<Written, 
     }
     let spellings = state.spellings(false);
     // Export shape: forgotten pages are left out, so a page the owner hid
-    // never reaches their agent.
+    // never reaches their agent, and searches and referrers only when asked
+    // for, by the export's own rules and from the library's own signals.
+    let recorded = library_history::for_library(root, log);
     let library = library::build(
         &loaded.snapshots,
+        &recorded,
         &state,
         &HashMap::new(),
         Shape::Export {
-            with_history: false,
+            with_history: options.with_history,
         },
     );
     let mut written = Written {
@@ -198,7 +200,8 @@ pub fn write(root: &Path, options: &PromptOptions, log: Log) -> Result<Written, 
         ..Written::default()
     };
     let mut pages = Vec::new();
-    for (url, title) in library.titles() {
+    for listed in library.listed() {
+        let url = listed.url;
         if !options.all {
             if !state.page_tags(url, &spellings).is_empty() {
                 written.skipped_tagged += 1;
@@ -211,7 +214,9 @@ pub fn write(root: &Path, options: &PromptOptions, log: Log) -> Result<Written, 
         }
         let mut page = PageLine {
             url: url.to_owned(),
-            title: collapse(title),
+            title: collapse(listed.title),
+            search: non_empty(listed.search),
+            referrer: listed.referrer.map(ToOwned::to_owned),
             ..PageLine::default()
         };
         if let Some(record) = metadata.pages.get(url) {
@@ -219,9 +224,6 @@ pub fn write(root: &Path, options: &PromptOptions, log: Log) -> Result<Written, 
             if page.description.is_some() || page.readme.is_some() || page.kind.is_some() {
                 written.enriched += 1;
             }
-        }
-        if options.with_history {
-            page.remember(&loaded.snapshots, &state);
         }
         pages.push(page);
     }
@@ -255,29 +257,6 @@ impl PageLine {
             self.topics.clone_from(&github.topics);
             self.readme = non_empty(github.readme.as_deref())
                 .map(|text| text.chars().take(README_LIMIT).collect());
-        }
-    }
-
-    /// The search and referrer from the newest snapshot that has signals
-    /// for this page. A referrer the owner has forgotten stays out, and so
-    /// does the page itself, which snapshots saved before capture dropped it
-    /// can name.
-    fn remember(&mut self, snapshots: &[Snapshot], state: &State) {
-        let history = snapshots
-            .iter()
-            .rev()
-            .flat_map(|snapshot| &snapshot.tabs)
-            .find(|tab| tab.url == self.url && tab.history.is_some())
-            .and_then(|tab| tab.history.as_ref());
-        if let Some(history) = history {
-            self.search = history
-                .search
-                .as_ref()
-                .and_then(|search| non_empty(Some(&search.term)));
-            self.referrer = history
-                .referrer
-                .clone()
-                .filter(|referrer| *referrer != self.url && !state.forgotten.contains(referrer));
         }
     }
 }

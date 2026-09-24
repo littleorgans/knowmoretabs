@@ -14,6 +14,7 @@ use url::Url;
 
 use crate::archive::{self, Archive, SNAPSHOT_JSON};
 use crate::error::Error;
+use crate::library_history::Entry;
 use crate::local;
 use crate::model::{self, Snapshot};
 use crate::suggestions::Suggested;
@@ -246,6 +247,24 @@ pub fn known_urls(snapshots: &[Snapshot]) -> HashSet<&str> {
         .collect()
 }
 
+/// The pages whose History signals a refresh looks up: those the library
+/// would list, less forgotten pages and anything that is not http(s), which
+/// History has nothing useful about.
+pub fn history_urls<'a>(
+    tabs: impl IntoIterator<Item = &'a model::Tab>,
+    forgotten: &BTreeSet<String>,
+) -> BTreeSet<String> {
+    tabs.into_iter()
+        .map(|tab| tab.url.as_str())
+        .filter(|url| {
+            Url::parse(url).is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
+                && public_domain(url).is_some()
+                && !forgotten.contains(*url)
+        })
+        .map(ToOwned::to_owned)
+        .collect()
+}
+
 /// Whether forgotten pages are left out (an export is read-only, so a hidden
 /// page has no way back) or kept and flagged (serve has a Restore button).
 /// An export also leaves out the search that led to a page and where it came
@@ -290,8 +309,8 @@ struct Page {
     /// Imported suggestions the owner has neither added nor removed, each
     /// with the sources that made it. Always present, like `tags`.
     suggested: Vec<Suggested>,
-    /// From the newest snapshot that recorded signals for the URL; absent
-    /// when none did, which is every page seen only before 7b.
+    /// From `pages/history.json` when it has the URL, else from the newest
+    /// snapshot that recorded signals for it; absent when neither does.
     #[serde(skip_serializing_if = "Option::is_none")]
     history: Option<PageHistory>,
 }
@@ -372,18 +391,39 @@ struct Group {
 // `page_index`, window, position, `tab_id`, pinned (0/1), `group_index_or_null`.
 type Tab = (usize, u32, usize, i32, u8, Option<usize>);
 
+/// A page as a prompt lists it: its search and referrer are there only when
+/// the shape keeps them.
+pub struct Listed<'a> {
+    pub url: &'a str,
+    pub title: &'a str,
+    pub search: Option<&'a str>,
+    pub referrer: Option<&'a str>,
+}
+
 impl Library {
-    /// Each page's URL and title, in library order: what a prompt lists.
-    pub fn titles(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.pages
-            .iter()
-            .map(|page| (page.url.as_str(), page.title.as_str()))
+    /// Every page, in library order: what a prompt lists.
+    pub fn listed(&self) -> impl Iterator<Item = Listed<'_>> {
+        self.pages.iter().map(|page| {
+            let history = page.history.as_ref();
+            Listed {
+                url: &page.url,
+                title: &page.title,
+                search: history
+                    .and_then(|h| h.search.as_ref())
+                    .map(|search| search.term.as_str()),
+                referrer: history
+                    .and_then(|h| h.referrer.as_ref())
+                    .map(|referrer| referrer.url.as_str()),
+            }
+        })
     }
 }
 
-/// `suggested` is [`crate::suggestions::by_page`] over the same `state`.
+/// `suggested` is [`crate::suggestions::by_page`] over the same `state`, and
+/// `recorded` is [`crate::library_history::for_library`].
 pub fn build(
     snapshots: &[Snapshot],
+    recorded: &BTreeMap<String, Entry>,
     state: &State,
     suggested: &HashMap<String, Vec<Suggested>>,
     shape: Shape,
@@ -479,6 +519,13 @@ pub fn build(
             groups,
             tabs,
         });
+    }
+    // The library's own record wins: every written save refreshes it, and
+    // it covers pages that no save had open.
+    for page in &mut library.pages {
+        if let Some(entry) = recorded.get(&page.url) {
+            page.history = Some(page_history(&page.url, &entry.history, shape, forgotten));
+        }
     }
     name_referrers(&mut library.pages);
     library.stats.pages = library.pages.len();
