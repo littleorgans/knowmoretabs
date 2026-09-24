@@ -211,6 +211,19 @@ fn forgotten_local_and_non_web_pages_are_never_looked_up() {
     assert_eq!(record["pages"][OLDER]["visits"], 5);
     // `OPEN` is not in the library until a save puts it there.
     assert!(record["pages"].get(OPEN).is_none());
+    assert_success(&fx.run(&["restore", forgotten]));
+    assert_eq!(
+        self::record(&fx)["pages"][forgotten],
+        earlier["pages"][forgotten]
+    );
+    let restored = json_run(&fx, &["history", "--refresh"]);
+    assert_eq!(restored["refreshed"]["found"], 3);
+    let after = self::record(&fx);
+    assert_eq!(after["pages"][forgotten]["visits"], 5);
+    assert_eq!(
+        after["pages"][forgotten]["refreshed_at"],
+        after["updated_at"]
+    );
 }
 
 #[test]
@@ -387,11 +400,11 @@ fn a_save_whose_history_cannot_be_read_leaves_the_record_alone() {
 fn a_damaged_record_is_never_overwritten_and_costs_a_save_nothing() {
     let (fx, h) = library_and_browser();
     drop(h);
-    fs::create_dir_all(fx.root.join("pages")).unwrap();
-    for damaged in [
-        &b"{\"schema_version\": 1, \"pages\": {"[..],
-        br#"{"schema_version": 2}"#,
-    ] {
+    assert_success(&fx.run(&["history", "--refresh"]));
+    let mut unsupported = record(&fx);
+    unsupported["schema_version"] = json!(2);
+    let unsupported = serde_json::to_vec(&unsupported).unwrap();
+    for damaged in [&b"{\"schema_version\": 1, \"pages\": {"[..], &unsupported] {
         fs::write(record_path(&fx), damaged).unwrap();
         let output = fx.run(&["history", "--refresh"]);
         assert_eq!(output.status.code(), Some(1));
@@ -413,10 +426,7 @@ fn a_damaged_record_is_never_overwritten_and_costs_a_save_nothing() {
     );
     let snapshot = read_snapshot(fx.snapshot_dirs().last().unwrap());
     assert_eq!(snapshot["tabs"][0]["history"]["visits"], 1, "{err}");
-    assert_eq!(
-        fs::read(record_path(&fx)).unwrap(),
-        br#"{"schema_version": 2}"#
-    );
+    assert_eq!(fs::read(record_path(&fx)).unwrap(), unsupported);
 }
 
 #[test]
@@ -458,10 +468,23 @@ fn a_refresh_waits_for_the_lock_and_reads_the_library_after_it() {
         format!(r#"{{"schema_version":1,"forgotten":["{OLDEST}"]}}"#),
     )
     .unwrap();
+    let save = fx
+        .command()
+        .arg("save")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
     drop(lock);
     assert_success(&child.wait_with_output().unwrap());
+    assert_success(&save.wait_with_output().unwrap());
     reader.join().unwrap();
-    assert_eq!(urls(&record(&fx)), [OLDER], "read after the lock");
+    assert_eq!(
+        urls(&record(&fx)),
+        [OLDER, OPEN],
+        "both commands merge under the lock"
+    );
+    assert_eq!(fx.snapshot_dirs().len(), 3);
     // Replaced in one rename, in a private directory, leaving nothing beside.
     let pages: Vec<_> = fs::read_dir(fx.root.join("pages"))
         .unwrap()
