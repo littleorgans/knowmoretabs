@@ -412,8 +412,11 @@ pub fn is_public(ip: IpAddr) -> bool {
             !(v6.is_loopback()
                 || v6.is_unspecified()
                 || v6.is_multicast()
-                || (first & 0xfe00) == 0xfc00
-                || (first & 0xffc0) == 0xfe80
+                // Only native global unicast; exclude local, reserved and
+                // transition ranges that can embed a private IPv4 target.
+                || (first & 0xe000) != 0x2000
+                || first == 0x2002
+                || (first == 0x2001 && second == 0)
                 || (first == 0x2001 && second == 0x0db8)
                 || (first == 0x0064 && second == 0xff9b))
         }
@@ -600,6 +603,18 @@ mod tests {
             "http://0.0.0.0/",
             "http://[::1]/",
             "http://[fd00::1]/",
+            "http://[fec0::1]/",
+            "http://[feff::1]/",
+            "http://[::127.0.0.1]/",
+            "http://[2002:7f00:1::]/",
+            "http://0.1.2.3/",
+            "http://2130706433/",
+            "http://0177.0.0.1/",
+            "http://127.0.0.1./",
+            "http://224.0.0.1/",
+            "http://255.255.255.255/",
+            "http://[ff02::1]/",
+            "http://[::ffff:169.254.169.254]/",
             "http://[fe80::1]/",
             "http://[::ffff:192.168.0.1]/",
             "http://0x7f.1/",
