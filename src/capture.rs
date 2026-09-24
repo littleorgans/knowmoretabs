@@ -751,9 +751,10 @@ fn read_stable(path: &Path) -> Result<(Vec<u8>, Option<std::time::SystemTime>), 
 /// Length and mtime everywhere, plus whatever else the platform can say
 /// cheaply about "this is still the same file, untouched". Unix adds the
 /// inode and ctime; Windows has no stable inode on `Metadata` but does have
-/// the creation time, which a replaced file carries a new value of unless
-/// NTFS tunnelling preserves it — and tunnelling only ever makes this agree
-/// where it would otherwise disagree, so it costs no correctness.
+/// the creation time. NTFS tunnelling can preserve that on replacement, and
+/// write times may lag while a writer stays open, so this is a best-effort
+/// change detector, not a proof of identity. History also compares a second
+/// copy on Windows before opening either copy with SQLite.
 pub fn same_file_state(a: &fs::Metadata, b: &fs::Metadata) -> bool {
     let basic = a.len() == b.len() && a.modified().ok() == b.modified().ok();
     #[cfg(unix)]

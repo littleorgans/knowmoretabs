@@ -154,6 +154,15 @@ fn unreadable(path: &Path, err: &rusqlite::Error) -> String {
 /// after. Three attempts, as for the session file. Returns the copy and its
 /// size.
 fn copy_stable(source: &Path, into: &Path) -> Result<(PathBuf, u64), String> {
+    copy_stable_with(source, into, cfg!(windows), |from, to| fs::copy(from, to))
+}
+
+fn copy_stable_with(
+    source: &Path,
+    into: &Path,
+    verify_contents: bool,
+    mut copy: impl FnMut(&Path, &Path) -> std::io::Result<u64>,
+) -> Result<(PathBuf, u64), String> {
     let name = source
         .file_name()
         .map_or_else(|| HISTORY_FILE.into(), ToOwned::to_owned);
@@ -172,6 +181,7 @@ fn copy_stable(source: &Path, into: &Path) -> Result<(PathBuf, u64), String> {
         if before.last().is_some_and(Option::is_none) {
             return Err(format!("no History file at {}", source.display()));
         }
+        let mut complete = true;
         for ((from, to), state) in files.iter().zip(&before) {
             // A companion from an earlier attempt that has since gone would
             // otherwise be read as belonging to this copy.
@@ -179,15 +189,39 @@ fn copy_stable(source: &Path, into: &Path) -> Result<(PathBuf, u64), String> {
             if state.is_none() {
                 continue;
             }
-            match fs::copy(from, to) {
-                Ok(_) => {
+            match copy(from, to) {
+                Ok(bytes) => {
+                    complete &= state.as_ref().is_some_and(|meta| meta.len() == bytes);
                     // CopyFileExW also copies the read-only attribute. Recovery
                     // must be able to write and cleanup must be able to delete.
                     make_copy_writable(to)?;
                 }
                 // Gone between the stat and the copy: the check below sees it.
-                Err(err) if err.kind() == ErrorKind::NotFound => {}
+                Err(err) if err.kind() == ErrorKind::NotFound => complete = false,
                 Err(err) => return Err(format!("cannot copy {}: {err}", from.display())),
+            }
+        }
+        // Windows may defer mtime updates until Chrome closes its writer.
+        // Compare a second complete copy as well; metadata alone can accept
+        // a same-sized write. Only scratch files are opened for comparison.
+        if complete && verify_contents {
+            for ((from, to), state) in files.iter().zip(&before) {
+                if state.is_none() {
+                    continue;
+                }
+                let verification = to.with_extension("verify");
+                remove_if_present(&verification)?;
+                match copy(from, &verification) {
+                    Ok(_) => {
+                        make_copy_writable(&verification)?;
+                        complete &= copy_digest(to)? == copy_digest(&verification)?;
+                    }
+                    Err(err) if err.kind() == ErrorKind::NotFound => complete = false,
+                    Err(err) => {
+                        return Err(format!("cannot verify copy {}: {err}", from.display()));
+                    }
+                }
+                remove_if_present(&verification)?;
             }
         }
         let after = states(&files)?;
@@ -196,7 +230,10 @@ fn copy_stable(source: &Path, into: &Path) -> Result<(PathBuf, u64), String> {
             (None, None) => true,
             _ => false,
         });
-        if unchanged && let Some(Some(history)) = after.last() {
+        if complete
+            && unchanged
+            && let Some(Some(history)) = after.last()
+        {
             return Ok((into.join(&name), history.len()));
         }
     }
@@ -204,6 +241,24 @@ fn copy_stable(source: &Path, into: &Path) -> Result<(PathBuf, u64), String> {
         "{} kept changing while it was being copied",
         source.display()
     ))
+}
+
+fn copy_digest(path: &Path) -> Result<sha2::digest::Output<sha2::Sha256>, String> {
+    use sha2::Digest;
+    use std::io::Read;
+    let digest = || -> std::io::Result<_> {
+        let mut file = fs::File::open(path)?;
+        let mut hash = sha2::Sha256::new();
+        let mut buffer = [0; 16 * 1024];
+        loop {
+            let read = file.read(&mut buffer)?;
+            if read == 0 {
+                return Ok(hash.finalize());
+            }
+            hash.update(&buffer[..read]);
+        }
+    };
+    digest().map_err(|err| format!("cannot compare copy {}: {err}", path.display()))
 }
 
 fn make_copy_writable(path: &Path) -> Result<(), String> {
@@ -520,4 +575,77 @@ fn first_elsewhere(
         }
     }
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stable_copy_retries_changes_and_removes_vanished_companions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("History");
+        let journal = source.with_file_name("History-journal");
+        fs::write(&source, b"before").unwrap();
+        fs::write(&journal, b"journal").unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let mut calls = 0;
+        let (path, bytes) = copy_stable_with(&source, dest.path(), false, |from, to| {
+            let count = fs::copy(from, to)?;
+            calls += 1;
+            if from == source && calls == 2 {
+                fs::write(&source, b"after transaction")?;
+                fs::remove_file(&journal)?;
+            }
+            Ok(count)
+        })
+        .unwrap();
+        assert_eq!(calls, 3);
+        assert_eq!(bytes, 17);
+        assert_eq!(fs::read(path).unwrap(), b"after transaction");
+        assert!(!dest.path().join("History-journal").exists());
+    }
+
+    #[test]
+    fn unstable_or_incomplete_copies_are_never_accepted() {
+        for missing in [false, true] {
+            let tmp = tempfile::tempdir().unwrap();
+            let source = tmp.path().join("History");
+            fs::write(&source, b"complete").unwrap();
+            let dest = tempfile::tempdir().unwrap();
+            let mut calls = 0;
+            let result = copy_stable_with(&source, dest.path(), false, |_, to| {
+                calls += 1;
+                if missing {
+                    Err(std::io::Error::from(ErrorKind::NotFound))
+                } else {
+                    fs::write(to, b"short")?;
+                    Ok(5)
+                }
+            });
+            assert!(result.is_err());
+            assert_eq!(calls, ATTEMPTS);
+        }
+    }
+
+    #[test]
+    fn verification_rejects_same_size_torn_copies_despite_stable_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("History");
+        fs::write(&source, b"good").unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let mut calls = 0;
+        let (path, _) = copy_stable_with(&source, dest.path(), true, |from, to| {
+            calls += 1;
+            let count = fs::copy(from, to)?;
+            if calls == 1 {
+                fs::write(to, b"torn")?;
+            }
+            Ok(count)
+        })
+        .unwrap();
+        assert_eq!(calls, 4);
+        assert_eq!(fs::read(path).unwrap(), b"good");
+        assert_eq!(fs::read_dir(dest.path()).unwrap().count(), 1);
+    }
 }
