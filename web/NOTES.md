@@ -19,7 +19,7 @@ web/
 ├── app.css                 styles
 ├── app.js                  renderer and interactions (unminified)
 ├── fixtures/generate.py    deterministic synthetic library (seed 2026) + cases
-├── fixtures/library.json   2,166 pages · 41 snapshots · 163 sites · 8,478 sightings · 78 groups · 270 with History · 102 with suggestions
+├── fixtures/library.json   2,166 pages · 41 snapshots · 163 sites · 8,478 sightings · 78 groups · 270 with History · 102 with suggestions · 5 defined tags
 ├── fixtures/cases/         empty · no-pages · one-snapshot · degraded · export-forgotten
 └── NOTES.md                this file
 ```
@@ -34,10 +34,11 @@ cells. Every row is a cell: a two-digit index on the left behind a hairline,
 the sighting strip, a serif title over the URL, how long ago it was last seen
 on the title's own baseline, and an arrow cell on the right that opens the
 history drawer. Text aligns to text — title and age on one line, address and
-group mark on the next — while the index, the strip and the arrow centre in
-their cells, because they are furniture rather than words. Hover, the
-keyboard cursor and an expanded row invert wholesale (paper on ink, or ink on
-paper in dark mode); selection tints. Band headings are large and sticky under
+group mark on the next — and the index, the strip and the arrow sit on the
+title's line (`--mid`), however many lines of chips the row grows. Hover and
+the keyboard cursor lay the row on the drawer's bg-1; an expanded row inverts
+wholesale (paper on ink, or ink on paper in dark mode), the ink rising from
+the row's foot; selection tints. Band headings are large and sticky under
 the top bar.
 
 **Theme.** Light and dark follow the OS until the switch is used; then
@@ -128,7 +129,8 @@ Pages (default)
   Toolbar       Search (title+URL, all words, any order; `/` hint inside)
                 Site (text field with datalist, exact site or substring)
                 Group (same, hidden when the archive has no groups)
-                Show ▾ Everything | Open now | Closed | Forgotten (serve only)
+                Show ▾ Everything | Open now | Closed | Has suggested tags (when
+                       there are any) | Forgotten (serve only)
                 Sort ▾ Last seen | First seen | Times seen | Title | URL
                 Clear (only while a filter is set) · ? (opens the legend)
   Bar           "104 of 2,160 pages", only while a filter is set
@@ -180,9 +182,10 @@ the toolbar; the search field shows a `/` hint.
 **`esc` takes one step a press, the most local thing showing:**
 
 1. an open dialog (the legend, Retire tags) closes;
-2. an open menu (Site, Group, Show, Sort, the tag suggestions) closes;
+2. an open menu (Site, Group, Show, Sort) closes;
 3. text in the focused field clears (search, Site, Group, the tag field);
-4. the tag editor, its field empty, closes and the key goes back to its row;
+4. the tag editor, its field empty, closes and the key goes back to its row
+   (from one of its buttons, a chip's ✓ or ×, it closes at once);
 5. an open history closes;
 6. the preview goes back to the full list, the selection kept;
 7. the selection clears;
@@ -404,7 +407,8 @@ emits today.
     }
   ],
   "vocabulary": [                              // active names; alphabetical ignoring case; always present
-    { "name": "Harness", "created_at": "2026-09-24T10:00:00Z" }
+    { "name": "Harness", "created_at": "2026-09-24T10:00:00Z",
+      "definition": "agent harnesses: the code that runs a model in a loop with tools" }   // definition optional
   ],
   "pages": [                                   // one entry per distinct URL, any order
     {
@@ -414,7 +418,7 @@ emits today.
       "forgotten": false,                      // optional; absent means false
       "tags": ["Harness"],                     // active names, vocabulary spelling, alphabetical ignoring case; [] if untagged
       "suggested": [                           // 7c: imported suggestions neither added nor removed; always present, [] if none
-        { "name": "Skills", "sources": ["claude-opus-5"] }                  // not shown yet: the review UI is a later pass
+        { "name": "Skills", "sources": ["claude-opus-5"] }                  // one or more sources; §11
       ],
       "history": {                             // optional; absent when no snapshot recorded signals for the URL
         "visits": 12, "typed": 3,              // what the browser still kept, about 90 days
@@ -451,8 +455,9 @@ Rules the backend must keep:
   when empty. Every page tag is an active vocabulary name. A retired name
   stays in the state file; bringing it back restores it on every page that
   had it. An older document lacking both keys reads as untagged.
-- Each page's `suggested` is always present, in serve and export alike. The
-  page ignores it until the review UI lands.
+- Each page's `suggested` is always present, in serve and export alike, and
+  holds only active names the owner has neither added nor removed. A
+  vocabulary entry's `definition` is present only when the owner gave one.
 - A page's `history` comes from the newest snapshot that recorded signals for
   its URL, and every field in it is optional. Export leaves out `search` and
   `referrer` unless `export --with-history` is given. A referrer is never a
@@ -670,14 +675,16 @@ views and deep links only. A deep link that has to reveal a hidden page
 clears the tags along with the other filters. Clear and `esc` clear them too,
 and a tag filter unfolds "Open now", like any other filter.
 
-**Chips get a line of their own under the address.** A tagged row has three
-lines: the title (with the age on its baseline), the URL (with the group mark
-at its end, where it always was), and then the chips. The chips are aligned
-with the title and URL text, 0.45 rem below the URL, so they read as a line
-and not as part of the address. An untagged row keeps its two lines and its
-height, 61 px at 1400; a tagged row is 88 px. The first version put the chips
-at the end of the URL line. The owner found that crowded, and the owner was
-right: the URL, chips and group mark were competing for one line.
+**Chips get a line of their own under the address, on every row.** A row has
+three lines: the title (with the age on its baseline), the URL (with the
+group mark at its end, where it always was), and then the chips. The chips
+are aligned with the title and URL text, 0.55 rem below the URL, so they read
+as a line and not as part of the address. Every row is 92 px at 1400, tagged
+or not. The first version put the chips at the end of the URL line. The owner
+found that crowded, and the owner was right: the URL, chips and group mark
+were competing for one line. Later the owner asked for more room in and
+between chips: 0.15 rem by 0.6 rem inside, 0.5 rem between (0.45 rem between
+wrapped lines), the same for all three states in §11.
 
 - **The cap is 8 chips or 80 characters, then "+N".** The old cap of 4 chips or
   30 characters was set by the width left over on the URL line, and a line of
@@ -694,29 +701,38 @@ right: the URL, chips and group mark were competing for one line.
   its group. It never opens the drawer.
 - **Narrow screens.** The chip line wraps, so on a phone a heavily tagged row
   can take a fourth line.
-- **Offscreen rows and placeholders.** Tagged rows carry a `tall` class, so
-  `content-visibility` estimates them at their real height. The lazy
-  placeholders count the tagged rows they stand for (`--tall` × `--tagline`),
-  so scrolling into them does not jump.
+- **Offscreen rows and placeholders.** `content-visibility` lays an offscreen
+  row out at an estimate, and a row that renders taller moves the page under
+  the reader: at 390 px, where chips wrap, a row scrolled to used to move
+  573 px a second later. The estimate is now the layout's own. One rendered
+  one-line row gives every row's height (`--h1`), a row on screen that wraps
+  gives a further line (`--hl`), and `app.js` works out how many lines each
+  row's chips take, from their text widths (a canvas, in the chips' font,
+  once per name) at the chip line's width: `data-x` on a row, `--x` summed on
+  a lazy placeholder. It is measured again on each render, when the list
+  changes width, and when the measured row changes height (the serif titles
+  finish loading after the first render and add 5 px to every row). Measured
+  on the lab archive (562 rows) at 390, 700 and 1400 px: a row jumped to
+  moves by at most 1 px, and every row's estimate is within 3 px of its
+  rendered height (it was 5 to 32 px off on every row).
 
 **`+ tag` and the tagger: one editor, moved to where it is needed.** On a
-tagged row, a dashed `+` ends the chip line. An untagged row has no chip line,
-and the owner asked that it not reserve one, so its `+ tag` waits at the end
-of the URL line, before the group mark. It shows under the pointer and on the
-cursor row. The rest of the time it is transparent but keeps its place, so a
-hover never moves anything; at most a very long URL ellipsises a few
-characters earlier. A chip line that appeared on hover would make the row
-jump under the pointer, which is exactly what hover must not do. Clicking
-`+ tag`, or pressing `+`, opens the editor, and that does give the row its
-third line. That growth is the answer to an action you took, the same kind of
-disclosure as the history drawer, not motion on hover.
+tagged row, a dashed `+` ends the chip line. On an untagged row `+ tag` starts
+it, left-aligned under the title and URL. It used to wait at the far end of
+the URL line, where the owner found it "lost in space", and a chip line that
+appeared on hover would make the row jump under the pointer. So every row has
+the line, and the rows share one height. `+ tag` shows under the pointer, on
+the cursor row and on focus; the rest of the time it is transparent but keeps
+its place. Clicking it, or pressing `+`, opens the tag panel under the row
+(§13); clicking it again, or the row, closes it.
 
 `+` (or `=`, the same key unshifted) opens the editor on the selection if
 there is one, otherwise on the cursor row: the same targets `f` uses.
 
-- **On a row,** the editor takes the chip line: the page's chips with ×, then
-  a field. The title, the URL and the group mark stay where they are.
-- **On the tray,** it adds a line above the tray's actions and edits the whole
+- **On a row,** the editor is the row's second drawer: your chips with × and
+  the suggestions, the field, and a grid of tags to add (§13). The row's own
+  chip line stays, and updates as you edit.
+- **On the tray,** it adds a block above the tray's actions and edits the whole
   selection. A chip on only some of the selected pages shows how many carry
   it ("Agent 2"). Its × removes the tag from all of them, and adding a tag
   adds it to all of them.
@@ -724,10 +740,9 @@ there is one, otherwise on the cursor row: the same targets `f` uses.
   list does not move under the pointer. The list catches up when the editor
   closes. A row that no longer matches the filter leaves then, not while you
   are typing into it.
-- **The field is the page's own combobox.** It is `dropdown()`, the same one
-  Site and Group use, with an `own` flag meaning "the caller filters and
-  orders the options". So the keys, the menu, the highlight and the ARIA are
-  shared code, not a second copy.
+- **The field lights a grid, not a menu.** Under the field every tag it could
+  add is a ruled cell with its count, narrowed as you type (§13). It was
+  `dropdown()`, the Site and Group menu; that menu floated over the rows.
 
 **Suggestions and creating a tag.** The field suggests from the vocabulary as
 you type:
@@ -744,18 +759,15 @@ you type:
   field has no `maxlength` and cuts nothing: the server counts the 40
   characters (a `maxlength` counts UTF-16 units, which cuts an emoji short),
   and a name it refuses stays in the field with its reason in the toast.
-- **Keys.** `↑` `↓` move, and `↵` adds and keeps the field open for the next
-  tag; the menu comes back on typing or `↓`. `esc` closes the menu, then clears
-  the field, then closes the editor and returns to the row (steps 2 to 4 of
-  §3). `↵` on an empty field closes it too. With the menu shut by `esc`, `↵`
-  adds the name as typed, since the suggestions were refused: "Ag" makes Ag,
-  an existing name in any case is that tag, and a retired one comes back.
-  (It used to do nothing: the menu took `↵` only while open.)
-- **Placement.** The menu opens under the field. When the row is too near the
-  bottom of the window, the page first scrolls to make room. At the very end
-  of the list the menu opens upward instead, clear of the title and URL. A tag
-  retired on this visit is offered as "retired · brings it back", not as a new
-  tag.
+- **Keys.** Typing lights the first cell. `↓` `↑` move a line of the grid
+  (`↑` off the top returns to the field, where nothing is lit), and `← →`
+  move a cell once one is lit. `↵` adds the lit tag, or with nothing lit the
+  name as typed ("Ag" makes Ag, an existing name in any case is that tag, a
+  retired one comes back), and keeps the field open for the next. `esc`
+  clears the field, then closes the panel and returns to the row (steps 2 to
+  4 of §3). `↵` on an empty field closes it too.
+- **Retired names.** A tag retired on this visit is offered as "retired ·
+  brings it back", not as a new tag.
 
 **Undo covers every change.** Each change is one name on some pages, and the
 toast says so: "Added Voice to 4 pages · Undo", "Removed MCP from 1 page ·
@@ -825,9 +837,8 @@ The page asks whether `host.tag` exists, never which host it is.
   change chip widths on hover (the row would shift) or cost a × of width
   always. The tagger makes × part of an explicit edit, in the same place.
 - **The tagger is one DOM node, moved.** Moving one node means one set of
-  listeners and one menu. Rows use `content-visibility: auto`, which contains
-  paint and would clip the menu, so the tagging row switches to `visible`
-  while the editor is open.
+  listeners. The tagging row switches from `content-visibility: auto` to
+  `visible` while the panel is open, so it is always rendered.
 - **`+` as the key.** The page's keys are mnemonic (`f` forget, `u` undo, `x`
   select, `t` theme), and `t` was taken. `+` is the label on the button it
   opens.
@@ -1041,3 +1052,298 @@ a row with signals. No console errors.
 - **The drawer grows by up to four lines** on pages with signals, and the
   Forget button stays where it was. If the section is read more than the
   sightings, it could sit beside them at wide widths instead of above.
+
+## 11. Suggested tags: review in the chip line and the editor
+
+Since 7c, `tag --import` stores what an owner's agent suggested, and every
+page carries `suggested: [{name, sources}]` (§5): active names the owner has
+neither added nor removed. The owner's view is settled (brief §1, §2): tags
+are flat facets they control, recall is favoured, and review mostly removes
+wrong tags. So a suggestion is treated as a tag until it is decided, marked
+so the owner can see what they have not yet looked at, and decided in the
+editor 7a already built. Nothing new sits on the row, and nothing moves on
+hover.
+
+**Three states on the chip line, told apart by line and weight.**
+
+```
+Agent   ┆MCP ▮▮┆   ┆Harness ▮┆
+yours    suggested by several   suggested by one
+```
+
+- **Yours:** a solid hairline, as in 7a.
+- **Suggested:** the same chip with a dashed outline, in `--ink-3`, a step
+  quieter than yours.
+- **Suggested by several sources:** dashed, but in `--ink-2`, as loud as
+  yours. The brief calls these confirmed; the page never uses that word for
+  them, because ✓ is what confirms.
+- **One mark per source** follows the name: 2 px bars on a 4 px pitch, one,
+  two or three of them (three stands for three or more). It is the sighting
+  strip's language, one mark per snapshot, and it says how much agreement
+  there is without a number or a badge. The tooltip names the sources
+  ("Suggested by jev and luna") and gives the tag's definition, which is
+  what you judge a suggestion against.
+
+Order: your tags, then suggestions from several sources, then single ones,
+alphabetical within each. The filter's picked tags still go last. The first
+suggestion keeps 0.35 rem of air from your last chip, so the two groups read
+as two. The 8-chip and 80-character cap counts both groups; the "+N" tooltip
+marks the suggested ones, and the row-height estimate counts suggestions'
+widths with the rest (§9). The drawer's summary adds "· suggested MCP,
+Harness".
+
+Colour does no work here. One accent, no badges, no red, and the dashed
+outline and marks invert with the row like everything else.
+
+**Review happens in the tag editor.** In serve, clicking a suggestion opens
+the editor on its row, as `+ tag` does (in export it filters, like your
+chips). The editor lists your tags with ×, then each suggestion with ✓
+(confirm: add it, so it is yours) and × (dismiss: remove it, so it is never
+suggested again). A page with two or more suggestions ends the line with
+"Confirm all". There is no Forget in the editor: it followed there for a
+while (brief §5, "forget page beside the tags"), and the owner took it out,
+since you open the editor to tag. Forget is in the drawer and on the tray.
+
+- **The grid sits under the review.** The chips to confirm come first, on
+  their own line, and the grid below them floats over nothing, so it no
+  longer has to stay shut while you review.
+- **Keyboard.** `+` opens the editor. `←` from the empty field steps back
+  along its buttons (Confirm all, then each chip's ×, ✓), and
+  `←` `→` move between them. `↵` or `space` presses one. After ✓ or × the
+  key moves to the same button on the next suggestion, so `↵ ↵ ↵` dismisses
+  a run of them. `u` undoes from a button, and `esc` closes the editor from
+  one (§3, step 4). Other page keys are off while a button has the key.
+- **On the tray**, the editor lists the selection's suggestions, each with
+  how many selected pages carry it ("Agent 2"), busiest first. ✓ and × act
+  only on the pages that carry it. Dismissing on the rest would record a
+  decision about a tag nobody suggested there.
+- **The toast says what happened:** "Confirmed MCP on 1 page", "Dismissed
+  Voice on 3 pages", counted from the decisions the server reports as
+  changed. A dismissal changes no visible tag, so `urls` would say 0. Undo
+  says "Harness is suggested again on 1 page", and undoing that confirms or
+  dismisses again.
+
+**How the page knows what is still a suggestion.** The server's rule is
+"suggested, and neither added nor removed". The page keeps each page's
+suggestions as loaded (`sg`), and the names decided on this visit (`gone`).
+Every tag request already returns the exact decisions it replaced (§5,
+`undo`). So after a request, each decision in it is made (added to `gone`),
+and after an undo each one it restores to neither-added-nor-removed is
+unmade (taken out of `gone`), which shows the suggestion again. That is
+exact for everything this tab does, with no new endpoint and no refetch. A
+revival already refetches the library, and now reloads suggestions with it.
+Retiring a tag hides its suggestions too, as the server does.
+
+**The tag bar and filters count suggestions.** A page's tags, for filtering
+and counting, are yours plus its suggestions (`p.all`). This is the brief's
+model (§2: "its suggestions … plus the owner's additions, minus the owner's
+removals") and the owner's recall-first view. It also makes review a
+filtering job: pick Harness and every page tagged or suggested Harness is
+there to confirm or clear. The count stays a single number, so the bar
+reads as before. Its tooltip splits it: "132 pages tagged Harness, all
+suggested", "173 pages tagged Agent, 171 of them suggested". Rejected: two
+numbers per cell (noise on every cell, for a split the chips already show
+row by row); counting only yours (after an import, the bar would be empty
+while 385 rows carried chips, and a filter would hide exactly the pages
+waiting for review). The retire dialog counts the same way, since retiring
+hides suggestions too. The editor's own chips count only yours, because ×
+there removes a tag you set.
+
+**"Has suggested tags" is a Show option,** between Closed and Forgotten, and
+only offered when the library has suggestions. The count line says "385
+pages with suggested tags", as the Forgotten view says "6 forgotten pages".
+Forgotten pages are left out, as in every view except Forgotten. It is a
+Show option and not a toggle beside the tag bar, because Show is where the
+page already keeps "which pages", and it takes a filter and `esc` the same
+way. A row that runs out of suggestions leaves the view when the editor
+closes, not while you are in it (§9).
+
+**Definitions.** `GET api/library` now gives each vocabulary entry its
+`definition` when there is one (`tags --define`). The backend change is one
+optional field on `VocabularyEntry`, so `api/tags` and `api/vocabulary`
+answers carry it too. The page shows it where it helps a decision: the
+tooltip of a tag bar cell, of your chips and of suggestions, and in the
+retire dialog as a grey line under the name, cut to one line with the whole
+text as the tooltip.
+
+**Export is read-only.** Suggestions show with the same dashes, marks and
+tooltips, count in the bar, and "Has suggested tags" works. Clicking one
+filters. There is no ✓ or × anywhere, and `+` offers the
+`knowmoretabs tag '<url>' --add NAME` command, which is also how a
+suggestion is confirmed from a terminal.
+
+### Rejected
+
+- **✓ × on every suggestion at rest.** One click fewer, but every row with
+  suggestions (two in three in the owner's archive) would carry two more
+  controls per chip, all the time. 7a rejected × on hover for the same
+  reason: it shifts widths or costs width always.
+- **Clicking a suggestion to filter, in serve.** Consistent with your
+  chips, but a suggestion is a question, and answering it is what the click
+  is for. The tag bar still filters by it. Export, which cannot answer,
+  filters.
+- **A "Confirm all" on the tray.** A selection's pages carry different
+  suggestions, and one request adds the same names to every page it names.
+  So it would be one request per page, and undo covers one request. Per
+  name it stays one request, and exact.
+- **Opacity or colour for suggestions.** Opacity fades the text too far on
+  an inverted row. A tint would be a second accent.
+- **A number for sources ("MCP 2").** It reads as a count of pages, which
+  is what numbers mean on the tag bar and in the tray editor.
+
+### Fixture
+
+`generate.py` gives five tags a definition (Harness, MCP, Skills, Evals,
+Voice), and not Agent, the first, so the contract test, which reads the
+first entry's fields as required, keeps `definition` optional. Nothing else
+moves. `tests/serve.rs` checks that the served vocabulary carries a
+definition, and leaves the key out when there is none.
+
+### Size and speed
+
+app.js 63,068 → 70,396 bytes (+7.3 KB): the chip states, the editor's
+review buttons and their keys, the decision bookkeeping, the toasts,
+definitions, and the view. app.css 39,037 → 40,292 bytes (+1.3 KB). On the
+lab archive (562 rows, 385 with suggestions, 822 suggestion chips rendered),
+a render is 14.8 ms and boot to first render 120 ms, over `fetch`. The
+fixture from `file://` renders in 17.1 ms.
+
+### Checked
+
+In Chrome headless against `serve` on copies of the owner's archive, with
+the lab's facet vocabulary (44 active tags, each defined, Usage & Cost
+retired), suggestions from two models imported with the real
+`tag --import --accept-new --partial` (jev with tags on 354 pages, luna on
+343), and six decisions set by hand. Keys were sent as single
+trusted presses over the DevTools protocol, since the harness's own key
+command repeated `u` 870 times.
+
+- Light and dark at 1400, 700 and 390 px, the list and the open editor. No
+  horizontal overflow, no console errors.
+- One row by keyboard: `+`, `←` to a ×, `↵` dismisses and moves to the
+  next ×, `u` brings it back, `↵` on ✓ confirms, `esc` closes. After each
+  step, `library.json`'s `add` and `remove` matched the toast.
+- One row by mouse: click a suggestion, ✓, ×, the toast's Undo, Confirm
+  all, and its undo, restoring the page exactly.
+- Four selected rows: ✓ Model added it to all four, × Provider removed it
+  from the three that carried it and recorded nothing on the fourth, and
+  undo restored all three.
+- Retiring a mostly suggested tag hid it from 132 pages and the bar.
+  Bringing it back restored them.
+- Tag names, a source and a definition carrying `<img onerror>`, `<svg
+  onload>`, `<script>` and quotes render as text everywhere: chips, editor,
+  bar, drawer summary, dialog, tooltips, toast. Serve and export alike.
+- Export: marked, filterable, no ✓ ×, `+` offers the command.
+- Still working: the `esc` order (field, editor from a chip, history,
+  selection, filters), `f` and `u`, Forget from the drawer and restore from
+  the Forgotten view, and the drawer's Browser history section (on a copy
+  of the history-view archive, since the owner's own has no snapshot with
+  signals yet).
+
+### Open
+
+- **Touch targets.** ✓ and × are chip-sized, about 16 px. Fine with a
+  pointer, small on a phone.
+- **Should agreement be the default for filters?** If single-source
+  suggestions prove mostly wrong, the bar could count only agreed ones and
+  yours. That is one predicate (`setSug`).
+- **"Untagged" view.** Still open from §9's follow-ups; "Has suggested tags"
+  covers the review backlog, not pages nothing suggested anything for.
+- **Tray size.** Selecting hundreds of pages lists every suggested name in
+  the tray editor, which wraps and grows. It has not been capped.
+
+## 12. Row polish: hover, alignment, the drawer's ink (September 2026)
+
+A pass with the owner at the running server, one change at a time.
+
+- **Hover is the drawer's ground, not ink.** Hover and the cursor take bg-1,
+  the colour the drawer opens on, and leave the text alone. Only an expanded
+  row inverts. A selected row keeps its bg-2 under the pointer.
+- **Everything on the title's line.** The index, the checkbox, the strip's
+  first line and the arrow centre on `--mid` (1.36rem from the row's top: the
+  body's padding plus the serif's x-height centre, measured). They used to
+  centre in the row, so they drifted as chips grew it. A strip of several
+  lines keeps its first line there and grows down.
+- **One drawer, and the row stays put.** Opening a row still closes the
+  other, but a drawer above it now closes at once and the page scrolls back
+  by its height, so the row opened stays under the pointer (before, it
+  jumped 172 px when the drawer above was partly on screen). Scroll anchoring
+  is off for that moment, since Chrome would correct it a second time and
+  Safari not at all. A drawer below still closes with its transition.
+- **The ink rises.** An expanded row's ink is an absolute `::after` on the
+  header's grid row: the grid area is its box, so it covers the header at
+  any height, never the drawer, and takes no cell from placement. It scales
+  up from the foot on open and back down on close (`--rise`, 0.26 s,
+  ease-out). The text turns with it: what inherits follows the row's colour
+  on the same curve, and the chips, whose greys are custom properties, carry
+  their own. A second transition on inheriting text made the title lag dark
+  on the ink, so they have none. Hover's bg-1 fades on `--fade` (0.18 s).
+  Rejected: a plain crossfade, compared side by side; the rise says which
+  row opened.
+- **The toolbar's menus hang from the ink rule.** An open control draws a
+  2 px ink rule under itself; the menu used to start 1 px lower with its own
+  ink top, and the divider between showed as a double line. It now starts at
+  the control's padding box foot with no top border. On a phone, Clear is
+  ordered after the search on the first line (it came last in the markup, so
+  it wrapped onto a line of its own and broke the rules), and Sort, at the
+  screen's edge, has no right rule.
+
+## 13. The tag panel: a drawer, not a menu (September 2026)
+
+The owner's screenshots of the tagger showed its menu drawn under the next
+row, under the band's sticky heading and past the band's end; the page
+jumping down when `+ tag` was clicked; and, on the tray, a menu above the
+selection holding only "Type a name to make a tag". All of it came from the
+menu floating over the list. (The overlap was also made worse by §12's ink
+layer, which gave every row `isolation: isolate` and so a stacking context
+the menu could not leave.) The owner's call: lose the popup, and open a panel
+with the field, the results under it.
+
+- **A second drawer.** `+ tag` opens the panel where the history drawer
+  opens, on the drawer's bg-1 and with its collapse transition, and the
+  row's header inverts with the rising ink, as for history. One panel is open
+  at a time, history or tags, through `closePanels()`: one above the row
+  being opened closes at once and the page is scrolled back by its height,
+  so the row stays under the pointer. Leaving the panel for another row
+  closes it the same way, anchored on that row.
+- **What is in it.** Your tags with ×, the suggestions with ✓ and ×, and
+  Confirm all, on their own line (hidden when there are none); then the
+  field, at most 28 rem wide, and Done, a button like the drawer's, beside
+  it (at the far edge it was lost); then the grid.
+- **Its foot is the row divider.** An inverted row clears `--line` for its
+  header, which also took the rule under its drawer; `--rule` keeps it.
+- **The grid.** Every tag the field could add, as ruled cells with the
+  library count, in the tag bar's language: exact match first, then names
+  that start with what is typed, then names that contain it, busiest first,
+  and a dashed "new tag" cell last. An empty field shows them all, so the
+  common tags are one click. The grid holds three lines and scrolls in
+  itself, so typing never changes the panel's height and nothing below it
+  bounces. Each cell draws its own rules, overlapped a pixel, so a short
+  list leaves no empty frame.
+- **Nothing scrolls the page.** The scroll that made room for the menu, the
+  menu that flipped upward at the end of the list, and the menu's stacking
+  are gone with it. The lit cell is kept in view by scrolling the grid
+  alone.
+- **On a phone** the grid's cells narrow to 8 rem (two to a line at 390
+  px), and both drawers start at the title, since the strip is hidden.
+- **On the tray** the same panel sits above the actions. The tray is fixed,
+  so it grows upward over the list, as the tray always has. It never grows
+  wider than the dock: the panel has `contain: inline-size` (and its padding
+  inside that), so it takes the tray's width and adds none. On a phone the
+  tray's first line (✕, the count, Select all shown) is 2.75 rem tall; it
+  was 22 px, pressed against its rules.
+- **Closing.** `esc` (after clearing the field), `↵` on an empty field,
+  Done, clicking `+ tag` again, or clicking the row. A press on the row
+  being tagged only closes the panel; it does not go on to open the
+  history. The session's edits re-filter the list once the panel has gone.
+- **Rejected:** tags inside the history drawer (reading a page's history
+  should not put a field in the way, and `+ tag` should go straight to
+  typing); a list instead of the grid (it fits about a third as many tags,
+  though its keys would be only `↑` `↓`).
+
+Checked in Chrome headless at 1400 px, light and dark, against a copy of
+the owner's archive on its own port: open, add by `↵`, remove by ×, close
+by `esc`, with the row's top unmoved (200 → 200); the panel replacing an
+open drawer and a drawer replacing the panel, both ways, the row fixed to
+the pixel; the tray on a two-page selection; and review chips on a page
+with suggestions planted in memory (the owner's archive has none).

@@ -672,6 +672,7 @@ pub fn tag_command(
         out::json(&serde_json::json!({
             "changed": outcome.changed,
             "unchanged": outcome.unchanged,
+            "dismissed": dismissed(&outcome).0,
             "tags": outcome.tags,
             "created": outcome.created,
             "revived": outcome.revived,
@@ -682,20 +683,54 @@ pub fn tag_command(
     Ok(())
 }
 
+/// Pages whose shown tags stayed the same but whose decisions changed, and
+/// the names decided: removing a tag a page does not show (one only
+/// suggested, or none at all) still records it, so it is not suggested there
+/// again. Those pages are in `unchanged`, since `changed` counts shown tags.
+fn dismissed(outcome: &Outcome) -> (Vec<&str>, Vec<&str>) {
+    let mut urls = Vec::new();
+    let mut names: Vec<&str> = Vec::new();
+    for url in &outcome.unchanged {
+        let decided: Vec<&Decision> = outcome.undo.tags.iter().filter(|d| &d.url == url).collect();
+        if !decided.is_empty() {
+            urls.push(url.as_str());
+        }
+        for decision in decided {
+            if !names.iter().any(|n| fold(n) == fold(&decision.name)) {
+                names.push(&decision.name);
+            }
+        }
+    }
+    (urls, names)
+}
+
 fn human_tag(outcome: &Outcome) -> String {
     let changed = outcome.changed.len();
-    let unchanged = outcome.unchanged.len();
-    let mut line = if changed == 0 {
+    let (urls, names) = dismissed(outcome);
+    let unchanged = outcome.unchanged.len() - urls.len();
+    let mut parts = Vec::new();
+    if changed > 0 {
+        parts.push(format!("retagged {}", plural(changed, "page")));
+    }
+    if !urls.is_empty() {
+        let (was, will) = if names.len() == 1 {
+            ("it was not a tag you set there", "it")
+        } else {
+            ("they were not tags you set there", "they")
+        };
+        parts.push(format!(
+            "dismissed {} on {} ({was}, and {will} will not be suggested there again)",
+            names.join(", "),
+            plural(urls.len(), "page")
+        ));
+    }
+    let mut line = if parts.is_empty() {
         format!(
             "already tagged that way: {}; nothing changed",
             plural(unchanged, "page")
         )
     } else {
-        format!(
-            "retagged {}{}",
-            plural(changed, "page"),
-            already(unchanged, "already tagged that way")
-        )
+        parts.join("; ") + &already(unchanged, "already tagged that way")
     };
     if !outcome.created.is_empty() {
         let _ = write!(line, "; new tags: {}", outcome.created.join(", "));
@@ -921,6 +956,47 @@ mod tests {
         assert_eq!(
             human_tag(&nothing),
             "already tagged that way: 1 page; nothing changed"
+        );
+    }
+
+    #[test]
+    fn human_line_says_a_removal_it_recorded_without_changing_shown_tags() {
+        let decision = |url: &str, name: &str| Decision {
+            url: url.into(),
+            name: name.into(),
+            add: false,
+            remove: false,
+        };
+        let outcome = Outcome {
+            changed: vec!["a".into()],
+            unchanged: vec!["b".into(), "c".into(), "d".into()],
+            undo: Undo {
+                tags: vec![
+                    decision("a", "MCP"),
+                    decision("b", "MCP"),
+                    decision("c", "mcp"),
+                ],
+                vocabulary: BTreeMap::new(),
+            },
+            ..Outcome::default()
+        };
+        assert_eq!(
+            human_tag(&outcome),
+            "retagged 1 page; dismissed MCP on 2 pages (it was not a tag you set there, \
+             and it will not be suggested there again) (1 was already tagged that way)"
+        );
+        let only = Outcome {
+            unchanged: vec!["b".into()],
+            undo: Undo {
+                tags: vec![decision("b", "MCP"), decision("b", "Skills")],
+                vocabulary: BTreeMap::new(),
+            },
+            ..Outcome::default()
+        };
+        assert_eq!(
+            human_tag(&only),
+            "dismissed MCP, Skills on 1 page (they were not tags you set there, \
+             and they will not be suggested there again)"
         );
     }
 }

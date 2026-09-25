@@ -398,6 +398,13 @@ TAG_KINDS = {   # which themes a kind of page is tagged from, by its host
     "news": ["life"], "shop": ["life"], "travel": ["life"], "food": ["life"], "media": ["life"], "misc": ["life", "eng"],
 }
 TAG_UNUSED = ["Prompt"]         # made once, never kept on a page: a 0-count tag
+TAG_DEFS = {    # a few tags the owner defined (`tags --define`); the first tag has none, so the field stays optional
+    "Harness": "agent harnesses: the code that runs a model in a loop with tools",
+    "MCP": "the Model Context Protocol, its servers and clients",
+    "Skills": "packaged instructions an agent loads for one kind of task",
+    "Evals": "measuring models and agents: benchmarks, graders, test sets",
+    "Voice": "speech in and out: recognition, synthesis, voice agents",
+}
 
 
 def kind_of(domain):
@@ -434,6 +441,9 @@ def add_tags(lib, seed):
     lib["vocabulary"] = [{"name": n, "created_at": (start + timedelta(days=j * 4, hours=j % 9)).strftime("%Y-%m-%dT%H:%M:%SZ")}
                          for j, n in enumerate(t for t in vocab if t in used or t in TAG_UNUSED)]
     lib["vocabulary"].sort(key=lambda v: v["name"].lower())
+    for v in lib["vocabulary"]:
+        if v["name"] in TAG_DEFS:
+            v["definition"] = TAG_DEFS[v["name"]]
     return lib
 
 

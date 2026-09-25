@@ -130,6 +130,9 @@ impl Term {
 pub struct VocabularyEntry {
     pub name: String,
     pub created_at: Timestamp,
+    /// Absent when the owner has not defined the tag.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub definition: Option<String>,
 }
 
 /// Tag names compare without regard to case, so "mcp" finds "MCP".
@@ -202,6 +205,7 @@ impl State {
             .map(|(name, term)| VocabularyEntry {
                 name: name.clone(),
                 created_at: term.created_at,
+                definition: term.definition.clone(),
             })
             .collect();
         entries.sort_by(|a, b| tag_order(&a.name, &b.name));

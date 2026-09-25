@@ -141,10 +141,15 @@ Codex or any other agent in that folder and say "Read prompt.md and carry it
 out." It writes `tags.jsonl`; `tag --import DIR/tags.jsonl` checks every line
 against your library and vocabulary, refuses the whole file if anything is
 wrong, and otherwise stores the answers as suggestions, with the model's name,
-the date and the vocabulary version. Your own tags are never changed:
-`serve` and `export` list each page's suggestions beside its tags, with the
-sources that made them, and a suggestion you add or remove is yours from then
-on. Import a second agent's answers and a tag two sources agree on shows both.
+the date and the vocabulary version. Your own tags are never changed. The
+library shows each page's suggestions after its tags, dashed, with a mark for
+each source that made them, so a tag two agents agree on stands out from one
+only one of them suggested. They count toward the tag bar and its filters until
+you decide. In `serve`, click a suggestion (or press `+`) to confirm it with ✓
+or dismiss it with ×, one page at a time or across a selection, and undo
+either from the toast. Show ▸ "Has suggested tags" lists the pages still
+waiting. A suggestion you confirm or dismiss is yours from then on; an export
+shows suggestions but cannot decide them.
 
 ## The rest of the command line
 

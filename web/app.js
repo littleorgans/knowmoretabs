@@ -26,7 +26,7 @@ const host = (() => {
 // ---- 2. State -------------------------------------------------------------
 const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rendered: [], q: '', domain: '', group: '', status: '', sort: 'last',
             openAll: false, preview: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages',
-            vocab: new Map(), tags: [], tagsAll: false };   // vocab: lower-case name → name; tags: the tag filter, lower-case, all must match
+            vocab: new Map(), defs: new Map(), tags: [], tagsAll: false };   // vocab: lower-case name → name; tags: the tag filter, lower-case, all must match
 const FOLD = 10;                                   // rows of "Open now" shown before "show all"
 const EAGER = 300, CHUNK = 200;                    // rows rendered up front; rows per lazy placeholder after that
 const COLS = 12, COL = 4, SROWS = 4;               // the sighting strip: marks to a row, px per mark (--col), rows
@@ -76,7 +76,25 @@ function setTags(p, names) {
   const m = new Map();
   for (const t of names) { const k = lc(t); if (!S.vocab.has(k)) S.vocab.set(k, t); m.set(k, S.vocab.get(k)); }
   p.tags = [...m.values()].sort(collator.compare); p.tk = new Set(m.keys());
+  if (p.sg) setSug(p);
 }
+// Suggestions as loaded, each name with its sources; `gone` is what was decided
+// on this visit. A page shows the ones still active and undecided, several
+// sources first, and filters and counts by them with its own tags (`all`).
+function loadSug(p, list) {
+  p.sg = new Map(); p.gone = new Set();
+  for (const s of Array.isArray(list) ? list : []) if (typeof s?.name === 'string' && s.name) p.sg.set(lc(s.name), Array.isArray(s.sources) ? s.sources.filter((x) => typeof x === 'string') : []);
+  setSug(p);
+}
+function setSug(p) {
+  p.sug = [...p.sg].filter(([k]) => S.vocab.has(k) && !p.tk.has(k) && !p.gone.has(k)).map(([k, src]) => ({ k, name: S.vocab.get(k), src }))
+    .sort((a, b) => (b.src.length > 1) - (a.src.length > 1) || collator.compare(a.name, b.name));
+  p.all = p.sug.length ? new Set([...p.tk, ...p.sug.map((s) => s.k)]) : p.tk;
+}
+const and = new Intl.ListFormat(undefined, { type: 'conjunction' });
+const def = (k) => (S.defs.get(k) ? `\n${S.defs.get(k)}` : '');
+const sugTitle = (k, src, then = '') => `Suggested${src.length ? ` by ${and.format(src)}` : ''}${then}${def(k)}`;
+const TICKS = '<i class="src" aria-hidden="true"></i>';
 const isForm = (el) => el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.type !== 'checkbox';   // a box is not typed into
 const plural = (n, one, many = one + 's') => `${num.format(n)} ${n === 1 ? one : many}`;
 const SORTS = {
@@ -104,7 +122,7 @@ function derive(lib) {
   // Tags: a library from before 7a has neither key and reads as untagged. A
   // page tag the vocabulary does not list is still shown, and joins it.
   setVocab(Array.isArray(lib.vocabulary) ? lib.vocabulary : []);
-  for (const p of S.pages) setTags(p, Array.isArray(p.tags) ? p.tags.filter((t) => typeof t === 'string' && t) : []);
+  for (const p of S.pages) { setTags(p, Array.isArray(p.tags) ? p.tags.filter((t) => typeof t === 'string' && t) : []); loadSug(p, p.suggested); }
   S.byUrl = new Map(S.pages.map((p) => [p.url, p]));
   S.skipped = 0;
   S.snaps = (lib.snapshots || []).filter((s) => { const ok = s && !isNaN(new Date(s.captured_at)); if (!ok) S.skipped++; return ok; }).map((s, k) => {
@@ -191,8 +209,8 @@ function matcher(skip) {
   const g = skip === 'group' ? '' : S.group.trim().toLowerCase(), gexact = g && S.groups.has(g);
   return (p) => p.n && p.forgotten === wantForgotten && (!d || (exact ? p.domain === d : p.domain.includes(d)))
     && (!g || p.gs.some((t) => (gexact ? t === g : t.includes(g))))
-    && (S.status !== 'open' || p.open) && (S.status !== 'closed' || !p.open)
-    && (!S.preview || S.sel.has(p.i)) && S.tags.every((t) => p.tk.has(t))
+    && (S.status !== 'open' || p.open) && (S.status !== 'closed' || !p.open) && (S.status !== 'suggested' || p.sug.length)
+    && (!S.preview || S.sel.has(p.i)) && S.tags.every((t) => p.all.has(t))
     && words.every((w) => p.hay.includes(w));
 }
 function compute() { S.shown = S.pages.filter(matcher('')).sort(SORTS[S.sort]); }
@@ -207,9 +225,10 @@ const siteOptions = () => facet('domain', (p) => (p.domain ? [p.domain] : []))
   .map(([d, k]) => ({ value: d, label: d, meta: plural(k, 'page') }));
 const groupOptions = () => facet('group', (p) => p.gs)
   .map(([t, k]) => ({ value: S.groups.get(t).title, label: S.groups.get(t).title, meta: plural(k, 'page') }));
-// Pages per tag. Over the shown list it is co-occurrence: with Harness picked,
-// "Skills 47" is 47 Harness pages that are also Skills.
-function tagCounts(pages) { const n = new Map(); for (const p of pages) for (const k of p.tk) n.set(k, (n.get(k) || 0) + 1); return n; }
+// Pages per tag, suggestions included (`own`: the owner's alone). Over the
+// shown list it is co-occurrence: with Harness picked, "Skills 47" is 47
+// Harness pages that are also Skills.
+function tagCounts(pages, own) { const n = new Map(); for (const p of pages) for (const k of own ? p.tk : p.all) n.set(k, (n.get(k) || 0) + 1); return n; }
 const libraryCounts = () => tagCounts(S.pages.filter((p) => p.n && !p.forgotten));
 function bandOf(p) {
   if (S.sort === 'last') return p.open ? 'Open now' : F.month.format(S.snaps[p.last].date);
@@ -230,20 +249,30 @@ function titleHTML(p) {
   return p.link ? `<a class="t" dir="auto" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" tabindex="-1">${inner}</a>` : `<span class="t" dir="auto">${inner}</span>`;
 }
 // Chips get a line of their own under the address: up to TAGMAX, or TAGCH
-// characters, then "+N" (the history lists all). The filter's own tags go
-// last, since every row shown has them.
-function tagsHTML(p) {
-  const on = new Set(S.tags), list = [...p.tags].sort((a, b) => on.has(lc(a)) - on.has(lc(b)));
+// characters, then "+N" (the history lists all). The owner's tags come
+// first, then suggestions, dashed, each with a mark per source. The filter's
+// own tags go last, since every row shown has them. In serve a suggestion
+// opens the editor, where it is confirmed or dismissed; in export it filters.
+function chipsOf(p) {
+  const on = new Set(S.tags), list = [...p.tags.map((name) => ({ k: lc(name), name })), ...p.sug].sort((a, b) => on.has(a.k) - on.has(b.k));
   let k = 0, used = 0;
-  while (k < list.length && k < TAGMAX && (k === 0 || used + list[k].length <= TAGCH)) used += list[k++].length;
-  const chips = list.slice(0, k).map((t) => `<button type="button" class="tag${on.has(lc(t)) ? ' on' : ''}" tabindex="-1" data-act="tagf" data-t="${esc(lc(t))}" title="${on.has(lc(t)) ? 'Stop filtering by' : 'Only pages tagged'} ${esc(t)}">${esc(t)}</button>`).join('');
-  const more = k < list.length ? `<span class="tag n" title="${esc(list.slice(k).join(', '))}">+${list.length - k}</span>` : '';
+  while (k < list.length && k < TAGMAX && (k === 0 || used + list[k].name.length <= TAGCH)) used += list[k++].name.length;
+  return { on, list, k };
+}
+// Every row has the line, so rows share a height and a hover moves nothing: an
+// untagged row's holds only "+ tag", at its start.
+function tagsHTML(p) {
+  const { on, list, k } = chipsOf(p);
+  const chips = list.slice(0, k).map(({ k: t, name, src }) => { const f = on.has(t) ? 'Stop filtering by' : 'Only pages tagged', rev = src && host.tag && !on.has(t);
+    return `<button type="button" class="tag${src ? ` s s${Math.min(3, src.length) || 1}` : ''}${on.has(t) ? ' on' : ''}" tabindex="-1" data-act="${rev ? 'tag' : 'tagf'}" data-t="${esc(t)}" ` +
+      `title="${esc(src ? sugTitle(t, src, rev ? '. Click to confirm or dismiss it' : `. ${f} ${name}`) : `${f} ${name}${def(t)}`)}">${esc(name)}${src ? TICKS : ''}</button>`; }).join('');
+  const more = k < list.length ? `<span class="tag n" title="${esc(list.slice(k).map((t) => t.name + (t.src ? ' (suggested)' : '')).join(', '))}">+${list.length - k}</span>` : '';
   const add = host.tag ? `<button type="button" class="tag add" tabindex="-1" data-act="tag" aria-label="Add a tag" title="Add or remove tags (+)">${list.length ? '+' : '+ tag'}</button>` : '';
-  return `<span class="tags${list.length ? ' line' : ''}">${chips}${more}${add}</span>`;
+  return `<span class="tags">${chips}${more}${add}</span>`;
 }
 function rowHTML(p) {
   const s = S.snaps[p.last];
-  return `<li class="row${p.open ? ' open' : ''}${p.tags.length ? ' tall' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}${S.exp.has(p.i) ? ' exp' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
+  return `<li class="row${p.open ? ' open' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}${S.exp.has(p.i) ? ' exp' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
     `<span class="pick"><input type="checkbox" tabindex="-1" aria-label="Select"${S.sel.has(p.i) ? ' checked' : ''}></span>` +
     `<span class="strip" title="Seen in ${p.n} of ${S.snaps.length} snapshots"></span>` +
     `<span class="body">${titleHTML(p)}<span class="u">${esc(p.addr)}</span>${tagsHTML(p)}${grpHTML(p.grp, true)}</span>` +
@@ -295,7 +324,7 @@ function browserHTML(p) {
 function histHTML(p, cls = 'hist in') {
   const sightings = p.seen.map(([k, w, tid, pos, g]) => { const s = S.snaps[k];
     return `<li><a href="#snapshot/${esc(s.id)}/${tid}">${F.full.format(s.date)}</a><span>window ${w} · tab ${pos + 1}</span>${grpHTML(g)}</li>`; }).reverse();
-  const tagged = p.tags.length ? ` · tagged ${p.tags.map(esc).join(', ')}` : '';
+  const tagged = (p.tags.length ? ` · tagged ${p.tags.map(esc).join(', ')}` : '') + (p.sug.length ? ` · suggested ${p.sug.map((s) => esc(s.name)).join(', ')}` : '');
   const groups = p.gs.length ? ` · in ${p.gs.length === 1 ? 'group' : 'groups'} ${p.gs.map((t) => esc(S.groups.get(t).title)).join(', ')}` : '';
   const act = p.forgotten ? '<button type="button" data-act="restore" title="Puts it back in the library.">Restore</button>'
     : '<button type="button" data-act="forget" title="Hides it from the library. The snapshots themselves are never touched.">Forget</button>';
@@ -312,7 +341,7 @@ function render() {
   const t0 = performance.now();
   // The rebuild drops the focused row: note if the key was in the list (or a going tray).
   const was = S.rendered, a = document.activeElement, held = $('list').contains(a) || (!S.sel.size && $('tray').contains(a));
-  if (T.on?.row != null) closeTagger(false, false);   // the row it sits in is about to be rebuilt
+  if (T.on?.row != null) closeTagger(false, false, true);   // the row it sits in is about to be rebuilt
   compute();
   tagbar();
   // "Open now" folds to its first rows when nothing is filtered, so the archive
@@ -337,7 +366,8 @@ function render() {
   const list = $('list');
   list.innerHTML = html + (band === null ? '' : tail + '</ol></section>');
   strips(list);
-  for (const ph of list.querySelectorAll('.ph')) { ph.style.setProperty('--rows', ph.dataset.b - ph.dataset.a); ph.style.setProperty('--tall', S.rendered.slice(+ph.dataset.a, +ph.dataset.b).filter((p) => p.tags.length).length); lazy.observe(ph); }
+  for (const ph of list.querySelectorAll('.ph')) { ph.style.setProperty('--rows', ph.dataset.b - ph.dataset.a); lazy.observe(ph); }
+  fitRows();
   if (S.rendered.length && !list.querySelector('.row.cur')) list.querySelector('.row').tabIndex = 0;
   // back to the same row, or the nearest that stayed: after it, then before
   if (held) { const live = new Set(S.rendered.map((p) => p.i)), at = was.findIndex((p) => p.i === S.cur);
@@ -345,7 +375,7 @@ function render() {
   const total = S.pages.filter((p) => p.n && !p.forgotten).length, n = S.shown.length;
   // The masthead already says how many pages there are; this line speaks only when a filter narrows them.
   const filtered = !!(S.q.trim() || S.domain.trim() || S.group.trim() || S.status || S.preview || S.tags.length);
-  $('count').textContent = S.preview ? `Previewing ${plural(n, 'selected page')}` : S.status === 'forgotten' ? `${plural(n, 'forgotten page')}` : !filtered ? '' : `${num.format(n)} of ${plural(total, 'page')}`;
+  $('count').textContent = S.preview ? `Previewing ${plural(n, 'selected page')}` : S.status === 'forgotten' ? `${plural(n, 'forgotten page')}` : S.status === 'suggested' ? `${plural(n, 'page')} with suggested tags` : !filtered ? '' : `${num.format(n)} of ${plural(total, 'page')}`;
   $('reset').hidden = !filtered;
   $('empty').hidden = n > 0;
   $('empty-msg').textContent = total ? 'Nothing matches.' : 'No pages yet.';
@@ -362,7 +392,49 @@ const lazy = new IntersectionObserver((es) => { for (const e of es) if (e.isInte
 function materialise(ph) {
   lazy.unobserve(ph); const ol = ph.parentElement;
   ph.outerHTML = S.rendered.slice(+ph.dataset.a, +ph.dataset.b).map(rowHTML).join('');
-  strips(ol);
+  strips(ol); fitRows(ol);
+}
+// Offscreen rows are laid out at an estimate (content-visibility), and a row
+// that renders taller than its estimate moves the page under the reader.
+// Every row has one line of chips, so one rendered row gives the height of
+// all of them (--h1) and a chip gives each further line (--hl). What varies
+// is how many lines a row's chips wrap to: that comes from their text widths
+// (measured once per name, on a canvas, in the chips' font) at the chip
+// line's width, as `data-x` on a row and `--x` summed on a placeholder.
+// Measured again on each render, and when the list or a row changes size.
+const FIT = { w: 0, words: new Map() };
+function measure() {
+  const t = [...$('list').querySelectorAll('.row:not(.exp):not(.tagging) .tags')].find((x) => x.checkVisibility({ contentVisibilityAuto: true }) && x.offsetHeight < 1.5 * x.firstElementChild?.offsetHeight);
+  if (!t) return;
+  const c = t.firstElementChild, cs = getComputedStyle(c), ts = getComputedStyle(t), px = (v) => parseFloat(v) || 0;
+  if (FIT.font !== cs.font) { FIT.font = cs.font; FIT.words.clear(); (FIT.ctx ||= document.createElement('canvas').getContext('2d')).font = cs.font; }
+  const sep = $('list').querySelector('.tag:not(.s) + .tag.s');
+  Object.assign(FIT, { w: t.getBoundingClientRect().width, gap: px(ts.columnGap), in: px(cs.columnGap), sep: sep ? px(getComputedStyle(sep).marginLeft) : FIT.sep || 0,
+    pad: px(cs.paddingLeft) + px(cs.paddingRight) + px(cs.borderLeftWidth) + px(cs.borderRightWidth) });
+  const row = t.closest('.row'), root = document.documentElement.style;
+  // A further line from a row on screen that wraps (lines snap to whole pixels), else from a chip and the gap.
+  const lines = (x) => new Set([...x.children].map((e) => e.offsetTop)).size;
+  const t2 = [...$('list').querySelectorAll('.row[data-x]:not(.exp):not(.tagging) .tags')].find((x) => x.checkVisibility({ contentVisibilityAuto: true }) && lines(x) > 1);
+  FIT.h1 = row.clientHeight; root.setProperty('--h1', `${FIT.h1}px`);
+  root.setProperty('--hl', `${t2 ? (t2.offsetHeight - t.offsetHeight) / (lines(t2) - 1) : c.getBoundingClientRect().height + px(ts.rowGap)}px`);
+  // The row it measured is watched: a face that finishes loading later (the serif titles) changes every row.
+  FIT.ro ||= new ResizeObserver(([e]) => { if (e.target.clientHeight !== FIT.h1 && e.target.isConnected) fitRows(); });
+  FIT.ro.disconnect(); FIT.ro.observe(row);
+}
+const textW = (s) => FIT.words.get(s) ?? FIT.words.set(s, FIT.ctx.measureText(s).width).get(s);
+function extra(p) {   // the lines of chips past the first, as tagsHTML lays them out
+  const { list, k } = chipsOf(p), ws = list.slice(0, k).map((t, j) => textW(t.name) + FIT.pad + (t.src ? FIT.in + 4 * (Math.min(3, t.src.length) || 1) - 2 + (j && !list[j - 1].src ? FIT.sep : 0) : 0));
+  if (k < list.length) ws.push(textW(`+${list.length - k}`) + FIT.pad);
+  if (host.tag) ws.push(textW(list.length ? '+' : '+ tag') + FIT.pad);
+  let x = 0, n = 0;
+  for (const w of ws) if (x && x + FIT.gap + w > FIT.w) { n++; x = w; } else x += (x && FIT.gap) + w;
+  return Math.min(n, 8);
+}
+function fitRows(root = $('list')) {
+  if (root === $('list')) measure();
+  if (!FIT.w) return;
+  for (const el of root.querySelectorAll('.band .row')) { const x = extra(S.pages[+el.dataset.i]); if (x) el.dataset.x = x; else delete el.dataset.x; }
+  for (const ph of root.querySelectorAll('.ph')) ph.style.setProperty('--x', S.rendered.slice(+ph.dataset.a, +ph.dataset.b).reduce((n, p) => n + extra(p), 0));
 }
 const materialiseAll = () => { for (const ph of [...$('list').querySelectorAll('.ph')]) materialise(ph); };
 const DEFAULTS = { status: '', sort: 'last' };
@@ -374,7 +446,7 @@ function setSeg(id, v) { S[id] = v; const o = DD[id].options.find((x) => x.value
 // under a button. The native datalist and select popups looked like three
 // different products, could not scroll, and could not be styled.
 const DD = {};
-function dropdown(id, { typeahead = false, own = false, none = 'No matches', onPick, options }) {
+function dropdown(id, { typeahead = false, none = 'No matches', onPick, options }) {
   const root = $(id + '-dd'), ctl = $(id), menu = $(id + '-menu');
   const d = { options: [], shown: [], open: false, hi: -1 };
   d.render = () => {
@@ -382,7 +454,7 @@ function dropdown(id, { typeahead = false, own = false, none = 'No matches', onP
     // in which case it is the filter already applied and the menu is how you
     // change it: offering only the site you are already on is a dead end.
     const v = typeahead ? ctl.value.trim().toLowerCase() : '';
-    const q = own || d.options.some((o) => o.value.toLowerCase() === v) ? '' : v;   // own: the options already answer what is typed
+    const q = d.options.some((o) => o.value.toLowerCase() === v) ? '' : v;
     d.shown = q ? d.options.filter((o) => o.label.toLowerCase().includes(q)) : d.options;
     menu.innerHTML = d.shown.length ? d.shown.map((o, i) => `<li role="option" id="${id}-o${i}" aria-selected="${i === d.hi}" data-i="${i}"><span>${esc(o.label)}</span>${o.meta ? `<small>${esc(o.meta)}</small>` : ''}</li>`).join('') : `<li class="none">${none}</li>`;
     ctl.setAttribute('aria-activedescendant', d.hi >= 0 ? `${id}-o${d.hi}` : '');
@@ -397,12 +469,12 @@ function dropdown(id, { typeahead = false, own = false, none = 'No matches', onP
   ctl.addEventListener('keydown', (e) => {
     const k = e.key;
     if (k === 'ArrowDown' || k === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); if (!d.open) d.show(); d.hi = Math.max(0, Math.min(d.shown.length - 1, d.hi + (k === 'ArrowDown' ? 1 : -1))); d.render(); }
-    else if (k === 'Enter' && d.open) { if (own && !ctl.value.trim() && d.hi < 0) { d.hide(); return; } e.preventDefault(); e.stopPropagation(); if (d.shown[d.hi]) d.pick(d.shown[d.hi]); else d.hide(); }
+    else if (k === 'Enter' && d.open) { e.preventDefault(); e.stopPropagation(); if (d.shown[d.hi]) d.pick(d.shown[d.hi]); else d.hide(); }
     else if (k === 'Escape' && d.open) { e.preventDefault(); e.stopPropagation(); d.hide(); }
     else if ((k === ' ' || k === 'Enter') && !typeahead) { e.preventDefault(); e.stopPropagation(); d.open ? d.hide() : d.show(); }
     else if (k === 'Tab') d.hide();
   });
-  if (typeahead) { ctl.addEventListener('input', () => { if (own) d.options = options(); d.show(); d.hi = own && ctl.value.trim() ? 0 : -1; d.render(); }); ctl.addEventListener('focus', d.show); ctl.addEventListener('click', d.show); }
+  if (typeahead) { ctl.addEventListener('input', () => { d.show(); d.hi = -1; d.render(); }); ctl.addEventListener('focus', d.show); ctl.addEventListener('click', d.show); }
   else ctl.addEventListener('click', () => (d.open ? d.hide() : d.show()));
   ctl.addEventListener('blur', d.hide);
   menu.addEventListener('mousedown', (e) => e.preventDefault());   // keep focus in the control
@@ -436,16 +508,30 @@ function move(delta) {
   const next = Math.max(0, Math.min(all.length - 1, at < 0 ? (delta > 0 ? 0 : all.length - 1) : at + delta));
   setCursor(all[next]);
 }
-// One history open at a time: opening a row closes the other. The panel is
-// inserted collapsed and given `in` a frame later so the grid row can
-// transition open; on close `in` comes off and the node goes once it has
-// closed (or after the transition would have ended, for reduced motion).
-function toggle(i, force) {
+// One panel open at a time, history or tags: opening one closes the others.
+// Those above the row being opened close at once, and the page is scrolled
+// back by what they took, so the row stays under the pointer. Scroll
+// anchoring is off for that moment: Chrome would correct it a second time,
+// and Safari not at all. Those below close with their transition.
+function closePanels(el, keep = -1, hist = true) {
+  const top = el.getBoundingClientRect().top, html = document.documentElement.style;
+  const above = (o) => !!(o.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
+  html.overflowAnchor = 'none';
+  if (hist) for (const j of [...S.exp]) if (j !== keep) { const o = rowOf(j); if (o) toggle(j, false, above(o)); else S.exp.delete(j); }
+  if (T.on?.row != null) { const o = rowOf(T.on.row); closeTagger(false, true, !o || above(o)); }
+  const moved = el.getBoundingClientRect().top - top; if (moved) scrollBy(0, moved);
+  requestAnimationFrame(() => { html.overflowAnchor = ''; });
+}
+// The history drawer is inserted collapsed and given `in` a frame later so
+// the grid row can transition open; on close `in` comes off and the node goes
+// once it has closed (or after the transition would have ended, for reduced
+// motion), or at once when `now`.
+function toggle(i, force, now = false) {
   const el = rowOf(i); if (!el) return;
   const open = force ?? !S.exp.has(i);
   let h = el.querySelector('.hist');
   if (open) {
-    for (const j of [...S.exp]) if (j !== i) toggle(j, false);
+    closePanels(el, i);
     S.exp.add(i);
     if (!h) { el.insertAdjacentHTML('beforeend', histHTML(S.pages[i], 'hist')); h = el.lastElementChild; h.getBoundingClientRect(); }
     h.inert = false; h.classList.add('in');
@@ -453,7 +539,8 @@ function toggle(i, force) {
     S.exp.delete(i);
     if (h) {
       if (h.contains(document.activeElement)) home(i);
-      h.inert = true; h.classList.remove('in'); setTimeout(() => { if (!h.classList.contains('in')) h.remove(); }, 260);
+      h.inert = true; h.classList.remove('in');
+      if (now) h.remove(); else setTimeout(() => { if (!h.classList.contains('in')) h.remove(); }, 260);
     }
   }
   el.querySelector('.more').setAttribute('aria-expanded', open); el.classList.toggle('exp', open);
@@ -516,8 +603,11 @@ const targets = () => (S.sel.size ? [...S.sel] : S.cur >= 0 ? [S.cur] : []);
 // every other count is over what is shown, so it is what a click will give.
 function tagbar() {
   const bar = $('tagbar'); bar.hidden = !S.vocab.size && !host.tag; if (bar.hidden) return;
-  const n = tagCounts(S.shown), cell = (k, c) => { const name = esc(S.vocab.get(k) || k), on = c < 0;
-    return `<li><button type="button" data-t="${esc(k)}" aria-pressed="${on}" title="${on ? 'Stop filtering by' : plural(c, 'page') + ' tagged'} ${name}"><span>${name}</span><small>${on ? '×' : num.format(c)}</small></button></li>`; };
+  const n = tagCounts(S.shown), sug = new Map();
+  for (const p of S.shown) for (const s of p.sug) sug.set(s.k, (sug.get(s.k) || 0) + 1);
+  const cell = (k, c) => { const name = S.vocab.get(k) || k, on = c < 0, s = sug.get(k);
+    const title = `${on ? 'Stop filtering by' : plural(c, 'page') + ' tagged'} ${name}${!on && s ? `, ${s === c ? (c === 1 ? 'suggested' : 'all suggested') : `${num.format(s)} of them suggested`}` : ''}${def(k)}`;
+    return `<li><button type="button" data-t="${esc(k)}" aria-pressed="${on}" title="${esc(title)}"><span>${esc(name)}</span><small>${on ? '×' : num.format(c)}</small></button></li>`; };
   const rest = [...n].filter(([k]) => !S.tags.includes(k) && S.vocab.has(k)).sort((a, b) => b[1] - a[1] || collator.compare(S.vocab.get(a[0]), S.vocab.get(b[0])));
   $('tb').innerHTML = !S.vocab.size ? '<li class="none wide">No tags yet. Press <kbd>+</kbd> on any row to add one.</li>'
     : S.tags.map((k) => cell(k, -1)).join('') + rest.map(([k, c]) => cell(k, c)).join('') + (rest.length || S.tags.length ? '' : `<li class="none${host.tag ? '' : ' wide'}">None of these pages is tagged.</li>`) +
@@ -540,34 +630,72 @@ function filterTag(k) {
   if (b) (b.parentElement.hidden ? $('tb-more') : b).focus();
 }
 
-// The tagger: one editor, moved onto a row's address line or above the tray's
-// actions, its field a dropdown() like Site. While it is open only chips and
-// counts repaint, so the list does not move under the pointer.
-const T = { on: null, dirty: false };                // on: { row: i } or { sel: true }
+// The tagger: one panel, moved under a row as its second drawer or above the
+// tray's actions. Your tags and the suggestions, a field, and under it a ruled
+// grid of every tag it could add, narrowed as you type. The grid keeps one
+// height, so typing never moves what is below. While it is open only chips
+// and counts repaint, so the list does not move under the pointer.
+const T = { on: null, dirty: false, owed: false, hi: -1, opts: [], gen: 0 };   // on: { row: i } or { sel: true }; owed: a closing session's re-filter
 const tagIdxs = () => (T.on?.sel ? [...S.sel] : T.on ? [T.on.row] : []);
 function openTagger(where) {
   if (!host.tag) return readOnlyTag(where);
-  closeTagger(false);
   const el = $('tg-dd'), row = where !== 'sel' && rowOf(where);
-  if (row) { setCursor(row, false); row.classList.add('tagging'); row.querySelector('.body').append(el); }
-  else if (S.sel.size) $('tray').prepend(el); else return;
-  T.on = row ? { row: where } : { sel: true }; T.dirty = false;
-  el.hidden = false; $('tg').value = ''; paintTagger();
-  if (row) { const short = row.getBoundingClientRect().bottom + 360 - innerHeight; if (short > 0) scrollBy(0, short); }   // room for the menu
-  el.classList.toggle('up', !row || el.getBoundingClientRect().bottom + 350 > innerHeight);   // the tray, or the end of the list
+  if (!row && !S.sel.size) return;
+  if (row) closePanels(row); else closeTagger(false, true, true);
+  T.on = row ? { row: where } : { sel: true }; T.dirty = T.owed; T.owed = false; T.hi = -1; T.gen++;   // a close cut short passes its re-filter on
+  if (row) { setCursor(row, false); row.classList.add('tagging'); row.append(el); } else $('tray').prepend(el);
+  el.hidden = false; el.classList.remove('in'); $('tg').value = ''; paintTagger();
+  el.getBoundingClientRect(); el.classList.add('in');   // collapsed first, so it opens as the drawer does
   $('tg').focus({ preventScroll: true });
 }
-function closeTagger(refocus = true, rerender = true) {
+// On a row it closes as the drawer does, unless `now` (a panel above the one
+// opening, or a row about to be rebuilt); a tagging session's edits re-filter
+// the list once it has gone.
+function closeTagger(refocus = true, rerender = true, now = false) {
   if (!T.on) return;
-  const row = rowOf(T.on.row); T.on = null;
+  const el = $('tg-dd'), row = rowOf(T.on.row), gen = ++T.gen; T.owed = T.dirty && rerender; T.on = null;
   if (refocus && rowOf(S.cur)) setCursor(rowOf(S.cur));   // first, so the render below finds the key in the list
-  $('tg-dd').hidden = true; document.body.append($('tg-dd')); row?.classList.remove('tagging');
-  if (T.dirty && rerender) render();
+  row?.classList.remove('tagging'); el.classList.remove('in');
+  const gone = () => { if (T.gen !== gen) return; el.hidden = true; document.body.append(el); if (T.owed) { T.owed = false; render(); } };
+  if (now || !row) gone(); else setTimeout(gone, 220);
 }
+// The owner's tags with ×, then the suggestions with ✓ and ×: on the tray,
+// each counted over the selected pages that carry it.
 function paintTagger() {
-  const idxs = tagIdxs(), n = tagCounts(idxs.map((i) => S.pages[i]));
-  $('tg-chips').innerHTML = [...n].sort((a, b) => collator.compare(S.vocab.get(a[0]), S.vocab.get(b[0]))).map(([k, c]) => { const name = esc(S.vocab.get(k));
-    return `<span class="tag x">${name}${c < idxs.length ? `<small title="On ${c} of ${idxs.length} selected pages">${c}</small>` : ''}<button type="button" data-rm="${esc(k)}" aria-label="Remove ${name}" title="Remove">×</button></span>`; }).join('');
+  const idxs = tagIdxs(), pages = idxs.map((i) => S.pages[i]), n = tagCounts(pages, true), sg = new Map();
+  for (const p of pages) for (const s of p.sug) { const e = sg.get(s.k) || { n: 0, src: new Set() }; e.n++; s.src.forEach((x) => e.src.add(x)); sg.set(s.k, e); }
+  const on = (c) => (c < idxs.length ? `<small title="On ${c} of ${idxs.length} selected pages">${c}</small>` : '');
+  const mine = [...n].sort((a, b) => collator.compare(S.vocab.get(a[0]), S.vocab.get(b[0]))).map(([k, c]) => { const name = esc(S.vocab.get(k));
+    return `<span class="tag x">${name}${on(c)}<button type="button" data-rm="${esc(k)}" aria-label="Remove ${name}" title="Remove">×</button></span>`; });
+  const sugs = [...sg].sort((a, b) => b[1].n - a[1].n || (b[1].src.size > 1) - (a[1].src.size > 1) || collator.compare(S.vocab.get(a[0]), S.vocab.get(b[0]))).map(([k, e]) => { const name = esc(S.vocab.get(k)), src = [...e.src].sort(collator.compare);
+    return `<span class="tag x s s${Math.min(3, src.length) || 1}" title="${esc(sugTitle(k, src))}">${name}${TICKS}${on(e.n)}<button type="button" data-ok="${esc(k)}" aria-label="Confirm ${name}" title="Confirm: make it yours">✓</button><button type="button" data-no="${esc(k)}" aria-label="Dismiss ${name}" title="Dismiss: not this tag">×</button></span>`; });
+  const all = T.on?.row != null && sg.size > 1 ? '<button type="button" class="tag all" data-all title="Confirm every suggestion on this page">Confirm all</button>' : '';
+  if ($('tg-chips').contains(document.activeElement)) $('tg').focus({ preventScroll: true });   // the key stays in the editor as its chips go
+  $('tg-chips').innerHTML = mine.join('') + sugs.join('') + all;
+  paintResults();
+}
+// The grid: what tagOptions() offers, one ruled cell each, the highlight
+// (↵'s pick) kept in view by scrolling the grid alone, never the page.
+function paintResults() {
+  const g = $('tg-menu'), o = T.opts = tagOptions(); T.hi = Math.min(T.hi, o.length - 1);
+  g.innerHTML = o.length ? o.map((x, i) => `<li role="option" id="tg-o${i}" aria-selected="${i === T.hi}" data-i="${i}"${x.fresh ? ' class="new"' : ''}${S.defs.get(lc(x.value)) ? ` title="${esc(S.defs.get(lc(x.value)))}"` : ''}><span>${esc(x.label)}</span><small>${esc(x.meta)}</small></li>`).join('')
+    : `<li class="none">${S.vocab.size ? 'Every tag is on already. Type a name to make one.' : 'No tags yet. Type a name to make one.'}</li>`;
+  $('tg').setAttribute('aria-activedescendant', T.hi >= 0 ? `tg-o${T.hi}` : '');
+  const li = g.children[T.hi]; if (!li) return;
+  if (li.offsetTop < g.scrollTop) g.scrollTop = li.offsetTop;
+  else if (li.offsetTop + li.offsetHeight > g.scrollTop + g.clientHeight) g.scrollTop = li.offsetTop + li.offsetHeight - g.clientHeight;
+}
+const tgCols = () => getComputedStyle($('tg-menu')).gridTemplateColumns.split(' ').length;
+// ✓ or × on suggestions: add or remove, on just the pages that carry them.
+// From the keyboard the key goes on to the next suggestion's same button.
+async function review(ks, ok, kb) {
+  const idxs = tagIdxs().filter((i) => S.pages[i].sug.some((s) => ks.includes(s.k))), names = ks.map((k) => S.vocab.get(k));
+  if (!idxs.length) return;
+  const at = [...$('tg-chips').querySelectorAll('[data-ok]')].findIndex((b) => b.dataset.ok === ks[0]);
+  await applyTags(idxs, ok ? names : [], ok ? [] : names, null, ok ? 'confirm' : 'dismiss');
+  if (!kb || !T.on) return;
+  const bs = $('tg-chips').querySelectorAll(ok ? '[data-ok]' : '[data-no]');
+  (ks.length === 1 && bs[Math.min(at, bs.length - 1)] || $('tg')).focus({ preventScroll: true });
 }
 // Names that start with what is typed, then names that contain it, busiest
 // first, less what every target has. A new name comes last, so ↵ on a
@@ -578,14 +706,15 @@ function tagOptions() {
     .map(([k, name]) => ({ value: name, label: name, n: all.get(k) || 0, pre: k.startsWith(q), meta: plural(all.get(k) || 0, 'page') }))
     .sort((a, b) => (lc(b.value) === q) - (lc(a.value) === q) || b.pre - a.pre || b.n - a.n || collator.compare(a.label, b.label));
   const back = S.retired?.get(q);                    // retired on this visit: the one retired name the page knows
-  if (q && !S.vocab.has(q)) o.push({ value: back || typed, label: back || typed, meta: back ? 'retired · brings it back' : 'new tag' });
+  if (q && !S.vocab.has(q)) o.push({ value: back || typed, label: back || typed, meta: back ? 'retired · brings it back' : 'new tag', fresh: !back });
   return o;
 }
 function readOnlyTag(i) { const p = S.pages[i]; if (p) readOnly(`knowmoretabs tag ${shellQuote(p.url)} --add NAME`); }
 // One name on some pages. Like retiring it waits for the server, which has
 // the final word on spelling and on which pages changed. Its answer carries
 // the decisions it replaced, and undo sends them back, exact on any selection.
-async function applyTags(idxs, add, remove, reverse) {
+// `how` names a review ('confirm', 'dismiss') or its undo ('confirm-undo'), for the toast.
+async function applyTags(idxs, add, remove, reverse, how) {
   if (!host.tag) return readOnlyTag(idxs[0]);
   const before = libraryCounts();
   let r;
@@ -593,27 +722,36 @@ async function applyTags(idxs, add, remove, reverse) {
   catch (e) { toast(`Could not update tags (${e.message}).`); return false; }
   setVocab(r.vocabulary || []);
   const idxsOf = (urls) => urls.map((u) => S.byUrl.get(u)).filter(Boolean).map((p) => p.i);
+  const inv = r.undo;
+  // Each decision touched is now made, or by an undo unmade, which shows a suggestion again.
+  for (const d of reverse ? reverse.tags : inv?.tags || []) S.byUrl.get(d.url)?.gone[reverse && !d.add && !d.remove ? 'delete' : 'add'](lc(d.name));
   for (const [u, ts] of Object.entries(r.tags || {})) if (S.byUrl.has(u)) setTags(S.byUrl.get(u), ts);
-  const changed = idxsOf(r.urls || []), inv = r.undo, tagged = idxsOf(Object.keys(r.tags || {}));
+  const changed = idxsOf(r.urls || []), tagged = idxsOf(Object.keys(r.tags || {}));
   // nothing to undo is nothing done (another tab got there first): quiet, as forget is
   if (!inv || !(inv.tags.length || Object.keys(inv.vocabulary).length)) return retagged(tagged);
-  S.undo = () => applyTags(changed, remove, add, inv);
+  S.undo = () => applyTags(changed, remove, add, inv, how && (how.endsWith('-undo') ? how.slice(0, -5) : how + '-undo'));
   // The inverse keeps a revived name's old retirement (null for one it retired),
   // and that happened on every page with the name, so it is said as the dialog does.
   const vs = Object.entries(inv?.vocabulary || {}), back = vs.find((v) => v[1])?.[0], gone = vs.find((v) => v[1] === null)?.[0];
   const note = back && !reverse ? await refetchTags() : '';
-  toast(back ? `${back} is back${note || ` on ${plural(libraryCounts().get(lc(back)) || 0, 'page')}`}`
+  const names = (add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t), on = `on ${plural(new Set(inv.tags.map((d) => d.url)).size, 'page')}`;
+  toast(how ? (how.endsWith('undo') ? `${and.format(names)} ${names.length > 1 ? 'are' : 'is'} suggested again ${on}` : `${how === 'confirm' ? 'Confirmed' : 'Dismissed'} ${names.join(', ')} ${on}`)
+    : back ? `${back} is back${note || ` on ${plural(libraryCounts().get(lc(back)) || 0, 'page')}`}`
     : gone ? `Retired ${gone}; ${plural(before.get(lc(gone)) || 0, 'page')} no longer show it`
-    : `${add.length ? 'Added' : 'Removed'} ${(add.length ? add : remove).map((t) => S.vocab.get(lc(t)) || t).join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`, 'Undo', undo);
+    : `${add.length ? 'Added' : 'Removed'} ${names.join(', ')} ${add.length ? 'to' : 'from'} ${plural(changed.length, 'page')}`, 'Undo', undo);
   retagged(tagged);
 }
-function setVocab(list) { S.vocab = new Map(list.filter((v) => typeof v?.name === 'string' && v.name).map((v) => [lc(v.name), v.name])); }
+function setVocab(list) {
+  list = list.filter((v) => typeof v?.name === 'string' && v.name);
+  S.vocab = new Map(list.map((v) => [lc(v.name), v.name]));
+  S.defs = new Map(list.filter((v) => typeof v.definition === 'string' && v.definition.trim()).map((v) => [lc(v.name), v.definition.trim()]));
+}
 // After a name comes back: '' or, if the reload fails, the toast's note that the write stood.
 async function refetchTags() {
   try {
     const lib = await host.load();
     setVocab(lib.vocabulary || []);
-    for (const q of lib.pages || []) if (S.byUrl.has(q.url)) setTags(S.byUrl.get(q.url), Array.isArray(q.tags) ? q.tags : []);
+    for (const q of lib.pages || []) if (S.byUrl.has(q.url)) { const p = S.byUrl.get(q.url); setTags(p, Array.isArray(q.tags) ? q.tags : []); loadSug(p, q.suggested); }
     return '';
   } catch (e) { return `; saved, but could not refresh the library (${e.message}). Reload to see all pages.`; }
 }
@@ -629,7 +767,7 @@ function retagged(idxs) {
 function vocabDialog() {
   const focused = document.activeElement?.dataset.k;
   const all = libraryCounts(), rows = [...S.vocab].concat([...(S.retired || [])].filter(([k]) => !S.vocab.has(k)).map(([k, name]) => [k, name, 1]));
-  $('vocab-list').innerHTML = rows.sort((a, b) => collator.compare(a[1], b[1])).map(([k, name, off]) => `<li${off ? ' class="off"' : ''}><span>${esc(name)}</span>` +
+  $('vocab-list').innerHTML = rows.sort((a, b) => collator.compare(a[1], b[1])).map(([k, name, off]) => `<li${off ? ' class="off"' : ''}><span${S.defs.get(k) ? ` title="${esc(S.defs.get(k))}"` : ''}>${esc(name)}${S.defs.get(k) ? `<small>${esc(S.defs.get(k))}</small>` : ''}</span>` +
     `<small>${off ? 'retired' : plural(all.get(k) || 0, 'page')}</small><button type="button" data-k="${esc(k)}">${off ? 'Bring back' : 'Retire'}</button></li>`).join('');
   if (focused) $('vocab-list').querySelector(`[data-k="${CSS.escape(focused)}"]`)?.focus();
 }
@@ -640,7 +778,7 @@ async function retire(k) {
   try { r = await host.vocab(back ? [name] : [], back ? [] : [name]); }
   catch (e) { toast(`Could not update tags (${e.message}).`); return false; }
   setVocab(r.vocabulary || []);
-  if (!back) { S.retired.set(k, name); S.tags = S.tags.filter((t) => t !== k); for (const p of S.pages) if (p.tk.has(k)) setTags(p, p.tags.filter((t) => lc(t) !== k)); }
+  if (!back) { S.retired.set(k, name); S.tags = S.tags.filter((t) => t !== k); for (const p of S.pages) if (p.tk.has(k)) setTags(p, p.tags.filter((t) => lc(t) !== k)); else if (p.sg.has(k)) setSug(p); }
   S.undo = () => retire(k);
   const note = back ? await refetchTags() : '';
   toast(back ? `${name} is back${note || ` on ${plural(libraryCounts().get(k) || 0, 'page')}`}` : `Retired ${name}; ${plural(n, 'page')} no longer show it`, 'Undo', undo);
@@ -700,6 +838,12 @@ function reveal(i) {
 function keys(e) {
   const t = e.target, k = e.key.length === 1 ? e.key.toLowerCase() : e.key;   // shift or caps lock sends "X" for x
   if (document.querySelector('dialog[open]')) return;   // dialogs are modal; esc closes them natively
+  // On the editor's buttons: arrows move along them, esc closes it, u undoes; the rest is theirs.
+  if (t.closest?.('#tg-chips')) {
+    if (k === 'Escape') closeTagger(); else if (k === 'u' && !e.repeat) undo();
+    else if (k === 'ArrowLeft' || k === 'ArrowRight') { e.preventDefault(); const bs = [...$('tg-chips').querySelectorAll('button')]; (bs[bs.indexOf(t) + (k === 'ArrowLeft' ? -1 : 1)] || (k === 'ArrowLeft' ? t : $('tg'))).focus(); }
+    return;
+  }
   if (k === 'Escape') return stepBack(t);
   if (isForm(t)) { if ((k === 'ArrowDown' || k === 'Enter') && t.id === 'q') { e.preventDefault(); move(1); } return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
@@ -751,12 +895,13 @@ function wire() {
   $('reset').addEventListener('click', () => { clearFilters(); render(); });
   $('empty-clear').addEventListener('click', () => $('reset').click());
   let down = null;
-  $('list').addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
+  $('list').addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY, e.target.closest('.row.tagging')]; });
   $('list').addEventListener('click', (e) => {
-    const dragged = down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4; down = null;
+    const dragged = down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4, closing = down?.[2]; down = null;
     if (e.target.id === 'fold') { S.openAll = !S.openAll; render(); if (S.openAll) setCursor(rows()[FOLD]); else $('fold').focus(); return; }
     if (e.target.closest('.tagger')) return;          // the editor handles its own clicks
     const row = e.target.closest('.row'); if (!row) return; const i = +row.dataset.i;
+    if (row === closing && !e.target.closest('.pick, a')) return;   // that press closed its tag panel (focusout), and is spent
     // the index cell is the checkbox once it shows, so the whole cell picks
     const pick = e.target.closest('.pick');
     // and the row keeps the key; a focused box would swallow the page's keys
@@ -791,18 +936,42 @@ function wire() {
     else if (b.id === 'tb-manage') { vocabDialog(); $('vocab').showModal(); }
     else filterTag(b.dataset.t); });
   new ResizeObserver(fitTags).observe($('tagbar'));
+  new ResizeObserver(([e]) => { if (e.contentRect.width !== FIT.lw) { FIT.lw = e.contentRect.width; fitRows(); } }).observe($('list'));
   $('tag-sel').addEventListener('click', () => openTagger('sel'));
-  const addTag = async (name) => { const v = $('tg').value; if ((await applyTags(tagIdxs(), [name], [])) !== false && $('tg').value === v) $('tg').value = ''; };   // a failed add keeps what was typed
-  dropdown('tg', { typeahead: true, own: true, none: 'Type a name to make a tag', options: tagOptions, onPick: (o) => addTag(o.value) });
-  // After the menu's keys: esc clears, then closes; ↵ on nothing closes, and with the menu shut adds what is typed.
+  const addTag = async (name) => { const v = $('tg').value; if ((await applyTags(tagIdxs(), [name], [])) !== false && $('tg').value === v) { $('tg').value = ''; T.hi = -1; if (T.on) paintResults(); } };   // a failed add keeps what was typed
+  $('tg').addEventListener('input', () => { T.hi = $('tg').value.trim() ? 0 : -1; paintResults(); });
+  // ↓ ↑ move a line of the grid, and ↑ off its top returns to the field; ← →
+  // move a cell once one is lit. ↵ adds the lit tag, or what is typed; on an
+  // empty field it closes. esc clears the field, then closes.
   $('tg').addEventListener('keydown', (e) => {
-    e.stopPropagation(); const v = $('tg').value;
-    if (e.defaultPrevented || (e.key !== 'Escape' && e.key !== 'Enter')) return;
-    e.preventDefault(); if (e.key === 'Enter' && v.trim()) addTag(tagName(v)); else if (v) $('tg').value = ''; else closeTagger();
+    e.stopPropagation(); const k = e.key, v = $('tg').value, n = T.opts.length, last = [...$('tg-chips').querySelectorAll('button')].at(-1);
+    const lit = (i) => { e.preventDefault(); T.hi = i; paintResults(); };
+    if (k === 'ArrowDown' && n) { const c = tgCols(); return lit(T.hi < 0 ? 0 : Math.floor(T.hi / c) < Math.floor((n - 1) / c) ? Math.min(n - 1, T.hi + c) : T.hi); }   // a line down, if there is one
+    if (k === 'ArrowUp' && T.hi >= 0) return lit(T.hi - tgCols() < 0 ? -1 : T.hi - tgCols());
+    if ((k === 'ArrowLeft' || k === 'ArrowRight') && T.hi >= 0) return lit(Math.max(0, Math.min(n - 1, T.hi + (k === 'ArrowLeft' ? -1 : 1))));
+    if (k === 'ArrowLeft' && !v && last) { e.preventDefault(); last.focus(); return; }   // back along the chips
+    if (k !== 'Escape' && k !== 'Enter') return;
+    e.preventDefault();
+    if (k === 'Enter' && T.opts[T.hi]) addTag(T.opts[T.hi].value); else if (k === 'Enter' && v.trim()) addTag(tagName(v));
+    else if (v) { $('tg').value = ''; T.hi = -1; paintResults(); } else closeTagger();
   });
   $('tg-dd').addEventListener('mousedown', (e) => { if (e.target !== $('tg')) e.preventDefault(); });   // keep focus in the field
-  $('tg-dd').addEventListener('click', (e) => { const rm = e.target.closest('[data-rm]'); if (rm) applyTags(tagIdxs(), [], [S.vocab.get(rm.dataset.rm)]); });
-  $('tg-dd').addEventListener('focusout', (e) => { if (!$('tg-dd').contains(e.relatedTarget)) closeTagger(false); });
+  $('tg-dd').addEventListener('click', (e) => {
+    if (e.target.closest('#tg-done')) return closeTagger();
+    const li = e.target.closest('#tg-menu [data-i]'); if (li) return addTag(T.opts[+li.dataset.i].value);
+    const b = e.target.closest('#tg-chips button'), kb = b === document.activeElement;   // the mouse leaves the key in the field
+    if (!b) return;
+    if (b.dataset.rm) applyTags(tagIdxs(), [], [S.vocab.get(b.dataset.rm)]);
+    else if (b.dataset.ok || b.dataset.no) review([b.dataset.ok || b.dataset.no], !!b.dataset.ok, kb);
+    else if ('all' in b.dataset) review(S.pages[T.on.row].sug.map((s) => s.k), true, kb);
+  });
+  // Leaving the panel closes it. For another row, through closePanels, so a
+  // panel above that row goes at once and the row keeps its place; the press
+  // that moved the key arrives after, and finds the panel gone.
+  $('tg-dd').addEventListener('focusout', (e) => {
+    const to = e.relatedTarget; if (!T.on || $('tg-dd').contains(to)) return;
+    const row = to?.closest?.('#list .row'); if (row) closePanels(row, -1, false); else closeTagger(false);
+  });
   $('vocab-list').addEventListener('click', (e) => { const b = e.target.closest('button[data-k]'); if (b) retire(b.dataset.k); });
   $('vocab-close').addEventListener('click', () => $('vocab').close());
   // the toast sits above the tray, however tall the tray grows
@@ -826,6 +995,7 @@ async function main() {
     const span = sameDay ? F.dayYear.format(first) : `${(sameYear ? F.day : F.dayYear).format(first)} to ${F.dayYear.format(last)}`;
     $('card').innerHTML = `<b>${plural(total, 'page')}</b> · ${plural(domains.size, 'site')} · ${plural(n, 'snapshot')} · ${span}`;
   }
+  if (S.pages.some((p) => p.sg.size)) DD.status.set(DD.status.options.concat({ value: 'suggested', label: 'Has suggested tags' }));
   if (host.forget) {
     DD.status.set(DD.status.options.concat({ value: 'forgotten', label: 'Forgotten' }));
     $('mode-note').textContent = 'Live — served by knowmoretabs on this machine. Forgetting hides a page; snapshots are never changed.';
