@@ -182,7 +182,7 @@ the toolbar; the search field shows a `/` hint.
 **`esc` takes one step a press, the most local thing showing:**
 
 1. an open dialog (the legend, Retire tags) closes;
-2. an open menu (Site, Group, Show, Sort, the tag suggestions) closes;
+2. an open menu (Site, Group, Show, Sort) closes;
 3. text in the focused field clears (search, Site, Group, the tag field);
 4. the tag editor, its field empty, closes and the key goes back to its row
    (from one of its buttons, a chip's ✓ or ×, it closes at once);
@@ -723,14 +723,16 @@ the URL line, where the owner found it "lost in space", and a chip line that
 appeared on hover would make the row jump under the pointer. So every row has
 the line, and the rows share one height. `+ tag` shows under the pointer, on
 the cursor row and on focus; the rest of the time it is transparent but keeps
-its place. Clicking it, or pressing `+`, opens the editor in that line.
+its place. Clicking it, or pressing `+`, opens the tag panel under the row
+(§13); clicking it again, or the row, closes it.
 
 `+` (or `=`, the same key unshifted) opens the editor on the selection if
 there is one, otherwise on the cursor row: the same targets `f` uses.
 
-- **On a row,** the editor takes the chip line: the page's chips with ×, then
-  a field. The title, the URL and the group mark stay where they are.
-- **On the tray,** it adds a line above the tray's actions and edits the whole
+- **On a row,** the editor is the row's second drawer: your chips with × and
+  the suggestions, the field, and a grid of tags to add (§13). The row's own
+  chip line stays, and updates as you edit.
+- **On the tray,** it adds a block above the tray's actions and edits the whole
   selection. A chip on only some of the selected pages shows how many carry
   it ("Agent 2"). Its × removes the tag from all of them, and adding a tag
   adds it to all of them.
@@ -738,10 +740,9 @@ there is one, otherwise on the cursor row: the same targets `f` uses.
   list does not move under the pointer. The list catches up when the editor
   closes. A row that no longer matches the filter leaves then, not while you
   are typing into it.
-- **The field is the page's own combobox.** It is `dropdown()`, the same one
-  Site and Group use, with an `own` flag meaning "the caller filters and
-  orders the options". So the keys, the menu, the highlight and the ARIA are
-  shared code, not a second copy.
+- **The field lights a grid, not a menu.** Under the field every tag it could
+  add is a ruled cell with its count, narrowed as you type (§13). It was
+  `dropdown()`, the Site and Group menu; that menu floated over the rows.
 
 **Suggestions and creating a tag.** The field suggests from the vocabulary as
 you type:
@@ -758,18 +759,15 @@ you type:
   field has no `maxlength` and cuts nothing: the server counts the 40
   characters (a `maxlength` counts UTF-16 units, which cuts an emoji short),
   and a name it refuses stays in the field with its reason in the toast.
-- **Keys.** `↑` `↓` move, and `↵` adds and keeps the field open for the next
-  tag; the menu comes back on typing or `↓`. `esc` closes the menu, then clears
-  the field, then closes the editor and returns to the row (steps 2 to 4 of
-  §3). `↵` on an empty field closes it too. With the menu shut by `esc`, `↵`
-  adds the name as typed, since the suggestions were refused: "Ag" makes Ag,
-  an existing name in any case is that tag, and a retired one comes back.
-  (It used to do nothing: the menu took `↵` only while open.)
-- **Placement.** The menu opens under the field. When the row is too near the
-  bottom of the window, the page first scrolls to make room. At the very end
-  of the list the menu opens upward instead, clear of the title and URL. A tag
-  retired on this visit is offered as "retired · brings it back", not as a new
-  tag.
+- **Keys.** Typing lights the first cell. `↓` `↑` move a line of the grid
+  (`↑` off the top returns to the field, where nothing is lit), and `← →`
+  move a cell once one is lit. `↵` adds the lit tag, or with nothing lit the
+  name as typed ("Ag" makes Ag, an existing name in any case is that tag, a
+  retired one comes back), and keeps the field open for the next. `esc`
+  clears the field, then closes the panel and returns to the row (steps 2 to
+  4 of §3). `↵` on an empty field closes it too.
+- **Retired names.** A tag retired on this visit is offered as "retired ·
+  brings it back", not as a new tag.
 
 **Undo covers every change.** Each change is one name on some pages, and the
 toast says so: "Added Voice to 4 pages · Undo", "Removed MCP from 1 page ·
@@ -839,9 +837,8 @@ The page asks whether `host.tag` exists, never which host it is.
   change chip widths on hover (the row would shift) or cost a × of width
   always. The tagger makes × part of an explicit edit, in the same place.
 - **The tagger is one DOM node, moved.** Moving one node means one set of
-  listeners and one menu. Rows use `content-visibility: auto`, which contains
-  paint and would clip the menu, so the tagging row switches to `visible`
-  while the editor is open.
+  listeners. The tagging row switches from `content-visibility: auto` to
+  `visible` while the panel is open, so it is always rendered.
 - **`+` as the key.** The page's keys are mnemonic (`f` forget, `u` undo, `x`
   select, `t` theme), and `t` was taken. `+` is the label on the button it
   opens.
@@ -1103,17 +1100,15 @@ the editor on its row, as `+ tag` does (in export it filters, like your
 chips). The editor lists your tags with ×, then each suggestion with ✓
 (confirm: add it, so it is yours) and × (dismiss: remove it, so it is never
 suggested again). A page with two or more suggestions ends the line with
-"Confirm all". "Forget page" follows, since review is where a login screen
-or a dead page turns up (brief §5: "forget page beside the tags"). It is
-quiet and takes the burnt earth on hover, like the drawer's Forget. On an
-expanded row, which is inverted, it takes the other scheme's earth, which
-keeps its contrast.
+"Confirm all". There is no Forget in the editor: it followed there for a
+while (brief §5, "forget page beside the tags"), and the owner took it out,
+since you open the editor to tag. Forget is in the drawer and on the tray.
 
-- **The menu stays shut** when the editor opens on pages with suggestions.
-  Reviewing comes first, and a 44-tag menu dropping over the rows below was
-  in the way. Typing or `↓` brings it back, as after `esc`.
+- **The grid sits under the review.** The chips to confirm come first, on
+  their own line, and the grid below them floats over nothing, so it no
+  longer has to stay shut while you review.
 - **Keyboard.** `+` opens the editor. `←` from the empty field steps back
-  along its buttons (Forget page, Confirm all, then each chip's ×, ✓), and
+  along its buttons (Confirm all, then each chip's ×, ✓), and
   `←` `→` move between them. `↵` or `space` presses one. After ✓ or × the
   key moves to the same button on the next suggestion, so `↵ ↵ ↵` dismisses
   a run of them. `u` undoes from a button, and `esc` closes the editor from
@@ -1247,20 +1242,6 @@ command repeated `u` 870 times.
 
 ### Open
 
-- **Opening the editor scrolls the page (for the editor's redesign).** The
-  owner saw the row jump up when `+` is clicked, leaving the pointer over the
-  next row, and both rows inverted. The cause is `openTagger()`: before
-  focusing the field it runs `scrollBy(0, row.bottom + 360 − innerHeight)`
-  to make room for the tag menu under the row (§9, "Placement"). Measured at
-  1400 px: a row whose top was at 776 px scrolled 229 px, one at 590 px
-  scrolled 43 px, exactly that formula. The row's height did not change
-  (92 → 92 px), and the row-height estimates play no part (a jump to a row
-  now moves it at most 1 px). The scroll runs even when the menu then stays
-  shut, which it does on any page with suggestions. The page moves under a
-  still pointer, so the next row takes `:hover` while the edited row keeps
-  `.cur`, and both render inverted. The editor is being redesigned, so this
-  is left to that redesign. It needs either no scroll or a menu placed
-  without one, such as opening upward (`.tagger.up`).
 - **Touch targets.** ✓ and × are chip-sized, about 16 px. Fine with a
   pointer, small on a phone.
 - **Should agreement be the default for filters?** If single-source
@@ -1299,3 +1280,70 @@ A pass with the owner at the running server, one change at a time.
   on the ink, so they have none. Hover's bg-1 fades on `--fade` (0.18 s).
   Rejected: a plain crossfade, compared side by side; the rise says which
   row opened.
+- **The toolbar's menus hang from the ink rule.** An open control draws a
+  2 px ink rule under itself; the menu used to start 1 px lower with its own
+  ink top, and the divider between showed as a double line. It now starts at
+  the control's padding box foot with no top border. On a phone, Clear is
+  ordered after the search on the first line (it came last in the markup, so
+  it wrapped onto a line of its own and broke the rules), and Sort, at the
+  screen's edge, has no right rule.
+
+## 13. The tag panel: a drawer, not a menu (September 2026)
+
+The owner's screenshots of the tagger showed its menu drawn under the next
+row, under the band's sticky heading and past the band's end; the page
+jumping down when `+ tag` was clicked; and, on the tray, a menu above the
+selection holding only "Type a name to make a tag". All of it came from the
+menu floating over the list. (The overlap was also made worse by §12's ink
+layer, which gave every row `isolation: isolate` and so a stacking context
+the menu could not leave.) The owner's call: lose the popup, and open a panel
+with the field, the results under it.
+
+- **A second drawer.** `+ tag` opens the panel where the history drawer
+  opens, on the drawer's bg-1 and with its collapse transition, and the
+  row's header inverts with the rising ink, as for history. One panel is open
+  at a time, history or tags, through `closePanels()`: one above the row
+  being opened closes at once and the page is scrolled back by its height,
+  so the row stays under the pointer. Leaving the panel for another row
+  closes it the same way, anchored on that row.
+- **What is in it.** Your tags with ×, the suggestions with ✓ and ×, and
+  Confirm all, on their own line (hidden when there are none); then the
+  field, at most 28 rem wide, and Done, a button like the drawer's, beside
+  it (at the far edge it was lost); then the grid.
+- **Its foot is the row divider.** An inverted row clears `--line` for its
+  header, which also took the rule under its drawer; `--rule` keeps it.
+- **The grid.** Every tag the field could add, as ruled cells with the
+  library count, in the tag bar's language: exact match first, then names
+  that start with what is typed, then names that contain it, busiest first,
+  and a dashed "new tag" cell last. An empty field shows them all, so the
+  common tags are one click. The grid holds three lines and scrolls in
+  itself, so typing never changes the panel's height and nothing below it
+  bounces. Each cell draws its own rules, overlapped a pixel, so a short
+  list leaves no empty frame.
+- **Nothing scrolls the page.** The scroll that made room for the menu, the
+  menu that flipped upward at the end of the list, and the menu's stacking
+  are gone with it. The lit cell is kept in view by scrolling the grid
+  alone.
+- **On a phone** the grid's cells narrow to 8 rem (two to a line at 390
+  px), and both drawers start at the title, since the strip is hidden.
+- **On the tray** the same panel sits above the actions. The tray is fixed,
+  so it grows upward over the list, as the tray always has. It never grows
+  wider than the dock: the panel has `contain: inline-size` (and its padding
+  inside that), so it takes the tray's width and adds none. On a phone the
+  tray's first line (✕, the count, Select all shown) is 2.75 rem tall; it
+  was 22 px, pressed against its rules.
+- **Closing.** `esc` (after clearing the field), `↵` on an empty field,
+  Done, clicking `+ tag` again, or clicking the row. A press on the row
+  being tagged only closes the panel; it does not go on to open the
+  history. The session's edits re-filter the list once the panel has gone.
+- **Rejected:** tags inside the history drawer (reading a page's history
+  should not put a field in the way, and `+ tag` should go straight to
+  typing); a list instead of the grid (it fits about a third as many tags,
+  though its keys would be only `↑` `↓`).
+
+Checked in Chrome headless at 1400 px, light and dark, against a copy of
+the owner's archive on its own port: open, add by `↵`, remove by ×, close
+by `esc`, with the row's top unmoved (200 → 200); the panel replacing an
+open drawer and a drawer replacing the panel, both ways, the row fixed to
+the pixel; the tray on a two-page selection; and review chips on a page
+with suggestions planted in memory (the owner's archive has none).
