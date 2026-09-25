@@ -512,12 +512,20 @@ function move(delta) {
 // inserted collapsed and given `in` a frame later so the grid row can
 // transition open; on close `in` comes off and the node goes once it has
 // closed (or after the transition would have ended, for reduced motion).
-function toggle(i, force) {
+// A panel above the row being opened closes at once instead, and the page is
+// scrolled back by what it took, so the row stays under the pointer. Scroll
+// anchoring is off for that moment: Chrome would correct it a second time,
+// and Safari not at all.
+function toggle(i, force, now = false) {
   const el = rowOf(i); if (!el) return;
   const open = force ?? !S.exp.has(i);
   let h = el.querySelector('.hist');
   if (open) {
-    for (const j of [...S.exp]) if (j !== i) toggle(j, false);
+    const top = el.getBoundingClientRect().top, html = document.documentElement.style;
+    html.overflowAnchor = 'none';
+    for (const j of [...S.exp]) if (j !== i) { const o = rowOf(j); if (o) toggle(j, false, !!(o.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING)); else S.exp.delete(j); }
+    const moved = el.getBoundingClientRect().top - top; if (moved) scrollBy(0, moved);
+    requestAnimationFrame(() => { html.overflowAnchor = ''; });
     S.exp.add(i);
     if (!h) { el.insertAdjacentHTML('beforeend', histHTML(S.pages[i], 'hist')); h = el.lastElementChild; h.getBoundingClientRect(); }
     h.inert = false; h.classList.add('in');
@@ -525,7 +533,8 @@ function toggle(i, force) {
     S.exp.delete(i);
     if (h) {
       if (h.contains(document.activeElement)) home(i);
-      h.inert = true; h.classList.remove('in'); setTimeout(() => { if (!h.classList.contains('in')) h.remove(); }, 260);
+      h.inert = true; h.classList.remove('in');
+      if (now) h.remove(); else setTimeout(() => { if (!h.classList.contains('in')) h.remove(); }, 260);
     }
   }
   el.querySelector('.more').setAttribute('aria-expanded', open); el.classList.toggle('exp', open);

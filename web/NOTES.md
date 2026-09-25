@@ -34,10 +34,11 @@ cells. Every row is a cell: a two-digit index on the left behind a hairline,
 the sighting strip, a serif title over the URL, how long ago it was last seen
 on the title's own baseline, and an arrow cell on the right that opens the
 history drawer. Text aligns to text — title and age on one line, address and
-group mark on the next — while the index, the strip and the arrow centre in
-their cells, because they are furniture rather than words. Hover, the
-keyboard cursor and an expanded row invert wholesale (paper on ink, or ink on
-paper in dark mode); selection tints. Band headings are large and sticky under
+group mark on the next — and the index, the strip and the arrow sit on the
+title's line (`--mid`), however many lines of chips the row grows. Hover and
+the keyboard cursor lay the row on the drawer's bg-1; an expanded row inverts
+wholesale (paper on ink, or ink on paper in dark mode), the ink rising from
+the row's foot; selection tints. Band headings are large and sticky under
 the top bar.
 
 **Theme.** Light and dark follow the OS until the switch is used; then
@@ -1104,9 +1105,9 @@ chips). The editor lists your tags with ×, then each suggestion with ✓
 suggested again). A page with two or more suggestions ends the line with
 "Confirm all". "Forget page" follows, since review is where a login screen
 or a dead page turns up (brief §5: "forget page beside the tags"). It is
-quiet and takes the burnt earth on hover, like the drawer's Forget. The row
-being edited is inverted, so it takes the other scheme's earth, which keeps
-its contrast.
+quiet and takes the burnt earth on hover, like the drawer's Forget. On an
+expanded row, which is inverted, it takes the other scheme's earth, which
+keeps its contrast.
 
 - **The menu stays shut** when the editor opens on pages with suggestions.
   Reviewing comes first, and a 44-tag menu dropping over the rows below was
@@ -1269,3 +1270,32 @@ command repeated `u` 870 times.
   covers the review backlog, not pages nothing suggested anything for.
 - **Tray size.** Selecting hundreds of pages lists every suggested name in
   the tray editor, which wraps and grows. It has not been capped.
+
+## 12. Row polish: hover, alignment, the drawer's ink (September 2026)
+
+A pass with the owner at the running server, one change at a time.
+
+- **Hover is the drawer's ground, not ink.** Hover and the cursor take bg-1,
+  the colour the drawer opens on, and leave the text alone. Only an expanded
+  row inverts. A selected row keeps its bg-2 under the pointer.
+- **Everything on the title's line.** The index, the checkbox, the strip's
+  first line and the arrow centre on `--mid` (1.36rem from the row's top: the
+  body's padding plus the serif's x-height centre, measured). They used to
+  centre in the row, so they drifted as chips grew it. A strip of several
+  lines keeps its first line there and grows down.
+- **One drawer, and the row stays put.** Opening a row still closes the
+  other, but a drawer above it now closes at once and the page scrolls back
+  by its height, so the row opened stays under the pointer (before, it
+  jumped 172 px when the drawer above was partly on screen). Scroll anchoring
+  is off for that moment, since Chrome would correct it a second time and
+  Safari not at all. A drawer below still closes with its transition.
+- **The ink rises.** An expanded row's ink is an absolute `::after` on the
+  header's grid row: the grid area is its box, so it covers the header at
+  any height, never the drawer, and takes no cell from placement. It scales
+  up from the foot on open and back down on close (`--rise`, 0.26 s,
+  ease-out). The text turns with it: what inherits follows the row's colour
+  on the same curve, and the chips, whose greys are custom properties, carry
+  their own. A second transition on inheriting text made the title lag dark
+  on the ink, so they have none. Hover's bg-1 fades on `--fade` (0.18 s).
+  Rejected: a plain crossfade, compared side by side; the rise says which
+  row opened.

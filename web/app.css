@@ -3,8 +3,8 @@
    why:   One sheet serves file:// export and 127.0.0.1 serve. Nothing fetched.
           The page is a ruled frame: one centred column, hairlines on every
           edge, every row a cell with its index on the left and an arrow on the
-          right. Paper in light, near-black in dark; hover and the cursor invert
-          a row wholesale. Bold system sans for headings and chrome, a serif
+          right. Paper in light, near-black in dark; hover and the cursor lift a
+          row onto the drawer's bg-1, and an expanded row inverts wholesale. Bold system sans for headings and chrome, a serif
           for page titles, mono only for literal URLs and commands.
    theme: light/dark follows the OS until the switch in the top bar is used;
           then html[data-theme] pins it and light-dark() does the rest. */
@@ -30,6 +30,7 @@
   --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
   --row: 3.5rem;
+  --mid: 1.36rem;          /* a row's title line, measured to the serif's x-height centre; the index, checkbox and strip centre on it */
   --chip-py: 0.15rem;      /* a chip's padding, top and bottom */
   --tagline: 1.95rem;      /* what the line of chips adds to a row, until app.js measures it (--h1, --hl) */
   --col: 4px;              /* one snapshot column in the sighting strip */
@@ -38,6 +39,8 @@
   --frame: 76rem;
   --top: 3.25rem;
   --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --rise: 0.26s cubic-bezier(0.22, 1, 0.36, 1);   /* an opening row's ink coming up from its foot */
+  --fade: 0.18s cubic-bezier(0.4, 0, 0.2, 1);   /* a row changing state: long enough to see which one, too short to wait for */
 }
 :root[data-theme="light"] { color-scheme: light; }
 :root[data-theme="dark"]  { color-scheme: dark; }
@@ -151,36 +154,45 @@ main { flex: 1; }
 .band h3, .win h3 { position: sticky; top: var(--top); z-index: 2; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin: 0; padding: 1.75rem 1.5rem 1.25rem; background: var(--bg); border-bottom: 1px solid var(--line); font-size: clamp(1.5rem, 3vw, 2.125rem); line-height: 1; font-weight: 700; letter-spacing: -0.03em; }
 .band h3 small, .win h3 small { font-size: 0.75rem; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
 .band ol, .win ol { list-style: none; margin: 0; padding: 0; container-type: inline-size; counter-reset: row; }
-.row { counter-increment: row; display: grid; grid-template-columns: var(--idx) auto minmax(0, 1fr) 8ch var(--arrow); grid-template-rows: minmax(var(--row), auto); align-items: center; column-gap: 1.25rem; min-height: var(--row); padding: 0; border-bottom: 1px solid var(--line); content-visibility: auto; contain-intrinsic-size: auto var(--row); position: relative; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
+.row { counter-increment: row; display: grid; grid-template-columns: var(--idx) auto minmax(0, 1fr) 8ch var(--arrow); grid-template-rows: minmax(var(--row), auto); align-items: center; column-gap: 1.25rem; min-height: var(--row); padding: 0; border-bottom: 1px solid var(--line); content-visibility: auto; contain-intrinsic-size: auto var(--row); position: relative; transition: background-color var(--fade), color var(--rise); }
 .row > * { min-height: 0; }
+/* opening turns the text with the rising ink. What inherits follows the row;
+   the chips' greys come from custom properties, which switch at once, so the
+   chips carry a transition of their own */
+.row .tag:not(.add) { transition: color var(--rise), border-color var(--rise); }
 /* the index and the checkbox share one cell: the number is the resting state,
    the checkbox takes its place under the pointer, the cursor or a selection */
-.row::before { content: counter(row, decimal-leading-zero); grid-area: 1 / 1; align-self: stretch; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; letter-spacing: 0.04em; color: var(--ink-3); border-right: 1px solid var(--line); transition: color 0.12s var(--ease); }
-.pick { grid-area: 1 / 1; align-self: stretch; position: relative; display: grid; place-items: center; cursor: pointer; }
+.row::before { content: counter(row, decimal-leading-zero); grid-area: 1 / 1; align-self: stretch; display: flex; align-items: flex-start; padding-top: calc(var(--mid) - 0.5lh); justify-content: center; font-size: 0.75rem; letter-spacing: 0.04em; color: var(--ink-3); border-right: 1px solid var(--line); transition: border-color var(--rise); }
+.pick { grid-area: 1 / 1; align-self: stretch; position: relative; display: grid; place-items: start center; padding-top: calc(var(--mid) - 0.9375rem / 2); cursor: pointer; }
 [data-mode="export"] .pick { display: none; }
-.row:hover, .row.cur:not(.target) { background: var(--ink); color: var(--bg); --line: transparent; --ink-2: color-mix(in srgb, var(--bg) 72%, transparent); --ink-3: color-mix(in srgb, var(--bg) 55%, transparent); --line-2: color-mix(in srgb, var(--bg) 35%, transparent); --dot: var(--bg); --surface: var(--ink); }
-.row:is(:hover, .cur:not(.target)) :is(.t, .u, .last), .row:is(:hover, .cur:not(.target))::before { color: inherit; }
-.row:is(:hover, .cur:not(.target)) .u { opacity: 0.7; }
-.row:is(:hover, .cur:not(.target))::before, .row:is(:hover, .cur:not(.target)) .more { border-color: color-mix(in srgb, var(--bg) 25%, transparent); }
-.row:focus-visible { outline: 2px solid var(--bg); outline-offset: -4px; }
-.row.sel { background: var(--bg-2); }
-.row.sel:hover, .row.sel.cur { background: var(--ink); }
+/* hover and the cursor sit the row on the drawer's ground; a selection keeps its own */
+.row:not(.exp):hover, .row.cur:not(.target, .exp) { background: var(--bg-1); --surface: var(--bg-1); }
+.row:focus-visible { outline: 2px solid var(--ink); outline-offset: -4px; }
+.row.sel:not(.exp), .row.sel:not(.exp):is(:hover, .cur) { background: var(--bg-2); --surface: var(--bg-2); }
 /* the tab a snapshot link points at: paper, ink text and a rule in the margin.
    It keeps that look while it is the cursor — the row you followed the link
-   for is a row you can read — and inverts under the pointer like any other. */
+   for is a row you can read — and takes bg-1 under the pointer like any other. */
 .row.target:not(:hover) { background: var(--bg-2); box-shadow: inset 2px 0 0 var(--ink); }
 .row.target:not(:hover):focus-visible { outline-color: var(--ink); }
 /* an expanded row and its drawer are one block: the row stays inverted, the
    drawer opens on bg-1 beneath it with the same ruled edges */
-.row.exp { background: var(--ink); color: var(--bg); --line: transparent; --ink-2: color-mix(in srgb, var(--bg) 72%, transparent); --ink-3: color-mix(in srgb, var(--bg) 55%, transparent); --dot: var(--bg); --surface: var(--ink); }
+.row.exp { color: var(--bg); --line: transparent; --ink-2: color-mix(in srgb, var(--bg) 72%, transparent); --ink-3: color-mix(in srgb, var(--bg) 55%, transparent); --dot: var(--bg); --surface: var(--ink); }
 .row.exp .t, .row.exp::before, .row.exp .u, .row.exp .last { color: inherit; }
 .row.exp::before, .row.exp .more { border-color: color-mix(in srgb, var(--bg) 25%, transparent); }
+.row.exp:focus-visible { outline-color: var(--bg); }
+/* the ink is a layer on the header's grid row (absolute, so the grid area is
+   its box and it takes no cell from the placement), covering the header at
+   any height and never the drawer; it rises from the foot on open and sinks
+   back on close. */
+.row { isolation: isolate; }
+.row::after { content: ""; position: absolute; inset: 0; grid-area: 1 / 1 / 2 / -1; z-index: -1; background: var(--ink); transform: scaleY(0); transform-origin: bottom; transition: transform var(--rise); pointer-events: none; }
+.row.exp::after { transform: none; }
 .row > .body, .row > .n, .row > .last { user-select: none; }   /* a fast second click must toggle, not select a word */
 /* the checkbox is drawn rather than native, because it has to sit on paper and
    on ink, and it only shows itself when it matters */
 .pick input { margin: 0; display: block; width: 0.9375rem; height: 0.9375rem; padding: 0; appearance: none; -webkit-appearance: none; background: none; border: 1.5px solid currentColor; border-radius: 0; opacity: 0; transition: opacity 0.12s var(--ease); }
 .pick input:checked { background: currentColor; }
-.pick::after { content: ""; position: absolute; left: 50%; top: 50%; width: 0.25rem; height: 0.5rem; border: solid var(--surface); border-width: 0 2px 2px 0; translate: -60% -65%; rotate: 45deg; opacity: 0; pointer-events: none; }
+.pick::after { content: ""; position: absolute; left: 50%; top: var(--mid); width: 0.25rem; height: 0.5rem; border: solid var(--surface); border-width: 0 2px 2px 0; translate: -60% -65%; rotate: 45deg; opacity: 0; pointer-events: none; }
 .pick:has(input:checked)::after { opacity: 1; }
 .row:is(:hover, .cur, .sel, .exp) .pick input, .pick input:focus-visible { opacity: 1; }
 [data-mode="serve"] .row:is(:hover, .cur, .sel, .exp, :has(.pick input:focus-visible))::before { color: transparent; }
@@ -200,17 +212,19 @@ main { flex: 1; }
 .u { font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 4ch; }
 /* one mark per snapshot, twelve to a line, wrapping downward (see app.js). The
    mask cuts the columns, the last background layer is the empty track and cuts
-   the lines, and each line of marks is a positioned gradient layer above it. */
-.strip { width: var(--sw, 0); height: var(--sh, 8px); margin-left: 0.25rem; border-radius: 1px;
+   the lines, and each line of marks is a positioned gradient layer above it.
+   The first line centres on the title's (--mid), so more lines grow down
+   the row and never move it. */
+.strip { align-self: start; width: var(--sw, 0); height: var(--sh, 8px); margin: calc(var(--mid) - var(--sbar, 8px) / 2) 0 0 0.25rem; border-radius: 1px;
   background-image: var(--g, none), repeating-linear-gradient(180deg, var(--line-2) 0 var(--sbar, 8px), transparent var(--sbar, 8px) var(--spitch, 8px));
   background-size: var(--gs, auto), 100% 100%;
   background-position: var(--gp, 0 0), 0 0;
   background-repeat: no-repeat;
   mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px var(--col)); }
 .row.open .strip { --dot: var(--ink); }
-.row:hover.open .strip, .row.cur.open .strip, .row.exp.open .strip { --dot: var(--bg); }
+.row.exp.open .strip { --dot: var(--bg); }
 .last { align-self: baseline; font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; letter-spacing: 0.02em; text-align: right; }
-.more { align-self: stretch; display: grid; place-items: center; background: none; border: 0; border-left: 1px solid var(--line); padding: 0; margin: 0; width: 100%; color: inherit; font-size: 0; transition: background-color 0.15s var(--ease); }
+.more { align-self: stretch; display: grid; place-items: start center; background: none; border: 0; border-left: 1px solid var(--line); padding: calc(var(--mid) - 0.625rem) 0 0; margin: 0; width: 100%; color: inherit; font-size: 0; transition: background-color 0.15s var(--ease), border-color var(--rise); }
 .more::before { content: "→"; font: 400 1.25rem/1 var(--sans); transition: transform 0.2s var(--ease); }
 .more[aria-expanded="true"]::before { transform: rotate(90deg); }
 .more:hover::before { transform: translateX(3px); }
@@ -245,7 +259,7 @@ button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
 .tag .src { align-self: center; width: 2px; height: 0.6em; background: repeating-linear-gradient(90deg, currentColor 0 2px, transparent 2px 4px); opacity: 0.8; }
 .tag.s2 .src { width: 6px; }
 .tag.s3 .src { width: 10px; }
-.tag.add { border-style: dashed; color: var(--ink-3); opacity: 0; transition: opacity 0.12s var(--ease); }
+.tag.add { border-style: dashed; color: var(--ink-3); opacity: 0; transition: opacity 0.12s var(--ease), color var(--rise), border-color var(--rise); }
 .row:is(:hover, .cur) .tag.add, .tag.add:focus-visible { opacity: 1; }
 @media (hover: none) { .tag.add { opacity: 1; } }
 /* the tagger: on a row it takes the chips' line; on the tray, a line above the actions */
@@ -263,9 +277,10 @@ button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
 .tag.all { border-color: transparent; color: inherit; opacity: 0.75; }
 .tag.all:hover { opacity: 1; text-decoration: underline; text-underline-offset: 0.2em; }
 .tag.fg { margin-left: 0.6rem; }
-/* the one coloured hover, as on the drawer's Forget; the row being edited is
-   inverted, so it takes the other scheme's earth */
-.tag.fg:hover { color: light-dark(#e2896c, #a8432a); }
+/* the one coloured hover, as on the drawer's Forget; on an expanded row, which
+   is inverted, it takes the other scheme's earth */
+.tag.fg:hover { color: var(--forget); }
+.row.exp .tag.fg:hover { color: light-dark(#e2896c, #a8432a); }
 /* Offscreen rows are laid out at an estimate. Every row has one line of
    chips; app.js measures a rendered row (--h1) and a further line (--hl), and
    marks a row whose chips wrap with how many more lines they take (data-x). */
@@ -351,7 +366,7 @@ button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
 .snap-head p { margin: 0; font-size: 0.8125rem; color: var(--ink-2); }
 .win .row { grid-template-columns: var(--idx) minmax(0, 1fr) auto auto var(--arrow); counter-increment: none; }
 .win .row::before { content: none; }
-.win .pos { align-self: stretch; display: flex; align-items: center; justify-content: center; text-align: center; border-right: 1px solid var(--line); }
+.win .pos { align-self: stretch; display: flex; align-items: flex-start; padding-top: calc(var(--mid) - 0.5lh); justify-content: center; text-align: center; border-right: 1px solid var(--line); }
 .win .more { font-size: 0.75rem; }
 .win .more::before { content: "→"; }
 
