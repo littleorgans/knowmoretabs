@@ -1,7 +1,7 @@
 //! Suggested tags: what an owner's agent answered, validated whole and kept
 //! in `tags/suggested.jsonl`, and the per-page view the library shows.
 //!
-//! slice: triage
+//! slice: tags
 //! why: A suggestion is someone else's opinion, so it never becomes one of
 //!      the owner's decisions: it sits in its own append-only file, with
 //!      where it came from, when, and which vocabulary it answered. An

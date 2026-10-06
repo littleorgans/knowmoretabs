@@ -1,7 +1,7 @@
 //! The writer of `pages/metadata.jsonl`: one line per fetch attempt,
 //! appended so that no interruption can cost more than the line in flight.
 //!
-//! slice: library
+//! slice: enrich
 //! why: `enrich` owns this file and `tag --prompt` reads it through
 //!      `metadata`, the contract's reader, which this module deliberately
 //!      does not touch. A line is written whole, under the archive lock and

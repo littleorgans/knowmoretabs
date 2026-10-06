@@ -422,7 +422,7 @@ mod tests {
             fs::remove_dir(&ordinary).unwrap();
         }
         Archive::open(&root).unwrap();
-        assert!(archive.snapshot_ids().unwrap().is_empty());
+        assert_eq!(archive.snapshot_ids().unwrap(), Vec::<String>::new());
     }
 
     /// Who a directory grants what, read back through `icacls`, with the
@@ -496,7 +496,7 @@ mod tests {
         let staging = archive.stage().unwrap();
         staging.write("a.txt", b"hello").unwrap();
         assert!(staging.path().starts_with(archive.snapshots_dir()));
-        assert!(archive.snapshot_ids().unwrap().is_empty());
+        assert_eq!(archive.snapshot_ids().unwrap(), Vec::<String>::new());
 
         let abandoned = archive.stage().unwrap();
         let abandoned_path = abandoned.dir.keep();

@@ -151,8 +151,8 @@ The costs are real and stated above: +1.75 MB, +13 s on a clean release
 build, and 269k lines of C (the amalgamation) inside a crate that forbids
 `unsafe` in its own code. The owner accepted them (§12).
 
-**This is not SQLite as storage.** `BRIEF.md`'s "Deliberately not built:
-SQLite" is about the archive, and it stands. Snapshots stay JSON. Nothing is
+**This is not SQLite as storage.** `docs/BRIEF.md` (at 2256595), "Deliberately not built:
+SQLite", is about the archive, and it stands. Snapshots stay JSON. Nothing is
 written with SQLite except a scratch copy that is deleted within the same
 run. Having the crate in the tree does not bring the `scale-index` row
 forward; that row keeps its own trigger.
@@ -322,7 +322,7 @@ so it gets no History and says so.
   roughly doubles. The verbatim `session.snss` beside it is 1,031,751 B, so a
   300-tab snapshot directory grows by about 110 KB, around 10%. `serve`
   parses every `snapshot.json` per library load. Fifty 300-tab snapshots add
-  about 5.5 MB of JSON, well inside the in-memory budget `BRIEF.md` sets.
+  about 5.5 MB of JSON, well inside the in-memory budget `docs/BRIEF.md` (at 2256595) sets.
 
 ## 6. Cost per save
 
@@ -462,7 +462,7 @@ immutable), non-Chromium browsers, and any SQLite in the archive.
 13. CI is green on all four test runners and the five release targets with
     `bundled` SQLite, and `cargo xtask slices --check` passes.
 
-## 10. Changes to `docs/BRIEF.md` and the research docs (approved)
+## 10. Changes to `docs/BRIEF.md` (at 2256595) and the research docs (approved)
 
 1. **Deliberately not built, SQLite:** "SQLite *as the archive's storage*."
    Add: "`save` reads the browser's own `History` database through a bundled

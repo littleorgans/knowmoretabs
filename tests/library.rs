@@ -399,8 +399,8 @@ fn empty_archive_exports_valid_zero_page_library() {
             "pages": 0, "snapshots": 0, "domains": 0, "sightings": 0, "forgotten": 0
         })
     );
-    assert!(library["snapshots"].as_array().unwrap().is_empty());
-    assert!(library["pages"].as_array().unwrap().is_empty());
+    assert_eq!(library["snapshots"], json!([]));
+    assert_eq!(library["pages"], json!([]));
 }
 
 #[test]

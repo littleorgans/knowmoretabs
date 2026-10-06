@@ -1,7 +1,7 @@
 //! Entry point: parses the command line, runs the chosen command, and turns
 //! the outcome into stdout lines or JSON and an exit status.
 //!
-//! slice: capture, library, triage
+//! slice: capture, library, triage, tags, history, enrich
 //! why: Presentation lives here and nowhere else. The capture code returns
 //!      typed outcomes and typed errors; this file decides what a person
 //!      sees on a terminal, what a script sees under `--json`, and which

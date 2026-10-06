@@ -1,7 +1,7 @@
 //! Tags the owner sets on pages, and the vocabulary they come from: the
 //! second write path of `library.json`.
 //!
-//! slice: triage
+//! slice: tags
 //! why: Tags are the owner's decisions, so they live beside `forgotten` and
 //!      take the same lock, read and atomic rewrite. One module owns the
 //!      rules (what a name may be, how case is matched, what adding and

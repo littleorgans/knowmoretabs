@@ -1,7 +1,7 @@
 # The library interface: two designs, one chosen
 
 Two designers built the library interface independently and blind — neither saw
-the other's work, both worked from `docs/BRIEF.md` §8 and the same synthetic
+the other's work, both worked from `docs/BRIEF.md` §8 (at 2256595) and the same synthetic
 2,000-page fixture. The point of doing it twice was to get two genuine shapes
 rather than one shape and one revision of it.
 

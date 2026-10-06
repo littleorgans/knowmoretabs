@@ -1,7 +1,7 @@
 //! `knowmoretabs save`, end to end: find the session, refuse if stale, read
 //! it stably, parse, skip if unchanged, read History, stage, publish.
 //!
-//! slice: capture, browsers
+//! slice: capture, browsers, history
 //! why: The order of these steps is the product's safety story. Discovery
 //!      and the staleness check run before the archive is touched, so a
 //!      machine without Chrome never gets an empty archive; the lock is taken

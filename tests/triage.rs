@@ -101,7 +101,7 @@ fn a_url_not_in_the_library_is_refused_and_nothing_is_written() {
             stderr(&output),
             format!("knowmoretabs: not in your library: {missing}; nothing changed\n")
         );
-        assert!(stdout(&output).is_empty());
+        assert_eq!(stdout(&output), "");
         assert!(!fx.root.join("library.json").exists(), "{args:?}");
     }
     let output = fx.run(&["--json", "forget", "https://nowhere.test/"]);

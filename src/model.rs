@@ -1,6 +1,6 @@
 //! The shape of `snapshot.json`, the archive's source of truth.
 //!
-//! slice: capture
+//! slice: capture, history
 //! why: Snapshots are immutable and every later slice reads them, so a field
 //!      added here is a field every reader must understand for as long as the
 //!      archive exists. These are plain data types with serde derives and no
@@ -183,8 +183,8 @@ pub struct Group {
     pub window: u32,
 }
 
-// `tab_id` is the name the brief's data model uses and the reference
-// implementation wrote; `id` alone would be ambiguous beside `window_id`.
+// `tab_id` is the name the archive's data model has used from the start and
+// the reference implementation wrote; `id` alone would be ambiguous beside `window_id`.
 #[allow(clippy::struct_field_names)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Tab {

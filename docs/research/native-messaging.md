@@ -620,7 +620,7 @@ Do it.
 | | Detail |
 |---|---|
 | **No write lag** | SNSS is what the browser has flushed. The API is what the browser has. A tab opened ten seconds ago is in one and may not be in the other. |
-| **No format risk** | The single biggest recurring cost in this project is Chrome changing its session command IDs without notice — weaknesses 1, 2 and 3 in the brief all exist because of it. `chrome.tabs.Tab` is a documented, versioned, deprecation-policied interface. Fields are *added*, at named milestones. |
+| **No format risk** | The single biggest recurring cost in this project is Chrome changing its session command IDs without notice — weaknesses 1, 2 and 3 in `docs/BRIEF.md` §3 (at 2256595) all exist because of it. `chrome.tabs.Tab` is a documented, versioned, deprecation-policied interface. Fields are *added*, at named milestones. |
 | **Tab groups, first-class** | `Tab.groupId` for membership (ungated, Chrome 88+) and `tabGroups.query()` for `title`, `color`, `collapsed`, `windowId`, `shared` (Chrome 137+). Compare with reverse-engineering commands 25 and 27 and hoping the token layout has not changed. |
 | **Favicons** | `favIconUrl`. SNSS has no favicon at all. This is the single most visible improvement the library UI would get. |
 | **Liveness signals** | `audible`, `mutedInfo` (Chrome 46+), `discarded` and `autoDiscardable` (Chrome 54+), `frozen` (Chrome 132+), `status` (`unloaded` / `loading` / `complete`). None of these exist in a session file. "Which of my 300 tabs are actually resident" is a question only the live API can answer. |
@@ -764,8 +764,8 @@ The toolchain is Xcode; the extension must ship inside an app; the app and
 extension must be code-signed and either notarised for Developer ID
 distribution or shipped through the Mac App Store. [documented]
 
-That is incompatible with brief principle 6, "One binary, no runtime. The user
-installs nothing else." Supporting Safari means shipping a Mac app. Do not.
+That is incompatible with the README's principle "One binary, no runtime."
+The user installs nothing else. Supporting Safari means shipping a Mac app. Do not.
 
 ---
 
@@ -890,13 +890,13 @@ binary**. New surface:
   messaging host detection failing specifically on Brave and Chromium. Every
   one of those is the same bug: seven browsers, three platforms, twenty-one
   cells, each of which must be right.
-- **It puts a file inside the browser's own directory.** The brief's non-goals
-  say "We never modify the browser's own files — we read and copy, nothing
+- **It puts a file inside the browser's own directory.** The README's non-goals
+  say it "never modifies the browser's own files: it reads and copies, nothing
   else." Writing a *new* file into the browser's user-data directory is not
   modifying a browser file, and the distinction is real — but it is close
-  enough that the sentence needs rewording rather than lawyering. The brief
+  enough that the sentence needs rewording rather than lawyering. The README
   also says, in the same list, "No browser extension (for now)." **Building
-  this requires an explicit amendment to §1 of `BRIEF.md`, and that is a
+  this requires an explicit amendment to the README's non-goals, and that is a
   product decision, not an implementation detail.**
 
 **What it costs us, in one sentence:** the tool stops being a binary you can
@@ -1048,7 +1048,7 @@ that made anyone install it. So: second source, permanently, with the
 degradation named honestly in the docs rather than smoothed over.
 
 "Do not build it and accept the clock" is also wrong, but only just. `save` is
-the command. The brief's 80/20 says two things carry almost all the value and
+the command. The README's 80/20 says two things carry almost all the value and
 `save` is the first. A tool whose primary command refuses to run is finished,
 and "we detect the condition and print a good error" is a way of being
 finished politely. Something has to exist on the other side of that error
@@ -1078,7 +1078,7 @@ once a second source exists, and by then there will be snapshots in the wild.
 |---|---|---|
 | **A. The host** | Framing (~35 lines of `std`, prototyped and working), `argv[1]` dispatch, origin validation, a `LiveTabs` source kind, the `Source` schema bump, the try-lock path in `archive.rs`, the same-source layout comparison, the MV3 extension (~150 lines of JS plus a manifest), `install-host`/`uninstall-host` for macOS and Linux, integration tests that drive the real binary over a real pipe. | The largest single piece, and the most self-contained. Every mechanism in it is documented and one of them is already prototyped. |
 | **B. Windows and the rest of the table** | Registry read/write, a dependency decision, the per-browser install matrix across seven browsers and three platforms, `--check` for a moved binary, Windows `O_BINARY` verification, CI coverage. | Smaller in lines, larger in cells. This is where the bugs other projects have shipped will find us. |
-| **C. Distribution** | Developer account, the fee, the pinned `key`, listing copy that justifies "Read your browsing history", a privacy disclosure, the review round-trip, update mechanics, and an amendment to `BRIEF.md` §1 removing "No browser extension (for now)". | **Mostly not code.** It has a queue in front of it that we do not control, and it recurs on every release. |
+| **C. Distribution** | Developer account, the fee, the pinned `key`, listing copy that justifies "Read your browsing history", a privacy disclosure, the review round-trip, update mechanics, and an amendment to the README's non-goals removing "No browser extension (for now)". | **Mostly not code.** It has a queue in front of it that we do not control, and it recurs on every release. |
 
 If someone insists on one number: assume A and B are each a normal slice, and
 C is a normal slice's worth of calendar time containing a fortnight's worth of

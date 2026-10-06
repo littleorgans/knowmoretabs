@@ -1,6 +1,6 @@
 //! Derives the compact frontend contract from immutable capture snapshots.
 //!
-//! slice: library
+//! slice: library, tags, history
 //! why: One bad snapshot must not hide a whole archive; one repeated URL must
 //!      retain every tab sighting without repeating page metadata in the payload.
 

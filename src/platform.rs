@@ -1132,10 +1132,9 @@ mod tests {
         let suffixes: Vec<i64> = found.iter().map(|c| c.suffix).collect();
         assert_eq!(suffixes, vec![100, 20, 9]);
         assert_eq!(found[0].path, dir.path().join("Session_100"));
-        assert!(
-            session_candidates(&dir.path().join("missing"))
-                .unwrap()
-                .is_empty()
+        assert_eq!(
+            session_candidates(&dir.path().join("missing")).unwrap(),
+            Vec::<SessionCandidate>::new()
         );
     }
 

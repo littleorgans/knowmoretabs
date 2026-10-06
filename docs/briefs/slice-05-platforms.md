@@ -12,7 +12,7 @@ macOS-shaped elsewhere. Expect the second half to be the larger half.
 1. **`docs/research/browsers.md`** §1, §2, §4, §6 — the path matrix for Linux
    (including Flatpak and Snap, which differ) and Windows, plus which
    environment overrides to honour. It is the specification.
-2. `docs/BRIEF.md` §2 and §5.
+2. `docs/BRIEF.md` §2 and §5 (at 2256595).
 3. `src/platform.rs` — the table as slice 4 left it.
 4. `.github/workflows/ci.yml` — one Linux job today.
 

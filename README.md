@@ -415,9 +415,39 @@ cargo xtask slices --check    # slice metadata lint and docs/SLICES.md
 
 Every source file starts with a `slice:` / `why:` header naming the slice or
 slices it belongs to and why it exists; `cargo xtask slices` enforces it.
-`docs/BRIEF.md` is the reasoning behind the project, `docs/SLICES.md` the
-build order, and `docs/briefs/` the brief each slice was built from.
-Releases are built by `.github/workflows/release.yml` from a `v*` tag.
+`slices.toml` is the reasoning behind what is built and what is not,
+`docs/SLICES.md` the build order generated from it, and `docs/briefs/` the
+brief each slice was built from. Those briefs cite `docs/BRIEF.md`, the
+original project brief, retired after commit 2256595;
+`git show 2256595:docs/BRIEF.md` reads it. Releases are built by
+`.github/workflows/release.yml` from a `v*` tag.
+
+`save` and `serve` carry almost all the value; when a decision is close, pick
+the option that keeps those two excellent. A feature that serves a fifth of the
+value for half the work does not ship: cut it and record it in the `future`
+band of `slices.toml`. Beyond that:
+
+- The archive is sacred. A browser file is never modified. A snapshot is
+  published whole by one rename and never written again, and `library.json`
+  and `pages/history.json` are replaced whole, so a failure mid-write leaves
+  the previous file as it was. `pages/metadata.jsonl` is append-only instead:
+  an interrupted `enrich` keeps every record it completed.
+- Plain files first. JSON snapshots are the source of truth and anything
+  derived is rebuildable. No database until a measured query is slow; no
+  async, since a single-user localhost server does not need it; no config
+  file until a user has to repeat themselves.
+- No build step for the frontend: hand-written HTML, CSS and JS, the same
+  assets for `file://` and `serve`.
+- One binary, no runtime.
+- Comments explain why, never what. Library code returns typed errors; no
+  `unwrap()` outside tests and no `panic!` on user input. A clippy `allow` is
+  justified by a comment where it is written.
+- Unit tests sit beside the code; integration tests in `tests/` drive the real
+  binary. Fixtures are synthetic or redacted: never commit a real URL or title
+  from anyone's browser.
+- `reference/` is the vendored prior art, a Python script and its tests:
+  inspiration, not a specification, and read-only.
+- Commits are conventional commits; `main` stays green.
 
 ## License
 

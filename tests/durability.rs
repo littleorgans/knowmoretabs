@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use common::{
@@ -42,7 +43,7 @@ fn unchanged_layout_is_skipped_unless_forced() {
     );
     assert!(out.contains("--force"), "{out}");
     assert_eq!(fx.snapshot_dirs().len(), 1);
-    assert!(fx.staging_dirs().is_empty());
+    assert_eq!(fx.staging_dirs(), Vec::<PathBuf>::new());
 
     let output = fx.run(&["--json"]);
     assert_success(&output);
@@ -179,7 +180,7 @@ fn a_kill_between_staging_and_rename_leaves_the_archive_untouched() {
         "{}",
         stderr(&output)
     );
-    assert!(fx.staging_dirs().is_empty());
+    assert_eq!(fx.staging_dirs(), Vec::<PathBuf>::new());
     assert_eq!(fx.snapshot_dirs().len(), 2);
 }
 
@@ -195,7 +196,7 @@ fn two_concurrent_saves_both_succeed() {
         assert_success(&output);
     }
     assert_eq!(fx.snapshot_dirs().len(), 2);
-    assert!(fx.staging_dirs().is_empty());
+    assert_eq!(fx.staging_dirs(), Vec::<PathBuf>::new());
     for dir in fx.snapshot_dirs() {
         assert_eq!(read_snapshot(&dir)["stats"]["tabs"], 2);
     }

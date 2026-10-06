@@ -19,6 +19,9 @@
 | `my-browser` | Use the browser I actually use | 4 `browsers` |
 | `my-platform` | Use it on my Linux box or my work Windows machine | 5 `platforms` |
 | `easy-install` | Install it without installing a toolchain first | 6 `release` |
+| `tag-pages` | Tag pages my way, and narrow the library by combining tags | 7 `tags` |
+| `how-i-found-it` | See how I found a page and how much I used it | 7 `history` |
+| `what-a-page-is` | Know what a page is about without opening it | 7 `enrich` |
 
 ## Build order
 
@@ -107,6 +110,61 @@ does not care what it is written in. Publishing to a registry is a separate,
 explicit decision — this slice builds the machinery and leaves the trigger
 unpulled.
 
+### 7. Tags, and suggested tags (`tags`) — done
+
+- Delivers: tag-pages
+- Depends on: triage
+
+**Ships.** Tags you set, offline (7a): `knowmoretabs tag` puts flat tags on pages or
+takes them off, `tags` manages the vocabulary, and `serve` gets a tag bar
+whose counts show how the shown pages combine with each tag, chips on each
+row, bulk tagging from the selection tray, and undo. `export` shows tags
+read-only. Suggested tags (7c): `tag --prompt DIR` writes a work folder for an
+agent the owner runs, and `tag --import` validates its answer whole and keeps
+it in `tags/suggested.jsonl`, reviewed in `serve` with confirm and dismiss.
+
+**Intent.** Tags are flat facets the owner controls; the meaning is in the combination,
+so there is no hierarchy and no tag follows from another. The tool contains
+no model and makes no request: tagging by machine is a handoff the owner
+runs, and the owner's decisions always win over suggestions. Learning from
+those decisions (7d) is not built.
+
+### 7. History signals (`history`) — done
+
+- Delivers: how-i-found-it
+- Depends on: capture, library
+
+**Ships.** `save` copies the browser's `History` database with its journal and WAL and
+records, for each tab, the search that led to it, the referrer, visit and
+typed counts, first and last visit, and time in the foreground (7b, part
+one). The library keeps its own record of those signals for every page in
+`pages/history.json`, refreshed by each written save and by
+`history --refresh`, and shows them in each page's drawer. `export` leaves out
+searches and referrers unless `--with-history`; `save --no-history` reads
+nothing.
+
+**Intent.** Chrome forgets visits after about 90 days; a snapshot keeps them for as long
+as the archive exists. It reads a copy of a browser file through a bundled
+SQLite, with no network, so it brings neither storage nor `scale-index`
+forward.
+
+### 7. Enrich: what pages say about themselves (`enrich`) — done
+
+- Delivers: what-a-page-is
+- Depends on: library
+
+**Ships.** `knowmoretabs enrich` fetches the `<head>` of library pages without cookies,
+and for public GitHub repositories their topics and README, appending each
+result to `pages/metadata.jsonl` and never fetching a page twice unless asked
+(7b). `--dry-run` lists what would and would not be sent, and why;
+`--limit N` caps a run. `tag --prompt` hands what it recorded to the tagging
+agent.
+
+**Intent.** The one command that sends anything off the machine, so it is opt-in and the
+decision of what never leaves is made before any request: forgotten pages,
+this machine and the private network, search results and URLs that carry a
+token stay home.
+
 ## Prepared for, deliberately not built
 
 ### `live-tabs` — See my live tabs exactly, not the last session written to disk
@@ -134,13 +192,13 @@ pinned sidebar. Parsing its session files would snapshot the wrong thing
 convincingly, which is worse than not supporting it. Arc needs a second source
 adapter, not a row in the browser table.
 
-### `notes-tags` — Tag a page and write myself a note about it
+### `notes` — Write myself a note about a page
 
-- Prepared by: triage
+- Prepared by: triage, tags
 
-`library.json` already carries per-URL user state; forgetting is the first and
-most-wanted instance of it. Tags earn their place once triage is in daily use
-and the shape of what people want to record is known, rather than guessed.
+`library.json` already carries per-URL user state: forgetting, then tags.
+Tags shipped once triage was in daily use and the shape of what people want
+to record was known; notes earn their place the same way, rather than guessed.
 
 ### `fulltext` — Search what was on the page, not just its title
 

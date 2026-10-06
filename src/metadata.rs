@@ -1,6 +1,6 @@
 //! The reader of `pages/metadata.jsonl`, the page metadata `enrich` fetches.
 //!
-//! slice: triage
+//! slice: tags, enrich
 //! why: `enrich` writes this file and `tag --prompt` reads it; the two are
 //!      built apart, so they meet in this one module and its pinned shape
 //!      (the 7b/7c contract). The file is append-only with one line per

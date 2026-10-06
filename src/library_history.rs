@@ -1,7 +1,7 @@
 //! `pages/history.json`, the library's own record of History signals, and
 //! `knowmoretabs history`, which shows it or refreshes it.
 //!
-//! slice: capture, library
+//! slice: history
 //! why: A snapshot's signals cover only the tabs open during that save, and
 //!      snapshots never change, so most pages in a library would never carry
 //!      any. This file is a refreshed view beside them: every written save,

@@ -1,7 +1,7 @@
 //! A public GitHub repository's topics and README, from the data its own page
 //! embeds for the browser.
 //!
-//! slice: library
+//! slice: enrich
 //! why: A repository's `<head>` says little more than its name, while its
 //!      topics and README say what it is about. Both are in the JSON the
 //!      repository page carries for its scripts, so the one cookieless fetch
@@ -146,7 +146,7 @@ mod tests {
         let page = format!(r#"{{"richText":"<p>{long}</p>","topics":[]}}"#);
         let data = repo_data(&page).unwrap();
         assert_eq!(data.readme.unwrap().chars().count(), README_CHARS);
-        assert!(data.topics.is_empty());
+        assert_eq!(data.topics, Vec::<String>::new());
         assert_eq!(repo_data("<html><title>x</title></html>"), None);
         assert_eq!(repo_data(r#""topics":[not json"#), None);
     }
