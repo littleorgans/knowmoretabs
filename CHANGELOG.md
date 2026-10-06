@@ -151,7 +151,7 @@ as what you can do that you could not before.
   `behind_login`, `blocked`, `paywalled`, `not_found`, `not_html`,
   `skipped`, `error` or `unavailable`. It never fetches what `enrich` never
   fetches, and records X profiles and YouTube channels and playlists as not
-  a document, without a request. A timeout, a 429 or a 5xx is retried twice
+  a document, without a request. A timeout, a 429 or an HTTP 502, 503 or 504 is retried twice
   in the run, honouring `Retry-After` up to a minute; a page still failing
   is retried on the next run and is `unavailable` after three. A page known
   by addresses that differ only after `#` is fetched once. `--dry-run`,
