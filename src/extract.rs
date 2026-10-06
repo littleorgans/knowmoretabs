@@ -9,7 +9,9 @@
 //!      a browser, a login or a subscription to show it. When readability
 //!      picks the wrong part of a page that plainly has text, as listing and
 //!      index pages lead it to, the whole page less its menus, banners,
-//!      footers and sidebars is kept instead, and judged on what is left.
+//!      footers and sidebars outside `main` is kept instead, and judged on
+//!      what is left. Inside `main`, those elements can hold page headings
+//!      and usage instructions, so their text is kept.
 //!      Pure: HTML in, a verdict out, so the rules can be checked against
 //!      pages alone.
 
@@ -35,8 +37,9 @@ const APP_MOUNTS: &str = "#root, #app, #__next, #__nuxt";
 const NOT_TEXT: [&str; 8] = [
     "head", "script", "style", "noscript", "template", "svg", "meta", "iframe",
 ];
-/// Page chrome the whole-page markdown also leaves out: menus, banners,
-/// footers and sidebars.
+/// Page chrome the whole-page markdown leaves out when it is outside
+/// `main`: menus, banners, footers and sidebars. Inside `main`, the same
+/// elements can hold substantive headings and usage instructions.
 const CHROME: &str = "nav, header, footer, aside, [role~=navigation], [role~=banner], [role~=contentinfo], [role~=complementary]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,10 +190,10 @@ fn visible_text(document: &Document) -> String {
     head::collapse(&text)
 }
 
-/// The body as markdown, its [`CHROME`] left out.
+/// The body as markdown, its [`CHROME`] outside `main` left out.
 fn whole_page(html: &str) -> String {
     let document = Document::from(html);
-    document.select(CHROME).remove();
+    document.select(CHROME).filter(":not(main *)").remove();
     let body = document.select("body");
     body.nodes()
         .first()
