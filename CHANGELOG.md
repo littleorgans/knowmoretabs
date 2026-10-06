@@ -160,10 +160,11 @@ as what you can do that you could not before.
 - **X posts as text.** `content` reads an X post (`x.com` or `twitter.com`,
   `/<user>/status/<id>`) from the public X post API at `api.fxtwitter.com`,
   sending only the post's number, and keeps its text, the post it quotes, an
-  article's body, the author, the date and the descriptions of its images.
-  One post, not its thread. A missing, deleted or suspended post is
-  `not_found`, a private post or protected account `behind_login`, and a
-  `blocked` tombstone `blocked`.
+  article's body with its code and a link to each post it embeds, the
+  author, the date and the descriptions of its images. One post, not its
+  thread. A missing, deleted or suspended post is `not_found`, a private
+  post or protected account `behind_login`, and a post the API reports as
+  blocked `blocked`.
 
 ### Changed
 
