@@ -8,8 +8,10 @@
 //!      say whether what it found is the page or a sign that the page needs
 //!      a browser, a login or a subscription to show it. When readability
 //!      picks the wrong part of a page that plainly has text, as listing and
-//!      index pages lead it to, the whole page is kept instead. Pure: HTML
-//!      in, a verdict out, so the rules can be checked against pages alone.
+//!      index pages lead it to, the whole page less its menus, banners,
+//!      footers and sidebars is kept instead, and judged on what is left.
+//!      Pure: HTML in, a verdict out, so the rules can be checked against
+//!      pages alone.
 
 use dom_query::{Document, NodeRef};
 use dom_smoothie::{Config, Readability, TextMode};
@@ -33,6 +35,9 @@ const APP_MOUNTS: &str = "#root, #app, #__next, #__nuxt";
 const NOT_TEXT: [&str; 8] = [
     "head", "script", "style", "noscript", "template", "svg", "meta", "iframe",
 ];
+/// Page chrome the whole-page markdown also leaves out: menus, banners,
+/// footers and sidebars.
+const CHROME: &str = "nav, header, footer, aside, [role~=navigation], [role~=banner], [role~=contentinfo], [role~=complementary]";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Class {
@@ -182,9 +187,10 @@ fn visible_text(document: &Document) -> String {
     head::collapse(&text)
 }
 
-/// The body, all of it, as markdown.
+/// The body as markdown, its [`CHROME`] left out.
 fn whole_page(html: &str) -> String {
     let document = Document::from(html);
+    document.select(CHROME).remove();
     let body = document.select("body");
     body.nodes()
         .first()
@@ -382,6 +388,37 @@ mod tests {
         assert!(page.visible >= ENOUGH);
         for n in [1, 17, 30] {
             assert!(page.markdown.contains(&format!("Entry {n}:")), "entry {n}");
+        }
+    }
+
+    #[test]
+    fn a_page_of_only_menus_and_footers_is_thin() {
+        let links =
+            |label: &str| format!("<li><a href=\"/{label}\">{label} link</a></li>").repeat(30);
+        let page = page(
+            &format!(
+                "<html><body><header><ul>{}</ul></header><nav><ul>{}</ul></nav>\
+                 <div role=\"navigation\"><ul>{}</ul></div>\
+                 <main><p>A gallery of tide pool photographs.</p></main>\
+                 <aside><ul>{}</ul></aside><div role=\"complementary\"><ul>{}</ul></div>\
+                 <footer><ul>{}</ul></footer><div role=\"contentinfo\"><p>Example Field Notes.</p></div>\
+                 </body></html>",
+                links("Banner"),
+                links("Section"),
+                links("Language"),
+                links("Gallery"),
+                links("Related"),
+                links("Footer")
+            ),
+            None,
+        );
+        assert!(page.visible >= ENOUGH, "{}", page.visible);
+        assert_eq!((page.class, page.reason), (Class::Thin, Some("short text")));
+        assert!(page.markdown.contains("A gallery of tide pool photographs"));
+        for chrome in [
+            "Banner", "Section", "Language", "Gallery", "Related", "Footer",
+        ] {
+            assert!(!page.markdown.contains(chrome), "{chrome}");
         }
     }
 
