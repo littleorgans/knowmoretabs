@@ -27,6 +27,7 @@ mod library_commands;
 mod library_history;
 mod local;
 mod metadata;
+mod metadata_fetch;
 mod metadata_writer;
 mod model;
 mod out;

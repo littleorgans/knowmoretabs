@@ -26,6 +26,7 @@ use crate::fetch::Fetcher;
 use crate::guard::{self, carries_token, is_search_results};
 use crate::library::{self, State};
 use crate::metadata::{self, Metadata};
+use crate::metadata_fetch;
 use crate::metadata_writer::{Appender, Line, Outcome};
 use crate::model::Snapshot;
 use crate::out;
@@ -301,7 +302,7 @@ fn run(root: &Path, plan: &Plan, state: &State, log: Log) -> Result<Tally, Error
                         if stop.load(Ordering::Relaxed) {
                             return;
                         }
-                        if let Err(err) = record(&fetcher.fetch(&item.url)) {
+                        if let Err(err) = record(&metadata_fetch::fetch(&fetcher, &item.url)) {
                             stop.store(true, Ordering::Relaxed);
                             failed
                                 .lock()
