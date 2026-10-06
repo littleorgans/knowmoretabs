@@ -896,7 +896,7 @@ binary**. New surface:
   modifying a browser file, and the distinction is real — but it is close
   enough that the sentence needs rewording rather than lawyering. The brief
   also says, in the same list, "No browser extension (for now)." **Building
-  this requires an explicit amendment to §1 of `BRIEF.md`, and that is a
+  this requires an explicit amendment to the README's non-goals, and that is a
   product decision, not an implementation detail.**
 
 **What it costs us, in one sentence:** the tool stops being a binary you can
@@ -1078,7 +1078,7 @@ once a second source exists, and by then there will be snapshots in the wild.
 |---|---|---|
 | **A. The host** | Framing (~35 lines of `std`, prototyped and working), `argv[1]` dispatch, origin validation, a `LiveTabs` source kind, the `Source` schema bump, the try-lock path in `archive.rs`, the same-source layout comparison, the MV3 extension (~150 lines of JS plus a manifest), `install-host`/`uninstall-host` for macOS and Linux, integration tests that drive the real binary over a real pipe. | The largest single piece, and the most self-contained. Every mechanism in it is documented and one of them is already prototyped. |
 | **B. Windows and the rest of the table** | Registry read/write, a dependency decision, the per-browser install matrix across seven browsers and three platforms, `--check` for a moved binary, Windows `O_BINARY` verification, CI coverage. | Smaller in lines, larger in cells. This is where the bugs other projects have shipped will find us. |
-| **C. Distribution** | Developer account, the fee, the pinned `key`, listing copy that justifies "Read your browsing history", a privacy disclosure, the review round-trip, update mechanics, and an amendment to `BRIEF.md` §1 removing "No browser extension (for now)". | **Mostly not code.** It has a queue in front of it that we do not control, and it recurs on every release. |
+| **C. Distribution** | Developer account, the fee, the pinned `key`, listing copy that justifies "Read your browsing history", a privacy disclosure, the review round-trip, update mechanics, and an amendment to the README's non-goals removing "No browser extension (for now)". | **Mostly not code.** It has a queue in front of it that we do not control, and it recurs on every release. |
 
 If someone insists on one number: assume A and B are each a normal slice, and
 C is a normal slice's worth of calendar time containing a fortnight's worth of

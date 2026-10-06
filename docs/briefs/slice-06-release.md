@@ -11,7 +11,7 @@ and they are not here.
 
 ## Required reading
 
-1. `docs/BRIEF.md` §1 (including the non-goals) and §7.
+1. The project brief §1 (including the non-goals) and §7.
 2. `docs/research/rust-stack.md` §13 — the release-tooling recommendation.
 3. `slices.toml` — slice `release`, and the whole `future` band, which is what
    the README must be honest about.
@@ -33,7 +33,7 @@ to satisfy a linter would be the tail wagging the dog.
 
 So: **let a file claim more than one slice.** Extend the marker to accept a
 list, update `cargo xtask slices` to parse and enforce it, keep the rules in
-`docs/BRIEF.md` §6 otherwise intact, and regenerate `docs/SLICES.md`. Then
+the project brief §6 otherwise intact, and regenerate `docs/SLICES.md`. Then
 mark up `src/platform.rs` honestly, and check every other file for the same
 situation now that it is expressible — several probably qualify.
 
@@ -87,7 +87,7 @@ Rewrite it for someone who has never heard of the project. It should cover:
 - Install: prebuilt binary first, `cargo install` second. Never "install Rust".
 - The two commands that matter — `save` and `serve` — before anything else.
 - Where data lives per platform, and that nothing leaves the machine.
-- The non-goals from `docs/BRIEF.md` §1, stated plainly.
+- The non-goals from the project brief §1, stated plainly.
 - **The encrypted-sessions clock**, honestly. Chromium is migrating to
   encrypted session storage; when it completes, `knowmoretabs` stops being
   able to read sessions and refuses rather than reporting stale tabs as
@@ -122,7 +122,7 @@ Anything you find wrong but out of scope: **report it, do not fix it.**
   (generated), and `slice:` headers in `src/**`.
 - Do not change behaviour. No feature work, no refactoring, no new
   dependencies in the binary. If a test fails, that is a finding.
-- Do not touch `web/`'s three assets, `reference/`, `docs/BRIEF.md`,
+- Do not touch `web/`'s three assets, `reference/`, the project brief,
   `docs/research/**`, or `docs/briefs/**`.
 - **Run no git commands at all**, and do not create or push a tag.
 

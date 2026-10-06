@@ -164,7 +164,10 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// The five rules from `docs/BRIEF.md` §6, except the generated-doc check.
+/// The slice rules, except the generated-doc check: every file has a header
+/// with a `slice:` marker; every marker names a slice in `slices.toml`; every
+/// `why:` has at least eight words and does not restate the title; every
+/// `done` slice is claimed by at least one file.
 fn lint(matrix: &toml::Table, headers: &[(String, Result<Header, String>)]) -> Vec<String> {
     let mut problems = Vec::new();
     let slices = array(matrix, "slice");
