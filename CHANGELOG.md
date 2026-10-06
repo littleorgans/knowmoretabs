@@ -160,9 +160,6 @@ as what you can do that you could not before.
 
 ### Changed
 
-- **Page text fallback.** Menus, banners, footers and sidebars are removed
-  only outside `<main>`, preserving page headings and usage instructions
-  inside it.
 - **Private page metadata.** On Unix, `pages/metadata.jsonl` is now created with mode `0600`, and an existing file's mode is corrected when opened for enrichment.
 
 [0.1.0]: https://github.com/littleorgans/knowmoretabs/releases/tag/v0.1.0
