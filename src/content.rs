@@ -200,15 +200,8 @@ fn plan(
             .map(|item| (item.url, Skip::NotADocument)),
     );
     if let Some(limit) = options.limit {
-        let mut fetchable = 0;
-        plan.todo.retain(|item| {
-            if item.why == Why::Login {
-                return true;
-            }
-            fetchable += 1;
-            fetchable <= limit
-        });
-        plan.more = fetchable.saturating_sub(limit);
+        plan.more = plan.todo.len().saturating_sub(limit);
+        plan.todo.truncate(limit);
     }
     let attempt = |url: &str| content_fetch::next_attempt(known.pages.get(url));
     let mut fetches: Vec<Fetch> = Vec::new();
@@ -643,36 +636,6 @@ mod tests {
         assert!(work.fetches.is_empty());
         assert_eq!(work.unsent, []);
         assert_eq!(plan.skip_counts()[&Skip::Forgotten], 2);
-    }
-
-    #[test]
-    fn login_pages_do_not_consume_the_fetch_limit() {
-        let snapshots = [snapshot(&[
-            "https://a.test/login",
-            "https://a.test/1",
-            "https://b.test/login",
-            "https://a.test/2",
-        ])];
-        for limit in [0, 1] {
-            let (plan, work) = plan(
-                &snapshots,
-                &state(&[]),
-                &log(&[]),
-                Options {
-                    limit: Some(limit),
-                    ..Options::default()
-                },
-            );
-            assert_eq!(work.fetches.len(), limit);
-            assert_eq!(plan.more, 2 - limit);
-            assert_eq!(work.unsent.len(), 2);
-            assert!(
-                work.unsent
-                    .iter()
-                    .all(|line| line.status == Status::BehindLogin)
-            );
-            assert_eq!(plan.todo.len(), limit + 2);
-        }
     }
 
     #[test]

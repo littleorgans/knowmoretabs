@@ -277,9 +277,8 @@ one file per page under `pages/content/`, with one line per attempt in
 `pages/content.jsonl`. Plain HTTP reads every page today: readability finds
 the main text, and a page is recorded as ok, thin, an app shell, behind a
 login, blocked, paywalled, not found or not HTML. Passing failures are retried
-in the run and on the next one. `--dry-run` and `--refetch` keep `enrich`'s
-meaning; `--limit` counts fetchable pages only, and `--url` captures one page.
-Next, each page takes the
+in the run and on the next one. `--dry-run`, `--limit` and `--refetch` keep
+`enrich`'s meaning, and `--url` captures one page. Next, each page takes the
 cheapest route that works: the public X post API for posts, `gh` for GitHub,
 yt-dlp captions for videos, and a local headless Chrome for pages that need a
 browser to show their text, with `doctor` saying which optional tools are
