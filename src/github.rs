@@ -103,6 +103,13 @@ impl Target {
             [owner, name, rest @ ..] => (*owner, *name, rest),
             _ => return None,
         };
+        // GitHub redirects a root ending in `.git` to the repository page,
+        // but its API requires the repository name without that suffix.
+        let name = if rest.is_empty() {
+            name.strip_suffix(".git").unwrap_or(name)
+        } else {
+            name
+        };
         if NOT_OWNERS.contains(&owner.to_ascii_lowercase().as_str())
             || !is_owner_name(owner)
             || !is_repo_name(name)

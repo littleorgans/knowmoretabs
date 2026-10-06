@@ -220,6 +220,16 @@ mod tests {
     }
 
     #[test]
+    fn git_suffix_addresses_share_the_repository_fetch() {
+        let root = "https://github.com/Owner/Repo";
+        let alias = "https://github.com/Owner/Repo.git/?tab=readme-ov-file#install";
+        let root_route = route(root).unwrap();
+        let alias_route = route(alias).unwrap();
+        assert_eq!(alias_route, root_route);
+        assert_eq!(alias_route.key(alias), root_route.key(root));
+    }
+
+    #[test]
     fn a_github_document_is_one_fetch_whatever_its_address() {
         let key = |raw: &str| route(raw).unwrap().key(raw);
         assert_eq!(
