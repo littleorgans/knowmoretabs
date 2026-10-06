@@ -11,7 +11,7 @@ knowmoretabs saves a dated, immutable snapshot of every open window and tab by r
 
 Browsers: Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and Vivaldi on macOS, Linux and Windows (`code:src/platform.rs`). Arc is refused (`code:src/error.rs#ArcUnsupported`).
 
-Non-goals: sync, accounts, cloud, telemetry, full-text indexing, tag hierarchy, touching or closing live tabs, modifying browser files (claimed by S1, unverified).
+Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (content capture, planned, is opt in, and keyword search over what it stores comes later), tag hierarchy, touching or closing live tabs, modifying browser files (claimed by S1, unverified).
 
 ## Responsibilities
 

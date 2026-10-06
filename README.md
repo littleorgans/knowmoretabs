@@ -24,7 +24,9 @@ cargo install --git https://github.com/littleorgans/knowmoretabs knowmoretabs
 ```
 
 Or clone the repository and run `cargo build --release`; the binary is
-`target/release/knowmoretabs`, and it depends on nothing else.
+`target/release/knowmoretabs`, and it depends on nothing else. Content
+capture, planned, can use yt-dlp, gh and Chrome when they are installed, and
+works without them.
 
 Nothing is tagged yet: the prebuilt binaries and the crates.io package
 described next arrive with v0.1.0, and until then the repository is the only
@@ -241,6 +243,20 @@ a sign-in form. None of this hides a page from your library; forgetting it is
 your call. `--dry-run` lists every page and the reason, and `--json` reports
 the counts.
 
+## Page text, planned
+
+Not built yet; this is what it will do. Content capture is opt in: a command
+of its own that runs only when you run it, never as part of `save`. It sends
+the addresses of pages you visited to their own sites, and the addresses of X
+posts to the public X post API, to read each page's main text. It uses
+optional local tools when they are installed: yt-dlp for video captions, gh
+for GitHub, and Chrome for pages that need a browser to show their text.
+Without them it does what it can over plain HTTP. The text is stored as
+markdown, private to you, under `pages/content/`, with one line per attempt in
+`pages/content.jsonl`. robots.txt is not consulted, as with `enrich`: every
+address is one you opened yourself. What `enrich` never fetches, content
+capture never fetches either.
+
 ## Where the data lives
 
 | Platform | Archive root |
@@ -270,7 +286,9 @@ editor. Everything under `export/` is derived and can be deleted.
 
 Nothing leaves the machine unless you run `enrich`. `save`, `serve`,
 `export` and the tag commands make no network requests of any kind; `enrich`
-is the only code that does, and what it sends is described above. A
+is the only code that does, and what it sends is described above. Content
+capture, planned, will be the second, as described under **Page text,
+planned**. A
 `tag --prompt` folder is the one thing made to be handed on: it holds the
 addresses and titles of pages in your library, what `enrich` recorded about
 them if you ran it, and their searches and referrers if you ask for them. It
@@ -377,7 +395,8 @@ Why decrypting is not the answer is in
 ## Non-goals
 
 No sync. No accounts. No cloud. No telemetry. No browser extension (for
-now). No full-text indexing of page contents. No tag hierarchy. It never
+now). No page text unless you ask for it: content capture, planned, is opt in,
+and keyword search over what it stores comes later. No tag hierarchy. It never
 touches, closes or reorders tabs in the live browser, and never modifies the
 browser's own files: it reads and copies, nothing else.
 
@@ -395,8 +414,9 @@ Each of these is a recorded decision, with its reasoning in
   session log.
 - **Notes on a page.** `library.json` is where they would go, beside the
   forgotten URLs and the tags.
-- **Searching page contents.** Means fetching and storing page bodies: a
-  different product with a different privacy story.
+- **Searching page contents.** Keyword search over the page text that
+  content capture, planned, stores. It waits for that store, and for a
+  measured query to say what the index should be.
 - **An index for years of snapshots.** Reading JSON into memory is instant at
   fifteen thousand rows. A rebuildable index arrives when a measured query is
   slow.
@@ -438,7 +458,9 @@ band of `slices.toml`. Beyond that:
   file until a user has to repeat themselves.
 - No build step for the frontend: hand-written HTML, CSS and JS, the same
   assets for `file://` and `serve`.
-- One binary, no runtime.
+- One binary, no runtime. Optional local tools may widen what an opt-in
+  command can reach (planned: yt-dlp, gh and Chrome for content capture), never
+  what the binary needs to run.
 - Comments explain why, never what. Library code returns typed errors; no
   `unwrap()` outside tests and no `panic!` on user input. A clippy `allow` is
   justified by a comment where it is written.
