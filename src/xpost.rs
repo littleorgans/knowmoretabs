@@ -317,8 +317,8 @@ fn alt_texts(post: &Post) -> impl Iterator<Item = (&'static str, &str)> {
 }
 
 /// `# Title`, the byline, the post's text, its article and its image
-/// descriptions, then the quoted post as a block quote. Ends in one
-/// newline.
+/// descriptions, then the quoted post as a block quote. Ends with a
+/// newline without stripping the post's trailing whitespace.
 fn markdown(post: &Post) -> String {
     let mut text = format!("# {}\n\n{}", title(post), body(post, false));
     if let Some(quote) = &post.quote {
@@ -327,13 +327,16 @@ fn markdown(post: &Post) -> String {
             None => format!("Quoting {}", body(quote, true)),
         };
         text.push_str("\n\n");
-        for line in quoted.trim_end().lines() {
+        for line in quoted.lines() {
             text.push_str(if line.is_empty() { ">" } else { "> " });
             text.push_str(line);
             text.push('\n');
         }
     }
-    format!("{}\n", text.trim_end())
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 /// A post without its quote: the byline, then each part a paragraph. A
@@ -341,7 +344,7 @@ fn markdown(post: &Post) -> String {
 fn body(post: &Post, quoted: bool) -> String {
     let mut parts = vec![byline(post)];
     if !post.text.trim().is_empty() {
-        parts.push(post.text.trim().to_owned());
+        parts.push(post.text.clone());
     }
     if let Some(article) = &post.article {
         if quoted && !article.title.trim().is_empty() {
@@ -366,7 +369,7 @@ fn block(block: &Block) -> String {
         _ => "",
     };
     if block.kind == "code-block" {
-        format!("```\n{text}\n```")
+        format!("```\n{}\n```", block.text)
     } else {
         format!("{prefix}{text}")
     }
@@ -464,6 +467,40 @@ mod tests {
              Image: A chart of tides\n"
         );
         assert_eq!(page.chars, extract::plain_chars(&page.markdown));
+    }
+
+    #[test]
+    fn post_text_keeps_its_original_whitespace() {
+        for text in ["  Indented text.\nTrailing spaces.  ", "First line.\n\n\n"] {
+            let page = read_value(&post(text)).page.unwrap();
+            let mut expected = format!(
+                "# Example Person (@example) on X\n\n\
+                 Example Person (@example), 2026-10-07T09:00:00Z\n\n{text}"
+            );
+            if !expected.ends_with('\n') {
+                expected.push('\n');
+            }
+            assert_eq!(page.markdown, expected);
+        }
+        let mut status = post("Public commentary.");
+        status["quote"] = post("  Quoted line.  \n\n\n");
+        assert!(
+            read_value(&status)
+                .page
+                .unwrap()
+                .markdown
+                .ends_with(">   Quoted line.  \n>\n>\n")
+        );
+        status["article"] = json!({"content": {"blocks": [
+            {"type": "code-block", "text": "    first()\n    second()"}
+        ]}});
+        assert!(
+            read_value(&status)
+                .page
+                .unwrap()
+                .markdown
+                .contains("```\n    first()\n    second()\n```")
+        );
     }
 
     #[test]
