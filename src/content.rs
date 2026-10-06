@@ -5,8 +5,9 @@
 //! why: Content capture sends the URLs you visited to their own sites, so it
 //!      plans from the same `targets` rules as `enrich` before any request,
 //!      says in full with `--dry-run` what it would send, and records pages
-//!      that are not documents once, with the reason. Forgotten, private,
-//!      token and search URLs stay out of the store. A page known by several
+//!      that are not documents once, with the reason. Pages the shared
+//!      rules keep home (forgotten, private, token, search and non web URLs)
+//!      are counted and stay out of the store. A page known by several
 //!      addresses that differ only after `#` is fetched once and recorded
 //!      under each. Hosts run in parallel while each sees one request a
 //!      second, and every result is written as it arrives, so an interrupted
@@ -42,7 +43,7 @@ struct Work {
     /// One fetch per page, its fragment variants recorded with it.
     fetches: Vec<Fetch>,
     /// Pages recorded without a request: login screens, and pages that are
-    /// not web pages or not documents that the log does not mention yet.
+    /// not documents.
     unsent: Vec<Line>,
 }
 
@@ -146,7 +147,8 @@ fn only<'a>(
 /// The shared plan, with `content`'s own rules on top: pages that are not
 /// documents stay home, as does every variant of a forgotten page,
 /// `--limit` counts what is left, fragment variants share a fetch, and pages
-/// that are not web pages or not documents are recorded once.
+/// that are not documents are recorded once. Pages the shared rules keep
+/// home are counted, never recorded, as with `enrich`.
 fn plan(
     snapshots: &[Snapshot],
     state: &State,
@@ -183,17 +185,7 @@ fn plan(
     plan.todo = documents;
     let mut unsent: Vec<Line> = not_documents
         .iter()
-        .map(|item| (item.url.clone(), Skip::NotADocument))
-        .chain(
-            plan.not_fetched
-                .iter()
-                .filter(|(url, skip)| {
-                    matches!(skip, Skip::NotWeb | Skip::NotADocument)
-                        && !known.pages.contains_key(url)
-                })
-                .cloned(),
-        )
-        .map(|(url, skip)| Line::new(&url, Status::Skipped).with_reason(skip.label()))
+        .map(|item| Line::new(&item.url, Status::Skipped).with_reason(Skip::NotADocument.label()))
         .collect();
     plan.not_fetched.extend(
         not_documents
@@ -597,16 +589,19 @@ mod tests {
     }
 
     #[test]
-    fn privacy_skips_never_write_urls_to_the_content_store() {
+    fn shared_skips_never_write_urls_to_the_content_store() {
         let snapshots = [snapshot(&[
             "https://www.google.com/search?q=tide",
             "https://a.test/reset?token=abc123",
             "http://192.168.1.1/admin",
             "https://forgotten.test/",
+            "chrome://settings/",
+            "data:text/plain,hello",
         ])];
         let state = state(&["https://forgotten.test/"]);
         let (plan, work) = plan(&snapshots, &state, &log(&[]), Options::default());
-        assert_eq!(plan.not_fetched.len(), 4);
+        assert_eq!(plan.not_fetched.len(), 6);
+        assert_eq!(plan.skip_counts()[&Skip::NotWeb], 2);
         assert!(work.fetches.is_empty());
         let root = tempfile::tempdir().unwrap();
         run(root.path(), work, &state, Log::default()).unwrap();
