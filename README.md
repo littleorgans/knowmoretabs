@@ -294,10 +294,11 @@ it is `unavailable`. Every other outcome stands until you pass `--refetch`,
 and a refetch that finds the same text leaves the file as it was.
 
 From an X post it keeps the post's text, the post it quotes, an article's
-body, who wrote it and when, and the descriptions of its images and videos;
+body, who wrote it and when, and the descriptions of its images;
 one post, not the thread around it. A post the API does not find, or one
 deleted or suspended, is `not_found`; a private post or a protected account
-is `behind_login`; a post with no text at all is `thin`. The API's 429 and
+is `behind_login`; a `blocked` tombstone is `blocked`; a post with no text
+at all is `thin`. The API's 429 and
 5xx answers are retried as a site's are. Two addresses of the same post are
 fetched once.
 

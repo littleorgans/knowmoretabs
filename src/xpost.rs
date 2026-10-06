@@ -163,7 +163,6 @@ struct Block {
 #[serde(default)]
 struct Media {
     photos: Vec<Medium>,
-    videos: Vec<Medium>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -300,15 +299,14 @@ fn blocks(article: &Article) -> impl Iterator<Item = &Block> {
         .filter(|block| !block.text.trim().is_empty())
 }
 
-/// Each image or video description, with what it describes.
+/// Each image description, with what it describes.
 fn alt_texts(post: &Post) -> impl Iterator<Item = (&'static str, &str)> {
     post.media
         .iter()
-        .flat_map(|media| media.photos.iter().chain(media.videos.iter()))
+        .flat_map(|media| media.photos.iter())
         .filter_map(|medium| {
             let alt = medium.alt_text.as_deref()?.trim();
             let kind = match medium.kind.as_str() {
-                "video" => "Video",
                 "gif" => "GIF",
                 _ => "Image",
             };

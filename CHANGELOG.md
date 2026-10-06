@@ -162,7 +162,8 @@ as what you can do that you could not before.
   sending only the post's number, and keeps its text, the post it quotes, an
   article's body, the author, the date and the descriptions of its images.
   One post, not its thread. A missing, deleted or suspended post is
-  `not_found` and a private post or protected account `behind_login`.
+  `not_found`, a private post or protected account `behind_login`, and a
+  `blocked` tombstone `blocked`.
 
 ### Changed
 
