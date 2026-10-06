@@ -19,13 +19,16 @@ mod error;
 mod export;
 mod fetch;
 mod github;
+mod guard;
 mod head;
 mod history;
+mod jsonl;
 mod library;
 mod library_commands;
 mod library_history;
 mod local;
 mod metadata;
+mod metadata_fetch;
 mod metadata_writer;
 mod model;
 mod out;
@@ -37,6 +40,7 @@ mod snss;
 mod staleness;
 mod suggestions;
 mod tags;
+mod targets;
 mod triage;
 
 use std::fmt::Write as _;
@@ -112,7 +116,7 @@ fn main() -> ExitCode {
             refetch,
         }) => enrich::command(
             &root,
-            enrich::Options {
+            targets::Options {
                 dry_run: *dry_run,
                 limit: *limit,
                 refetch: *refetch,

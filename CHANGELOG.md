@@ -144,4 +144,8 @@ as what you can do that you could not before.
   including failed attempts. It is the only command that sends
   anything, and the README says what.
 
+### Changed
+
+- **Private page metadata.** On Unix, `pages/metadata.jsonl` is now created with mode `0600`, and an existing file's mode is corrected when opened for enrichment.
+
 [0.1.0]: https://github.com/littleorgans/knowmoretabs/releases/tag/v0.1.0

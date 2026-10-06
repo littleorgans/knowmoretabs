@@ -1,19 +1,20 @@
-//! The only network code in knowmoretabs: one cookieless GET per page, read
-//! until `</head>`, turned into a metadata record.
+//! The only network code in knowmoretabs: one cookieless, guarded GET,
+//! with every redirect hop checked before it is requested.
 //!
-//! slice: enrich
-//! why: `enrich` is opt-in because it sends the URLs you visited to their
-//!      own sites, so what it sends is kept to the minimum and every hop is
-//!      checked. No cookies, no referrer, no proxy from the environment; each
-//!      redirect is followed here, not by the client, so that a hop to this
-//!      machine, the private network or a login screen is refused before it
-//!      is requested; and every name is resolved through a resolver that
+//! slice: enrich, content
+//! why: A network command is opt-in because it sends the URLs you visited
+//!      to their own sites, so what it sends is kept to the minimum and every
+//!      hop is checked. No cookies, no referrer, no proxy from the environment;
+//!      each redirect is followed here, not by the client, so that a hop to
+//!      this machine, the private network or a login screen is refused before
+//!      it is requested; and every name is resolved through a resolver that
 //!      refuses private addresses, so a public name pointing inward is caught
-//!      at the one moment it matters, the connect.
+//!      at the one moment it matters, the connect. What a response means is
+//!      the caller's business; how it was fetched is this module's alone.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Read};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -21,19 +22,20 @@ use ureq::config::Config;
 use ureq::http::Uri;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
-use url::{Host, Url};
+use url::Url;
 
-use crate::github;
-use crate::head::{self, Head};
-use crate::local;
-use crate::metadata_writer::{Line, Outcome};
+use crate::guard::{
+    self, carries_token, is_login_page, is_login_redirect, is_private_host, is_public,
+    is_search_results, is_web,
+};
+use crate::head;
 
-/// `YouTube`'s meta tags start about 0.7 MB into its pages.
-pub const HEAD_CAP: usize = 3 * 1024 * 1024;
 pub const MAX_REDIRECTS: usize = 10;
 pub const TIMEOUT: Duration = Duration::from_secs(15);
 /// One request per second to any one host.
 pub const PACE: Duration = Duration::from_secs(1);
+/// What a browser asks for when it wants a page.
+pub const ACCEPT_HTML: &str = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5";
 
 /// Says what is asking, in the form sites already know how to read.
 const USER_AGENT: &str = concat!(
@@ -41,15 +43,47 @@ const USER_AGENT: &str = concat!(
     env!("CARGO_PKG_VERSION"),
     "; +https://github.com/littleorgans/knowmoretabs)"
 );
-const ACCEPT: &str = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5";
-/// Longest meta value kept; a description is a sentence or two.
-const VALUE_CAP: usize = 2000;
 
 pub struct Fetcher {
     agent: ureq::Agent,
     pacer: Pacer,
     forgotten: BTreeSet<String>,
     timeout: Duration,
+}
+
+/// Why a GET ended without a response to read: a hop the rules refuse, or
+/// a request that did not complete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Refusal {
+    InvalidUrl,
+    /// The URL, or a redirect, is not `http` or `https` with a host.
+    NotWeb,
+    PrivateNetwork {
+        redirected: bool,
+    },
+    /// The name resolved to this machine or the private network.
+    PrivateAddress,
+    Forgotten,
+    TokenOrSearch,
+    /// A sign-in, sign-up or verification screen, where it was met.
+    Login(Url),
+    InvalidRedirect {
+        status: u16,
+    },
+    TooManyRedirects,
+    /// Timeout, connection failure and the like, as a short reason.
+    Failed(String),
+}
+
+/// The final response, its body not yet read. The request's deadline
+/// still covers reading it.
+pub struct Response {
+    /// Where the redirects ended.
+    pub url: Url,
+    pub status: u16,
+    /// Empty when the server sent none.
+    pub content_type: String,
+    inner: ureq::http::Response<ureq::Body>,
 }
 
 impl Fetcher {
@@ -72,7 +106,6 @@ impl Fetcher {
             .http_status_as_error(false)
             .proxy(None)
             .user_agent(USER_AGENT)
-            .accept(ACCEPT)
             .timeout_global(Some(timeout))
             .build();
         Self {
@@ -87,175 +120,108 @@ impl Fetcher {
         }
     }
 
-    /// Fetches one page and says what came of it. Never fails: a failure is
-    /// a record too.
-    pub fn fetch(&self, raw: &str) -> Line {
+    /// Requests one page, following redirects itself so that every hop is
+    /// checked and paced first. One deadline covers the hops and the body.
+    pub fn get(&self, raw: &str, accept: &str) -> Result<Response, Refusal> {
         let deadline = Instant::now() + self.timeout;
         let Ok(mut url) = Url::parse(raw) else {
-            return Line::new(raw, Outcome::Error).with_reason("not a valid URL");
+            return Err(Refusal::InvalidUrl);
         };
         url.set_fragment(None);
         for hop in 0..=MAX_REDIRECTS {
             if !is_web(&url) {
-                return Line::new(raw, Outcome::Skipped)
-                    .with_reason("redirected away from the web");
+                return Err(Refusal::NotWeb);
             }
             if is_private_host(&url) {
-                return Line::new(raw, Outcome::Skipped).with_reason(if hop == 0 {
-                    "private network"
-                } else {
-                    "redirected to a private network"
+                return Err(Refusal::PrivateNetwork {
+                    redirected: hop > 0,
                 });
             }
             if self.forgotten.contains(url.as_str()) {
-                return Line::new(raw, Outcome::Skipped).with_reason("forgotten page, not fetched");
+                return Err(Refusal::Forgotten);
             }
             if carries_token(&url) || is_search_results(&url) {
-                return Line::new(raw, Outcome::Skipped)
-                    .with_reason("token or search URL, not fetched");
+                return Err(Refusal::TokenOrSearch);
             }
             if is_login_page(&url) || (hop > 0 && is_login_redirect(&url)) {
-                let mut record =
-                    Line::new(raw, Outcome::BehindLogin).with_reason("redirected to a login page");
-                record.final_url = Some(url.to_string());
-                return record;
+                return Err(Refusal::Login(url));
             }
-            if !self.pacer.wait(
-                &url.host_str()
-                    .unwrap_or("")
-                    .trim_end_matches('.')
-                    .to_ascii_lowercase(),
-                deadline,
-            ) {
-                return Line::new(raw, Outcome::Error).with_reason("timeout");
+            if !self.pacer.wait(&guard::host_key(&url), deadline) {
+                return Err(Refusal::Failed("timeout".to_owned()));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Line::new(raw, Outcome::Error).with_reason("timeout");
+                return Err(Refusal::Failed("timeout".to_owned()));
             }
-            let response = match self
+            let response = self
                 .agent
                 .get(url.as_str())
                 .config()
+                .accept(accept)
                 .timeout_global(Some(remaining))
                 .build()
                 .call()
-            {
-                Ok(response) => response,
-                Err(err) => return failure(raw, &err),
-            };
+                .map_err(|err| refusal(&err))?;
             let status = response.status().as_u16();
             let location = response
                 .headers()
                 .get("location")
                 .and_then(|v| v.to_str().ok());
             if let (300..=399, Some(location)) = (status, location) {
-                match url.join(location.trim()) {
-                    Ok(next) => {
-                        url = next;
-                        url.set_fragment(None);
-                        continue;
-                    }
-                    Err(_) => {
-                        return Line::new(raw, Outcome::Error)
-                            .with_reason(format!("HTTP {status} to an invalid URL"));
-                    }
-                }
+                url = url
+                    .join(location.trim())
+                    .map_err(|_| Refusal::InvalidRedirect { status })?;
+                url.set_fragment(None);
+                continue;
             }
-            return read_page(raw, &url, response);
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_owned();
+            return Ok(Response {
+                url,
+                status,
+                content_type,
+                inner: response,
+            });
         }
-        Line::new(raw, Outcome::Error).with_reason("too many redirects")
+        Err(Refusal::TooManyRedirects)
     }
 }
 
-fn read_page(raw: &str, url: &Url, mut response: ureq::http::Response<ureq::Body>) -> Line {
-    let status = response.status().as_u16();
-    let content_type = response
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_owned();
-    let with_response = |mut record: Line| {
-        record.final_url = Some(url.to_string());
-        record.http_status = Some(status);
-        record
-    };
-    if status == 401 {
-        return with_response(Line::new(raw, Outcome::BehindLogin).with_reason("HTTP 401"));
+impl Response {
+    /// The media type alone, lowercase; empty when none was sent.
+    pub fn mime(&self) -> String {
+        self.content_type
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase()
     }
-    if !(200..300).contains(&status) {
-        return with_response(Line::new(raw, Outcome::Error).with_reason(format!("HTTP {status}")));
+
+    /// Whether the body arrives as sent: no `Content-Encoding` but
+    /// `identity`. No decoder is compiled in.
+    pub fn is_identity(&self) -> bool {
+        self.inner
+            .headers()
+            .get_all("content-encoding")
+            .iter()
+            .all(|value| {
+                value
+                    .to_str()
+                    .is_ok_and(|v| v.trim().eq_ignore_ascii_case("identity"))
+            })
     }
-    let mime = content_type
-        .split(';')
-        .next()
-        .unwrap_or("")
-        .trim()
-        .to_ascii_lowercase();
-    if !mime.is_empty() && !mime.contains("html") {
-        return with_response(
-            Line::new(raw, Outcome::Skipped).with_reason(format!("not HTML ({mime})")),
-        );
+
+    /// At most `cap` bytes of the body, and no more than the chunk that ends
+    /// the head when `stop_at_head`. Fails with a short reason.
+    pub fn read(&mut self, cap: usize, stop_at_head: bool) -> Result<Vec<u8>, String> {
+        read_head(self.inner.body_mut().as_reader(), cap, stop_at_head)
+            .map_err(|err| io_reason(&err))
     }
-    if response
-        .headers()
-        .get_all("content-encoding")
-        .iter()
-        .any(|value| {
-            !value
-                .to_str()
-                .is_ok_and(|v| v.trim().eq_ignore_ascii_case("identity"))
-        })
-    {
-        return with_response(
-            Line::new(raw, Outcome::Error).with_reason("unsupported content encoding"),
-        );
-    }
-    let repo = github::is_repo_page(url);
-    let cap = HEAD_CAP;
-    let bytes = match read_head(response.body_mut().as_reader(), cap, !repo) {
-        Ok(bytes) => bytes,
-        Err(err) => {
-            return with_response(Line::new(raw, Outcome::Error).with_reason(io_reason(&err)));
-        }
-    };
-    let text = match head::decode(&bytes, head::charset_param(&content_type).as_deref()) {
-        Ok(text) => text,
-        Err(label) => {
-            return with_response(
-                Line::new(raw, Outcome::Error).with_reason(format!("unsupported charset {label}")),
-            );
-        }
-    };
-    if text.len() > HEAD_CAP {
-        return with_response(
-            Line::new(raw, Outcome::Error).with_reason("decoded head exceeds 3 MB"),
-        );
-    }
-    let found = head::scan(&text);
-    if is_sign_in_page(&found) {
-        let mut record =
-            with_response(Line::new(raw, Outcome::BehindLogin).with_reason("sign-in page"));
-        record.title.clone_from(&found.title);
-        return record;
-    }
-    let mut record = with_response(Line::new(raw, Outcome::Ok));
-    fill(&mut record, &found, url);
-    if repo {
-        record.github = github::repo_data(&text);
-    }
-    let empty = record.title.is_none()
-        && record.description.is_none()
-        && record.og.is_empty()
-        && record.twitter.is_empty()
-        && record.github.is_none();
-    if empty && bytes.len() >= cap {
-        return with_response(
-            Line::new(raw, Outcome::Error).with_reason("no </head> in the first 3 MB"),
-        );
-    }
-    record
 }
 
 /// Reads until the head ends (when `stop_at_head`), the cap, or the end.
@@ -279,113 +245,21 @@ fn read_head(mut body: impl Read, cap: usize, stop_at_head: bool) -> io::Result<
     Ok(bytes)
 }
 
-fn fill(record: &mut Line, found: &Head, url: &Url) {
-    let cap = |value: &str| value.chars().take(VALUE_CAP).collect::<String>();
-    record.title = found.title.as_deref().map(cap);
-    record.description = found.meta("description").map(|d| cap(&head::collapse(d)));
-    record.lang.clone_from(&found.lang);
-    record.canonical = found
-        .canonical
-        .as_deref()
-        .and_then(|href| url.join(href).ok())
-        .map(|canonical| canonical.to_string());
-    for (key, value) in &found.meta {
-        let (map, name) = if let Some(name) = key.strip_prefix("og:") {
-            (&mut record.og, name)
-        } else if let Some(name) = key.strip_prefix("twitter:") {
-            (&mut record.twitter, name)
-        } else {
-            continue;
-        };
-        if !name.is_empty() && map.len() < 32 {
-            map.entry(name.to_owned())
-                .or_insert_with(|| cap(&head::collapse(value)));
-        }
-    }
-    record.jsonld_types = jsonld_types(&found.jsonld);
-}
-
-/// Every `@type` in the page's JSON-LD, `@graph` and nesting included, in
-/// the order met and without the schema.org prefix.
-fn jsonld_types(blocks: &[String]) -> Vec<String> {
-    fn walk(value: &serde_json::Value, found: &mut Vec<String>) {
-        match value {
-            serde_json::Value::Object(map) => {
-                let types = match map.get("@type") {
-                    Some(serde_json::Value::Array(items)) => items.iter().collect(),
-                    Some(one) => vec![one],
-                    None => Vec::new(),
-                };
-                for name in types.into_iter().filter_map(serde_json::Value::as_str) {
-                    let name = ["https://schema.org/", "http://schema.org/"]
-                        .iter()
-                        .fold(name.trim(), |n, prefix| n.strip_prefix(prefix).unwrap_or(n));
-                    if !name.is_empty() && found.len() < 16 && !found.iter().any(|f| f == name) {
-                        found.push(name.to_owned());
-                    }
-                }
-                map.values().for_each(|v| walk(v, found));
-            }
-            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, found)),
-            _ => {}
-        }
-    }
-    let mut found = Vec::new();
-    for block in blocks {
-        // Some pages wrap the JSON in an HTML comment or CDATA.
-        let text = block
-            .trim()
-            .trim_start_matches("<!--")
-            .trim_end_matches("-->")
-            .trim_start_matches("//<![CDATA[")
-            .trim_end_matches("//]]>");
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
-            walk(&value, &mut found);
-        }
-    }
-    found
-}
-
-/// A page that is only a sign-in form: a title that says so and nothing
-/// that describes the page itself.
-fn is_sign_in_page(found: &Head) -> bool {
-    let Some(title) = &found.title else {
-        return false;
-    };
-    let title = title.to_lowercase();
-    let says_sign_in = ["sign in", "signin", "sign-in", "log in", "login", "log-in"]
-        .iter()
-        .any(|phrase| has_word(&title, phrase));
-    says_sign_in && found.meta("description").is_none() && found.meta("og:description").is_none()
-}
-
-fn has_word(text: &str, phrase: &str) -> bool {
-    text.match_indices(phrase).any(|(at, _)| {
-        let before = text[..at].chars().next_back();
-        let after = text[at + phrase.len()..].chars().next();
-        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
-    })
-}
-
-fn failure(raw: &str, err: &ureq::Error) -> Line {
-    let (status, reason) = match err {
+fn refusal(err: &ureq::Error) -> Refusal {
+    match err {
         ureq::Error::Io(io)
             if io
                 .get_ref()
                 .is_some_and(<dyn std::error::Error + Send + Sync>::is::<PrivateAddress>) =>
         {
-            (Outcome::Skipped, "private network address".to_owned())
+            Refusal::PrivateAddress
         }
-        ureq::Error::Timeout(_) => (Outcome::Error, "timeout".to_owned()),
-        ureq::Error::HostNotFound => (Outcome::Error, "host not found".to_owned()),
-        ureq::Error::ConnectionFailed => (Outcome::Error, "connection failed".to_owned()),
-        ureq::Error::Io(io) => (Outcome::Error, io_reason(io)),
-        other => (
-            Outcome::Error,
-            other.to_string().chars().take(160).collect(),
-        ),
-    };
-    Line::new(raw, status).with_reason(reason)
+        ureq::Error::Timeout(_) => Refusal::Failed("timeout".to_owned()),
+        ureq::Error::HostNotFound => Refusal::Failed("host not found".to_owned()),
+        ureq::Error::ConnectionFailed => Refusal::Failed("connection failed".to_owned()),
+        ureq::Error::Io(io) => Refusal::Failed(io_reason(io)),
+        other => Refusal::Failed(other.to_string().chars().take(160).collect()),
+    }
 }
 
 fn io_reason(err: &io::Error) -> String {
@@ -406,239 +280,6 @@ fn io_reason(err: &io::Error) -> String {
             }
         }
     }
-}
-
-pub fn is_web(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https") && url.host().is_some()
-}
-
-/// This machine or the private network, judged from the URL alone: an
-/// address literal outside public space, a name that only means something
-/// on a local network, or a bare name that a search domain would complete.
-pub fn is_private_host(url: &Url) -> bool {
-    match url.host() {
-        None => true,
-        Some(Host::Ipv4(ip)) => !is_public(IpAddr::V4(ip)),
-        Some(Host::Ipv6(ip)) => !is_public(IpAddr::V6(ip)),
-        Some(host @ Host::Domain(name)) => {
-            let name = name.trim_end_matches('.').to_ascii_lowercase();
-            local::is_this_machine(&host)
-                || !name.contains('.')
-                || [
-                    ".local",
-                    ".localdomain",
-                    ".internal",
-                    ".intranet",
-                    ".lan",
-                    ".home",
-                    ".home.arpa",
-                    ".corp",
-                ]
-                .iter()
-                .any(|suffix| name.ends_with(suffix))
-        }
-    }
-}
-
-/// Globally routable. Everything else is this machine, the private network
-/// or a range nothing public lives in.
-pub fn is_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, c, _] = v4.octets();
-            !(v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_multicast()
-                || v4.is_documentation()
-                || a == 0
-                || a >= 240
-                || (a == 100 && (64..128).contains(&b))
-                || (a == 192 && b == 0 && c == 0)
-                || (a == 198 && (b == 18 || b == 19)))
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public(IpAddr::V4(v4));
-            }
-            let [first, second, ..] = v6.segments();
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                // Only native global unicast; exclude local, reserved and
-                // transition ranges that can embed a private IPv4 target.
-                || (first & 0xe000) != 0x2000
-                || first == 0x2002
-                || (first == 0x2001 && second == 0)
-                || (first == 0x2001 && second == 0x0db8)
-                || (first == 0x0064 && second == 0xff9b))
-        }
-    }
-}
-
-/// A results page says nothing the query in its URL does not.
-pub fn is_search_results(url: &Url) -> bool {
-    let host = url
-        .host_str()
-        .unwrap_or("")
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    let host = host.strip_prefix("www.").unwrap_or(&host);
-    let path = decoded_path(url).to_ascii_lowercase();
-    let has = |key: &str| url.query_pairs().any(|(k, v)| k == key && !v.is_empty());
-    let engine = |name: &str| {
-        host == name || host.starts_with(&format!("{name}.")) || host.ends_with(&format!(".{name}"))
-    };
-    if engine("google") && ["/search", "/url", "/imgres", "/webhp"].contains(&path.as_str()) {
-        return true;
-    }
-    if (engine("duckduckgo")
-        && (has("q") || path.starts_with("/html") || path.starts_with("/lite")))
-        || (engine("baidu") && path == "/s")
-        || (engine("amazon") && path == "/s")
-    {
-        return true;
-    }
-    // Most sites put their own search at `/search` or `/results` with the
-    // query in a parameter: Bing, Kagi, Brave, GitHub, YouTube, Reddit ...
-    path.split('/')
-        .any(|segment| matches!(segment.to_ascii_lowercase().as_str(), "search" | "results"))
-        && url.query().is_some_and(|q| !q.is_empty())
-}
-
-/// Query parameter names that carry a secret or a one-time value. A GET can
-/// spend a one-time link, and the value is nobody else's business anyway.
-const TOKEN_WORDS: &[&str] = &[
-    "token",
-    "code",
-    "key",
-    "apikey",
-    "accesskey",
-    "authcode",
-    "authorizationcode",
-    "sessionkey",
-    "resetkey",
-    "secret",
-    "sig",
-    "signature",
-    "auth",
-    "session",
-    "sessionid",
-    "sid",
-    "otp",
-    "reset",
-    "verify",
-    "verification",
-    "confirm",
-    "confirmation",
-    "magic",
-    "nonce",
-    "state",
-    "password",
-    "pwd",
-    "ticket",
-    "jwt",
-    "credential",
-    "credentials",
-];
-
-/// A query parameter whose name says it carries a secret, whose value is a
-/// JSON Web Token, or credentials in the URL itself.
-pub fn carries_token(url: &Url) -> bool {
-    if !url.username().is_empty() || url.password().is_some() {
-        return true;
-    }
-    url.query_pairs().any(|(key, value)| {
-        let key = key.to_ascii_lowercase();
-        let words_match = key
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|word| TOKEN_WORDS.contains(&word));
-        words_match
-            || ["token", "secret", "password", "signature"]
-                .iter()
-                .any(|word| key.contains(word))
-            || (value.starts_with("eyJ") && value.len() > 30)
-    })
-}
-
-/// Path segments that name a sign-in, sign-up or verification screen on
-/// their own. A GET of a verification link can spend it, so these pages are
-/// never fetched.
-const LOGIN_SEGMENTS: &[&str] = &[
-    "login",
-    "log-in",
-    "log_in",
-    "logon",
-    "signin",
-    "sign-in",
-    "sign_in",
-    "signup",
-    "sign-up",
-    "sign_up",
-    "register",
-    "sso",
-    "saml",
-    "oauth",
-    "oauth2",
-    "authorize",
-    "verify",
-    "verify-email",
-    "verify_email",
-    "verification",
-    "confirm",
-    "confirmation",
-    "activate",
-    "activation",
-    "reset",
-    "confirm-email",
-    "confirm_email",
-    "reset-password",
-    "reset_password",
-    "password-reset",
-    "password_reset",
-    "forgot-password",
-    "forgot_password",
-    "magic-link",
-    "magic_link",
-    "2fa",
-    "mfa",
-    "otp",
-    "servicelogin",
-];
-/// Weaker words that mean a login when a page redirects to them.
-const REDIRECT_LOGIN_SEGMENTS: &[&str] = &["auth", "account", "accounts", "session", "sessions"];
-const LOGIN_HOST_LABELS: &[&str] = &["login", "signin", "accounts", "auth", "sso", "idp"];
-
-/// A sign-in, sign-up or verification screen in its own right.
-pub fn is_login_page(url: &Url) -> bool {
-    login_shaped(url, LOGIN_SEGMENTS)
-}
-
-fn is_login_redirect(url: &Url) -> bool {
-    login_shaped(url, LOGIN_SEGMENTS) || login_shaped(url, REDIRECT_LOGIN_SEGMENTS)
-}
-
-fn decoded_path(url: &Url) -> std::borrow::Cow<'_, str> {
-    percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy()
-}
-
-fn login_shaped(url: &Url, words: &[&str]) -> bool {
-    let host = url
-        .host_str()
-        .unwrap_or("")
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    let first_label = host.split('.').next().unwrap_or("");
-    if host.contains('.') && LOGIN_HOST_LABELS.contains(&first_label) {
-        return true;
-    }
-    decoded_path(url).split('/').any(|segment| {
-        let segment = segment.to_ascii_lowercase();
-        let stem = segment.split('.').next().unwrap_or("");
-        words.contains(&stem)
-    })
 }
 
 /// Spaces requests to each host. Every request, redirect hops included,
@@ -746,125 +387,17 @@ fn test_timeout() -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
-    use std::net::{Ipv4Addr, Ipv6Addr, TcpListener};
+    use std::net::TcpListener;
     use std::sync::Arc;
 
     use super::*;
+    use crate::metadata_fetch::HEAD_CAP;
 
     #[cfg(not(debug_assertions))]
     #[test]
     fn release_hooks_are_absent() {
         assert_eq!(test_address(), None);
         assert_eq!(test_timeout(), None);
-    }
-
-    fn url(raw: &str) -> Url {
-        Url::parse(raw).unwrap()
-    }
-
-    #[test]
-    fn private_hosts_are_known_from_the_url() {
-        for raw in [
-            "http://192.168.1.1/",
-            "http://10.0.0.8:8080/",
-            "http://172.16.4.4/",
-            "http://100.64.0.1/",
-            "http://169.254.169.254/latest/meta-data",
-            "http://127.0.0.1/",
-            "http://0.0.0.0/",
-            "http://[::1]/",
-            "http://[fd00::1]/",
-            "http://[fec0::1]/",
-            "http://[feff::1]/",
-            "http://[2001::7f00:1]/",
-            "http://[::127.0.0.1]/",
-            "http://[2002:7f00:1::]/",
-            "http://0.1.2.3/",
-            "http://2130706433/",
-            "http://0177.0.0.1/",
-            "http://127.0.0.1./",
-            "http://224.0.0.1/",
-            "http://255.255.255.255/",
-            "http://[ff02::1]/",
-            "http://[::ffff:169.254.169.254]/",
-            "http://[fe80::1]/",
-            "http://[::ffff:192.168.0.1]/",
-            "http://0x7f.1/",
-            "http://printer.local/",
-            "http://nas.home.arpa/",
-            "http://build.internal/",
-            "http://intranet/",
-            "http://app.localhost/",
-        ] {
-            assert!(is_private_host(&url(raw)), "{raw}");
-        }
-        for raw in [
-            "https://example.com/",
-            "http://8.8.8.8/",
-            "http://[2606:4700::1111]/",
-            "https://local.example.com/",
-            "https://localhost.example.test/",
-        ] {
-            assert!(!is_private_host(&url(raw)), "{raw}");
-        }
-        assert!(is_public(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
-        assert!(!is_public(IpAddr::V6(Ipv6Addr::LOCALHOST)));
-    }
-
-    #[test]
-    fn login_screens_are_known_by_their_own_url_and_redirects_by_more() {
-        for raw in [
-            "https://example.com/login",
-            "https://example.com/users/sign_in",
-            "https://example.com/accounts/login/?next=/x",
-            "https://example.com/login.php",
-            "https://example.com/oauth/authorize?client_id=x",
-            "https://example.com/verify-email/abc",
-            "https://accounts.example.com/ServiceLogin",
-            "https://login.example.com/",
-        ] {
-            assert!(is_login_page(&url(raw)), "{raw}");
-        }
-        for raw in [
-            "https://example.com/blog/how-login-works",
-            "https://github.com/owner/auth",
-            "https://example.com/account",
-            "https://login/",
-        ] {
-            assert!(!is_login_page(&url(raw)), "{raw}");
-        }
-        assert!(is_login_redirect(&url(
-            "https://example.com/account?return=/"
-        )));
-        assert!(is_login_redirect(&url("https://example.com/auth/start")));
-        assert!(!is_login_redirect(&url("https://example.com/docs/")));
-    }
-
-    #[test]
-    fn a_sign_in_title_without_a_description_is_a_sign_in_page() {
-        let page = |html: &str| is_sign_in_page(&head::scan(html));
-        assert!(page("<title>Sign in - Example</title>"));
-        assert!(page("<title>Login | App</title>"));
-        assert!(!page(
-            "<title>Sign in</title><meta name=description content=\"A real page\">"
-        ));
-        assert!(!page(
-            "<title>Why login forms fail</title><meta property=og:description content=x>"
-        ));
-        assert!(!page("<title>Blogin' about loginess</title>"));
-    }
-
-    #[test]
-    fn json_ld_types_are_collected_through_graphs_and_arrays() {
-        let blocks = vec![
-            r#"{"@context":"https://schema.org","@graph":[{"@type":"WebPage"},{"@type":["Article","https://schema.org/NewsArticle"],"author":{"@type":"Person"}}]}"#.to_owned(),
-            "<!--{\"@type\":\"WebPage\"}-->".to_owned(),
-            "not json".to_owned(),
-        ];
-        assert_eq!(
-            jsonld_types(&blocks),
-            ["WebPage", "Article", "NewsArticle", "Person"]
-        );
     }
 
     #[test]
@@ -962,12 +495,35 @@ mod tests {
     }
 
     #[test]
+    fn the_caller_chooses_the_accept_header() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut accept = Vec::new();
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("accept:") {
+                    accept.push(value.trim().to_owned());
+                }
+                line.clear();
+            }
+            let _ = stream.write_all(b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\n\r\n");
+            accept
+        });
+        let fetcher = Fetcher::with(Duration::from_secs(5), Some(address), PACE);
+        let response = fetcher.get("http://json.test/", "application/json").ok();
+        assert_eq!(response.map(|r| r.status), Some(204));
+        assert_eq!(server.join().unwrap(), ["application/json"]);
+    }
+
+    #[test]
     fn a_server_that_never_answers_is_a_timeout() {
         let fetcher = Fetcher::with(Duration::from_millis(300), Some(silent_server()), PACE);
         let start = Instant::now();
-        let record = fetcher.fetch("http://slow.test/");
-        assert_eq!(record.status, Outcome::Error);
-        assert_eq!(record.reason.as_deref(), Some("timeout"));
+        let refusal = fetcher.get("http://slow.test/", ACCEPT_HTML).err();
+        assert_eq!(refusal, Some(Refusal::Failed("timeout".to_owned())));
         assert!(start.elapsed() < Duration::from_secs(5));
     }
 
@@ -988,11 +544,10 @@ mod tests {
             std::thread::sleep(Duration::from_secs(3));
         });
         let fetcher = Fetcher::with(Duration::from_millis(400), Some(address), PACE);
-        let record = fetcher.fetch("http://stall.test/");
-        assert_eq!(
-            (record.status, record.reason.as_deref()),
-            (Outcome::Error, Some("timeout"))
-        );
+        let Ok(mut response) = fetcher.get("http://stall.test/", ACCEPT_HTML) else {
+            panic!("the head of the response arrived");
+        };
+        assert_eq!(response.read(HEAD_CAP, true), Err("timeout".to_owned()));
     }
 
     #[test]
@@ -1011,10 +566,10 @@ mod tests {
                 },
             )
             .unwrap_err();
-        assert_eq!(failure("http://x.test/", &err).status, Outcome::Skipped);
+        assert_eq!(refusal(&err), Refusal::PrivateAddress);
         assert_eq!(
-            fetcher.fetch("http://localhost:9/").reason.as_deref(),
-            Some("private network")
+            fetcher.get("http://localhost:9/", ACCEPT_HTML).err(),
+            Some(Refusal::PrivateNetwork { redirected: false })
         );
     }
 }

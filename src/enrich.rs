@@ -1,15 +1,14 @@
 //! `knowmoretabs enrich`: what to fetch, in what order, and the report.
 //!
 //! slice: enrich
-//! why: Enrich is the one command that sends anything anywhere, so the
-//!      decision of what never leaves is made once, before any request, and
-//!      can be read in full with `--dry-run`: forgotten pages, the private
-//!      network, search results and URLs that carry a token stay home.
-//!      Hosts run in parallel on a few workers while each host sees one
-//!      request a second, and every result is appended as it arrives so an
-//!      interrupted run keeps what it already fetched.
+//! why: Enrich sends the URLs you visited to their own sites, so it plans
+//!      from the shared `targets` rules before any request and says in full
+//!      with `--dry-run` what it would send and what stays home. Hosts run
+//!      in parallel on a few workers while each host sees one request a
+//!      second, and every result is appended as it arrives so an interrupted
+//!      run keeps what it already fetched.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -17,174 +16,24 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
 use serde::Serialize;
-use url::Url;
 
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
-use crate::fetch::{self, Fetcher, carries_token, is_search_results};
+use crate::fetch::Fetcher;
+use crate::jsonl::Appender;
 use crate::library::{self, State};
-use crate::metadata::{self, Metadata};
-use crate::metadata_writer::{Appender, Line, Outcome};
-use crate::model::Snapshot;
+use crate::metadata;
+use crate::metadata_fetch;
+use crate::metadata_writer::{Line, Outcome};
 use crate::out;
+use crate::targets::{self, Item, Options, Plan, Why};
 use crate::triage::plural;
 
 /// Hosts fetched at once. Each host still gets one request a second.
 const WORKERS: usize = 8;
 /// A progress line every this many pages, on stderr.
 const PROGRESS_EVERY: usize = 25;
-
-#[derive(Debug, Clone, Copy, Default)]
-pub struct Options {
-    pub dry_run: bool,
-    pub limit: Option<usize>,
-    pub refetch: bool,
-}
-
-/// Why a library page is not fetched at all.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-enum Skip {
-    NotWeb,
-    Forgotten,
-    PrivateNetwork,
-    SearchResults,
-    Token,
-}
-
-impl Skip {
-    fn label(self) -> &'static str {
-        match self {
-            Self::NotWeb => "not a web page",
-            Self::Forgotten => "forgotten",
-            Self::PrivateNetwork => "private network",
-            Self::SearchResults => "search results",
-            Self::Token => "token in URL",
-        }
-    }
-}
-
-/// Why a page is on the list.
-#[derive(Debug, Clone, PartialEq, Eq)]
-enum Why {
-    New,
-    Refetch,
-    /// A sign-in, sign-up or verification screen: recorded, never fetched.
-    Login,
-}
-
-impl Why {
-    fn label(&self) -> String {
-        match self {
-            Self::New => "new".to_owned(),
-            Self::Refetch => "refetch".to_owned(),
-            Self::Login => "login page: recorded as behind_login, not fetched".to_owned(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct Item {
-    url: String,
-    host: String,
-    why: Why,
-}
-
-#[derive(Debug, Default)]
-struct Plan {
-    todo: Vec<Item>,
-    /// On the list but past `--limit`.
-    more: usize,
-    not_fetched: Vec<(String, Skip)>,
-    already_fetched: usize,
-}
-
-impl Plan {
-    fn sites(&self) -> usize {
-        self.todo
-            .iter()
-            .filter(|item| item.why != Why::Login)
-            .map(|item| item.host.as_str())
-            .collect::<HashSet<_>>()
-            .len()
-    }
-
-    /// A lower bound: the busiest host's pages, one a second.
-    fn seconds_at_least(&self) -> usize {
-        let mut per_host: HashMap<&str, usize> = HashMap::new();
-        for item in self.todo.iter().filter(|item| item.why != Why::Login) {
-            *per_host.entry(&item.host).or_default() += 1;
-        }
-        per_host.values().max().map_or(0, |n| n.saturating_sub(1))
-    }
-
-    fn skip_counts(&self) -> BTreeMap<Skip, usize> {
-        let mut counts = BTreeMap::new();
-        for (_, skip) in &self.not_fetched {
-            *counts.entry(*skip).or_default() += 1;
-        }
-        counts
-    }
-}
-
-/// Library pages newest sighting first, excluding prior attempts unless
-/// the owner explicitly asks to fetch them again.
-fn plan(snapshots: &[Snapshot], state: &State, known: &Metadata, options: Options) -> Plan {
-    let library = library::known_urls(snapshots);
-    let mut seen = HashSet::new();
-    let mut plan = Plan::default();
-    let tabs = snapshots.iter().rev().flat_map(|s| s.tabs.iter());
-    for tab in tabs {
-        let raw = tab.url.as_str();
-        if !library.contains(raw) || !seen.insert(raw) {
-            continue;
-        }
-        let parsed = Url::parse(raw).ok().filter(fetch::is_web);
-        let skip = match &parsed {
-            None => Some(Skip::NotWeb),
-            Some(_) if state.forgotten.contains(raw) => Some(Skip::Forgotten),
-            Some(url) => skip_reason(url),
-        };
-        if let Some(skip) = skip {
-            plan.not_fetched.push((raw.to_owned(), skip));
-            continue;
-        }
-        let Some(url) = parsed else { continue };
-        let why = match known.pages.get(raw) {
-            Some(_) if !options.refetch => {
-                plan.already_fetched += 1;
-                continue;
-            }
-            _ if fetch::is_login_page(&url) => Why::Login,
-            Some(_) => Why::Refetch,
-            None => Why::New,
-        };
-        let item = Item {
-            url: raw.to_owned(),
-            host: url.host_str().unwrap_or("").to_ascii_lowercase(),
-            why,
-        };
-        plan.todo.push(item);
-    }
-    if let Some(limit) = options.limit {
-        plan.more = plan.todo.len().saturating_sub(limit);
-        plan.todo.truncate(limit);
-    }
-    plan
-}
-
-/// The rules for a web page on a public-looking host.
-fn skip_reason(url: &Url) -> Option<Skip> {
-    if fetch::is_private_host(url) {
-        Some(Skip::PrivateNetwork)
-    } else if is_search_results(url) {
-        Some(Skip::SearchResults)
-    } else if carries_token(url) {
-        Some(Skip::Token)
-    } else {
-        None
-    }
-}
 
 /// What a run did.
 #[derive(Debug, Default, Serialize)]
@@ -222,7 +71,12 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
             if known.unreadable == 1 { "was" } else { "were" }
         ));
     }
-    let plan = plan(&loaded.snapshots, &state, &known, options);
+    let plan = targets::plan(
+        &loaded.snapshots,
+        &state,
+        |url| known.pages.contains_key(url),
+        options,
+    );
     if options.dry_run {
         report_dry_run(&plan, options, json, log);
         return Ok(());
@@ -242,7 +96,7 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
 /// in order on one of the workers, busiest hosts first so the longest queue
 /// starts earliest.
 fn run(root: &Path, plan: &Plan, state: &State, log: Log) -> Result<Tally, Error> {
-    let appender = Mutex::new(Appender::open(root)?);
+    let appender = Mutex::new(Appender::open(root, metadata::path(root))?);
     let tally = Mutex::new(Tally::default());
     let record = |record: &Line| -> Result<(), Error> {
         appender
@@ -300,7 +154,7 @@ fn run(root: &Path, plan: &Plan, state: &State, log: Log) -> Result<Tally, Error
                         if stop.load(Ordering::Relaxed) {
                             return;
                         }
-                        if let Err(err) = record(&fetcher.fetch(&item.url)) {
+                        if let Err(err) = record(&metadata_fetch::fetch(&fetcher, &item.url)) {
                             stop.store(true, Ordering::Relaxed);
                             failed
                                 .lock()
@@ -479,63 +333,6 @@ fn breakdown(counts: &BTreeMap<String, usize>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn url(raw: &str) -> Url {
-        Url::parse(raw).unwrap()
-    }
-
-    #[test]
-    fn search_results_pages_are_known_by_engine_and_by_shape() {
-        for raw in [
-            "https://www.google.com/search?q=rust",
-            "https://www.google.co.uk/search?q=rust&tbm=isch",
-            "https://www.google.com/url?q=https://example.com",
-            "https://duckduckgo.com/?q=rust",
-            "https://www.bing.com/search?q=rust",
-            "https://kagi.com/search?q=rust",
-            "https://search.brave.com/search?q=rust",
-            "https://github.com/search?q=parser&type=repositories",
-            "https://www.youtube.com/results?search_query=rust",
-            "https://www.baidu.com/s?wd=rust",
-            "https://www.amazon.co.uk/s?k=kettle",
-        ] {
-            assert!(is_search_results(&url(raw)), "{raw}");
-        }
-        for raw in [
-            "https://www.google.com/maps/place/x",
-            "https://duckduckgo.com/about",
-            "https://example.com/search",
-            "https://example.com/research?q=x",
-            "https://example.com/blog/how-search-works",
-        ] {
-            assert!(!is_search_results(&url(raw)), "{raw}");
-        }
-    }
-
-    #[test]
-    fn token_parameters_are_known_by_name_value_and_credentials() {
-        for raw in [
-            "https://example.com/a?token=abc",
-            "https://example.com/a?access_token=abc",
-            "https://example.com/a?X-Amz-Signature=abc",
-            "https://example.com/cb?code=abc&state=xyz",
-            "https://example.com/a?resetPasswordToken=1",
-            "https://example.com/a?api-key=1",
-            "https://example.com/a?t=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig",
-            "https://user:pass@example.com/",
-        ] {
-            assert!(carries_token(&url(raw)), "{raw}");
-        }
-        for raw in [
-            "https://example.com/a?author=bob",
-            "https://example.com/a?keywords=rust&monkey=1",
-            "https://example.com/a?page=2&sort=new",
-            "https://example.com/a?estate=house&design=x",
-            "https://example.com/zip?postcode=AB1",
-        ] {
-            assert!(!carries_token(&url(raw)), "{raw}");
-        }
-    }
 
     #[test]
     fn breakdowns_put_the_common_reason_first() {

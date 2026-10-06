@@ -193,14 +193,20 @@ output of two different agents.
    the owner controls".
 2. **Non-goals:** "No full-text indexing of page contents" stays. 7b stores
    `<head>` metadata and a README excerpt, not page bodies. `fulltext` stays in
-   the future band.
+   the future band. *Superseded 2026-10-06 by the planned `content` slice:*
+   the non-goal now reads "No page text unless you ask for it: content
+   capture, planned, is opt in, and keyword search over what it stores comes
+   later", and `fulltext` is keyword retrieval prepared by `content`.
 3. **README, "Nothing leaves your machine"** stays true for knowmoretabs:
    `save`, `serve` and `tag` send nothing. Add "unless you run `enrich`, which
    fetches the `<head>` of pages you already visited". Say plainly that a
    `tag --prompt` folder holds page text, and that where it goes is the owner's choice.
 4. **Principle 6 ("One binary, no runtime")** holds. Only 7b needs an HTTP
    client with TLS in the binary (e.g. `ureq` with `rustls`), a new
-   dependency. `tag` needs none.
+   dependency. `tag` needs none. *Amended 2026-10-06 for the planned `content`
+   slice:* content capture is opt in, sends visited URLs to their own sites
+   and to the X post API, uses optional local tools (yt-dlp, gh, Chrome), and
+   stores page text privately. The binary still needs nothing else to run.
 
 ## 8. Decisions for the owner
 

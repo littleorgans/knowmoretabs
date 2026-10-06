@@ -22,6 +22,7 @@
 | `tag-pages` | Tag pages my way, and narrow the library by combining tags | 7 `tags` |
 | `how-i-found-it` | See how I found a page and how much I used it | 7 `history` |
 | `what-a-page-is` | Know what a page is about without opening it | 7 `enrich` |
+| `keep-page-text` | Keep what a page says, not just what it is called | 8 `content` |
 
 ## Build order
 
@@ -165,6 +166,26 @@ decision of what never leaves is made before any request: forgotten pages,
 this machine and the private network, search results and URLs that carry a
 token stay home.
 
+### 8. Content: what pages say (`content`) — planned
+
+- Delivers: keep-page-text
+- Depends on: library, enrich
+
+**Ships.** `knowmoretabs content` captures the main text of library pages as markdown,
+one file per page under `pages/content/`, with one line per attempt in
+`pages/content.jsonl`. Each page takes the cheapest route that works: the
+public X post API for posts, `gh` for GitHub, yt-dlp captions for videos,
+plain HTTP for the rest, and a local headless Chrome for pages that need a
+browser to show their text. `--dry-run`, `--limit` and `--refetch` keep
+`enrich`'s meaning, and `doctor` says which optional tools are ready.
+
+**Intent.** Opt in, because it sends the URLs you visited to their own sites and to the X
+post API, uses optional local tools (yt-dlp, gh, Chrome), and stores page text
+privately. It follows `enrich`'s rules for what never leaves the machine,
+through the same guard, fetcher, planner and log writer, rather than a second
+copy of them. Capture only: the markdown files are the store, and keyword
+retrieval over them is the `fulltext` entry, not this slice.
+
 ## Prepared for, deliberately not built
 
 ### `live-tabs` — See my live tabs exactly, not the last session written to disk
@@ -202,11 +223,12 @@ to record was known; notes earn their place the same way, rather than guessed.
 
 ### `fulltext` — Search what was on the page, not just its title
 
-- Prepared by: —
+- Prepared by: content
 
-Means fetching and storing page bodies: network traffic, a much larger archive,
-and a privacy story that changes completely. Titles and URLs answer most
-searches. This is a different product until proven otherwise.
+Keyword retrieval over the page text `content` stores. It waits for that store
+to exist and fill, and for a measured query to say what the index should be:
+built in memory from the markdown first, a rebuildable SQLite index if that is
+slow, as `scale-index` says. The files stay the source of truth either way.
 
 ### `scale-index` — Stay instant with years of snapshots
 
