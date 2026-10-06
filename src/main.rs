@@ -19,6 +19,7 @@ mod error;
 mod export;
 mod fetch;
 mod github;
+mod guard;
 mod head;
 mod history;
 mod library;

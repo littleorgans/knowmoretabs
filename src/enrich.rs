@@ -22,7 +22,8 @@ use url::Url;
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
-use crate::fetch::{self, Fetcher, carries_token, is_search_results};
+use crate::fetch::Fetcher;
+use crate::guard::{self, carries_token, is_search_results};
 use crate::library::{self, State};
 use crate::metadata::{self, Metadata};
 use crate::metadata_writer::{Appender, Line, Outcome};
@@ -139,7 +140,7 @@ fn plan(snapshots: &[Snapshot], state: &State, known: &Metadata, options: Option
         if !library.contains(raw) || !seen.insert(raw) {
             continue;
         }
-        let parsed = Url::parse(raw).ok().filter(fetch::is_web);
+        let parsed = Url::parse(raw).ok().filter(guard::is_web);
         let skip = match &parsed {
             None => Some(Skip::NotWeb),
             Some(_) if state.forgotten.contains(raw) => Some(Skip::Forgotten),
@@ -155,7 +156,7 @@ fn plan(snapshots: &[Snapshot], state: &State, known: &Metadata, options: Option
                 plan.already_fetched += 1;
                 continue;
             }
-            _ if fetch::is_login_page(&url) => Why::Login,
+            _ if guard::is_login_page(&url) => Why::Login,
             Some(_) => Why::Refetch,
             None => Why::New,
         };
@@ -175,7 +176,7 @@ fn plan(snapshots: &[Snapshot], state: &State, known: &Metadata, options: Option
 
 /// The rules for a web page on a public-looking host.
 fn skip_reason(url: &Url) -> Option<Skip> {
-    if fetch::is_private_host(url) {
+    if guard::is_private_host(url) {
         Some(Skip::PrivateNetwork)
     } else if is_search_results(url) {
         Some(Skip::SearchResults)
@@ -479,63 +480,6 @@ fn breakdown(counts: &BTreeMap<String, usize>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn url(raw: &str) -> Url {
-        Url::parse(raw).unwrap()
-    }
-
-    #[test]
-    fn search_results_pages_are_known_by_engine_and_by_shape() {
-        for raw in [
-            "https://www.google.com/search?q=rust",
-            "https://www.google.co.uk/search?q=rust&tbm=isch",
-            "https://www.google.com/url?q=https://example.com",
-            "https://duckduckgo.com/?q=rust",
-            "https://www.bing.com/search?q=rust",
-            "https://kagi.com/search?q=rust",
-            "https://search.brave.com/search?q=rust",
-            "https://github.com/search?q=parser&type=repositories",
-            "https://www.youtube.com/results?search_query=rust",
-            "https://www.baidu.com/s?wd=rust",
-            "https://www.amazon.co.uk/s?k=kettle",
-        ] {
-            assert!(is_search_results(&url(raw)), "{raw}");
-        }
-        for raw in [
-            "https://www.google.com/maps/place/x",
-            "https://duckduckgo.com/about",
-            "https://example.com/search",
-            "https://example.com/research?q=x",
-            "https://example.com/blog/how-search-works",
-        ] {
-            assert!(!is_search_results(&url(raw)), "{raw}");
-        }
-    }
-
-    #[test]
-    fn token_parameters_are_known_by_name_value_and_credentials() {
-        for raw in [
-            "https://example.com/a?token=abc",
-            "https://example.com/a?access_token=abc",
-            "https://example.com/a?X-Amz-Signature=abc",
-            "https://example.com/cb?code=abc&state=xyz",
-            "https://example.com/a?resetPasswordToken=1",
-            "https://example.com/a?api-key=1",
-            "https://example.com/a?t=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.sig",
-            "https://user:pass@example.com/",
-        ] {
-            assert!(carries_token(&url(raw)), "{raw}");
-        }
-        for raw in [
-            "https://example.com/a?author=bob",
-            "https://example.com/a?keywords=rust&monkey=1",
-            "https://example.com/a?page=2&sort=new",
-            "https://example.com/a?estate=house&design=x",
-            "https://example.com/zip?postcode=AB1",
-        ] {
-            assert!(!carries_token(&url(raw)), "{raw}");
-        }
-    }
 
     #[test]
     fn breakdowns_put_the_common_reason_first() {

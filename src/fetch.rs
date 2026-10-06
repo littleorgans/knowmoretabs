@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Read};
-use std::net::{IpAddr, SocketAddr};
+use std::net::SocketAddr;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -21,11 +21,14 @@ use ureq::config::Config;
 use ureq::http::Uri;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
-use url::{Host, Url};
+use url::Url;
 
 use crate::github;
+use crate::guard::{
+    self, carries_token, is_login_page, is_login_redirect, is_private_host, is_public,
+    is_search_results, is_web,
+};
 use crate::head::{self, Head};
-use crate::local;
 use crate::metadata_writer::{Line, Outcome};
 
 /// `YouTube`'s meta tags start about 0.7 MB into its pages.
@@ -120,13 +123,7 @@ impl Fetcher {
                 record.final_url = Some(url.to_string());
                 return record;
             }
-            if !self.pacer.wait(
-                &url.host_str()
-                    .unwrap_or("")
-                    .trim_end_matches('.')
-                    .to_ascii_lowercase(),
-                deadline,
-            ) {
+            if !self.pacer.wait(&guard::host_key(&url), deadline) {
                 return Line::new(raw, Outcome::Error).with_reason("timeout");
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -408,239 +405,6 @@ fn io_reason(err: &io::Error) -> String {
     }
 }
 
-pub fn is_web(url: &Url) -> bool {
-    matches!(url.scheme(), "http" | "https") && url.host().is_some()
-}
-
-/// This machine or the private network, judged from the URL alone: an
-/// address literal outside public space, a name that only means something
-/// on a local network, or a bare name that a search domain would complete.
-pub fn is_private_host(url: &Url) -> bool {
-    match url.host() {
-        None => true,
-        Some(Host::Ipv4(ip)) => !is_public(IpAddr::V4(ip)),
-        Some(Host::Ipv6(ip)) => !is_public(IpAddr::V6(ip)),
-        Some(host @ Host::Domain(name)) => {
-            let name = name.trim_end_matches('.').to_ascii_lowercase();
-            local::is_this_machine(&host)
-                || !name.contains('.')
-                || [
-                    ".local",
-                    ".localdomain",
-                    ".internal",
-                    ".intranet",
-                    ".lan",
-                    ".home",
-                    ".home.arpa",
-                    ".corp",
-                ]
-                .iter()
-                .any(|suffix| name.ends_with(suffix))
-        }
-    }
-}
-
-/// Globally routable. Everything else is this machine, the private network
-/// or a range nothing public lives in.
-pub fn is_public(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(v4) => {
-            let [a, b, c, _] = v4.octets();
-            !(v4.is_private()
-                || v4.is_loopback()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_multicast()
-                || v4.is_documentation()
-                || a == 0
-                || a >= 240
-                || (a == 100 && (64..128).contains(&b))
-                || (a == 192 && b == 0 && c == 0)
-                || (a == 198 && (b == 18 || b == 19)))
-        }
-        IpAddr::V6(v6) => {
-            if let Some(v4) = v6.to_ipv4_mapped() {
-                return is_public(IpAddr::V4(v4));
-            }
-            let [first, second, ..] = v6.segments();
-            !(v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                // Only native global unicast; exclude local, reserved and
-                // transition ranges that can embed a private IPv4 target.
-                || (first & 0xe000) != 0x2000
-                || first == 0x2002
-                || (first == 0x2001 && second == 0)
-                || (first == 0x2001 && second == 0x0db8)
-                || (first == 0x0064 && second == 0xff9b))
-        }
-    }
-}
-
-/// A results page says nothing the query in its URL does not.
-pub fn is_search_results(url: &Url) -> bool {
-    let host = url
-        .host_str()
-        .unwrap_or("")
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    let host = host.strip_prefix("www.").unwrap_or(&host);
-    let path = decoded_path(url).to_ascii_lowercase();
-    let has = |key: &str| url.query_pairs().any(|(k, v)| k == key && !v.is_empty());
-    let engine = |name: &str| {
-        host == name || host.starts_with(&format!("{name}.")) || host.ends_with(&format!(".{name}"))
-    };
-    if engine("google") && ["/search", "/url", "/imgres", "/webhp"].contains(&path.as_str()) {
-        return true;
-    }
-    if (engine("duckduckgo")
-        && (has("q") || path.starts_with("/html") || path.starts_with("/lite")))
-        || (engine("baidu") && path == "/s")
-        || (engine("amazon") && path == "/s")
-    {
-        return true;
-    }
-    // Most sites put their own search at `/search` or `/results` with the
-    // query in a parameter: Bing, Kagi, Brave, GitHub, YouTube, Reddit ...
-    path.split('/')
-        .any(|segment| matches!(segment.to_ascii_lowercase().as_str(), "search" | "results"))
-        && url.query().is_some_and(|q| !q.is_empty())
-}
-
-/// Query parameter names that carry a secret or a one-time value. A GET can
-/// spend a one-time link, and the value is nobody else's business anyway.
-const TOKEN_WORDS: &[&str] = &[
-    "token",
-    "code",
-    "key",
-    "apikey",
-    "accesskey",
-    "authcode",
-    "authorizationcode",
-    "sessionkey",
-    "resetkey",
-    "secret",
-    "sig",
-    "signature",
-    "auth",
-    "session",
-    "sessionid",
-    "sid",
-    "otp",
-    "reset",
-    "verify",
-    "verification",
-    "confirm",
-    "confirmation",
-    "magic",
-    "nonce",
-    "state",
-    "password",
-    "pwd",
-    "ticket",
-    "jwt",
-    "credential",
-    "credentials",
-];
-
-/// A query parameter whose name says it carries a secret, whose value is a
-/// JSON Web Token, or credentials in the URL itself.
-pub fn carries_token(url: &Url) -> bool {
-    if !url.username().is_empty() || url.password().is_some() {
-        return true;
-    }
-    url.query_pairs().any(|(key, value)| {
-        let key = key.to_ascii_lowercase();
-        let words_match = key
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|word| TOKEN_WORDS.contains(&word));
-        words_match
-            || ["token", "secret", "password", "signature"]
-                .iter()
-                .any(|word| key.contains(word))
-            || (value.starts_with("eyJ") && value.len() > 30)
-    })
-}
-
-/// Path segments that name a sign-in, sign-up or verification screen on
-/// their own. A GET of a verification link can spend it, so these pages are
-/// never fetched.
-const LOGIN_SEGMENTS: &[&str] = &[
-    "login",
-    "log-in",
-    "log_in",
-    "logon",
-    "signin",
-    "sign-in",
-    "sign_in",
-    "signup",
-    "sign-up",
-    "sign_up",
-    "register",
-    "sso",
-    "saml",
-    "oauth",
-    "oauth2",
-    "authorize",
-    "verify",
-    "verify-email",
-    "verify_email",
-    "verification",
-    "confirm",
-    "confirmation",
-    "activate",
-    "activation",
-    "reset",
-    "confirm-email",
-    "confirm_email",
-    "reset-password",
-    "reset_password",
-    "password-reset",
-    "password_reset",
-    "forgot-password",
-    "forgot_password",
-    "magic-link",
-    "magic_link",
-    "2fa",
-    "mfa",
-    "otp",
-    "servicelogin",
-];
-/// Weaker words that mean a login when a page redirects to them.
-const REDIRECT_LOGIN_SEGMENTS: &[&str] = &["auth", "account", "accounts", "session", "sessions"];
-const LOGIN_HOST_LABELS: &[&str] = &["login", "signin", "accounts", "auth", "sso", "idp"];
-
-/// A sign-in, sign-up or verification screen in its own right.
-pub fn is_login_page(url: &Url) -> bool {
-    login_shaped(url, LOGIN_SEGMENTS)
-}
-
-fn is_login_redirect(url: &Url) -> bool {
-    login_shaped(url, LOGIN_SEGMENTS) || login_shaped(url, REDIRECT_LOGIN_SEGMENTS)
-}
-
-fn decoded_path(url: &Url) -> std::borrow::Cow<'_, str> {
-    percent_encoding::percent_decode_str(url.path()).decode_utf8_lossy()
-}
-
-fn login_shaped(url: &Url, words: &[&str]) -> bool {
-    let host = url
-        .host_str()
-        .unwrap_or("")
-        .trim_end_matches('.')
-        .to_ascii_lowercase();
-    let first_label = host.split('.').next().unwrap_or("");
-    if host.contains('.') && LOGIN_HOST_LABELS.contains(&first_label) {
-        return true;
-    }
-    decoded_path(url).split('/').any(|segment| {
-        let segment = segment.to_ascii_lowercase();
-        let stem = segment.split('.').next().unwrap_or("");
-        words.contains(&stem)
-    })
-}
-
 /// Spaces requests to each host. Every request, redirect hops included,
 /// takes the next free slot for its host, whichever worker asks.
 struct Pacer {
@@ -746,7 +510,7 @@ fn test_timeout() -> Option<Duration> {
 #[cfg(test)]
 mod tests {
     use std::io::{BufRead, BufReader, Write};
-    use std::net::{Ipv4Addr, Ipv6Addr, TcpListener};
+    use std::net::TcpListener;
     use std::sync::Arc;
 
     use super::*;
@@ -756,88 +520,6 @@ mod tests {
     fn release_hooks_are_absent() {
         assert_eq!(test_address(), None);
         assert_eq!(test_timeout(), None);
-    }
-
-    fn url(raw: &str) -> Url {
-        Url::parse(raw).unwrap()
-    }
-
-    #[test]
-    fn private_hosts_are_known_from_the_url() {
-        for raw in [
-            "http://192.168.1.1/",
-            "http://10.0.0.8:8080/",
-            "http://172.16.4.4/",
-            "http://100.64.0.1/",
-            "http://169.254.169.254/latest/meta-data",
-            "http://127.0.0.1/",
-            "http://0.0.0.0/",
-            "http://[::1]/",
-            "http://[fd00::1]/",
-            "http://[fec0::1]/",
-            "http://[feff::1]/",
-            "http://[2001::7f00:1]/",
-            "http://[::127.0.0.1]/",
-            "http://[2002:7f00:1::]/",
-            "http://0.1.2.3/",
-            "http://2130706433/",
-            "http://0177.0.0.1/",
-            "http://127.0.0.1./",
-            "http://224.0.0.1/",
-            "http://255.255.255.255/",
-            "http://[ff02::1]/",
-            "http://[::ffff:169.254.169.254]/",
-            "http://[fe80::1]/",
-            "http://[::ffff:192.168.0.1]/",
-            "http://0x7f.1/",
-            "http://printer.local/",
-            "http://nas.home.arpa/",
-            "http://build.internal/",
-            "http://intranet/",
-            "http://app.localhost/",
-        ] {
-            assert!(is_private_host(&url(raw)), "{raw}");
-        }
-        for raw in [
-            "https://example.com/",
-            "http://8.8.8.8/",
-            "http://[2606:4700::1111]/",
-            "https://local.example.com/",
-            "https://localhost.example.test/",
-        ] {
-            assert!(!is_private_host(&url(raw)), "{raw}");
-        }
-        assert!(is_public(IpAddr::V4(Ipv4Addr::new(1, 1, 1, 1))));
-        assert!(!is_public(IpAddr::V6(Ipv6Addr::LOCALHOST)));
-    }
-
-    #[test]
-    fn login_screens_are_known_by_their_own_url_and_redirects_by_more() {
-        for raw in [
-            "https://example.com/login",
-            "https://example.com/users/sign_in",
-            "https://example.com/accounts/login/?next=/x",
-            "https://example.com/login.php",
-            "https://example.com/oauth/authorize?client_id=x",
-            "https://example.com/verify-email/abc",
-            "https://accounts.example.com/ServiceLogin",
-            "https://login.example.com/",
-        ] {
-            assert!(is_login_page(&url(raw)), "{raw}");
-        }
-        for raw in [
-            "https://example.com/blog/how-login-works",
-            "https://github.com/owner/auth",
-            "https://example.com/account",
-            "https://login/",
-        ] {
-            assert!(!is_login_page(&url(raw)), "{raw}");
-        }
-        assert!(is_login_redirect(&url(
-            "https://example.com/account?return=/"
-        )));
-        assert!(is_login_redirect(&url("https://example.com/auth/start")));
-        assert!(!is_login_redirect(&url("https://example.com/docs/")));
     }
 
     #[test]
