@@ -118,7 +118,9 @@ This sends the URLs it fetches to their own sites. X posts are read from the pub
 api.fxtwitter.com, the one third party service it uses, sending only the post's number. \
 GitHub repositories, issues, pull requests and discussions are read through gh api when gh is installed and \
 signed in, at most four at a time; gh keeps the token. Without it they are read as web pages. \
-What enrich never fetches, content never fetches \
+YouTube videos are read through yt-dlp, with deno or node, given only the video's id and no cookies, one \
+video at a time: the description, chapters and one caption track, English first, else the video's own \
+language. Without yt-dlp they wait for a later run. What enrich never fetches, content never fetches \
 either; X profiles and YouTube channels and playlists are recorded as not a document, and login screens \
 as behind a login, without a request. A page that failed is tried again on the next run, and after three \
 failed runs it is recorded as unavailable. One request a second per site. Never part of save."

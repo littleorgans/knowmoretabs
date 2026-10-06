@@ -10,8 +10,10 @@
 //!      and stay out of the store. A document known by several addresses
 //!      is fetched once and recorded under each. Each page's route is
 //!      chosen from its address, so the plan names the host every request
-//!      goes to; a GitHub page waits for `gh` only when the plan has one,
-//!      and without a signed in `gh` it is planned for the web instead.
+//!      goes to. A tool is asked about only when the plan has a page for
+//!      it: without a signed in `gh` a GitHub page is planned for the web
+//!      instead, and without yt-dlp a video waits, unrecorded, for a run
+//!      that has it.
 
 use std::cell::OnceCell;
 use std::collections::{HashMap, HashSet};
@@ -21,13 +23,13 @@ use url::Url;
 use crate::content_fetch;
 use crate::content_route::Route;
 use crate::content_store::{self, Line, Status};
-use crate::error::Error;
 use crate::github_api::Readiness;
 use crate::guard;
-use crate::library::{self, State};
+use crate::library::State;
 use crate::model::Snapshot;
 use crate::targets::{self, Item, Options, Plan, Skip, Why};
 use crate::triage::plural;
+use crate::ytdlp;
 
 /// What the run will do beyond the shared plan.
 #[derive(Debug, Default)]
@@ -40,8 +42,12 @@ pub struct Work {
     /// Whether `gh` can read GitHub pages, asked only when the plan has
     /// one.
     pub github: Option<Readiness>,
+    /// Whether yt-dlp can read videos, asked only when the plan has one.
+    pub youtube: Option<ytdlp::Readiness>,
     /// GitHub documents read from the web because `gh` cannot.
     github_on_the_web: usize,
+    /// Video pages left for a run with yt-dlp, unrecorded.
+    pub waiting: usize,
 }
 
 impl Work {
@@ -50,21 +56,26 @@ impl Work {
         targets::seconds_at_least(
             self.fetches
                 .iter()
-                .filter(|fetch| fetch.route.lanes() == 1)
-                .map(|fetch| fetch.host.as_str()),
+                .map(|fetch| (fetch.host.as_str(), fetch.route.seconds())),
         )
     }
 
     /// What the report says beyond the counts.
     pub fn notes(&self) -> Vec<String> {
+        let mut notes = Vec::new();
         let fallback = self.github.as_ref().and_then(Readiness::fallback);
-        match (fallback, self.github_on_the_web) {
-            (Some(why), n) if n > 0 => vec![format!(
+        if let Some(why) = fallback
+            && self.github_on_the_web > 0
+        {
+            notes.push(format!(
                 "GitHub API: {why}, used the web page for {}",
-                plural(n, "page")
-            )],
-            _ => Vec::new(),
+                plural(self.github_on_the_web, "page")
+            ));
         }
+        if self.waiting > 0 {
+            notes.push(ytdlp::waiting_note(self.waiting));
+        }
+        notes
     }
 }
 
@@ -79,52 +90,22 @@ pub struct Fetch {
     pub pages: Vec<(String, u32)>,
 }
 
-/// The snapshots narrowed to `urls`, each of which must be a library page;
-/// all of them when `urls` is empty.
-pub fn only<'a>(
-    snapshots: &'a [Snapshot],
-    urls: &[String],
-) -> Result<std::borrow::Cow<'a, [Snapshot]>, Error> {
-    if urls.is_empty() {
-        return Ok(std::borrow::Cow::Borrowed(snapshots));
-    }
-    let library = library::known_urls(snapshots);
-    let unknown: Vec<String> = urls
-        .iter()
-        .filter(|url| !library.contains(url.as_str()))
-        .cloned()
-        .collect();
-    if !unknown.is_empty() {
-        return Err(Error::NotInLibrary(unknown));
-    }
-    let wanted: HashSet<&str> = urls.iter().map(String::as_str).collect();
-    Ok(std::borrow::Cow::Owned(
-        snapshots
-            .iter()
-            .map(|snapshot| {
-                let mut snapshot = snapshot.clone();
-                snapshot
-                    .tabs
-                    .retain(|tab| wanted.contains(tab.url.as_str()));
-                snapshot
-            })
-            .collect(),
-    ))
-}
-
 /// The shared plan, with `content`'s own rules on top: pages that are not
 /// documents stay home, as does every variant of a forgotten page,
 /// `--limit` counts what is left, fragment variants share a fetch, and pages
 /// that are not documents are recorded once. Pages the shared rules keep
 /// home are counted, never recorded, as with `enrich`. `github` says
-/// whether `gh` can read GitHub pages; it is asked once, and only when
-/// there is one.
+/// whether `gh` can read GitHub pages and `youtube` whether yt-dlp can
+/// read videos; each is asked once, and only when there is such a page.
+/// Videos waiting for yt-dlp are counted before `--limit`, which counts
+/// only what is fetched.
 pub fn plan(
     snapshots: &[Snapshot],
     state: &State,
     known: &content_store::Log,
     options: Options,
     github: impl Fn() -> Readiness,
+    youtube: impl Fn() -> ytdlp::Readiness,
 ) -> (Plan, Work) {
     let mut plan = targets::plan(
         snapshots,
@@ -151,6 +132,8 @@ pub fn plan(
             .map(|item| (item.url, Skip::Forgotten)),
     );
     let readiness = OnceCell::new();
+    let videos = OnceCell::new();
+    let mut waiting = 0;
     let mut routes = Vec::new();
     let mut on_the_web = Vec::new();
     let mut not_documents = Vec::new();
@@ -160,6 +143,10 @@ pub fn plan(
             not_documents.push(item);
             continue;
         };
+        if matches!(route, Route::Youtube(_)) && videos.get_or_init(&youtube).tool().is_none() {
+            waiting += 1;
+            continue;
+        }
         let without_gh =
             matches!(route, Route::Github(_)) && readiness.get_or_init(&github).gh().is_none();
         let route = if without_gh { Route::Web } else { route };
@@ -190,7 +177,9 @@ pub fn plan(
         fetches,
         unsent,
         github: readiness.into_inner(),
+        youtube: videos.into_inner(),
         github_on_the_web: on_the_web.iter().filter(|web| **web).count(),
+        waiting,
     };
     (plan, work)
 }
@@ -290,6 +279,10 @@ pub(crate) mod tests {
         Readiness::Missing
     }
 
+    pub(crate) fn no_ytdlp() -> ytdlp::Readiness {
+        ytdlp::Readiness::Missing
+    }
+
     fn unsent(work: &Work) -> Vec<(&str, Status, &str)> {
         work.unsent
             .iter()
@@ -312,7 +305,14 @@ pub(crate) mod tests {
             "https://a.test/p#two",
         ])];
         let known = log(&[("https://a.test/p#two", Status::Error, 1)]);
-        let (plan, work) = plan(&snapshots, &state(&[]), &known, Options::default(), no_gh);
+        let (plan, work) = plan(
+            &snapshots,
+            &state(&[]),
+            &known,
+            Options::default(),
+            no_gh,
+            no_ytdlp,
+        );
         assert_eq!(plan.todo.len(), 4);
         let fetches: Vec<(&str, Vec<(&str, u32)>)> = work
             .fetches
@@ -355,6 +355,7 @@ pub(crate) mod tests {
             &log(&[]),
             Options::default(),
             no_gh,
+            no_ytdlp,
         );
         let hosts: Vec<&str> = plan.todo.iter().map(|i| i.host.as_str()).collect();
         assert_eq!(
@@ -405,6 +406,7 @@ pub(crate) mod tests {
             &log(&[]),
             Options::default(),
             ready,
+            no_ytdlp,
         );
         assert_eq!(
             work.seconds_at_least(),
@@ -417,6 +419,7 @@ pub(crate) mod tests {
             &log(&[]),
             Options::default(),
             no_gh,
+            no_ytdlp,
         );
         assert_eq!(
             web.seconds_at_least(),
@@ -435,6 +438,7 @@ pub(crate) mod tests {
             &log(&[]),
             Options::default(),
             ready,
+            no_ytdlp,
         );
         assert_eq!(
             gh_only.seconds_at_least(),
@@ -470,6 +474,7 @@ pub(crate) mod tests {
             &log(&[]),
             Options::default(),
             ready,
+            no_ytdlp,
         );
         assert_eq!(asked.get(), 1, "readiness is asked once");
         let fetches: Vec<(&str, bool, usize)> = work
@@ -506,6 +511,7 @@ pub(crate) mod tests {
             &log(&[]),
             Options::default(),
             no_gh,
+            no_ytdlp,
         );
         assert!(work.fetches.iter().all(|f| f.route == Route::Web));
         assert_eq!(plan.sites(), 2);
@@ -517,7 +523,7 @@ pub(crate) mod tests {
             limit: Some(1),
             ..Options::default()
         };
-        let (_, work) = super::plan(&snapshots, &state(&[]), &log(&[]), limited, no_gh);
+        let (_, work) = super::plan(&snapshots, &state(&[]), &log(&[]), limited, no_gh, no_ytdlp);
         assert_eq!(
             work.notes(),
             ["GitHub API: gh not found, used the web page for 1 page"]
@@ -525,7 +531,14 @@ pub(crate) mod tests {
 
         let never = || -> Readiness { panic!("no GitHub page, so gh is not asked") };
         let web_only = [snapshot(&["https://a.test/"])];
-        let (_, work) = super::plan(&web_only, &state(&[]), &log(&[]), Options::default(), never);
+        let (_, work) = super::plan(
+            &web_only,
+            &state(&[]),
+            &log(&[]),
+            Options::default(),
+            never,
+            no_ytdlp,
+        );
         assert_eq!(work.github, None);
         assert_eq!(github_api::CONCURRENT, 4);
     }
@@ -550,6 +563,7 @@ pub(crate) mod tests {
             &known,
             Options::default(),
             no_gh,
+            no_ytdlp,
         );
         let mut lines = unsent(&work);
         lines.sort_unstable();
@@ -593,6 +607,7 @@ pub(crate) mod tests {
             &log(&[]),
             Options::default(),
             no_gh,
+            no_ytdlp,
         );
         assert!(work.fetches.is_empty());
         assert_eq!(work.unsent, []);
@@ -617,7 +632,7 @@ pub(crate) mod tests {
             limit: Some(1),
             ..Options::default()
         };
-        let (plan, work) = plan(&snapshots, &state(&[]), &known, limited, no_gh);
+        let (plan, work) = plan(&snapshots, &state(&[]), &known, limited, no_gh, no_ytdlp);
         let todo: Vec<(&str, Why)> = plan
             .todo
             .iter()
@@ -631,7 +646,7 @@ pub(crate) mod tests {
             refetch: true,
             ..Options::default()
         };
-        let (plan, work) = super::plan(&snapshots, &state(&[]), &known, refetch, no_gh);
+        let (plan, work) = super::plan(&snapshots, &state(&[]), &known, refetch, no_gh, no_ytdlp);
         let whys: Vec<Why> = plan.todo.iter().map(|i| i.why.clone()).collect();
         assert_eq!(whys, [Why::Retry, Why::Refetch, Why::Refetch, Why::New]);
         let attempts: Vec<u32> = work.fetches.iter().map(|f| f.pages[0].1).collect();
@@ -639,18 +654,106 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn urls_narrow_the_library_and_must_belong_to_it() {
-        let snapshots = [snapshot(&["https://a.test/", "https://b.test/"])];
-        let narrowed = only(&snapshots, &["https://b.test/".to_owned()]).unwrap();
-        let urls: Vec<&str> = narrowed[0].tabs.iter().map(|t| t.url.as_str()).collect();
-        assert_eq!(urls, ["https://b.test/"]);
-        assert_eq!(only(&snapshots, &[]).unwrap().len(), 1);
-        let Err(Error::NotInLibrary(unknown)) = only(
-            &snapshots,
-            &["https://c.test/".to_owned(), "https://a.test/".to_owned()],
-        ) else {
-            panic!("an unknown URL is refused");
+    fn videos_wait_for_yt_dlp_unrecorded_or_go_one_at_a_time_once_per_id() {
+        use crate::ytdlp::{Runtime, YtDlp};
+
+        let snapshots = [snapshot(&[
+            "https://www.youtube.com/watch?v=aBc-12_xYz9",
+            "https://youtu.be/aBc-12_xYz9?t=5",
+            "https://www.youtube.com/watch?v=zYx-98_cBa7&list=PL0000",
+            "https://www.youtube.com/@someone",
+            "https://www.youtube.com/watch?v=short",
+            "https://a.test/",
+        ])];
+        let asked = std::cell::Cell::new(0);
+        let missing = || {
+            asked.set(asked.get() + 1);
+            ytdlp::Readiness::NoRuntime("/opt/bin/yt-dlp".into(), None)
         };
-        assert_eq!(unknown, ["https://c.test/"]);
+        let (plan, work) = plan(
+            &snapshots,
+            &state(&[]),
+            &log(&[]),
+            Options::default(),
+            no_gh,
+            missing,
+        );
+        assert_eq!(asked.get(), 1, "readiness is asked once");
+        let todo: Vec<&str> = plan.todo.iter().map(|i| i.url.as_str()).collect();
+        assert_eq!(
+            todo,
+            ["https://www.youtube.com/watch?v=short", "https://a.test/"]
+        );
+        assert_eq!(work.waiting, 3);
+        assert_eq!(
+            work.notes(),
+            ["3 YouTube pages waiting for yt-dlp (see knowmoretabs doctor)"]
+        );
+        assert_eq!(
+            unsent(&work),
+            [(
+                "https://www.youtube.com/@someone",
+                Status::Skipped,
+                "not a document"
+            )],
+            "waiting videos are not recorded"
+        );
+        let limited = Options {
+            limit: Some(1),
+            ..Options::default()
+        };
+        let (plan, work) = super::plan(&snapshots, &state(&[]), &log(&[]), limited, no_gh, missing);
+        assert_eq!((plan.todo.len(), plan.more, work.waiting), (1, 1, 3));
+
+        let ready = || {
+            ytdlp::Readiness::Ready(YtDlp {
+                path: "/opt/bin/yt-dlp".into(),
+                version: None,
+                runtime: Runtime {
+                    name: "deno",
+                    path: "/opt/bin/deno".into(),
+                },
+            })
+        };
+        let (_, work) = super::plan(
+            &snapshots,
+            &state(&[]),
+            &log(&[]),
+            Options::default(),
+            no_gh,
+            ready,
+        );
+        let fetches: Vec<(&str, &Route, usize)> = work
+            .fetches
+            .iter()
+            .map(|f| (f.host.as_str(), &f.route, f.pages.len()))
+            .collect();
+        assert_eq!(
+            fetches,
+            [
+                (ytdlp::HOST, &Route::Youtube("aBc-12_xYz9".to_owned()), 2),
+                (ytdlp::HOST, &Route::Youtube("zYx-98_cBa7".to_owned()), 1),
+                ("www.youtube.com", &Route::Web, 1),
+                ("a.test", &Route::Web, 1),
+            ]
+        );
+        assert_eq!((work.waiting, work.notes()), (0, Vec::<String>::new()));
+        assert_eq!(
+            work.seconds_at_least(),
+            2 * ytdlp::SECONDS_AT_LEAST,
+            "two videos, one at a time, on the page host's queue with its web page"
+        );
+
+        let never = || -> ytdlp::Readiness { panic!("no video, so yt-dlp is not asked") };
+        let web_only = [snapshot(&["https://a.test/", "https://www.youtube.com/"])];
+        let (_, work) = super::plan(
+            &web_only,
+            &state(&[]),
+            &log(&[]),
+            Options::default(),
+            no_gh,
+            never,
+        );
+        assert_eq!(work.youtube, None);
     }
 }

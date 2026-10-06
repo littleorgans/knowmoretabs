@@ -117,7 +117,7 @@ impl Plan {
             self.todo
                 .iter()
                 .filter(|item| item.why != Why::Login)
-                .map(|item| item.host.as_str()),
+                .map(|item| (item.host.as_str(), 1)),
         )
     }
 
@@ -130,11 +130,14 @@ impl Plan {
     }
 }
 
-/// A pacing lower bound from the hosts of requests sent one a second.
-pub fn seconds_at_least<'a>(hosts: impl Iterator<Item = &'a str>) -> usize {
+/// A pacing lower bound from each fetch's host and the least seconds it
+/// holds that host's queue: one for a request sent one a second. Hosts run
+/// at once, so the busiest one bounds the run; its first request waits for
+/// nothing.
+pub fn seconds_at_least<'a>(fetches: impl Iterator<Item = (&'a str, usize)>) -> usize {
     let mut per_host: HashMap<&str, usize> = HashMap::new();
-    for host in hosts {
-        *per_host.entry(host).or_default() += 1;
+    for (host, seconds) in fetches {
+        *per_host.entry(host).or_default() += seconds;
     }
     per_host.values().max().map_or(0, |n| n.saturating_sub(1))
 }
@@ -277,16 +280,17 @@ pub fn by_host<'a, T: Send>(
 }
 
 /// What `--dry-run` says: every page that would be fetched and why, every
-/// page that would not and why, and the counts.
+/// page that would not and why, the counts, and `notes` when there are any.
 pub fn report_dry_run(
     plan: &Plan,
     options: Options,
     json: bool,
     log: Log,
     seconds_at_least: usize,
+    notes: &[String],
 ) {
     if json {
-        out::json(&serde_json::json!({
+        let mut report = serde_json::json!({
             "dry_run": true,
             "fetch": plan.todo.iter().map(|item| serde_json::json!({
                 "url": item.url, "why": item.why.label(),
@@ -298,7 +302,11 @@ pub fn report_dry_run(
             "more": plan.more,
             "sites": plan.sites(),
             "seconds_at_least": seconds_at_least,
-        }));
+        });
+        if !notes.is_empty() {
+            report["notes"] = serde_json::json!(notes);
+        }
+        out::json(&report);
         return;
     }
     if log.quiet {
@@ -336,6 +344,9 @@ pub fn report_dry_run(
         for (url, skip) in &plan.not_fetched {
             let _ = writeln!(text, "  {url}  ({})", skip.label());
         }
+    }
+    for note in notes {
+        let _ = writeln!(text, "{note}");
     }
     let _ = writeln!(text, "{}", not_fetched_line(plan));
     out::block(&text);

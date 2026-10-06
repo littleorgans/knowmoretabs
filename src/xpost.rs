@@ -294,6 +294,7 @@ fn read(bytes: &[u8], line: impl Fn(Status) -> Line) -> Capture {
             Completeness::Thin
         },
         chars,
+        captions: None,
         markdown,
     };
     Capture {

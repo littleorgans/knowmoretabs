@@ -53,6 +53,9 @@ mod targets;
 mod tools;
 mod triage;
 mod xpost;
+mod youtube;
+mod youtube_page;
+mod ytdlp;
 
 use std::fmt::Write as _;
 use std::process::ExitCode;

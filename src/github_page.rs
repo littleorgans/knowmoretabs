@@ -169,6 +169,7 @@ fn page(
             Completeness::Thin
         },
         chars: extract::plain_chars(&markdown),
+        captions: None,
         markdown,
     };
     (page, (!has_text).then_some(thin))

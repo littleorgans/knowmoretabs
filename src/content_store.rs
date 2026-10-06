@@ -98,13 +98,14 @@ impl Status {
 }
 
 /// The route that made an attempt: the generic web route, the X post API,
-/// or the GitHub API through `gh`.
+/// the GitHub API through `gh`, or `YouTube` through yt-dlp.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
     Web,
     X,
     Github,
+    Youtube,
     #[serde(other)]
     Other,
 }
@@ -227,6 +228,14 @@ pub enum Completeness {
     Thin,
 }
 
+/// Who made the captions a video's transcript was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Captions {
+    Manual,
+    Automatic,
+}
+
 /// A page's text and what the front matter says about it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Page {
@@ -235,13 +244,15 @@ pub struct Page {
     pub extractor: String,
     pub completeness: Completeness,
     pub chars: usize,
+    /// A video's caption track; its language is the line's `lang`.
+    pub captions: Option<Captions>,
     /// Ends with one newline.
     pub markdown: String,
 }
 
 /// The keys this build writes, in the order it writes them. Any other key
 /// in an existing file is carried over when the file is replaced.
-const KNOWN_KEYS: [&str; 11] = [
+const KNOWN_KEYS: [&str; 12] = [
     "schema_version",
     "url",
     "final_url",
@@ -252,6 +263,7 @@ const KNOWN_KEYS: [&str; 11] = [
     "access",
     "completeness",
     "lang",
+    "captions",
     "chars",
 ];
 
@@ -259,7 +271,7 @@ const KNOWN_KEYS: [&str; 11] = [
 /// too, and no YAML parser is needed), then the markdown body.
 pub fn render(line: &Line, page: &Page, carried: &BTreeMap<String, Value>) -> String {
     let to = |value: Value| Some(value);
-    let known: [(&str, Option<Value>); 11] = [
+    let known: [(&str, Option<Value>); 12] = [
         ("schema_version", to(SCHEMA_VERSION.into())),
         ("url", to(line.url.clone().into())),
         ("final_url", line.final_url.clone().map(Value::from)),
@@ -280,6 +292,10 @@ pub fn render(line: &Line, page: &Page, carried: &BTreeMap<String, Value>) -> St
             .into()),
         ),
         ("lang", line.lang.clone().map(Value::from)),
+        (
+            "captions",
+            page.captions.and_then(|c| serde_json::to_value(c).ok()),
+        ),
         ("chars", to(page.chars.into())),
     ];
     let mut text = String::from("---\n");
@@ -381,6 +397,7 @@ mod tests {
             extractor: "dom_smoothie 0.18.2".to_owned(),
             completeness: Completeness::Full,
             chars: 42,
+            captions: None,
             markdown: markdown.to_owned(),
         }
     }
@@ -535,6 +552,27 @@ mod tests {
         assert_eq!(again, text, "a second round trip changes nothing");
         assert!(parse("no front matter").is_none());
         assert_eq!(parse("---\n---\nbody").unwrap().1, "body");
+    }
+
+    #[test]
+    fn a_video_records_its_caption_kind_and_an_older_one_is_not_carried() {
+        let mut line = ok_line("https://www.youtube.com/watch?v=aBc-12_xYz9");
+        line.tier = Some(Tier::Youtube);
+        let captioned = Page {
+            captions: Some(Captions::Automatic),
+            ..page("Body\n")
+        };
+        let (front, _) = parse(&render(&line, &captioned, &BTreeMap::new()))
+            .map(|(f, b)| (f, b.to_owned()))
+            .unwrap();
+        assert_eq!(front["tier"], "youtube");
+        assert_eq!(front["lang"], "en");
+        assert_eq!(front["captions"], "automatic");
+        let refetched = render(&line, &page("Body\n"), &front);
+        assert!(
+            !refetched.contains("captions:"),
+            "a page without captions now drops the old key"
+        );
     }
 
     #[test]
