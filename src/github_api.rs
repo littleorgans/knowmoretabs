@@ -38,7 +38,10 @@ pub const ENV: [(&str, &str); 3] = [
     ("GH_NO_UPDATE_NOTIFIER", "1"),
     ("NO_COLOR", "1"),
 ];
-const AUTH_STATUS: [&str; 4] = ["auth", "status", "--hostname", "github.com"];
+const HOST: &str = "github.com";
+const AUTH_STATUS: [&str; 4] = ["auth", "status", "--hostname", HOST];
+// Match readiness even when gh is configured for an enterprise host.
+const API_ARGS: &[&str] = &["api", "--include", "--hostname", HOST];
 
 /// The `gh` this run uses.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,7 +245,7 @@ impl Attempt<'_> {
     /// When `gh` printed none (it could not start, timed out, or failed
     /// before asking), the attempt ends as an `error` for the next run.
     fn ask(&self, args: &[&str]) -> Result<Answer, Ended> {
-        let mut command = vec!["api", "--include"];
+        let mut command = API_ARGS.to_vec();
         command.extend_from_slice(args);
         let limits = Limits {
             timeout: TIMEOUT,
@@ -487,6 +490,19 @@ mod tests {
                 (line.status, line.reason.clone().unwrap_or_default(), true)
             }
         }
+    }
+
+    #[test]
+    fn api_calls_use_the_host_readiness_checked() {
+        let api_host = API_ARGS
+            .windows(2)
+            .find_map(|pair| (pair[0] == "--hostname").then_some(pair[1]));
+        assert_eq!(
+            api_host,
+            Some(AUTH_STATUS[3]),
+            "API calls must not inherit a different host"
+        );
+        assert_eq!(api_host, Some("github.com"));
     }
 
     #[test]
