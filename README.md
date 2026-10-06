@@ -205,14 +205,14 @@ knowmoretabs enrich              # fetch every page not fetched before
 ```
 
 `enrich` and `content` are the only commands that send anything anywhere,
-and each runs only when you run it. For each library page it has not fetched before, it asks the
-page's own site for it, without cookies, and reads no further than `</head>`,
-and never more than 3 MB. From the head it keeps the title, the description,
-the `og:` and `twitter:` tags, the JSON-LD types, the language and the
-canonical address. For a public GitHub repository's own page it also keeps
-the repository's topics and the start of its README, from the same page: no
-token, no account. `serve` and `export` do not show it yet; `tag --prompt`
-hands it to your tagging agent.
+and each runs only when you run it. For each library page `enrich` has not
+fetched before, it asks the page's own site for it, without cookies, and
+reads no further than `</head>`, and never more than 3 MB. From the head it
+keeps the title, the description, the `og:` and `twitter:` tags, the JSON-LD
+types, the language and the canonical address. For a public GitHub
+repository's own page it also keeps the repository's topics and the start of
+its README, from the same page: no token, no account. `serve` and `export` do
+not show it yet; `tag --prompt` hands it to your tagging agent.
 
 Each attempt is appended to `pages/metadata.jsonl` as one line with its date,
 and the newest line for a page is the one that counts. A page that was
@@ -425,9 +425,9 @@ Why decrypting is not the answer is in
 ## Non-goals
 
 No sync. No accounts. No cloud. No telemetry. No browser extension (for
-now). No page text unless you ask for it: `content` is opt in, and keyword search
-over what it stores comes later. No tag hierarchy. It never
-touches, closes or reorders tabs in the live browser, and never modifies the
+now). No page text unless you ask for it: `content` is opt in, and keyword
+search over what it stores comes later. No tag hierarchy. It never touches,
+closes or reorders tabs in the live browser, and never modifies the
 browser's own files: it reads and copies, nothing else.
 
 ## Deliberately not built

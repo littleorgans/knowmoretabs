@@ -467,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn the_latest_line_wins_and_unknown_statuses_and_schemas_are_counted() {
+    fn the_latest_line_wins_unknown_statuses_stand_and_other_schemas_are_unreadable() {
         let text = concat!(
             r#"{"schema_version":1,"url":"https://a.test/","attempted_at":"2026-10-07T09:00:00Z","status":"error","reason":"timeout","attempt":1}"#,
             "\n",

@@ -163,9 +163,8 @@ agent.
 
 **Intent.** One of the two commands that send anything off the machine, with `content`,
 so it is opt-in and the decision of what never leaves is made before any
-request: forgotten pages,
-this machine and the private network, search results and URLs that carry a
-token stay home.
+request: forgotten pages, this machine and the private network, search results
+and URLs that carry a token stay home.
 
 ### 8. Content: what pages say (`content`) — done
 
@@ -184,12 +183,12 @@ yt-dlp captions for videos, and a local headless Chrome for pages that need a
 browser to show their text, with `doctor` saying which optional tools are
 ready.
 
-**Intent.** Opt in, because it sends the URLs you visited to their own sites and to the X
-post API, uses optional local tools (yt-dlp, gh, Chrome), and stores page text
-privately. It follows `enrich`'s rules for what never leaves the machine,
-through the same guard, fetcher, planner and log writer, rather than a second
-copy of them. Capture only: the markdown files are the store, and keyword
-retrieval over them is the `fulltext` entry, not this slice.
+**Intent.** Opt in, because it sends the URLs you visited to their own sites and stores
+page text privately; the later routes add the X post API and optional local
+tools (yt-dlp, gh, Chrome). It follows `enrich`'s rules for what never leaves
+the machine, through the same guard, fetcher, planner and log writer, rather
+than a second copy of them. Capture only: the markdown files are the store,
+and keyword retrieval over them is the `fulltext` entry, not this slice.
 
 ## Prepared for, deliberately not built
 
