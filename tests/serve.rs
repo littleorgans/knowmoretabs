@@ -7,6 +7,7 @@ mod common;
 use std::fs;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
+use std::path::PathBuf;
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
@@ -1560,7 +1561,7 @@ fn review_request_deadline_covers_silent_and_dribbling_clients() {
                     assert!(elapsed >= Duration::from_secs(9), "ended at {elapsed:?}");
                     assert!(elapsed < Duration::from_secs(15), "took {elapsed:?}");
                     if head.is_empty() {
-                        assert!(bytes.is_empty());
+                        assert_eq!(bytes, b"");
                     } else {
                         assert_eq!(Reply::parse(&bytes).status, 400);
                     }
@@ -1650,7 +1651,7 @@ fn review_forget_save_and_export_serialize_under_contention() {
         exported["stats"]["forgotten"].as_u64().unwrap() + visible as u64,
         3
     );
-    assert!(fx.staging_dirs().is_empty());
+    assert_eq!(fx.staging_dirs(), Vec::<PathBuf>::new());
 }
 
 #[test]

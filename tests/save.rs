@@ -3,6 +3,8 @@
 
 mod common;
 
+use std::path::PathBuf;
+
 use common::{
     Fixture, SessionBuilder, assert_success, read_snapshot, stderr, stdout, two_tab_session,
 };
@@ -56,7 +58,7 @@ fn default_discovery_saves_the_newest_session_verbatim() {
     assert_eq!(snapshot["tabs"][0]["url"], "https://example.test/one");
     assert_eq!(snapshot["tabs"][1]["active"], true);
     assert_eq!(snapshot["windows"][0]["active_tab"], 3);
-    assert!(snapshot["groups"].as_array().unwrap().is_empty());
+    assert_eq!(snapshot["groups"], serde_json::json!([]));
     let pretty = std::fs::read_to_string(dirs[0].join("snapshot.json")).unwrap();
     assert!(
         pretty.contains("\n  \"tabs\": ["),
@@ -417,7 +419,7 @@ fn encrypted_and_garbage_headers_are_the_only_fatal_parse_errors() {
     let err = stderr(&output);
     assert!(err.contains("encrypted session format"), "{err}");
     assert!(!fx.root.join("snapshots").join("x").exists());
-    assert!(fx.snapshot_dirs().is_empty());
+    assert_eq!(fx.snapshot_dirs(), Vec::<PathBuf>::new());
 
     fx.write_session("Default", 21, b"not a session at all");
     let output = fx.run(&[]);

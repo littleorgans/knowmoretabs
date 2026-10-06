@@ -320,7 +320,7 @@ fn history_refresh_backfills_without_saving_and_fails_when_history_cannot_be_rea
         stderr(&output)
     );
     assert_eq!(fs::read(record_path(&fx)).unwrap(), written);
-    assert!(fx.staging_dirs().is_empty());
+    assert_eq!(fx.staging_dirs(), Vec::<PathBuf>::new());
 }
 
 #[test]
@@ -555,7 +555,7 @@ fn the_browsers_files_are_untouched_and_no_copy_is_left_anywhere() {
         assert_success(&output);
         assert_eq!(browser(), before, "{args:?} moved the browser's files");
         assert!(!killed.exists(), "the killed run's copy is still there");
-        assert!(fx.staging_dirs().is_empty());
+        assert_eq!(fx.staging_dirs(), Vec::<PathBuf>::new());
         assert_eq!(history_files_under(&fx.root), Vec::<PathBuf>::new());
         assert_eq!(history_files_under(&temp), Vec::<PathBuf>::new());
     }

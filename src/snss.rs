@@ -184,8 +184,10 @@ impl<'a> Pickle<'a> {
         let units = usize::try_from(units).ok()?;
         let bytes = self.take(units.checked_mul(2)?)?;
         let decoded = bytes
-            .chunks_exact(2)
-            .map(|pair| u16::from_le_bytes([pair[0], pair[1]]));
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&pair| u16::from_le_bytes(pair));
         Some(
             char::decode_utf16(decoded)
                 .map(|r| r.unwrap_or(char::REPLACEMENT_CHARACTER))

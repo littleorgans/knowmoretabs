@@ -5,6 +5,7 @@
 mod common;
 
 use std::fs;
+use std::path::PathBuf;
 
 use common::{Fixture, assert_success, fingerprint, stderr, stdout, write_snapshot};
 use serde_json::{Value, json};
@@ -142,7 +143,7 @@ fn tag_writes_both_lists_and_creates_the_vocabulary() {
         before,
         "tagging never touches a snapshot"
     );
-    assert!(fx.staging_dirs().is_empty());
+    assert_eq!(fx.staging_dirs(), Vec::<PathBuf>::new());
 }
 
 #[test]

@@ -571,7 +571,7 @@ fn the_browsers_files_are_untouched_and_no_copy_is_left_anywhere() {
 
     assert_eq!(browser_files(&path), before, "the browser's files moved");
     assert!(!killed.exists(), "the killed run's copy is still there");
-    assert!(fx.staging_dirs().is_empty());
+    assert_eq!(fx.staging_dirs(), Vec::<PathBuf>::new());
     assert_eq!(history_files_under(&fx.root), Vec::<PathBuf>::new());
     assert_eq!(history_files_under(&temp), Vec::<PathBuf>::new());
 }
