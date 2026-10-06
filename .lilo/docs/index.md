@@ -11,7 +11,7 @@ knowmoretabs saves a dated, immutable snapshot of every open window and tab by r
 
 Browsers: Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and Vivaldi on macOS, Linux and Windows (`code:src/platform.rs`). Arc is refused (`code:src/error.rs#ArcUnsupported`).
 
-Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (content capture, planned, is opt in, and keyword search over what it stores comes later), tag hierarchy, touching or closing live tabs, modifying browser files (claimed by S1, unverified).
+Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (`content` is opt in, and keyword search over what it stores comes later), tag hierarchy, touching or closing live tabs, modifying browser files (claimed by S1, unverified).
 
 ## Responsibilities
 
@@ -21,7 +21,9 @@ Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (co
 - Library: pages derived across snapshots, user state, export, the library's History record: `code:src/library.rs`, `code:src/library_commands.rs`, `code:src/export.rs`, `code:src/library_history.rs`.
 - Serve and triage: the HTTP server and JSON API, forget and restore: `code:src/server.rs`, `code:src/triage.rs`; the frontend `code:web/app.js`, embedded by `code:src/assets.rs`.
 - Tags and suggestions: `code:src/tags.rs`, `code:src/prompt.rs`, `code:src/suggestions.rs`.
-- Enrich, the opt-in head fetch: `code:src/enrich.rs`, `code:src/fetch.rs`, `code:src/head.rs`, `code:src/github.rs`, `code:src/metadata.rs`, `code:src/metadata_writer.rs`.
+- Enrich, the opt-in head fetch: `code:src/enrich.rs`, `code:src/metadata_fetch.rs`, `code:src/head.rs`, `code:src/github.rs`, `code:src/metadata.rs`, `code:src/metadata_writer.rs`.
+- Shared by the network commands: the URL refusal rules `code:src/guard.rs`, the guarded GET and pacer `code:src/fetch.rs`, the planner and per-host workers `code:src/targets.rs`, the append-only logs `code:src/jsonl.rs`.
+- Content, the opt-in page text capture: `code:src/content.rs`, `code:src/content_fetch.rs`, `code:src/content_store.rs`, `code:src/extract.rs`; classifier parity tool `code:examples/content_parity.rs`.
 - Slice lint and matrix generator: `code:xtask/src/main.rs`.
 
 ## Reading path
@@ -45,12 +47,13 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 - Archive writers hold the archive's advisory lock (`code:src/archive.rs#LOCK_FILE`).
 - A snapshot is staged as a directory and renamed into place once, never over anything, and never written again (`code:src/archive.rs#publish`).
 - State files such as `library.json` are replaced whole: staged beside the target, then renamed (`code:src/archive.rs#replace_file`).
-- `pages/metadata.jsonl` is append only: one whole line per write, under the lock, synced before the next (`code:src/metadata_writer.rs#Appender`).
+- `pages/metadata.jsonl` and `pages/content.jsonl` are append only: one whole line per write, under the lock, synced before the next (`code:src/jsonl.rs#Appender`).
+- A content file is replaced whole, then its log line appended, under one hold of the lock; an unchanged body leaves the file untouched (`code:src/content_store.rs#Store`).
 - On Unix the archive root and its private directories are created mode 0700; on Windows they inherit the parent's ACL (`code:src/archive.rs#create_private_dir`).
 - An unknown session command is skipped and counted, never fatal; a torn tail is reported as truncated bytes (`code:src/session.rs`, `code:src/snss.rs`).
 - The encrypted-sessions preflight refuses a stale save with exit 3; `--force` cannot bypass it (`code:src/staleness.rs#check`, `code:src/error.rs#exit_code`).
 - Tabs on this machine (`localhost`, its subdomains, loopback) are left out of `snapshot.json` and of change detection; `session.snss` stays verbatim and keeps them (`code:src/capture.rs#leave_out_this_machine`, `code:src/local.rs#is_this_machine_url`).
-- Only `enrich` sends anything off the machine; `ureq` appears only in `code:src/fetch.rs`.
+- Only `enrich` and `content` send anything off the machine; `ureq` appears only in `code:src/fetch.rs`.
 - `serve` binds 127.0.0.1 only (`code:src/server.rs`).
 - JSON is the archive's storage; SQLite, bundled, only reads a copy of the browser's `History` taken with its `-journal` and `-wal` (`code:src/history.rs#COMPANIONS`).
 - Foreground time sums positive durations only; the search walk stops at `MAX_HOPS` hops (`code:src/history.rs#MAX_HOPS`).

@@ -1,14 +1,15 @@
 //! Reads a page's `<head>`: title, meta tags, canonical link, language and
 //! JSON-LD, from bytes in whatever charset the page declared.
 //!
-//! slice: enrich
+//! slice: enrich, content
 //! why: Enrich wants a dozen values out of the head, not a DOM. A scanner that
 //!      knows comments, quoted attributes and the elements whose content is
 //!      raw text does that in a few hundred lines with no parser dependency,
 //!      and it stops at `</head>` because that is all it is ever given.
 //!      Charsets are the ones the web actually declares: UTF-8, UTF-16 by
 //!      byte-order mark, and windows-1252 under its many labels; any other
-//!      is named rather than decoded into nonsense.
+//!      is named rather than decoded into nonsense. `content` decodes whole
+//!      pages here too, and judges a sign-in page by the same head rule.
 
 use std::borrow::Cow;
 
@@ -36,6 +37,27 @@ impl Head {
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
     }
+
+    /// A page that is only a sign-in form: a title that says so and nothing
+    /// that describes the page itself.
+    pub fn is_sign_in_page(&self) -> bool {
+        let Some(title) = &self.title else {
+            return false;
+        };
+        let title = title.to_lowercase();
+        let says_sign_in = ["sign in", "signin", "sign-in", "log in", "login", "log-in"]
+            .iter()
+            .any(|phrase| has_word(&title, phrase));
+        says_sign_in && self.meta("description").is_none() && self.meta("og:description").is_none()
+    }
+}
+
+fn has_word(text: &str, phrase: &str) -> bool {
+    text.match_indices(phrase).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + phrase.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
 }
 
 /// Incremental boundary detection keeps comments, attributes and raw text
@@ -682,6 +704,20 @@ pub fn text_of(html: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sign_in_title_without_a_description_is_a_sign_in_page() {
+        let page = |html: &str| scan(html).is_sign_in_page();
+        assert!(page("<title>Sign in - Example</title>"));
+        assert!(page("<title>Login | App</title>"));
+        assert!(!page(
+            "<title>Sign in</title><meta name=description content=\"A real page\">"
+        ));
+        assert!(!page(
+            "<title>Why login forms fail</title><meta property=og:description content=x>"
+        ));
+        assert!(!page("<title>Blogin' about loginess</title>"));
+    }
 
     #[test]
     fn boundaries_survive_every_byte_split() {

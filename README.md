@@ -8,8 +8,8 @@ snapshot of every open window and tab, and gives you a local page where you
 search everything you have ever had open, see what you keep reopening, and
 forget what you do not want. It reads your browser's own session file from
 disk to do it, so there is nothing to install in the browser. Nothing leaves
-your machine unless you run `enrich`, which fetches the `<head>` of pages you
-already visited.
+your machine unless you run `enrich` or `content`, which fetch pages you
+already visited: `enrich` reads their `<head>`, `content` their main text.
 
 It works with Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and
 Vivaldi, on macOS, Linux and Windows.
@@ -24,9 +24,9 @@ cargo install --git https://github.com/littleorgans/knowmoretabs knowmoretabs
 ```
 
 Or clone the repository and run `cargo build --release`; the binary is
-`target/release/knowmoretabs`, and it depends on nothing else. Content
-capture, planned, can use yt-dlp, gh and Chrome when they are installed, and
-works without them.
+`target/release/knowmoretabs`, and it depends on nothing else. `content`
+works without any other tool; planned routes will let it use yt-dlp, gh and
+Chrome when they are installed.
 
 Nothing is tagged yet: the prebuilt binaries and the crates.io package
 described next arrive with v0.1.0, and until then the repository is the only
@@ -163,6 +163,7 @@ knowmoretabs export [DIR]        # the same library as a static site that opens 
 knowmoretabs history             # how many library pages have History signals, and how current they are
 knowmoretabs history --refresh   # read History now and update every library page's signals
 knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
+knowmoretabs content             # keep the main text of library pages as markdown; --dry-run, --limit N, --refetch, --url URL
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
 knowmoretabs tag <URL>... --add NAME --remove NAME --clear NAME   # tag pages, untag them, or take back a decision; all repeatable
@@ -203,15 +204,15 @@ knowmoretabs enrich --limit 30   # fetch at most 30 pages this run
 knowmoretabs enrich              # fetch every page not fetched before
 ```
 
-`enrich` is the only command that sends anything anywhere, and it runs only
-when you run it. For each library page it has not fetched before, it asks the
-page's own site for it, without cookies, and reads no further than `</head>`,
-and never more than 3 MB. From the head it keeps the title, the description,
-the `og:` and `twitter:` tags, the JSON-LD types, the language and the
-canonical address. For a public GitHub repository's own page it also keeps
-the repository's topics and the start of its README, from the same page: no
-token, no account. `serve` and `export` do not show it yet; `tag --prompt`
-hands it to your tagging agent.
+`enrich` and `content` are the only commands that send anything anywhere,
+and each runs only when you run it. For each library page `enrich` has not
+fetched before, it asks the page's own site for it, without cookies, and
+reads no further than `</head>`, and never more than 3 MB. From the head it
+keeps the title, the description, the `og:` and `twitter:` tags, the JSON-LD
+types, the language and the canonical address. For a public GitHub
+repository's own page it also keeps the repository's topics and the start of
+its README, from the same page: no token, no account. `serve` and `export` do
+not show it yet; `tag --prompt` hands it to your tagging agent.
 
 Each attempt is appended to `pages/metadata.jsonl` as one line with its date,
 and the newest line for a page is the one that counts. A page that was
@@ -243,19 +244,51 @@ a sign-in form. None of this hides a page from your library; forgetting it is
 your call. `--dry-run` lists every page and the reason, and `--json` reports
 the counts.
 
-## Page text, planned
+## Page text, if you ask for it
 
-Not built yet; this is what it will do. Content capture is opt in: a command
-of its own that runs only when you run it, never as part of `save`. It sends
-the addresses of pages you visited to their own sites, and the addresses of X
-posts to the public X post API, to read each page's main text. It uses
-optional local tools when they are installed: yt-dlp for video captions, gh
-for GitHub, and Chrome for pages that need a browser to show their text.
-Without them it does what it can over plain HTTP. The text is stored as
-markdown, private to you, under `pages/content/`, with one line per attempt in
-`pages/content.jsonl`. robots.txt is not consulted, as with `enrich`: every
-address is one you opened yourself. What `enrich` never fetches, content
-capture never fetches either.
+```
+knowmoretabs content --dry-run   # what would be fetched, what would not and why; sends nothing
+knowmoretabs content --limit 30  # capture at most 30 pages this run
+knowmoretabs content             # capture every page not captured before, and retry the failed ones
+knowmoretabs content --url URL   # capture only this library page; repeatable
+```
+
+Content capture is opt in: a command of its own that runs only when you run
+it, never as part of `save`. It sends the addresses of pages you visited to
+their own sites, to read each page's main text, and stores that text as
+markdown, private to you: one file per page under `pages/content/`, named by
+the SHA-256 of the page's address, with one line per attempt in
+`pages/content.jsonl`. Today it reads every page over plain HTTP, the same
+way `enrich` does: without cookies, one request a second per site, a few
+sites at once, and no more than 10 MB of a page. Planned routes will also
+send the addresses of X posts to the public X post API, and use optional
+local tools when they are installed: yt-dlp for video captions, gh for
+GitHub, and Chrome for pages that need a browser to show their text. Without
+them it does what it can over plain HTTP. robots.txt is not consulted, as
+with `enrich`: every address is one you opened yourself.
+
+When article extraction misses a page's text, the fallback tries the whole
+body, removing menus, banners, footers and sidebars outside `<main>`. It
+keeps those elements inside `<main>` because they can contain page headings
+and usage instructions.
+
+What `enrich` never fetches, `content` never fetches either. Forgotten pages,
+private network addresses, search results, URLs carrying tokens and pages that
+are not web pages are counted in the report without being written to the
+content store. It records X profiles and YouTube channels and playlists as not
+a document, without a request, and anything that is not HTML as `not_html`
+with its type. A page that has text is `ok`, or `thin` when it has less than
+1,500 characters; either way the text is kept. A page drawn entirely by
+scripts is `empty_shell`, a sign-in form or a 401 is `behind_login`, a 403 is
+`blocked`, a 404 or 410 is `not_found`, and a short page whose publisher marks
+it as not free is `paywalled`, keeping what it showed. A timeout, a 429 or an
+HTTP 502, 503 or 504 is tried twice more in the same run, waiting 2 and then 8
+seconds or as long as the site's `Retry-After` asks, up to a minute. A longer
+`Retry-After` ends retries for that run. A site that answers 429 has its
+request interval doubled, up to eight seconds, for the rest of the run. A page
+still failing is `error` and is tried again on the next run; after three runs
+it is `unavailable`. Every other outcome stands until you pass `--refetch`,
+and a refetch that finds the same text leaves the file as it was.
 
 ## Where the data lives
 
@@ -272,6 +305,8 @@ capture never fetches either.
 │       └── session.snss       # a verbatim copy of the browser's session file
 ├── pages/
 │   ├── metadata.jsonl         # what `enrich` fetched, one line per attempt; append-only
+│   ├── content.jsonl          # what `content` captured, one line per attempt; append-only
+│   ├── content/               # one markdown file per captured page, named by the SHA-256 of its address
 │   └── history.json           # what History last said about each page; refreshed, never drops a page
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
 ├── tags/
@@ -284,11 +319,10 @@ capture never fetches either.
 with a `schema_version`; it is the source of truth and readable in any
 editor. Everything under `export/` is derived and can be deleted.
 
-Nothing leaves the machine unless you run `enrich`. `save`, `serve`,
-`export` and the tag commands make no network requests of any kind; `enrich`
-is the only code that does, and what it sends is described above. Content
-capture, planned, will be the second, as described under **Page text,
-planned**. A
+Nothing leaves the machine unless you run `enrich` or `content`. `save`,
+`serve`, `export` and the tag commands make no network requests of any kind;
+`enrich` and `content` are the only code that does, and what each sends is
+described above. A
 `tag --prompt` folder is the one thing made to be handed on: it holds the
 addresses and titles of pages in your library, what `enrich` recorded about
 them if you ran it, and their searches and referrers if you ask for them. It
@@ -312,8 +346,9 @@ inherits whatever its parent grants; `knowmoretabs` warns when you do that.
 Every snapshot is written to a temporary directory and renamed into place in
 one step, under a lock, so an interrupted run leaves the archive exactly as
 it was and two runs at once both succeed. A snapshot id that is already taken
-gets a `-2` suffix rather than being overwritten. `library.json` and
-`pages/history.json` are written the same way.
+gets a `-2` suffix rather than being overwritten. `library.json`,
+`pages/history.json` and the files under `pages/content/` are written the
+same way.
 
 ## What it reads, and what it tolerates
 
@@ -395,9 +430,9 @@ Why decrypting is not the answer is in
 ## Non-goals
 
 No sync. No accounts. No cloud. No telemetry. No browser extension (for
-now). No page text unless you ask for it: content capture, planned, is opt in,
-and keyword search over what it stores comes later. No tag hierarchy. It never
-touches, closes or reorders tabs in the live browser, and never modifies the
+now). No page text unless you ask for it: `content` is opt in, and keyword
+search over what it stores comes later. No tag hierarchy. It never touches,
+closes or reorders tabs in the live browser, and never modifies the
 browser's own files: it reads and copies, nothing else.
 
 ## Deliberately not built
@@ -415,7 +450,7 @@ Each of these is a recorded decision, with its reasoning in
 - **Notes on a page.** `library.json` is where they would go, beside the
   forgotten URLs and the tags.
 - **Searching page contents.** Keyword search over the page text that
-  content capture, planned, stores. It waits for that store, and for a
+  `content` stores. It waits for that store, and for a
   measured query to say what the index should be.
 - **An index for years of snapshots.** Reading JSON into memory is instant at
   fifteen thousand rows. A rebuildable index arrives when a measured query is
@@ -450,8 +485,9 @@ band of `slices.toml`. Beyond that:
 - The archive is sacred. A browser file is never modified. A snapshot is
   published whole by one rename and never written again, and `library.json`
   and `pages/history.json` are replaced whole, so a failure mid-write leaves
-  the previous file as it was. `pages/metadata.jsonl` is append-only instead:
-  an interrupted `enrich` keeps every record it completed.
+  the previous file as it was. `pages/metadata.jsonl` and
+  `pages/content.jsonl` are append-only instead: an interrupted `enrich` or
+  `content` keeps every record it completed.
 - Plain files first. JSON snapshots are the source of truth and anything
   derived is rebuildable. No database until a measured query is slow; no
   async, since a single-user localhost server does not need it; no config

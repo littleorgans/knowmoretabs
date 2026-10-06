@@ -28,6 +28,14 @@ pub fn is_web(url: &Url) -> bool {
     matches!(url.scheme(), "http" | "https") && url.host().is_some()
 }
 
+/// The address sent over HTTP, normalized and without its fragment. This
+/// is also the identity used to refuse every variant of a forgotten page.
+pub fn page_url(raw: &str) -> Option<Url> {
+    let mut url = Url::parse(raw).ok()?;
+    url.set_fragment(None);
+    Some(url)
+}
+
 /// This machine or the private network, judged from the URL alone: an
 /// address literal outside public space, a name that only means something
 /// on a local network, or a bare name that a search domain would complete.

@@ -1,7 +1,7 @@
 //! Entry point: parses the command line, runs the chosen command, and turns
 //! the outcome into stdout lines or JSON and an exit status.
 //!
-//! slice: capture, library, triage, tags, history, enrich
+//! slice: capture, library, triage, tags, history, enrich, content
 //! why: Presentation lives here and nowhere else. The capture code returns
 //!      typed outcomes and typed errors; this file decides what a person
 //!      sees on a terminal, what a script sees under `--json`, and which
@@ -14,9 +14,13 @@ mod archive;
 mod assets;
 mod capture;
 mod cli;
+mod content;
+mod content_fetch;
+mod content_store;
 mod enrich;
 mod error;
 mod export;
+mod extract;
 mod fetch;
 mod github;
 mod guard;
@@ -110,20 +114,10 @@ fn main() -> ExitCode {
             };
             tags::tags_command(&root, &edit, *all, cli.json, log)
         }
-        Some(Command::Enrich {
-            dry_run,
-            limit,
-            refetch,
-        }) => enrich::command(
-            &root,
-            targets::Options {
-                dry_run: *dry_run,
-                limit: *limit,
-                refetch: *refetch,
-            },
-            cli.json,
-            log,
-        ),
+        Some(Command::Enrich(fetch)) => enrich::command(&root, (*fetch).into(), cli.json, log),
+        Some(Command::Content { fetch, urls }) => {
+            content::command(&root, (*fetch).into(), urls, cli.json, log)
+        }
         Some(Command::History { refresh: true }) => {
             library_history::refresh_command(&capture_options(&cli, root), cli.json, log)
         }

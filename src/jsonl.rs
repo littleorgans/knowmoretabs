@@ -19,8 +19,9 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::archive::{self, Archive};
+use crate::archive::{self, Archive, Lock};
 use crate::error::Error;
+use crate::triage::plural;
 
 /// A record that belongs to one URL; the latest line for a URL wins.
 pub trait Keyed {
@@ -74,12 +75,18 @@ impl<T: Serialize> Appender<T> {
 
     /// One whole line in one write, under the archive lock, synced.
     pub fn append(&mut self, line: &T) -> Result<(), Error> {
+        let lock = self.archive.lock(|| {})?;
+        self.append_locked(line, &lock)
+    }
+
+    /// [`Self::append`] for a caller already holding the archive lock, so
+    /// that a write before the line and the line itself are one step.
+    pub fn append_locked(&mut self, line: &T, _held: &Lock) -> Result<(), Error> {
         let mut bytes = serde_json::to_vec(line).map_err(|source| Error::Json {
             path: self.path.clone(),
             source,
         })?;
         bytes.push(b'\n');
-        let _lock = self.archive.lock(|| {})?;
         if !self.ends_with_newline()? {
             bytes.insert(0, b'\n');
         }
@@ -124,6 +131,21 @@ impl<R> Default for Latest<R> {
             pages: HashMap::new(),
             unreadable: 0,
         }
+    }
+}
+
+impl<R> Latest<R> {
+    /// The warning a command gives when lines of the log at `path` could
+    /// not be read; `None` when every line could.
+    pub fn unreadable_note(&self, path: &Path) -> Option<String> {
+        (self.unreadable > 0).then(|| {
+            format!(
+                "{} of {} could not be read and {} ignored",
+                plural(self.unreadable, "line"),
+                path.display(),
+                if self.unreadable == 1 { "was" } else { "were" }
+            )
+        })
     }
 }
 
