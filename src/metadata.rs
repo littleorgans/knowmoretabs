@@ -4,19 +4,18 @@
 //! why: `enrich` writes this file and `tag --prompt` reads it; the two are
 //!      built apart, so they meet in this one module and its pinned shape
 //!      (the 7b/7c contract). The file is append-only with one line per
-//!      fetch attempt, so the latest line for a URL wins, a field this build
-//!      does not know is ignored, and a line it cannot read (a torn tail
-//!      after a crash) costs that line, not the prompt. This module never
-//!      writes the file.
+//!      fetch attempt, read through `jsonl`, so the latest line for a URL
+//!      wins, a field this build does not know is ignored, and a line it
+//!      cannot read (a torn tail after a crash) costs that line, not the
+//!      prompt. This module never writes the file.
 
-use std::collections::HashMap;
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::error::Error;
+use crate::jsonl::{self, Keyed};
 
 pub const DIR: &str = "pages";
 pub const FILE: &str = "metadata.jsonl";
@@ -116,36 +115,17 @@ impl Record {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct Metadata {
-    /// The latest line for each URL.
-    pub pages: HashMap<String, Record>,
-    /// Lines that were not a record this build can read.
-    pub unreadable: usize,
+impl Keyed for Record {
+    fn key(&self) -> &str {
+        &self.url
+    }
 }
+
+pub type Metadata = jsonl::Latest<Record>;
 
 /// The whole file; a missing file is no metadata.
 pub fn read(root: &Path) -> Result<Metadata, Error> {
-    let path = path(root);
-    let text = match fs::read(&path) {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Metadata::default()),
-        Err(err) => return Err(Error::io("read page metadata", &path)(err)),
-    };
-    Ok(parse(&text))
-}
-
-fn parse(text: &str) -> Metadata {
-    let mut metadata = Metadata::default();
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        match serde_json::from_str::<Record>(line) {
-            Ok(record) => {
-                metadata.pages.insert(record.url.clone(), record);
-            }
-            Err(_) => metadata.unreadable += 1,
-        }
-    }
-    metadata
+    jsonl::read(&path(root), "read page metadata")
 }
 
 #[cfg(test)]
@@ -167,7 +147,7 @@ mod tests {
             "\n",
             r#"{"url":"https://d.test/","fetched_at":"2026-09-2"#,
         );
-        let metadata = parse(text);
+        let metadata: Metadata = jsonl::parse(text);
         assert_eq!(metadata.unreadable, 1);
         assert_eq!(metadata.pages.len(), 3);
         let a = &metadata.pages["https://a.test/"];

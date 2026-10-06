@@ -21,10 +21,11 @@ use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
 use crate::fetch::Fetcher;
+use crate::jsonl::Appender;
 use crate::library::{self, State};
 use crate::metadata;
 use crate::metadata_fetch;
-use crate::metadata_writer::{Appender, Line, Outcome};
+use crate::metadata_writer::{Line, Outcome};
 use crate::out;
 use crate::targets::{self, Item, Options, Plan, Why};
 use crate::triage::plural;
@@ -95,7 +96,7 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
 /// in order on one of the workers, busiest hosts first so the longest queue
 /// starts earliest.
 fn run(root: &Path, plan: &Plan, state: &State, log: Log) -> Result<Tally, Error> {
-    let appender = Mutex::new(Appender::open(root)?);
+    let appender = Mutex::new(Appender::open(root, metadata::path(root))?);
     let tally = Mutex::new(Tally::default());
     let record = |record: &Line| -> Result<(), Error> {
         appender

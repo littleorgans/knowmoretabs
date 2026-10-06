@@ -22,6 +22,7 @@ mod github;
 mod guard;
 mod head;
 mod history;
+mod jsonl;
 mod library;
 mod library_commands;
 mod library_history;

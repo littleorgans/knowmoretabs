@@ -1,26 +1,18 @@
-//! The writer of `pages/metadata.jsonl`: one line per fetch attempt,
-//! appended so that no interruption can cost more than the line in flight.
+//! The line `enrich` writes to `pages/metadata.jsonl`: one per fetch
+//! attempt, appended through `jsonl`.
 //!
 //! slice: enrich
 //! why: `enrich` owns this file and `tag --prompt` reads it through
 //!      `metadata`, the contract's reader, which this module deliberately
-//!      does not touch. A line is written whole, under the archive lock and
-//!      synced before the next, so two runs never interleave and a run
-//!      killed halfway leaves every earlier line readable. A torn tail from
-//!      a crash is left for the reader to skip, and the next line starts on
-//!      a fresh line rather than being glued to it.
+//!      does not touch. The written shape is declared here, apart from the
+//!      read one, so that a field added for writing can never quietly change
+//!      what the pinned 7b/7c reader accepts; the round trip test holds the
+//!      two together.
 
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::Serialize;
-
-use crate::archive::{self, Archive};
-use crate::error::Error;
-use crate::metadata;
 
 /// One fetch attempt, in the shape `metadata::Record` reads. Absent fields
 /// are not written.
@@ -104,76 +96,14 @@ impl Line {
     }
 }
 
-/// Appends lines to the file for the length of a run.
-#[derive(Debug)]
-pub struct Appender {
-    archive: Archive,
-    path: PathBuf,
-    file: File,
-}
-
-impl Appender {
-    /// Creates `pages/` (private, as the root is) and the file if absent.
-    pub fn open(root: &Path) -> Result<Self, Error> {
-        let dir = root.join(metadata::DIR);
-        archive::create_private_dir(&dir).map_err(Error::io("create", &dir))?;
-        let path = metadata::path(root);
-        let file = File::options()
-            .read(true)
-            .append(true)
-            .create(true)
-            .open(&path)
-            .map_err(Error::io("open", &path))?;
-        Ok(Self {
-            archive: Archive::at(root),
-            path,
-            file,
-        })
-    }
-
-    /// One whole line in one write, under the archive lock, synced.
-    pub fn append(&mut self, line: &Line) -> Result<(), Error> {
-        let mut bytes = serde_json::to_vec(line).map_err(|source| Error::Json {
-            path: self.path.clone(),
-            source,
-        })?;
-        bytes.push(b'\n');
-        let _lock = self.archive.lock(|| {})?;
-        if !self.ends_with_newline()? {
-            bytes.insert(0, b'\n');
-        }
-        self.file
-            .write_all(&bytes)
-            .map_err(Error::io("append to", &self.path))?;
-        self.file.sync_data().map_err(Error::io("sync", &self.path))
-    }
-
-    /// Whether the file is empty or its last byte ends a line. Appends go to
-    /// the end whatever the read position, so seeking here is harmless.
-    fn ends_with_newline(&mut self) -> Result<bool, Error> {
-        let len = self
-            .file
-            .metadata()
-            .map_err(Error::io("read", &self.path))?
-            .len();
-        if len == 0 {
-            return Ok(true);
-        }
-        let mut last = [0u8];
-        self.file
-            .seek(SeekFrom::Start(len - 1))
-            .and_then(|_| self.file.read_exact(&mut last))
-            .map_err(Error::io("read", &self.path))?;
-        Ok(last[0] == b'\n')
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::path::Path;
 
     use super::*;
-    use crate::metadata::Status;
+    use crate::jsonl::Appender;
+    use crate::metadata::{self, Status};
 
     fn page(url: &str) -> Line {
         let mut line = Line::new(url, Outcome::Ok);
@@ -202,7 +132,7 @@ mod tests {
     #[test]
     fn what_is_written_is_what_the_contract_reader_reads() {
         let dir = tempfile::tempdir().unwrap();
-        let mut appender = Appender::open(dir.path()).unwrap();
+        let mut appender = Appender::open(dir.path(), metadata::path(dir.path())).unwrap();
         appender
             .append(&Line::new("https://a.test/", Outcome::Error).with_reason("timeout"))
             .unwrap();
@@ -239,67 +169,5 @@ mod tests {
             "whole seconds: {}",
             first["fetched_at"]
         );
-    }
-
-    #[test]
-    fn a_torn_tail_costs_one_line_and_the_next_append_starts_fresh() {
-        let dir = tempfile::tempdir().unwrap();
-        Appender::open(dir.path())
-            .unwrap()
-            .append(&page("https://a.test/"))
-            .unwrap();
-        let mut file = File::options()
-            .append(true)
-            .open(metadata::path(dir.path()))
-            .unwrap();
-        file.write_all(br#"{"url":"https://torn.test/","fetched_at":"2026-"#)
-            .unwrap();
-        drop(file);
-        let torn = metadata::read(dir.path()).unwrap();
-        assert_eq!((torn.pages.len(), torn.unreadable), (1, 1));
-
-        Appender::open(dir.path())
-            .unwrap()
-            .append(&page("https://b.test/"))
-            .unwrap();
-        let read = metadata::read(dir.path()).unwrap();
-        assert_eq!(read.pages.len(), 2, "b.test was not glued to the tear");
-        assert_eq!(read.unreadable, 1);
-        assert!(raw_lines(dir.path())[2].starts_with(r#"{"url":"https://b.test/""#));
-    }
-
-    #[test]
-    fn concurrent_appenders_preserve_complete_records() {
-        let dir = tempfile::tempdir().unwrap();
-        std::thread::scope(|scope| {
-            for worker in 0..8 {
-                let root = dir.path();
-                scope.spawn(move || {
-                    let mut writer = Appender::open(root).unwrap();
-                    for n in 0..16 {
-                        writer
-                            .append(&page(&format!("https://a.test/{worker}/{n}")))
-                            .unwrap();
-                    }
-                });
-            }
-        });
-        let read = metadata::read(dir.path()).unwrap();
-        assert_eq!((read.pages.len(), read.unreadable), (128, 0));
-        assert_eq!(raw_lines(dir.path()).len(), 128);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn the_pages_directory_is_private() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().join("archive");
-        Appender::open(&root).unwrap();
-        let mode = fs::metadata(root.join(metadata::DIR))
-            .unwrap()
-            .permissions()
-            .mode();
-        assert_eq!(mode & 0o777, 0o700);
     }
 }
