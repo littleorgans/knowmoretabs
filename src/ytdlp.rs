@@ -128,7 +128,7 @@ pub fn waiting_note(waiting: usize) -> String {
 /// How yt-dlp's reason for failing maps to a status, matched without
 /// regard to case, first match wins: a bot check before a sign in, a
 /// private video before a sign in, an age check before a sign in.
-const REFUSALS: [(&str, Status, &str); 23] = [
+const REFUSALS: [(&str, Status, &str); 24] = [
     (
         "not a bot",
         Status::Blocked,
@@ -185,6 +185,11 @@ const REFUSALS: [(&str, Status, &str); 23] = [
     ("video unavailable", Status::NotFound, "video unavailable"),
     (
         "video is unavailable",
+        Status::NotFound,
+        "video unavailable",
+    ),
+    (
+        "video is not available",
         Status::NotFound,
         "video unavailable",
     ),
@@ -494,6 +499,29 @@ mod tests {
             refusal(None, ""),
             (Status::Error, "yt-dlp was stopped by a signal".to_owned())
         );
+    }
+
+    #[test]
+    fn unavailable_wording_is_final_without_overriding_access_refusals() {
+        for (complaint, status, reason) in [
+            (
+                "ERROR: [youtube] aBc-12_xYz9: This video is not available.",
+                Status::NotFound,
+                "video unavailable",
+            ),
+            (
+                "ERROR: [youtube] aBc-12_xYz9: This video is not available in your country.",
+                Status::Blocked,
+                "not available in this country",
+            ),
+            (
+                "ERROR: [youtube] aBc-12_xYz9: This video is not available. Sign in to view this video.",
+                Status::BehindLogin,
+                "sign in required",
+            ),
+        ] {
+            assert_eq!(refusal(Some(1), complaint), (status, reason.to_owned()));
+        }
     }
 
     #[test]
