@@ -584,17 +584,30 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().to_path_buf();
         let held = Archive::at(&root).lock(|| {}).unwrap();
+        let (ready, started) = std::sync::mpsc::channel();
         let opening = std::thread::spawn({
             let root = root.clone();
-            move || Store::open(&root).map(|_| ())
+            move || {
+                // Check each actual directory creation, including after an
+                // Appender::open that would release its own lock too early.
+                let probe = fs::File::options()
+                    .read(true)
+                    .write(true)
+                    .open(root.join(archive::LOCK_FILE))
+                    .unwrap();
+                archive::DIRECTORY_CREATION_LOCK_PROBE.with(|slot| {
+                    *slot.borrow_mut() = Some(probe);
+                });
+                ready.send(()).unwrap();
+                Store::open(&root).map(|_| ())
+            }
         });
+        started.recv().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(300));
-        assert!(
-            !root.join(metadata::DIR).exists(),
-            "nothing before the lock"
-        );
+        let wrote_early = root.join(metadata::DIR).exists();
         drop(held);
         opening.join().unwrap().unwrap();
+        assert!(!wrote_early, "nothing before the lock");
         assert!(log_path(&root).is_file());
         assert!(super::dir(&root).is_dir());
     }
