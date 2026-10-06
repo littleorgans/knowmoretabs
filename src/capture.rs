@@ -18,7 +18,7 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use sha2::{Digest, Sha256};
 
-use crate::archive::{Archive, SNAPSHOT_JSON};
+use crate::archive::{self, Archive, SNAPSHOT_JSON};
 use crate::error::Error;
 use crate::history;
 use crate::library_history;
@@ -134,7 +134,7 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
 
     let archive = Archive::open(&opts.root)?;
     let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
-    let removed = archive.clean_stale_staging()?;
+    let removed = archive::clean_stale_staging(&archive.snapshots_dir())?;
     if removed > 0 {
         log.note(&format!(
             "removed {removed} stale staging director{}",

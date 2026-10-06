@@ -104,22 +104,6 @@ impl Archive {
         Ok(Lock { _file: file })
     }
 
-    /// Removes staging directories left by interrupted runs. Call with the
-    /// lock held. Returns how many were removed.
-    pub fn clean_stale_staging(&self) -> Result<usize, Error> {
-        let dir = self.snapshots_dir();
-        let mut removed = 0;
-        for entry in fs::read_dir(&dir).map_err(Error::io("list", &dir))? {
-            let entry = entry.map_err(Error::io("list", &dir))?;
-            let name = entry.file_name();
-            if name.to_string_lossy().starts_with(STAGING_PREFIX) {
-                fs::remove_dir_all(entry.path()).map_err(Error::io("remove", entry.path()))?;
-                removed += 1;
-            }
-        }
-        Ok(removed)
-    }
-
     /// Published snapshot ids, oldest first. Hidden entries are not snapshots.
     pub fn snapshot_ids(&self) -> Result<Vec<String>, Error> {
         let dir = self.snapshots_dir();
@@ -315,6 +299,32 @@ pub fn replace_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
     sync_dir(parent)
 }
 
+/// Removes what interrupted runs left staged in `dir`: snapshot staging
+/// directories and files staged by [`replace_file`] alike. Call with the
+/// lock held. Returns how many were removed.
+pub fn clean_stale_staging(dir: &Path) -> Result<usize, Error> {
+    let mut removed = 0;
+    for entry in fs::read_dir(dir).map_err(Error::io("list", dir))? {
+        let entry = entry.map_err(Error::io("list", dir))?;
+        if !entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(STAGING_PREFIX)
+        {
+            continue;
+        }
+        let path = entry.path();
+        let is_dir = entry.file_type().map_err(Error::io("list", dir))?.is_dir();
+        if is_dir {
+            fs::remove_dir_all(&path).map_err(Error::io("remove", &path))?;
+        } else {
+            fs::remove_file(&path).map_err(Error::io("remove", &path))?;
+        }
+        removed += 1;
+    }
+    Ok(removed)
+}
+
 /// The archive is a record of everything the user browses, so it is created
 /// private to them.
 ///
@@ -501,10 +511,28 @@ mod tests {
         let abandoned = archive.stage().unwrap();
         let abandoned_path = abandoned.dir.keep();
         assert!(abandoned_path.is_dir());
-        assert_eq!(archive.clean_stale_staging().unwrap(), 2);
+        assert_eq!(clean_stale_staging(&archive.snapshots_dir()).unwrap(), 2);
         assert!(!abandoned_path.is_dir());
         assert!(!staging.path().is_dir());
         drop(staging);
+    }
+
+    #[test]
+    fn cleaning_a_directory_removes_staged_files_and_keeps_the_rest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        fs::write(dir.join(format!("{STAGING_PREFIX}abc")), b"half written").unwrap();
+        fs::create_dir(dir.join(format!("{STAGING_PREFIX}def"))).unwrap();
+        fs::write(dir.join("kept.md"), b"published").unwrap();
+        fs::create_dir(dir.join("kept")).unwrap();
+        assert_eq!(clean_stale_staging(dir).unwrap(), 2);
+        let mut left: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        left.sort();
+        assert_eq!(left, ["kept", "kept.md"]);
+        assert!(clean_stale_staging(&dir.join("missing")).is_err());
     }
 
     #[test]
@@ -524,7 +552,7 @@ mod tests {
         #[cfg(unix)]
         assert_eq!(std::fs::metadata(&published).unwrap().ino(), staging_inode);
         assert_eq!(archive.snapshot_ids().unwrap(), vec!["2026-01-01-000000Z"]);
-        assert_eq!(archive.clean_stale_staging().unwrap(), 0);
+        assert_eq!(clean_stale_staging(&archive.snapshots_dir()).unwrap(), 0);
 
         let again = archive.stage().unwrap();
         again.write("a.txt", b"other").unwrap();
@@ -532,7 +560,7 @@ mod tests {
         assert!(err.to_string().contains("already exists"));
         assert_eq!(fs::read(published.join("a.txt")).unwrap(), b"hello");
         assert_eq!(
-            archive.clean_stale_staging().unwrap(),
+            clean_stale_staging(&archive.snapshots_dir()).unwrap(),
             0,
             "failed publish cleans itself"
         );
@@ -586,7 +614,11 @@ mod tests {
                 !destination.join("snapshot.json").exists(),
                 "{id}: the staged snapshot reached the destination"
             );
-            assert_eq!(archive.clean_stale_staging().unwrap(), 0, "{id}");
+            assert_eq!(
+                clean_stale_staging(&archive.snapshots_dir()).unwrap(),
+                0,
+                "{id}"
+            );
         }
         assert_eq!(
             fs::read(

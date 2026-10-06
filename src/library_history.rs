@@ -209,7 +209,7 @@ pub fn refresh_command(opts: &capture::Options, json: bool, log: Log) -> Result<
     let profile_dir = capture::profile_dir(opts, log)?;
     let archive = Archive::open(&opts.root)?;
     let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
-    archive.clean_stale_staging()?;
+    archive::clean_stale_staging(&archive.snapshots_dir())?;
     let pending = prepare(&opts.root, &archive, &[])?;
     let urls: BTreeSet<&str> = pending.urls.iter().map(String::as_str).collect();
     let mut reading = history::read_urls(profile_dir.as_deref(), &archive, &urls);
