@@ -21,9 +21,9 @@ Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (`c
 - Library: pages derived across snapshots, user state, export, the library's History record: `code:src/library.rs`, `code:src/library_commands.rs`, `code:src/export.rs`, `code:src/library_history.rs`.
 - Serve and triage: the HTTP server and JSON API, forget and restore: `code:src/server.rs`, `code:src/triage.rs`; the frontend `code:web/app.js`, embedded by `code:src/assets.rs`.
 - Tags and suggestions: `code:src/tags.rs`, `code:src/prompt.rs`, `code:src/suggestions.rs`.
-- Enrich, the opt-in head fetch: `code:src/enrich.rs`, `code:src/metadata_fetch.rs`, `code:src/head.rs`, `code:src/github.rs`, `code:src/metadata.rs`, `code:src/metadata_writer.rs`.
+- Enrich, the opt-in head fetch: `code:src/enrich.rs`, `code:src/metadata_fetch.rs`, `code:src/head.rs`, `code:src/metadata.rs`, `code:src/metadata_writer.rs`; GitHub address parsing and the embedded repository data `code:src/github.rs`, shared with content.
 - Shared by the network commands: the URL refusal rules `code:src/guard.rs`, the guarded GET and pacer `code:src/fetch.rs`, the planner and per-host workers `code:src/targets.rs`, the append-only logs `code:src/jsonl.rs`.
-- Content, the opt-in page text capture: `code:src/content.rs`, `code:src/content_fetch.rs`, `code:src/content_store.rs`, `code:src/extract.rs`; the router `code:src/content_route.rs` and the X post route `code:src/xpost.rs`; classifier parity tool `code:examples/content_parity.rs`.
+- Content, the opt-in page text capture: `code:src/content.rs`, `code:src/content_plan.rs`, `code:src/content_fetch.rs`, `code:src/content_store.rs`, `code:src/extract.rs`; the router `code:src/content_route.rs`, the X post route `code:src/xpost.rs` and the GitHub route through `gh api` `code:src/github_api.rs` with its markdown `code:src/github_page.rs`; external tool discovery and bounded runs `code:src/tools.rs`; the readiness report `code:src/doctor.rs`; classifier parity tool `code:examples/content_parity.rs`.
 - Slice lint and matrix generator: `code:xtask/src/main.rs`.
 
 ## Reading path
@@ -53,7 +53,8 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 - An unknown session command is skipped and counted, never fatal; a torn tail is reported as truncated bytes (`code:src/session.rs`, `code:src/snss.rs`).
 - The encrypted-sessions preflight refuses a stale save with exit 3; `--force` cannot bypass it (`code:src/staleness.rs#check`, `code:src/error.rs#exit_code`).
 - Tabs on this machine (`localhost`, its subdomains, loopback) are left out of `snapshot.json` and of change detection; `session.snss` stays verbatim and keeps them (`code:src/capture.rs#leave_out_this_machine`, `code:src/local.rs#is_this_machine_url`).
-- Only `enrich` and `content` send anything off the machine; `ureq` appears only in `code:src/fetch.rs`.
+- Only `enrich` and `content` send page addresses off the machine; `doctor` sends nothing of the owner's (gh checks its own sign in; `--live` asks the X post API for one fixed public post). `ureq` appears only in `code:src/fetch.rs`.
+- External tools run only through `code:src/tools.rs#run`: an argument vector, no shell, no input, a timeout, capped output, stderr cut to one line; `gh auth status` is read for its exit code only (`code:src/github_api.rs#Readiness`).
 - `serve` binds 127.0.0.1 only (`code:src/server.rs`).
 - JSON is the archive's storage; SQLite, bundled, only reads a copy of the browser's `History` taken with its `-journal` and `-wal` (`code:src/history.rs#COMPANIONS`).
 - Foreground time sums positive durations only; the search walk stops at `MAX_HOPS` hops (`code:src/history.rs#MAX_HOPS`).

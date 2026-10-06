@@ -165,6 +165,21 @@ as what you can do that you could not before.
   thread. A missing, deleted or suspended post is `not_found`, a private
   post or protected account `behind_login`, and a post the API reports as
   blocked `blocked`.
+- **GitHub as text.** With gh installed and signed in, `content` reads a
+  GitHub repository, issue, pull request or discussion through `gh api`,
+  never seeing the token: a repository's description, topics and README as
+  written, and a thread's title, state, opening post and first 10 comments,
+  with the total. At most four gh calls at once, each stopped after 20
+  seconds. A private repository is `behind_login`, a page GitHub does not
+  show is `not_found`, and a repository with no README or a thread with only
+  a title is `thin`. Without gh, GitHub pages are read as web pages, and the
+  report says so.
+- **Check what content can use.** `knowmoretabs doctor` reports whether each
+  way of reading pages is ready, missing or degraded, with how to fix it:
+  the web tier, gh and its sign in (exit code only), the X post API
+  (`--live` asks it once for a fixed public post), yt-dlp with deno or node,
+  and the `--browser` binary; then whether the archive is private and its
+  pages by status. `--json` for scripts. Exits 0 when the web tier is ready.
 
 ### Changed
 

@@ -25,8 +25,9 @@ cargo install --git https://github.com/littleorgans/knowmoretabs knowmoretabs
 
 Or clone the repository and run `cargo build --release`; the binary is
 `target/release/knowmoretabs`, and it depends on nothing else. `content`
-works without any other tool; planned routes will let it use yt-dlp, gh and
-Chrome when they are installed.
+works without any other tool; it reads GitHub through `gh` when gh is
+installed and signed in, and planned routes will let it use yt-dlp and
+Chrome. `knowmoretabs doctor` says which of them it can use.
 
 Nothing is tagged yet: the prebuilt binaries and the crates.io package
 described next arrive with v0.1.0, and until then the repository is the only
@@ -164,6 +165,7 @@ knowmoretabs history             # how many library pages have History signals, 
 knowmoretabs history --refresh   # read History now and update every library page's signals
 knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
 knowmoretabs content             # keep the main text of library pages as markdown; --dry-run, --limit N, --refetch, --url URL
+knowmoretabs doctor              # which ways of reading pages this machine can use; --live asks the X post API once
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
 knowmoretabs tag <URL>... --add NAME --remove NAME --clear NAME   # tag pages, untag them, or take back a decision; all repeatable
@@ -251,6 +253,7 @@ knowmoretabs content --dry-run   # what would be fetched, what would not and why
 knowmoretabs content --limit 30  # capture at most 30 pages this run
 knowmoretabs content             # capture every page not captured before, and retry the failed ones
 knowmoretabs content --url URL   # capture only this library page; repeatable
+knowmoretabs doctor              # which ways of reading pages are ready, and what the archive holds
 ```
 
 Content capture is opt in: a command of its own that runs only when you run
@@ -264,10 +267,11 @@ at once, and no more than 10 MB of a page. An X post (`x.com` or
 `twitter.com`, `/<user>/status/<id>`) is read from the public X post API at
 `api.fxtwitter.com` instead, the one third party service it uses: it sends
 the post's number, not the page's address, without cookies, one request a
-second. Planned routes will use optional local tools when they are
-installed: yt-dlp for video captions, gh for GitHub, and Chrome for pages
-that need a browser to show their text. Without them it does what it can
-over plain HTTP. robots.txt is not consulted, as with `enrich`: every
+second. A GitHub repository, issue, pull request or discussion is read
+through gh, GitHub's own command line tool, when it is installed and signed
+in. Planned routes will use yt-dlp for video captions and Chrome for pages
+that need a browser to show their text. Without these tools it does what it
+can over plain HTTP. robots.txt is not consulted, as with `enrich`: every
 address is one you opened yourself.
 
 When article extraction misses a page's text, the fallback tries the whole
@@ -302,6 +306,37 @@ post the API reports as blocked is `blocked`; a post with no text at all is
 `thin`. The API's 429 and 5xx answers are retried as a site's are. Two
 addresses of the same post are fetched once.
 
+A repository (`github.com/<owner>/<repo>`), issue (`/issues/<n>`), pull
+request (`/pull/<n>`) or discussion (`/discussions/<n>`) is read with
+`gh api`. gh holds your GitHub sign in; knowmoretabs never sees the token.
+gh runs without a shell, at most four calls at a time, each stopped after
+20 seconds. From a repository it keeps the description, the topics and the
+README as its author wrote it. From an issue, pull request or discussion it
+keeps the title, who opened it and when, its state, the opening post and
+the first 10 comments, with the total, since a thread's opening says what it
+is about; a discussion's accepted answer is kept too. Only public
+repositories are kept: a private one is `behind_login`, even when gh could
+read it. GitHub answers 404 alike for a page that does not exist and one
+your account may not see, so either is `not_found`. A repository with no
+README, or a thread with only a title, is `thin`. Rate limits and 5xx answers
+are retried as a site's are; a gh that fails or times out is `error`, tried
+again on the next run. Other GitHub pages, such as files, profiles and
+settings, are read as web pages. Without gh, or with gh not signed in, GitHub
+pages are read as web pages too, and the report says so, for example
+`GitHub API: gh not found, used the web page for 3 pages`. A dry run sends
+nothing, so it checks only that gh is installed.
+
+`knowmoretabs doctor` says, for each way `content` reads pages, whether it
+is ready, missing or degraded, and how to fix it: the web tier, which is
+compiled in; GitHub through gh, with its version and whether
+`gh auth status` exits 0 (its output is never read); the X post API; yt-dlp
+with deno or node for YouTube, and the `--browser` binary (Chrome by
+default) for headless reading, both ahead of their routes. Then the archive:
+whether it is private, whether `pages/content` exists, and its pages by
+latest status. It sends nothing of yours: gh checks its own sign in with
+GitHub, and `--live` asks the X post API once for a fixed public post. It
+exits 0 whenever the web tier is ready; a missing tool is a warning.
+
 ## Where the data lives
 
 | Platform | Archive root |
@@ -333,8 +368,10 @@ editor. Everything under `export/` is derived and can be deleted.
 
 Nothing leaves the machine unless you run `enrich` or `content`. `save`,
 `serve`, `export` and the tag commands make no network requests of any kind;
-`enrich` and `content` are the only code that does, and what each sends is
-described above. A
+`enrich` and `content` are the only code that sends your pages' addresses,
+and what each sends is described above. `doctor` sends nothing of yours: gh
+checks its own sign in with GitHub, and `doctor --live` asks the X post API
+for one fixed public post. A
 `tag --prompt` folder is the one thing made to be handed on: it holds the
 addresses and titles of pages in your library, what `enrich` recorded about
 them if you ran it, and their searches and referrers if you ask for them. It
@@ -507,7 +544,7 @@ band of `slices.toml`. Beyond that:
 - No build step for the frontend: hand-written HTML, CSS and JS, the same
   assets for `file://` and `serve`.
 - One binary, no runtime. Optional local tools may widen what an opt-in
-  command can reach (planned: yt-dlp, gh and Chrome for content capture), never
+  command can reach (gh for content capture; planned: yt-dlp and Chrome), never
   what the binary needs to run.
 - Comments explain why, never what. Library code returns typed errors; no
   `unwrap()` outside tests and no `panic!` on user input. A clippy `allow` is
