@@ -97,11 +97,13 @@ impl Status {
     }
 }
 
-/// The route that made an attempt. Only the generic web route exists yet.
+/// The route that made an attempt: the generic web route, or the X post
+/// API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
     Web,
+    X,
     #[serde(other)]
     Other,
 }
@@ -326,16 +328,16 @@ pub struct Store {
 
 impl Store {
     /// Opens the log and the content directory, both private, and removes
-    /// what an interrupted run left staged there.
+    /// what an interrupted run left staged there, all under one hold of the
+    /// archive lock, so every write `content` makes holds it.
     pub fn open(root: &Path) -> Result<Self, Error> {
-        let log = Appender::open(root, log_path(root))?;
+        let archive = Archive::at(root);
+        let lock = archive.lock(|| {})?;
+        let log = Appender::open_locked(root, log_path(root), &lock)?;
         let dir = dir(root);
         archive::create_private_dir(&dir).map_err(Error::io("create", &dir))?;
-        let archive = Archive::at(root);
-        {
-            let _lock = archive.lock(|| {})?;
-            archive::clean_stale_staging(&dir)?;
-        }
+        archive::clean_stale_staging(&dir)?;
+        drop(lock);
         Ok(Self { archive, dir, log })
     }
 
@@ -578,6 +580,39 @@ mod tests {
     }
 
     #[test]
+    fn opening_a_store_writes_nothing_until_it_holds_the_archive_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let held = Archive::at(&root).lock(|| {}).unwrap();
+        let (ready, started) = std::sync::mpsc::channel();
+        let opening = std::thread::spawn({
+            let root = root.clone();
+            move || {
+                // Check each actual directory creation, including after an
+                // Appender::open that would release its own lock too early.
+                let probe = fs::File::options()
+                    .read(true)
+                    .write(true)
+                    .open(root.join(archive::LOCK_FILE))
+                    .unwrap();
+                archive::DIRECTORY_CREATION_LOCK_PROBE.with(|slot| {
+                    *slot.borrow_mut() = Some(probe);
+                });
+                ready.send(()).unwrap();
+                Store::open(&root).map(|_| ())
+            }
+        });
+        started.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let wrote_early = root.join(metadata::DIR).exists();
+        drop(held);
+        opening.join().unwrap().unwrap();
+        assert!(!wrote_early, "nothing before the lock");
+        assert!(log_path(&root).is_file());
+        assert!(super::dir(&root).is_dir());
+    }
+
+    #[test]
     fn opening_a_store_clears_staged_leftovers_only() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -603,6 +638,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("archive");
+        archive::create_private_dir(&root).unwrap();
         let mut store = Store::open(&root).unwrap();
         store
             .record(ok_line("https://a.test/"), Some(&page("Body\n")))

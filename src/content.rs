@@ -9,9 +9,11 @@
 //!      rules keep home (forgotten, private, token, search and non web URLs)
 //!      are counted and stay out of the store. A page known by several
 //!      addresses that differ only after `#` is fetched once and recorded
-//!      under each. Hosts run in parallel while each sees one request a
-//!      second, and every result is written as it arrives, so an interrupted
-//!      run keeps what it captured.
+//!      under each. A page is routed by its address: an X post goes to the
+//!      X post API, once per post and paced on the API's host, and every
+//!      other document to its own site. Hosts run in parallel while each
+//!      sees one request a second, and every result is written as it
+//!      arrives, so an interrupted run keeps what it captured.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -24,6 +26,7 @@ use url::Url;
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::content_fetch::{self, Capture};
+use crate::content_route::Route;
 use crate::content_store::{self, Line, Status, Store};
 use crate::error::Error;
 use crate::fetch::Fetcher;
@@ -52,6 +55,7 @@ struct Fetch {
     /// The first library URL of the group; the fetcher drops its fragment.
     url: String,
     host: String,
+    route: Route,
     /// Every library URL the fetch stands for, with its attempt number.
     pages: Vec<(String, u32)>,
 }
@@ -179,10 +183,21 @@ fn plan(
             .into_iter()
             .map(|item| (item.url, Skip::Forgotten)),
     );
-    let (documents, not_documents): (Vec<Item>, Vec<Item>) = candidates
-        .into_iter()
-        .partition(|item| Url::parse(&item.url).map_or(true, |url| !is_not_a_document(&url)));
-    plan.todo = documents;
+    let mut documents = Vec::new();
+    let mut not_documents = Vec::new();
+    for mut item in candidates {
+        match Url::parse(&item.url).map_or(Some(Route::Web), |url| Route::of(&url)) {
+            Some(route) => {
+                if let Some(host) = route.host() {
+                    host.clone_into(&mut item.host);
+                }
+                documents.push((item, route));
+            }
+            None => not_documents.push(item),
+        }
+    }
+    let (todo, mut routes): (Vec<Item>, Vec<Route>) = documents.into_iter().unzip();
+    plan.todo = todo;
     let mut unsent: Vec<Line> = not_documents
         .iter()
         .map(|item| Line::new(&item.url, Status::Skipped).with_reason(Skip::NotADocument.label()))
@@ -195,18 +210,19 @@ fn plan(
     if let Some(limit) = options.limit {
         plan.more = plan.todo.len().saturating_sub(limit);
         plan.todo.truncate(limit);
+        routes.truncate(limit);
     }
     let attempt = |url: &str| content_fetch::next_attempt(known.pages.get(url));
     let mut fetches: Vec<Fetch> = Vec::new();
     let mut by_page: HashMap<String, usize> = HashMap::new();
-    for item in &plan.todo {
+    for (item, route) in plan.todo.iter().zip(routes) {
         if item.why == Why::Login {
             let line =
                 Line::new(&item.url, Status::BehindLogin).with_reason("login page, not fetched");
             unsent.push(content_fetch::settle(line, attempt(&item.url)));
             continue;
         }
-        let page = without_fragment(&item.url);
+        let page = route.key(&item.url);
         let pair = (item.url.clone(), attempt(&item.url));
         if let Some(&i) = by_page.get(&page) {
             fetches[i].pages.push(pair);
@@ -215,45 +231,12 @@ fn plan(
             fetches.push(Fetch {
                 url: item.url.clone(),
                 host: item.host.clone(),
+                route,
                 pages: vec![pair],
             });
         }
     }
     (plan, Work { fetches, unsent })
-}
-
-fn without_fragment(raw: &str) -> String {
-    raw.split_once('#').map_or(raw, |(page, _)| page).to_owned()
-}
-
-/// Pages on X and `YouTube` that list documents rather than being one:
-/// profiles, timelines, channels and playlists.
-fn is_not_a_document(url: &Url) -> bool {
-    let host = guard::host_key(url);
-    let host = host
-        .strip_prefix("www.")
-        .or_else(|| host.strip_prefix("mobile."))
-        .or_else(|| host.strip_prefix("m."))
-        .unwrap_or(&host);
-    let mut segments = url
-        .path_segments()
-        .into_iter()
-        .flatten()
-        .filter(|segment| !segment.is_empty());
-    match host {
-        "x.com" | "twitter.com" => {
-            let (_, second, third) = (segments.next(), segments.next(), segments.next());
-            !(second == Some("status")
-                && third.is_some_and(|id| id.bytes().all(|b| b.is_ascii_digit())))
-        }
-        "youtube.com" => match segments.next() {
-            Some(first) => {
-                first.starts_with('@') || ["channel", "c", "user", "playlist"].contains(&first)
-            }
-            None => false,
-        },
-        _ => false,
-    }
 }
 
 /// Records the pages that need no request, then fetches the rest, each
@@ -291,7 +274,7 @@ fn run(root: &Path, work: Work, state: &State, log: Log) -> Result<Tally, Error>
             .map(|fetch| (fetch.host.as_str(), fetch)),
         |fetch| {
             let started = Instant::now();
-            let Capture { line, page } = content_fetch::capture(&fetcher, &fetch.url);
+            let Capture { line, page } = fetch.route.capture(&fetcher, &fetch.url);
             {
                 let mut tally = tally.lock().unwrap_or_else(PoisonError::into_inner);
                 tally.fetches += 1;
@@ -402,49 +385,7 @@ fn report(plan: &Plan, tally: &Tally, took: Duration, root: &Path, json: bool, l
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn url(raw: &str) -> Url {
-        Url::parse(raw).unwrap()
-    }
-
-    #[test]
-    fn profiles_channels_and_playlists_are_not_documents() {
-        for raw in [
-            "https://x.com/someone",
-            "https://x.com/home",
-            "https://twitter.com/someone/lists",
-            "https://mobile.twitter.com/someone/status/",
-            "https://x.com/someone/status/not-a-number",
-            "https://www.youtube.com/@someone",
-            "https://www.youtube.com/channel/UC000",
-            "https://www.youtube.com/c/Someone",
-            "https://www.youtube.com/user/someone",
-            "https://www.youtube.com/playlist?list=PL000",
-        ] {
-            assert!(is_not_a_document(&url(raw)), "{raw}");
-        }
-        for raw in [
-            "https://x.com/someone/status/1234567890",
-            "https://twitter.com/someone/status/1234567890/photo/1",
-            "https://www.youtube.com/watch?v=abc",
-            "https://youtu.be/abc",
-            "https://www.youtube.com/shorts/abc",
-            "https://www.youtube.com/",
-            "https://example.test/someone",
-        ] {
-            assert!(!is_not_a_document(&url(raw)), "{raw}");
-        }
-    }
-
-    #[test]
-    fn fragments_are_dropped_for_grouping_only() {
-        assert_eq!(without_fragment("https://a.test/p#one"), "https://a.test/p");
-        assert_eq!(without_fragment("https://a.test/p"), "https://a.test/p");
-        assert_eq!(
-            without_fragment("https://a.test/p?q=1#"),
-            "https://a.test/p?q=1"
-        );
-    }
+    use crate::xpost;
 
     fn snapshot(urls: &[&str]) -> Snapshot {
         let tabs: Vec<serde_json::Value> = urls
@@ -536,6 +477,36 @@ mod tests {
             ]
         );
         assert_eq!(unsent(&work), []);
+    }
+
+    #[test]
+    fn one_post_is_fetched_once_from_the_api_host() {
+        let snapshots = [snapshot(&[
+            "https://x.com/someone/status/42",
+            "https://twitter.com/someone/status/42#top",
+            "https://x.com/other/status/43",
+            "https://a.test/",
+        ])];
+        let (plan, work) = plan(&snapshots, &state(&[]), &log(&[]), Options::default());
+        let hosts: Vec<&str> = plan.todo.iter().map(|i| i.host.as_str()).collect();
+        assert_eq!(
+            hosts,
+            [xpost::API_HOST, xpost::API_HOST, xpost::API_HOST, "a.test"]
+        );
+        assert_eq!(plan.sites(), 2);
+        let fetches: Vec<(&str, &Route, usize)> = work
+            .fetches
+            .iter()
+            .map(|f| (f.host.as_str(), &f.route, f.pages.len()))
+            .collect();
+        assert_eq!(
+            fetches,
+            [
+                (xpost::API_HOST, &Route::XPost("42".to_owned()), 2),
+                (xpost::API_HOST, &Route::XPost("43".to_owned()), 1),
+                ("a.test", &Route::Web, 1),
+            ]
+        );
     }
 
     #[test]

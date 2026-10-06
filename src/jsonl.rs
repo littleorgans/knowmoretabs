@@ -39,8 +39,16 @@ pub struct Appender<T> {
 
 impl<T: Serialize> Appender<T> {
     /// Creates the log's directory (private, as the root is) and the log if
-    /// absent. The log is `0600` on Unix, an existing one included.
+    /// absent, under the archive lock, so the root must exist. The log is
+    /// `0600` on Unix, an existing one included.
     pub fn open(root: &Path, path: PathBuf) -> Result<Self, Error> {
+        let lock = Archive::at(root).lock(|| {})?;
+        Self::open_locked(root, path, &lock)
+    }
+
+    /// [`Self::open`] for a caller already holding the archive lock, so
+    /// that the log's setup and the caller's own are one step.
+    pub fn open_locked(root: &Path, path: PathBuf, _held: &Lock) -> Result<Self, Error> {
         if let Some(dir) = path.parent() {
             archive::create_private_dir(dir).map_err(Error::io("create", dir))?;
         }
@@ -284,6 +292,7 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().join("archive");
+        archive::create_private_dir(&root).unwrap();
         open(&root);
         let mode = |path: &Path| fs::metadata(path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode(&root.join("pages")), 0o700);

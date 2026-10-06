@@ -325,6 +325,15 @@ pub fn clean_stale_staging(dir: &Path) -> Result<usize, Error> {
     Ok(removed)
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// An independent handle used to check the real lock at each directory
+    /// creation in the observing test's thread. Absent in production.
+    pub static DIRECTORY_CREATION_LOCK_PROBE: std::cell::RefCell<Option<File>> = const {
+        std::cell::RefCell::new(None)
+    };
+}
+
 /// The archive is a record of everything the user browses, so it is created
 /// private to them.
 ///
@@ -344,6 +353,16 @@ pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
     if path.is_dir() {
         return Ok(());
     }
+    #[cfg(test)]
+    DIRECTORY_CREATION_LOCK_PROBE.with(|probe| {
+        if let Some(file) = probe.borrow().as_ref() {
+            assert!(
+                matches!(file.try_lock(), Err(TryLockError::WouldBlock)),
+                "directory creation must hold the archive lock: {}",
+                path.display()
+            );
+        }
+    });
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
     #[cfg(unix)]

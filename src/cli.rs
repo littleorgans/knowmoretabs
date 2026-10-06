@@ -114,7 +114,9 @@ One request a second per site."
     #[command(
         long_about = "Fetches each library page not captured before, without cookies, keeps its main text \
 as markdown in <root>/pages/content/, and appends one line per attempt to <root>/pages/content.jsonl. \
-This sends the URLs it fetches to their own sites. What enrich never fetches, content never fetches \
+This sends the URLs it fetches to their own sites. X posts are read from the public X post API at \
+api.fxtwitter.com, the one third party service it uses, sending only the post's number. \
+What enrich never fetches, content never fetches \
 either; X profiles and YouTube channels and playlists are recorded as not a document, and login screens \
 as behind a login, without a request. A page that failed is tried again on the next run, and after three \
 failed runs it is recorded as unavailable. One request a second per site. Never part of save."
