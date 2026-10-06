@@ -335,7 +335,8 @@ whether it is private, whether `pages/content` exists, and its pages by
 latest status. It is offline by default, with GitHub sign in marked as not
 checked. With `--live`, gh checks its own sign in (the `gh auth status` exit
 code only; its output is never read), and the X post API is asked once for
-a fixed public post. It sends nothing of yours. It exits 0 whenever the web tier is ready; a missing tool is a warning.
+a fixed public post. It sends nothing of yours. It exits 0 whenever the web
+tier is ready; a missing tool is a warning.
 
 ## Where the data lives
 
