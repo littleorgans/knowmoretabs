@@ -113,11 +113,12 @@ impl Plan {
 
     /// A lower bound: the busiest host's pages, one a second.
     pub fn seconds_at_least(&self) -> usize {
-        let mut per_host: HashMap<&str, usize> = HashMap::new();
-        for item in self.todo.iter().filter(|item| item.why != Why::Login) {
-            *per_host.entry(&item.host).or_default() += 1;
-        }
-        per_host.values().max().map_or(0, |n| n.saturating_sub(1))
+        seconds_at_least(
+            self.todo
+                .iter()
+                .filter(|item| item.why != Why::Login)
+                .map(|item| item.host.as_str()),
+        )
     }
 
     pub fn skip_counts(&self) -> BTreeMap<Skip, usize> {
@@ -127,6 +128,15 @@ impl Plan {
         }
         counts
     }
+}
+
+/// A pacing lower bound from the hosts of requests sent one a second.
+pub fn seconds_at_least<'a>(hosts: impl Iterator<Item = &'a str>) -> usize {
+    let mut per_host: HashMap<&str, usize> = HashMap::new();
+    for host in hosts {
+        *per_host.entry(host).or_default() += 1;
+    }
+    per_host.values().max().map_or(0, |n| n.saturating_sub(1))
 }
 
 /// What a command's log already says about a URL.
@@ -268,7 +278,13 @@ pub fn by_host<'a, T: Send>(
 
 /// What `--dry-run` says: every page that would be fetched and why, every
 /// page that would not and why, and the counts.
-pub fn report_dry_run(plan: &Plan, options: Options, json: bool, log: Log) {
+pub fn report_dry_run(
+    plan: &Plan,
+    options: Options,
+    json: bool,
+    log: Log,
+    seconds_at_least: usize,
+) {
     if json {
         out::json(&serde_json::json!({
             "dry_run": true,
@@ -281,7 +297,7 @@ pub fn report_dry_run(plan: &Plan, options: Options, json: bool, log: Log) {
             "counts": counts_json(plan),
             "more": plan.more,
             "sites": plan.sites(),
-            "seconds_at_least": plan.seconds_at_least(),
+            "seconds_at_least": seconds_at_least,
         }));
         return;
     }
@@ -302,7 +318,7 @@ pub fn report_dry_run(plan: &Plan, options: Options, json: bool, log: Log) {
                 _ => String::new(),
             },
             plural(plan.sites(), "site"),
-            match plan.seconds_at_least() {
+            match seconds_at_least {
                 0 => String::new(),
                 n => format!(", at least {n} s at one request a second per site"),
             }

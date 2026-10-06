@@ -76,7 +76,7 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
         options,
     );
     if options.dry_run {
-        targets::report_dry_run(&plan, options, json, log);
+        targets::report_dry_run(&plan, options, json, log, plan.seconds_at_least());
         return Ok(());
     }
     let started = Instant::now();

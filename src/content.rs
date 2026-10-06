@@ -84,7 +84,7 @@ pub fn command(
     };
     let (plan, work) = content_plan::plan(&snapshots, &state, &known, options, github);
     if options.dry_run {
-        targets::report_dry_run(&plan, options, json, log);
+        targets::report_dry_run(&plan, options, json, log, work.seconds_at_least());
         return Ok(());
     }
     let started = Instant::now();

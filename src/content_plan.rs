@@ -45,6 +45,16 @@ pub struct Work {
 }
 
 impl Work {
+    /// The pacing lower bound for a dry run.
+    pub fn seconds_at_least(&self) -> usize {
+        targets::seconds_at_least(
+            self.fetches
+                .iter()
+                .filter(|fetch| fetch.route.lanes() == 1)
+                .map(|fetch| fetch.host.as_str()),
+        )
+    }
+
     /// What the report says beyond the counts.
     pub fn notes(&self) -> Vec<String> {
         let fallback = self.github.as_ref().and_then(Readiness::fallback);
@@ -364,6 +374,72 @@ pub(crate) mod tests {
                 (xpost::API_HOST, &Route::XPost("43".to_owned()), 1),
                 ("a.test", &Route::Web, 1),
             ]
+        );
+    }
+
+    #[test]
+    fn estimates_count_paced_fetches_and_exclude_gh() {
+        use crate::github_api::Gh;
+
+        let snapshots = [snapshot(&[
+            "https://github.com/owner/one",
+            "https://github.com/owner/two",
+            "https://github.com/owner/three",
+            "https://github.com/owner/four",
+            "https://github.com/owner/five",
+            "https://a.test/one",
+            "https://a.test/one#alias",
+            "https://a.test/two",
+            "https://x.com/someone/status/42",
+            "https://twitter.com/someone/status/42#alias",
+        ])];
+        let ready = || {
+            Readiness::Ready(Gh {
+                path: "/usr/bin/gh".into(),
+                version: None,
+            })
+        };
+        let (_, work) = plan(
+            &snapshots,
+            &state(&[]),
+            &log(&[]),
+            Options::default(),
+            ready,
+        );
+        assert_eq!(
+            work.seconds_at_least(),
+            1,
+            "only the two distinct web fetches are paced"
+        );
+        let (_, web) = plan(
+            &snapshots,
+            &state(&[]),
+            &log(&[]),
+            Options::default(),
+            no_gh,
+        );
+        assert_eq!(
+            web.seconds_at_least(),
+            4,
+            "five GitHub web fetches are paced"
+        );
+        let (_, gh_only) = plan(
+            &[snapshot(&[
+                "https://github.com/owner/one",
+                "https://github.com/owner/two",
+                "https://github.com/owner/three",
+                "https://github.com/owner/four",
+                "https://github.com/owner/five",
+            ])],
+            &state(&[]),
+            &log(&[]),
+            Options::default(),
+            ready,
+        );
+        assert_eq!(
+            gh_only.seconds_at_least(),
+            0,
+            "gh has concurrency bounds, no pacing delay"
         );
     }
 
