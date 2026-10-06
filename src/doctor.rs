@@ -6,11 +6,11 @@
 //!      installed, and falls back quietly when one is missing, so the
 //!      owner needs one place that says what is ready, what is missing and
 //!      how to fix it, before a long run rather than after. It reads the
-//!      machine and the archive and sends nothing of the owner's: the only
-//!      request it lets out is `gh` checking its own sign in with GitHub,
-//!      and with `--live`, one request to the X post API for a fixed public
-//!      post. Missing tools are warnings: only the generic web tier is
-//!      required, and it is compiled in.
+//!      machine and the archive offline by default. With `--live`, `gh`
+//!      checks its own sign in with GitHub and the X post API is asked
+//!      once for a fixed public post. It sends nothing of the owner's.
+//!      Missing tools are warnings: only the generic web tier is required,
+//!      and it is compiled in.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -174,7 +174,8 @@ pub struct Report {
 
 impl Report {
     /// What `probe` finds, for headless reading with browser `browser`;
-    /// `x` is what the X post API answered when it was asked.
+    /// `x` is what the X post API answered in live mode; `None` keeps
+    /// every check offline, including GitHub sign in.
     pub fn gather(
         probe: &impl Probe,
         browser: &str,
@@ -183,7 +184,7 @@ impl Report {
     ) -> Self {
         let checks = vec![
             Check::new(REQUIRED, State::Ready, "compiled in"),
-            github(probe),
+            github(probe, x.is_some()),
             x_check(x),
             youtube(probe),
             headless(probe, browser),
@@ -231,13 +232,26 @@ fn found(probe: &impl Probe, name: &str, path: &Path) -> String {
     named(name, probe.version(path), path)
 }
 
-fn github(probe: &impl Probe) -> Check {
+fn github(probe: &impl Probe, live: bool) -> Check {
+    let readiness = if live {
+        Readiness::check(probe)
+    } else {
+        Readiness::assumed(probe)
+    };
     let read_from_the_web = "GitHub pages are read from the web meanwhile";
-    match Readiness::check(probe) {
+    match readiness {
         Readiness::Ready(gh) => Check::new(
             "github",
             State::Ready,
-            format!("{}, signed in", named("gh", gh.version, &gh.path)),
+            format!(
+                "{}, {}",
+                named("gh", gh.version, &gh.path),
+                if live {
+                    "signed in"
+                } else {
+                    "sign in not checked (run doctor --live)"
+                }
+            ),
         ),
         Readiness::Missing => Check::new("github", State::Missing, "gh not found").hint(format!(
             "install gh (https://cli.github.com) and run gh auth login; {read_from_the_web}"
@@ -410,6 +424,29 @@ mod tests {
 
     fn states(report: &Report) -> Vec<(&str, State)> {
         report.checks.iter().map(|c| (c.tier, c.state)).collect()
+    }
+
+    #[test]
+    fn offline_checks_never_ask_gh_about_sign_in() {
+        let mut table = everything();
+        table.codes.insert(path("gh"), 1);
+        let report = Report::gather(&table, platform::CHROME, None, archive());
+        assert!(
+            table.runs.borrow().is_empty(),
+            "offline doctor must not ask gh"
+        );
+        assert_eq!(report.checks[1].state, State::Ready);
+        assert_eq!(
+            report.checks[1].detail,
+            "gh version 2.102.0 (2026-09-30), sign in not checked (run doctor --live)"
+        );
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["checks"][1]["detail"], report.checks[1].detail);
+        assert!(
+            report
+                .text()
+                .contains("sign in not checked (run doctor --live)")
+        );
     }
 
     #[test]

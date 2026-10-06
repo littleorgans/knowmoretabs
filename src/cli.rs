@@ -133,15 +133,15 @@ failed runs it is recorded as unavailable. One request a second per site. Never 
     /// Say which ways of reading pages this machine can use, and what the archive holds of page text
     #[command(
         long_about = "Reports, for each way content reads pages, whether it is ready, missing or degraded, \
-and how to fix it: the generic web tier (compiled in), GitHub through gh (found, its version, and whether \
-gh auth status exits 0; never its output), the X post API, YouTube through yt-dlp with deno or node, and \
+and how to fix it: the generic web tier (compiled in), GitHub through gh (found and its version, plus \
+with --live whether gh auth status exits 0; never its output), the X post API, YouTube through yt-dlp with deno or node, and \
 headless reading with the --browser binary (chrome by default). Then the archive: whether it is private, \
-whether pages/content exists, and its pages by their latest status. Sends nothing of yours; gh checks its \
-own sign in with GitHub. With --live, also asks the X post API once for a fixed public post. Exits 0 when \
+whether pages/content exists, and its pages by their latest status. Offline by default. With --live, gh \
+checks its own sign in with GitHub and the X post API is asked once for a fixed public post. Sends nothing of yours. Exits 0 when \
 the generic web tier is ready; missing tools are warnings."
     )]
     Doctor {
-        /// Also ask the X post API once, for a fixed public post, whether it answers
+        /// Check GitHub sign in and ask the X post API once for a fixed public post
         #[arg(long)]
         live: bool,
     },

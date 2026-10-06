@@ -53,7 +53,7 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 - An unknown session command is skipped and counted, never fatal; a torn tail is reported as truncated bytes (`code:src/session.rs`, `code:src/snss.rs`).
 - The encrypted-sessions preflight refuses a stale save with exit 3; `--force` cannot bypass it (`code:src/staleness.rs#check`, `code:src/error.rs#exit_code`).
 - Tabs on this machine (`localhost`, its subdomains, loopback) are left out of `snapshot.json` and of change detection; `session.snss` stays verbatim and keeps them (`code:src/capture.rs#leave_out_this_machine`, `code:src/local.rs#is_this_machine_url`).
-- Only `enrich` and `content` send page addresses off the machine; `doctor` sends nothing of the owner's (gh checks its own sign in; `--live` asks the X post API for one fixed public post). `ureq` appears only in `code:src/fetch.rs`.
+- Only `enrich` and `content` send page addresses off the machine; `doctor` is offline by default; `--live` lets gh check its own sign in and asks the X post API for one fixed public post, sending nothing of the owner's. `ureq` appears only in `code:src/fetch.rs`.
 - External tools run only through `code:src/tools.rs#run`: an argument vector, no shell, no input, a timeout, capped output, stderr cut to one line; `gh auth status` is read for its exit code only (`code:src/github_api.rs#Readiness`).
 - `serve` binds 127.0.0.1 only (`code:src/server.rs`).
 - JSON is the archive's storage; SQLite, bundled, only reads a copy of the browser's `History` taken with its `-journal` and `-wal` (`code:src/history.rs#COMPANIONS`).

@@ -165,7 +165,7 @@ knowmoretabs history             # how many library pages have History signals, 
 knowmoretabs history --refresh   # read History now and update every library page's signals
 knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
 knowmoretabs content             # keep the main text of library pages as markdown; --dry-run, --limit N, --refetch, --url URL
-knowmoretabs doctor              # which ways of reading pages this machine can use; --live asks the X post API once
+knowmoretabs doctor              # which ways of reading pages this machine can use; --live checks GitHub sign in and asks the X post API once
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
 knowmoretabs tag <URL>... --add NAME --remove NAME --clear NAME   # tag pages, untag them, or take back a decision; all repeatable
@@ -328,14 +328,14 @@ nothing, so it checks only that gh is installed.
 
 `knowmoretabs doctor` says, for each way `content` reads pages, whether it
 is ready, missing or degraded, and how to fix it: the web tier, which is
-compiled in; GitHub through gh, with its version and whether
-`gh auth status` exits 0 (its output is never read); the X post API; yt-dlp
+compiled in; GitHub through gh, found with its version; the X post API; yt-dlp
 with deno or node for YouTube, and the `--browser` binary (Chrome by
 default) for headless reading, both ahead of their routes. Then the archive:
 whether it is private, whether `pages/content` exists, and its pages by
-latest status. It sends nothing of yours: gh checks its own sign in with
-GitHub, and `--live` asks the X post API once for a fixed public post. It
-exits 0 whenever the web tier is ready; a missing tool is a warning.
+latest status. It is offline by default, with GitHub sign in marked as not
+checked. With `--live`, gh checks its own sign in (the `gh auth status` exit
+code only; its output is never read), and the X post API is asked once for
+a fixed public post. It sends nothing of yours. It exits 0 whenever the web tier is ready; a missing tool is a warning.
 
 ## Where the data lives
 
@@ -369,9 +369,9 @@ editor. Everything under `export/` is derived and can be deleted.
 Nothing leaves the machine unless you run `enrich` or `content`. `save`,
 `serve`, `export` and the tag commands make no network requests of any kind;
 `enrich` and `content` are the only code that sends your pages' addresses,
-and what each sends is described above. `doctor` sends nothing of yours: gh
-checks its own sign in with GitHub, and `doctor --live` asks the X post API
-for one fixed public post. A
+and what each sends is described above. `doctor` is offline by default.
+`doctor --live` lets gh check its own sign in with GitHub and asks the X
+post API for one fixed public post, sending nothing of yours. A
 `tag --prompt` folder is the one thing made to be handed on: it holds the
 addresses and titles of pages in your library, what `enrich` recorded about
 them if you ran it, and their searches and referrers if you ask for them. It

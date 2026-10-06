@@ -176,10 +176,11 @@ as what you can do that you could not before.
   report says so.
 - **Check what content can use.** `knowmoretabs doctor` reports whether each
   way of reading pages is ready, missing or degraded, with how to fix it:
-  the web tier, gh and its sign in (exit code only), the X post API
-  (`--live` asks it once for a fixed public post), yt-dlp with deno or node,
+  the web tier, gh and its version, the X post API, yt-dlp with deno or node,
   and the `--browser` binary; then whether the archive is private and its
-  pages by status. `--json` for scripts. Exits 0 when the web tier is ready.
+  pages by status. Offline by default; `--live` checks gh sign in (exit code
+  only, output never read) and asks the X post API once for a fixed public
+  post. `--json` for scripts. Exits 0 when the web tier is ready.
 
 ### Changed
 
