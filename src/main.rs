@@ -39,6 +39,7 @@ mod snss;
 mod staleness;
 mod suggestions;
 mod tags;
+mod targets;
 mod triage;
 
 use std::fmt::Write as _;
@@ -114,7 +115,7 @@ fn main() -> ExitCode {
             refetch,
         }) => enrich::command(
             &root,
-            enrich::Options {
+            targets::Options {
                 dry_run: *dry_run,
                 limit: *limit,
                 refetch: *refetch,
