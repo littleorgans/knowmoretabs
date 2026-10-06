@@ -267,7 +267,7 @@ impl Attempt<'_> {
             )),
             "captions",
         )?;
-        let said = youtube_page::transcript(&String::from_utf8_lossy(&vtt));
+        let said = youtube_page::transcript(&String::from_utf8_lossy(&vtt), choice.kind);
         if said.is_empty() {
             line.status = Status::Thin;
             line.reason = Some("captions empty".to_owned());

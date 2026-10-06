@@ -182,30 +182,62 @@ pub struct Said {
     pub text: String,
 }
 
-/// The lines a `WebVTT` file shows, in order, each once: tags, cue settings
-/// and timing removed, and a line repeated from the line before dropped,
-/// which is how rolling automatic captions repeat themselves.
-pub fn transcript(vtt: &str) -> Vec<Said> {
-    let mut said: Vec<Said> = Vec::new();
-    let mut cue: Option<f64> = None;
-    for line in vtt.lines() {
-        let line = line.trim_end_matches('\r');
-        if line.is_empty() {
-            cue = None;
-            continue;
-        }
-        if let Some((start, _)) = line.split_once("-->") {
-            cue = Some(seconds(start.trim()).unwrap_or(0.0));
-            continue;
-        }
-        let Some(at) = cue else {
+/// Cue text without tags, settings or timing. Automatic cues can grow or
+/// rewrap the previous cue: remove only their shared suffix and prefix,
+/// while cues overlap, or touch in `YouTube`'s rolling layout. Ordinary
+/// touching cues and manual captions keep repeated speech.
+pub fn transcript(vtt: &str, captions: Captions) -> Vec<Said> {
+    let mut said = Vec::new();
+    let mut previous: Vec<String> = Vec::new();
+    let mut previous_end = None;
+    let normalized = vtt.replace("\r\n", "\n");
+    for block in normalized.split("\n\n") {
+        let mut lines = block.lines();
+        let Some((at, end, rolling)) = lines.find_map(|line| {
+            let (start, end) = line.split_once("-->")?;
+            Some((
+                seconds(start.trim())?,
+                seconds(end.split_whitespace().next()?)?,
+                line.contains("position:0%"),
+            ))
+        }) else {
             continue;
         };
-        let text = plain(line);
-        if text.is_empty() || said.last().is_some_and(|last| last.text == text) {
+        let text: Vec<String> = lines.map(plain).filter(|line| !line.is_empty()).collect();
+        if text.is_empty() {
             continue;
         }
-        said.push(Said { at, text });
+        let words: Vec<&str> = text
+            .iter()
+            .flat_map(|line| line.split_whitespace())
+            .collect();
+        let before: Vec<&str> = previous
+            .iter()
+            .flat_map(|line| line.split_whitespace())
+            .collect();
+        let mut shared = if captions == Captions::Automatic
+            && previous_end.is_some_and(|end| at < end || (rolling && at <= end))
+        {
+            (1..=before.len().min(words.len()))
+                .rev()
+                .find(|&n| before[before.len() - n..] == words[..n])
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        for line in &text {
+            let rest = line
+                .split_whitespace()
+                .skip(shared)
+                .collect::<Vec<_>>()
+                .join(" ");
+            shared = shared.saturating_sub(line.split_whitespace().count());
+            if !rest.is_empty() {
+                said.push(Said { at, text: rest });
+            }
+        }
+        previous = text;
+        previous_end = Some(end);
     }
     said
 }
@@ -486,7 +518,7 @@ mod tests {
             text: text.to_owned(),
         };
         assert_eq!(
-            transcript(rolling),
+            transcript(rolling, Captions::Automatic),
             [
                 said(0.32, "[Music]"),
                 said(3.8, "we're no strangers to"),
@@ -496,12 +528,65 @@ mod tests {
     }
 
     #[test]
+    fn rolling_cues_keep_only_new_words_across_growth_and_rewrapping() {
+        let vtt = "WEBVTT\n\n\
+            00:00.000 --> 00:02.000\nWe test\n\n\
+            00:01.000 --> 00:03.000\nWe test the route\n\n\
+            00:02.000 --> 00:04.000\nWe test\nthe route works\n\n\
+            00:03.000 --> 00:05.000\nthe route works well\n";
+        assert_eq!(
+            transcript(vtt, Captions::Automatic),
+            [
+                Said {
+                    at: 0.0,
+                    text: "We test".to_owned()
+                },
+                Said {
+                    at: 1.0,
+                    text: "the route".to_owned()
+                },
+                Said {
+                    at: 2.0,
+                    text: "works".to_owned()
+                },
+                Said {
+                    at: 3.0,
+                    text: "well".to_owned()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_automatic_speech_after_a_gap_is_kept() {
+        let vtt = "WEBVTT\n\n\
+            00:00.000 --> 00:01.000\nAgain\n\n\
+            00:02.000 --> 00:03.000\nAgain\n";
+        assert_eq!(transcript(vtt, Captions::Automatic).len(), 2);
+        let touching = "WEBVTT\n\n\
+            00:00.000 --> 00:01.000\nPlease go\n\n\
+            00:01.000 --> 00:02.000\ngo again\n";
+        assert_eq!(
+            transcript(touching, Captions::Automatic)[1].text,
+            "go again"
+        );
+    }
+
+    #[test]
+    fn repeated_words_in_manual_captions_are_speech() {
+        let vtt = "WEBVTT\n\n\
+            00:00.000 --> 00:01.000\nGo!\nGo!\n\n\
+            00:01.000 --> 00:02.000\nGo!\n";
+        assert_eq!(transcript(vtt, Captions::Manual).len(), 3);
+    }
+
+    #[test]
     fn manual_captions_keep_every_line_without_timing_or_markup() {
         let manual = "WEBVTT\r\nKind: captions\r\n\r\nNOTE a comment\r\n\r\n\
             1\r\n00:01.200 --> 00:03.360 line:90%\r\n<v Speaker>First line</v>\r\n\
             second &amp; line\r\n\r\n2\r\n01:00:05.000 --> 01:00:07.000\r\n\
             <i>Third</i>&nbsp;line\r\n";
-        let said = transcript(manual);
+        let said = transcript(manual, Captions::Manual);
         assert_eq!(
             said,
             [
@@ -519,7 +604,7 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(transcript("WEBVTT\n\n"), []);
+        assert_eq!(transcript("WEBVTT\n\n", Captions::Manual), []);
     }
 
     fn described() -> Info {
