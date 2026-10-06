@@ -26,6 +26,12 @@ use crate::triage::plural;
 /// A record that belongs to one URL; the latest line for a URL wins.
 pub trait Keyed {
     fn key(&self) -> &str;
+
+    /// Whether this build understands the record's payload. An unknown
+    /// record can retain its key so a planner does not overwrite it.
+    fn is_understood(&self) -> bool {
+        true
+    }
 }
 
 /// Appends lines of one type to one log for the length of a run.
@@ -121,7 +127,8 @@ impl<T: Serialize> Appender<T> {
 pub struct Latest<R> {
     /// The latest line for each URL.
     pub pages: HashMap<String, R>,
-    /// Lines that were not a record this build can read.
+    /// Lines this build cannot understand, including records whose key is
+    /// retained to keep a newer outcome final.
     pub unreadable: usize,
 }
 
@@ -169,6 +176,7 @@ pub fn parse<R: DeserializeOwned + Keyed>(text: &str) -> Latest<R> {
     for line in text.lines().filter(|line| !line.trim().is_empty()) {
         match serde_json::from_str::<R>(line) {
             Ok(record) => {
+                latest.unreadable += usize::from(!record.is_understood());
                 latest.pages.insert(record.key().to_owned(), record);
             }
             Err(_) => latest.unreadable += 1,
