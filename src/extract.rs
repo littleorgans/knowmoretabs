@@ -395,6 +395,32 @@ mod tests {
     }
 
     #[test]
+    fn in_main_usage_instructions_survive_fallback() {
+        let instructions =
+            "load_tidepool_model(); inspect_species(); record_observations();\n".repeat(40);
+        let summary = "A tide pool holds small creatures through the low tide. \
+                       We record the water temperature, identify each species, \
+                       and compare our observations with earlier visits. "
+            .repeat(5);
+        let page = page(
+            &format!(
+                "<html><body><header><nav><a href=\"/\">Global menu</a></nav></header>\
+                 <main><header><h1>Tide pool guide</h1><nav class=\"sr-only\">\
+                 <h2>Usage</h2><ul><li><pre>{instructions}</pre></li></ul></nav></header>\
+                 <article><p>{summary}</p></article></main><footer>Site footer</footer>\
+                 </body></html>"
+            ),
+            None,
+        );
+        assert_eq!(page.class, Class::Ok);
+        assert_eq!(page.extractor, FULL_PAGE);
+        assert!(page.markdown.contains("Tide pool guide"));
+        assert!(page.markdown.contains("record_observations"));
+        assert!(!page.markdown.contains("Global menu"));
+        assert!(!page.markdown.contains("Site footer"));
+    }
+
+    #[test]
     fn a_page_of_only_menus_and_footers_is_thin() {
         let links =
             |label: &str| format!("<li><a href=\"/{label}\">{label} link</a></li>").repeat(30);
