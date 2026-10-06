@@ -161,23 +161,28 @@ result to `pages/metadata.jsonl` and never fetching a page twice unless asked
 `--limit N` caps a run. `tag --prompt` hands what it recorded to the tagging
 agent.
 
-**Intent.** The one command that sends anything off the machine, so it is opt-in and the
-decision of what never leaves is made before any request: forgotten pages,
+**Intent.** One of the two commands that send anything off the machine, with `content`,
+so it is opt-in and the decision of what never leaves is made before any
+request: forgotten pages,
 this machine and the private network, search results and URLs that carry a
 token stay home.
 
-### 8. Content: what pages say (`content`) — planned
+### 8. Content: what pages say (`content`) — done
 
 - Delivers: keep-page-text
 - Depends on: library, enrich
 
 **Ships.** `knowmoretabs content` captures the main text of library pages as markdown,
 one file per page under `pages/content/`, with one line per attempt in
-`pages/content.jsonl`. Each page takes the cheapest route that works: the
-public X post API for posts, `gh` for GitHub, yt-dlp captions for videos,
-plain HTTP for the rest, and a local headless Chrome for pages that need a
-browser to show their text. `--dry-run`, `--limit` and `--refetch` keep
-`enrich`'s meaning, and `doctor` says which optional tools are ready.
+`pages/content.jsonl`. Plain HTTP reads every page today: readability finds
+the main text, and a page is recorded as ok, thin, an app shell, behind a
+login, blocked, paywalled, not found or not HTML. Passing failures are retried
+in the run and on the next one. `--dry-run`, `--limit` and `--refetch` keep
+`enrich`'s meaning, and `--url` captures one page. Next, each page takes the
+cheapest route that works: the public X post API for posts, `gh` for GitHub,
+yt-dlp captions for videos, and a local headless Chrome for pages that need a
+browser to show their text, with `doctor` saying which optional tools are
+ready.
 
 **Intent.** Opt in, because it sends the URLs you visited to their own sites and to the X
 post API, uses optional local tools (yt-dlp, gh, Chrome), and stores page text

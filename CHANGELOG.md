@@ -141,8 +141,21 @@ as what you can do that you could not before.
   stay in the library. One request a second per site, a few sites at once,
   reading no more than 3 MB; `--dry-run` lists what would be fetched and why
   the rest would not, `--limit N` caps a run, and `--refetch` fetches again,
-  including failed attempts. It is the only command that sends
-  anything, and the README says what.
+  including failed attempts. It and `content` are the only commands that
+  send anything, and the README says what.
+- **Page text, if you ask for it.** `knowmoretabs content` fetches each
+  library page not captured before, without cookies, and keeps its main
+  text as markdown, private to you, in `pages/content/`, one file per page,
+  with one line per attempt in `pages/content.jsonl`. Each page is recorded
+  as `ok`, `thin` (under 1,500 characters, text kept), `empty_shell`,
+  `behind_login`, `blocked`, `paywalled`, `not_found`, `not_html`,
+  `skipped`, `error` or `unavailable`. It never fetches what `enrich` never
+  fetches, and records X profiles and YouTube channels and playlists as not
+  a document, without a request. A timeout, a 429 or a 5xx is retried twice
+  in the run, honouring `Retry-After` up to a minute; a page still failing
+  is retried on the next run and is `unavailable` after three. A page known
+  by addresses that differ only after `#` is fetched once. `--dry-run`,
+  `--limit N`, `--refetch` and `--url URL`; never part of `save`.
 
 ### Changed
 
