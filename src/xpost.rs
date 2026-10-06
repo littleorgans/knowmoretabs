@@ -276,6 +276,9 @@ fn byline(post: &Post) -> String {
 /// Every piece of text a post holds, quoted post included, joined; empty
 /// when it holds none.
 fn text_of(post: &Post) -> String {
+    if unavailable(post).is_some() {
+        return String::new();
+    }
     let mut parts = vec![post.text.trim().to_owned()];
     if let Some(article) = &post.article {
         parts.push(article.title.trim().to_owned());
@@ -320,8 +323,8 @@ fn markdown(post: &Post) -> String {
     let mut text = format!("# {}\n\n{}", title(post), body(post, false));
     if let Some(quote) = &post.quote {
         let quoted = match unavailable(quote) {
-            Some((_, reason)) if quote.kind == "tombstone" => format!("Quoted {reason}."),
-            _ => format!("Quoting {}", body(quote, true)),
+            Some((_, reason)) => format!("Quoted {reason}."),
+            None => format!("Quoting {}", body(quote, true)),
         };
         text.push_str("\n\n");
         for line in quoted.trim_end().lines() {
@@ -486,6 +489,55 @@ mod tests {
             page.markdown
                 .ends_with("Worth reading.\n\n> Quoted post deleted.\n")
         );
+    }
+
+    #[test]
+    fn unavailable_quotes_keep_no_text_in_the_store() {
+        use crate::content_store::{self, Store};
+
+        let mut protected = post("Restricted quote text.");
+        protected["author"]["protected"] = json!(true);
+        protected["article"] = json!({"title": "Restricted article", "content": {
+            "blocks": [{"type": "unstyled", "text": "Restricted article text."}]
+        }});
+        protected["media"] = json!({"photos": [{"altText": "Restricted image."}]});
+        for quote in [
+            protected,
+            json!({"type": "tombstone", "reason": "private", "text": "Restricted text."}),
+        ] {
+            let mut status = post("Public commentary.");
+            status["quote"] = quote;
+            let Capture { line, page } = read_value(&status);
+            assert_eq!(line.status, Status::Ok);
+            let root = tempfile::tempdir().unwrap();
+            let mut store = Store::open(root.path()).unwrap();
+            let line = store.record(line, page.as_ref()).unwrap();
+            let path = content_store::dir(root.path()).join(content_store::file_name(&line.url));
+            let saved = std::fs::read_to_string(path).unwrap();
+            let (front, body) = content_store::parse(&saved).unwrap();
+            assert_eq!(front["tier"], "x");
+            assert_eq!(front["access"], "public");
+            assert!(body.contains("Public commentary."));
+            assert!(
+                !body.contains("Restricted"),
+                "unavailable quote text retained"
+            );
+            assert_eq!(
+                line.content_sha256.as_deref(),
+                Some(content_store::sha256_hex(body.as_bytes()).as_str())
+            );
+        }
+    }
+
+    #[test]
+    fn a_post_with_only_a_protected_quote_is_thin() {
+        let mut status = post("");
+        let mut quote = post("Restricted quote text.");
+        quote["author"]["protected"] = json!(true);
+        status["quote"] = quote;
+        let Capture { line, page } = read_value(&status);
+        assert_eq!(line.status, Status::Thin);
+        assert_eq!(page.unwrap().completeness, Completeness::Thin);
     }
 
     #[test]
