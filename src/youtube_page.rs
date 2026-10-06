@@ -528,6 +528,21 @@ mod tests {
     }
 
     #[test]
+    fn a_line_said_twice_in_rolling_captions_is_kept_twice() {
+        let rolling = "WEBVTT\n\n\
+            00:00.000 --> 00:01.000 align:start position:0%\n \nthank<00:00.500><c> you</c>\n\n\
+            00:01.000 --> 00:01.010 align:start position:0%\nthank you\n \n\n\
+            00:01.010 --> 00:02.000 align:start position:0%\nthank you\nthank<00:01.500><c> you</c>\n\n\
+            00:02.000 --> 00:02.010 align:start position:0%\nthank you\n \n\n\
+            00:02.010 --> 00:03.000 align:start position:0%\nthank you\nso<00:02.500><c> much</c>\n";
+        let said: Vec<String> = transcript(rolling, Captions::Automatic)
+            .into_iter()
+            .map(|said| said.text)
+            .collect();
+        assert_eq!(said, ["thank you", "thank you", "so much"]);
+    }
+
+    #[test]
     fn rolling_cues_keep_only_new_words_across_growth_and_rewrapping() {
         let vtt = "WEBVTT\n\n\
             00:00.000 --> 00:02.000\nWe test\n\n\
