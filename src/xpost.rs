@@ -530,6 +530,8 @@ mod tests {
 
     use super::*;
 
+    const ARTICLE_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/content/x-article.json");
+
     fn url(raw: &str) -> Url {
         Url::parse(raw).unwrap()
     }
@@ -743,8 +745,7 @@ mod tests {
     fn an_article_keeps_atomic_code_embeds_and_images_in_order() {
         use crate::content_store::{self, Store};
 
-        let fixture = include_bytes!("../tests/fixtures/content/x-article.json");
-        let Capture { line, page } = read(fixture, line);
+        let Capture { line, page } = read(ARTICLE_FIXTURE, line);
         let page = page.unwrap();
         assert_eq!(line.status, Status::Ok);
         assert_eq!(page.completeness, Completeness::Full);
@@ -860,6 +861,53 @@ mod tests {
             media_article(&json!([medium("7", &gif)])),
             format!("{CHART_ARTICLE}[Video]\n")
         );
+    }
+
+    #[test]
+    fn an_article_keeps_each_media_item_without_empty_atomic_paragraphs() {
+        let expected = read(ARTICLE_FIXTURE, line)
+            .page
+            .unwrap()
+            .markdown
+            .replace("[Image]", "[Image]\n\n[Video]");
+        let mut answer: serde_json::Value = serde_json::from_slice(ARTICLE_FIXTURE).unwrap();
+        let article = &mut answer["status"]["article"];
+        article["media_entities"]
+            .as_array_mut()
+            .unwrap()
+            .push(medium(
+                "7",
+                &json!({"__typename": "ApiVideo", "ext_alt_text": null}),
+            ));
+        let content = &mut article["content"];
+        let entities = content["entityMap"].as_array_mut().unwrap();
+        let media = entities
+            .iter_mut()
+            .find(|entity| entity["key"] == "12")
+            .unwrap();
+        media["value"]["data"]["mediaItems"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"mediaId": "7"}));
+        entities.extend([
+            json!({"key": "13", "value": {"type": "MEDIA", "data": {"mediaItems": []}}}),
+            json!({"key": "14", "value": {"type": "MARKDOWN", "data": {"markdown": " \n "}}}),
+        ]);
+        let block = content["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|block| block["key"] == "media")
+            .unwrap();
+        block["entityRanges"] = json!([
+            {"key": 13}, {"key": 14}, {"key": 12}, {"key": 13}, {"key": 14},
+        ]);
+        let Capture { line, page } = read_value(&answer["status"]);
+        let page = page.unwrap();
+        assert_eq!(line.status, Status::Ok);
+        assert_eq!(page.completeness, Completeness::Full);
+        assert!(page.markdown.contains("[Image]\n\n[Video]"));
+        assert_eq!(page.markdown, expected);
     }
 
     #[test]
