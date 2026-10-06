@@ -117,7 +117,7 @@ impl Plan {
             self.todo
                 .iter()
                 .filter(|item| item.why != Why::Login)
-                .map(|item| (item.host.as_str(), 1)),
+                .map(|item| (item.host.as_str(), Cost::Paced)),
         )
     }
 
@@ -130,16 +130,34 @@ impl Plan {
     }
 }
 
-/// A pacing lower bound from each fetch's host and the least seconds it
-/// holds that host's queue: one for a request sent one a second. Hosts run
-/// at once, so the busiest one bounds the run; its first request waits for
-/// nothing.
-pub fn seconds_at_least<'a>(fetches: impl Iterator<Item = (&'a str, usize)>) -> usize {
-    let mut per_host: HashMap<&str, usize> = HashMap::new();
-    for (host, seconds) in fetches {
-        *per_host.entry(host).or_default() += seconds;
+/// The waiting one fetch adds to its host's queue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cost {
+    /// A request paced once a second; the first request starts immediately.
+    Paced,
+    /// Waiting inside a tool call, including the first call; zero for gh.
+    Tool(usize),
+}
+
+/// The busiest host bounds the run. Only the first paced request is free;
+/// a tool's internal waits apply to every fetch, including the first.
+pub fn seconds_at_least<'a>(fetches: impl Iterator<Item = (&'a str, Cost)>) -> usize {
+    let mut per_host: HashMap<&str, (usize, bool)> = HashMap::new();
+    for (host, cost) in fetches {
+        let (seconds, paced) = per_host.entry(host).or_default();
+        match cost {
+            Cost::Paced => {
+                *seconds += 1;
+                *paced = true;
+            }
+            Cost::Tool(wait) => *seconds += wait,
+        }
     }
-    per_host.values().max().map_or(0, |n| n.saturating_sub(1))
+    per_host
+        .values()
+        .map(|(seconds, paced)| seconds.saturating_sub(usize::from(*paced)))
+        .max()
+        .unwrap_or(0)
 }
 
 /// What a command's log already says about a URL.
@@ -394,6 +412,36 @@ pub fn breakdown(counts: &BTreeMap<String, usize>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tool_waits_are_included_even_for_the_first_fetch() {
+        let waits = crate::ytdlp::SECONDS_AT_LEAST;
+        assert_eq!(
+            seconds_at_least([("video", Cost::Tool(waits))].into_iter()),
+            waits
+        );
+        assert_eq!(
+            seconds_at_least(
+                [("video", Cost::Tool(waits)), ("video", Cost::Tool(waits))].into_iter()
+            ),
+            2 * waits
+        );
+        assert_eq!(
+            seconds_at_least([("video", Cost::Tool(waits)), ("video", Cost::Paced)].into_iter()),
+            waits
+        );
+        assert_eq!(
+            seconds_at_least(
+                [
+                    ("video", Cost::Tool(waits)),
+                    ("web", Cost::Paced),
+                    ("web", Cost::Paced)
+                ]
+                .into_iter()
+            ),
+            waits
+        );
+    }
 
     #[test]
     fn breakdowns_put_the_common_reason_first() {

@@ -19,6 +19,7 @@ use crate::fetch::Fetcher;
 use crate::github::Target;
 use crate::github_api::{self, Gh};
 use crate::guard;
+use crate::targets::Cost;
 use crate::xpost;
 use crate::youtube::Address;
 use crate::ytdlp::{self, YtDlp};
@@ -92,11 +93,11 @@ impl Route {
     /// estimate: a second for a paced request, longer for a tool that waits
     /// between its own requests, none for a tool with lanes and limits of
     /// its own.
-    pub fn seconds(&self) -> usize {
+    pub fn cost(&self) -> Cost {
         match self {
-            Self::Web | Self::XPost(_) => 1,
-            Self::Github(_) => 0,
-            Self::Youtube(_) => ytdlp::SECONDS_AT_LEAST,
+            Self::Web | Self::XPost(_) => Cost::Paced,
+            Self::Github(_) => Cost::Tool(0),
+            Self::Youtube(_) => Cost::Tool(ytdlp::SECONDS_AT_LEAST),
         }
     }
 
@@ -219,7 +220,7 @@ mod tests {
         }
         assert_eq!(video.host(), Some(ytdlp::HOST));
         assert_eq!(video.lanes(), 1, "one video at a time");
-        assert_eq!(video.seconds(), ytdlp::SECONDS_AT_LEAST);
+        assert_eq!(video.cost(), Cost::Tool(ytdlp::SECONDS_AT_LEAST));
         for raw in [
             "https://www.youtube.com/watch?v=abc",
             "https://youtu.be/abc",

@@ -56,7 +56,7 @@ impl Work {
         targets::seconds_at_least(
             self.fetches
                 .iter()
-                .map(|fetch| (fetch.host.as_str(), fetch.route.seconds())),
+                .map(|fetch| (fetch.host.as_str(), fetch.route.cost())),
         )
     }
 
