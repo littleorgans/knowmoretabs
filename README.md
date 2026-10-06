@@ -267,6 +267,11 @@ GitHub, and Chrome for pages that need a browser to show their text. Without
 them it does what it can over plain HTTP. robots.txt is not consulted, as
 with `enrich`: every address is one you opened yourself.
 
+When article extraction misses a page's text, the fallback tries the whole
+body, removing menus, banners, footers and sidebars outside `<main>`. It
+keeps those elements inside `<main>` because they can contain page headings
+and usage instructions.
+
 What `enrich` never fetches, `content` never fetches either. Forgotten pages,
 private network addresses, search results, URLs carrying tokens and pages that
 are not web pages are counted in the report without being written to the
