@@ -116,6 +116,8 @@ One request a second per site."
 as markdown in <root>/pages/content/, and appends one line per attempt to <root>/pages/content.jsonl. \
 This sends the URLs it fetches to their own sites. X posts are read from the public X post API at \
 api.fxtwitter.com, the one third party service it uses, sending only the post's number. \
+GitHub repositories, issues, pull requests and discussions are read through gh api when gh is installed and \
+signed in, at most four at a time; gh keeps the token. Without it they are read as web pages. \
 What enrich never fetches, content never fetches \
 either; X profiles and YouTube channels and playlists are recorded as not a document, and login screens \
 as behind a login, without a request. A page that failed is tried again on the next run, and after three \
@@ -127,6 +129,21 @@ failed runs it is recorded as unavailable. One request a second per site. Never 
         /// Capture only this library page (repeatable)
         #[arg(long = "url", value_name = "URL")]
         urls: Vec<String>,
+    },
+    /// Say which ways of reading pages this machine can use, and what the archive holds of page text
+    #[command(
+        long_about = "Reports, for each way content reads pages, whether it is ready, missing or degraded, \
+and how to fix it: the generic web tier (compiled in), GitHub through gh (found and its version, plus \
+with --live whether gh auth status exits 0; never its output), the X post API, YouTube through yt-dlp with deno or node, and \
+headless reading with the --browser binary (chrome by default). Then the archive: whether it is private, \
+whether pages/content exists, and its pages by their latest status. Offline by default. With --live, gh \
+checks its own sign in with GitHub and the X post API is asked once for a fixed public post. Sends nothing of yours. Exits 0 when \
+the generic web tier is ready; missing tools are warnings."
+    )]
+    Doctor {
+        /// Check GitHub sign in and ask the X post API once for a fixed public post
+        #[arg(long)]
+        live: bool,
     },
     /// Show the History signals the library keeps for its pages, or refresh them
     #[command(

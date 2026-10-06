@@ -2,17 +2,20 @@
 //!
 //! slice: content
 //! why: Each kind of document has a cheapest way to its text: an X post
-//!      through the X post API, anything else from its own site. Choosing
-//!      it from the address, before any request, lets the plan say which
-//!      host every request goes to, fetch one post once whatever address it
-//!      was opened at, and keep profiles, channels and playlists home as not
-//!      documents. A new route is a variant here, and `content` itself does
-//!      not change.
+//!      through the X post API, a GitHub repository, issue, pull request or
+//!      discussion through `gh api`, anything else from its own site.
+//!      Choosing it from the address, before any request, lets the plan say
+//!      which host every request goes to, fetch one document once whatever
+//!      address it was opened at, and keep profiles, channels and playlists
+//!      home as not documents. A new route is a variant here, and `content`
+//!      itself does not change.
 
 use url::Url;
 
 use crate::content_fetch::{self, Capture};
 use crate::fetch::Fetcher;
+use crate::github::Target;
+use crate::github_api::{self, Gh};
 use crate::guard;
 use crate::xpost;
 
@@ -23,6 +26,8 @@ pub enum Route {
     Web,
     /// From the X post API, by the post's number.
     XPost(String),
+    /// From the GitHub API through `gh`.
+    Github(Target),
 }
 
 impl Route {
@@ -38,6 +43,7 @@ impl Route {
             .unwrap_or(&host);
         match host {
             "x.com" | "twitter.com" => xpost::post_id(url).map(Self::XPost),
+            "github.com" => Some(Target::of(url).map_or(Self::Web, Self::Github)),
             "youtube.com" => {
                 let first = url
                     .path_segments()
@@ -63,22 +69,46 @@ impl Route {
         match self {
             Self::Web => None,
             Self::XPost(_) => Some(xpost::API_HOST),
+            Self::Github(_) => Some(github_api::API_HOST),
         }
     }
 
-    /// What one fetch stands for: page `raw` without its fragment, or the
-    /// post, whatever address it was opened at.
+    /// How many of its host's requests may run at once: one for a host
+    /// paced a request a second, more for a tool with limits of its own.
+    pub fn lanes(&self) -> usize {
+        match self {
+            Self::Web | Self::XPost(_) => 1,
+            Self::Github(_) => github_api::CONCURRENT,
+        }
+    }
+
+    /// What one fetch stands for: page `raw` without its fragment, the
+    /// post, or the repository or numbered thread, whatever address it was
+    /// opened at. Issues, pull requests and discussions share one number
+    /// space per repository, and GitHub names ignore case.
     pub fn key(&self, raw: &str) -> String {
         match self {
             Self::Web => without_fragment(raw),
             Self::XPost(id) => xpost::api_url(id),
+            Self::Github(target) => {
+                let repo = target.repo().full_name().to_ascii_lowercase();
+                match target {
+                    Target::Repo(_) => format!("github:{repo}"),
+                    Target::Issue(_, n) | Target::Pull(_, n) | Target::Discussion(_, n) => {
+                        format!("github:{repo}#{n}")
+                    }
+                }
+            }
         }
     }
 
-    pub fn capture(&self, fetcher: &Fetcher, raw: &str) -> Capture {
-        match self {
-            Self::Web => content_fetch::capture(fetcher, raw),
-            Self::XPost(id) => xpost::capture(fetcher, raw, id),
+    /// Reads page `raw`. A GitHub page without a usable `gh` is read from
+    /// the web, as the plan routes it.
+    pub fn capture(&self, fetcher: &Fetcher, gh: Option<&Gh>, raw: &str) -> Capture {
+        match (self, gh) {
+            (Self::XPost(id), _) => xpost::capture(fetcher, raw, id),
+            (Self::Github(target), Some(gh)) => github_api::capture(gh, raw, target),
+            (Self::Web | Self::Github(_), _) => content_fetch::capture(fetcher, raw),
         }
     }
 }
@@ -144,6 +174,80 @@ mod tests {
         ] {
             assert!(route(raw).is_some(), "{raw}");
         }
+    }
+
+    #[test]
+    fn github_documents_route_to_gh_and_other_github_pages_to_the_web() {
+        let repo = |owner: &str, name: &str| crate::github::Repo {
+            owner: owner.to_owned(),
+            name: name.to_owned(),
+        };
+        for (raw, target) in [
+            (
+                "https://github.com/owner/repo",
+                Target::Repo(repo("owner", "repo")),
+            ),
+            (
+                "https://www.github.com/Owner/Repo/?tab=readme-ov-file#install",
+                Target::Repo(repo("Owner", "Repo")),
+            ),
+            (
+                "https://github.com/owner/repo/issues/4",
+                Target::Issue(repo("owner", "repo"), 4),
+            ),
+            (
+                "https://github.com/owner/repo/pull/5/files",
+                Target::Pull(repo("owner", "repo"), 5),
+            ),
+            (
+                "https://github.com/owner/repo/discussions/6",
+                Target::Discussion(repo("owner", "repo"), 6),
+            ),
+        ] {
+            assert_eq!(route(raw), Some(Route::Github(target)), "{raw}");
+        }
+        for raw in [
+            "https://github.com/owner/repo/blob/main/src/lib.rs",
+            "https://github.com/owner/repo/releases",
+            "https://github.com/owner",
+            "https://github.com/settings/profile",
+            "https://github.com/",
+            "https://gist.github.com/owner/abc",
+            "https://docs.github.com/en/rest",
+        ] {
+            assert_eq!(route(raw), Some(Route::Web), "{raw}");
+        }
+    }
+
+    #[test]
+    fn git_suffix_addresses_share_the_repository_fetch() {
+        let root = "https://github.com/Owner/Repo";
+        let alias = "https://github.com/Owner/Repo.git/?tab=readme-ov-file#install";
+        let root_route = route(root).unwrap();
+        let alias_route = route(alias).unwrap();
+        assert_eq!(alias_route, root_route);
+        assert_eq!(alias_route.key(alias), root_route.key(root));
+    }
+
+    #[test]
+    fn a_github_document_is_one_fetch_whatever_its_address() {
+        let key = |raw: &str| route(raw).unwrap().key(raw);
+        assert_eq!(
+            key("https://github.com/Owner/Repo"),
+            key("https://www.github.com/owner/repo/?tab=readme-ov-file#install")
+        );
+        assert_eq!(
+            key("https://github.com/owner/repo/issues/5"),
+            key("https://github.com/owner/repo/pull/5/files")
+        );
+        assert_ne!(
+            key("https://github.com/owner/repo"),
+            key("https://github.com/owner/repo/issues/5")
+        );
+        let repo = route("https://github.com/owner/repo").unwrap();
+        assert_eq!(repo.host(), Some(github_api::API_HOST));
+        assert_eq!(repo.lanes(), github_api::CONCURRENT);
+        assert_eq!(Route::Web.lanes(), 1);
     }
 
     #[test]

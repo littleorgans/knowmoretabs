@@ -48,6 +48,21 @@ pub struct Passing {
     retry_after: Option<Duration>,
 }
 
+impl Passing {
+    /// Failure `line`, to be retried no sooner than `retry_after`.
+    pub fn new(line: Line, retry_after: Option<Duration>) -> Self {
+        Self {
+            line: Box::new(line),
+            retry_after,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn line(&self) -> &Line {
+        &self.line
+    }
+}
+
 /// Fetches and reads one page, retrying passing failures. Never fails: a
 /// failure is a capture too.
 pub fn capture(fetcher: &Fetcher, raw: &str) -> Capture {
@@ -107,10 +122,7 @@ pub fn refused(raw: &str, tier: Tier, refusal: Refusal) -> Result<Capture, Passi
         }
         refusal if refusal.is_rule() => ended(Status::Skipped),
         Refusal::Failed(_) if is_passing(&reason) => {
-            return Err(Passing {
-                line: Box::new(ended(Status::Error)),
-                retry_after: None,
-            });
+            return Err(Passing::new(ended(Status::Error), None));
         }
         _ => ended(Status::Error),
     };
@@ -209,12 +221,12 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
 /// A passing failure `failed`, to be retried no sooner than `response`
 /// asks in its Retry-After.
 pub fn passing(response: &Response, failed: Line) -> Passing {
-    Passing {
-        line: Box::new(failed),
-        retry_after: response
+    Passing::new(
+        failed,
+        response
             .header("retry-after")
             .and_then(|value| retry_after(value, Timestamp::now())),
-    }
+    )
 }
 
 /// Up to [`BODY_CAP`] of a response's body, sent as is. Otherwise how the
@@ -232,10 +244,10 @@ pub fn body(
     }
     match response.read(BODY_CAP, false) {
         Ok(bytes) => Ok(bytes),
-        Err(reason) if is_passing(&reason) => Err(Box::new(Err(Passing {
-            line: Box::new(line(Status::Error, reason)),
-            retry_after: None,
-        }))),
+        Err(reason) if is_passing(&reason) => Err(Box::new(Err(Passing::new(
+            line(Status::Error, reason),
+            None,
+        )))),
         Err(reason) => done(line(Status::Error, reason)),
     }
 }
@@ -267,7 +279,7 @@ fn retry_wait(retry: u32, retry_after: Option<Duration>, jitter: Duration) -> Op
 
 /// `Retry-After` as a wait from `now`: seconds, or an HTTP date. A date in
 /// the past is no wait.
-fn retry_after(value: &str, now: Timestamp) -> Option<Duration> {
+pub fn retry_after(value: &str, now: Timestamp) -> Option<Duration> {
     let value = value.trim();
     if let Ok(seconds) = value.parse::<u64>() {
         return Some(Duration::from_secs(seconds));

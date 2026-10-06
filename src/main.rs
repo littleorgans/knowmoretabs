@@ -16,14 +16,18 @@ mod capture;
 mod cli;
 mod content;
 mod content_fetch;
+mod content_plan;
 mod content_route;
 mod content_store;
+mod doctor;
 mod enrich;
 mod error;
 mod export;
 mod extract;
 mod fetch;
 mod github;
+mod github_api;
+mod github_page;
 mod guard;
 mod head;
 mod history;
@@ -46,6 +50,7 @@ mod staleness;
 mod suggestions;
 mod tags;
 mod targets;
+mod tools;
 mod triage;
 mod xpost;
 
@@ -119,6 +124,9 @@ fn main() -> ExitCode {
         Some(Command::Enrich(fetch)) => enrich::command(&root, (*fetch).into(), cli.json, log),
         Some(Command::Content { fetch, urls }) => {
             content::command(&root, (*fetch).into(), urls, cli.json, log)
+        }
+        Some(Command::Doctor { live }) => {
+            doctor::command(&root, cli.browser.as_deref(), *live, cli.json, log)
         }
         Some(Command::History { refresh: true }) => {
             library_history::refresh_command(&capture_options(&cli, root), cli.json, log)

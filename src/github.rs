@@ -1,11 +1,16 @@
-//! A public GitHub repository's topics and README, from the data its own page
-//! embeds for the browser.
+//! GitHub addresses: which repository, issue, pull request or discussion a
+//! page is; and a public repository's topics and README, from the data its
+//! own page embeds for the browser.
 //!
-//! slice: enrich
+//! slice: enrich, content
 //! why: A repository's `<head>` says little more than its name, while its
 //!      topics and README say what it is about. Both are in the JSON the
 //!      repository page carries for its scripts, so the one cookieless fetch
 //!      enrich already makes gets them with no token and no API quota.
+//!      Content reads the same documents through the GitHub API, so both
+//!      commands judge an address by the one parse here: GitHub's own pages
+//!      are nobody's repository, and a name GitHub would not accept is never
+//!      put into an API path.
 
 use serde_json::Value;
 use url::Url;
@@ -54,20 +59,116 @@ const NOT_OWNERS: &[&str] = &[
     "users",
 ];
 
+/// A repository, by the names its address spells.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Repo {
+    pub owner: String,
+    pub name: String,
+}
+
+impl Repo {
+    /// `owner/name`, as GitHub spells it in a title.
+    pub fn full_name(&self) -> String {
+        format!("{}/{}", self.owner, self.name)
+    }
+}
+
+/// What a GitHub page is a page of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Target {
+    /// `github.com/OWNER/REPO`.
+    Repo(Repo),
+    /// `github.com/OWNER/REPO/issues/N`.
+    Issue(Repo, u32),
+    /// `github.com/OWNER/REPO/pull/N`, and its tabs (`/files`, `/commits`).
+    Pull(Repo, u32),
+    /// `github.com/OWNER/REPO/discussions/N`.
+    Discussion(Repo, u32),
+}
+
+impl Target {
+    /// What `url` is a page of; `None` for any other page on GitHub (a
+    /// file, a profile, the settings) and for any other site.
+    pub fn of(url: &Url) -> Option<Self> {
+        let host = url.host_str().unwrap_or("");
+        if !host.eq_ignore_ascii_case("github.com") && !host.eq_ignore_ascii_case("www.github.com")
+        {
+            return None;
+        }
+        let segments: Vec<&str> = url
+            .path_segments()
+            .map(|s| s.filter(|s| !s.is_empty()).collect())
+            .unwrap_or_default();
+        let (owner, name, rest) = match segments.as_slice() {
+            [owner, name, rest @ ..] => (*owner, *name, rest),
+            _ => return None,
+        };
+        // GitHub redirects a root ending in `.git` to the repository page,
+        // but its API requires the repository name without that suffix.
+        let name = if rest.is_empty() {
+            name.strip_suffix(".git").unwrap_or(name)
+        } else {
+            name
+        };
+        if NOT_OWNERS.contains(&owner.to_ascii_lowercase().as_str())
+            || !is_owner_name(owner)
+            || !is_repo_name(name)
+        {
+            return None;
+        }
+        let repo = Repo {
+            owner: owner.to_owned(),
+            name: name.to_owned(),
+        };
+        let number = |n: &str| {
+            n.bytes()
+                .all(|b| b.is_ascii_digit())
+                .then(|| n.parse::<u32>().ok())
+                .flatten()
+                .filter(|n| (1..=i32::MAX.unsigned_abs()).contains(n))
+        };
+        Some(match rest {
+            [] => Self::Repo(repo),
+            ["issues", n] => Self::Issue(repo, number(n)?),
+            ["pull", n, ..] => Self::Pull(repo, number(n)?),
+            ["discussions", n] => Self::Discussion(repo, number(n)?),
+            _ => return None,
+        })
+    }
+
+    pub fn repo(&self) -> &Repo {
+        match self {
+            Self::Repo(repo)
+            | Self::Issue(repo, _)
+            | Self::Pull(repo, _)
+            | Self::Discussion(repo, _) => repo,
+        }
+    }
+}
+
+/// A user or organisation name: letters, digits, `-`, and `_` for the
+/// accounts an enterprise manages.
+fn is_owner_name(name: &str) -> bool {
+    !name.is_empty()
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
+/// A repository name: letters, digits, `-`, `_` and `.`, but not a path
+/// step of dots alone.
+fn is_repo_name(name: &str) -> bool {
+    !name.bytes().all(|b| b == b'.')
+        && name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b"-_.".contains(&b))
+}
+
 /// Whether `url` is a repository's own page, `github.com/OWNER/REPO`. Pages
 /// inside a repository (an issue, a file) are enriched from their own head
 /// only: fetching the repository page as well would be a second request.
 pub fn is_repo_page(url: &Url) -> bool {
-    let host = url.host_str().unwrap_or("");
-    if !host.eq_ignore_ascii_case("github.com") && !host.eq_ignore_ascii_case("www.github.com") {
-        return false;
-    }
-    let segments: Vec<&str> = url
-        .path_segments()
-        .map(|s| s.filter(|s| !s.is_empty()).collect())
-        .unwrap_or_default();
-    matches!(segments.as_slice(), [owner, _repo]
-        if !NOT_OWNERS.contains(&owner.to_ascii_lowercase().as_str()))
+    matches!(Target::of(url), Some(Target::Repo(_)))
 }
 
 /// Topics and README text, if the page carries either.
@@ -122,8 +223,47 @@ mod tests {
             ("https://github.com/Orgs/x", false),
             ("https://gist.github.com/owner/abc", false),
             ("https://example.test/owner/repo", false),
+            ("https://github.com/owner/..", false),
+            ("https://github.com/own%2Fer/repo", false),
         ] {
             assert_eq!(is_repo_page(&Url::parse(raw).unwrap()), repo, "{raw}");
+        }
+    }
+
+    #[test]
+    fn issues_pulls_and_discussions_are_targets_and_other_pages_are_not() {
+        let target = |raw: &str| Target::of(&Url::parse(raw).unwrap());
+        let repo = Repo {
+            owner: "some-owner".to_owned(),
+            name: "repo.rs".to_owned(),
+        };
+        assert_eq!(
+            target("https://github.com/some-owner/repo.rs/issues/12#issuecomment-1"),
+            Some(Target::Issue(repo.clone(), 12))
+        );
+        assert_eq!(
+            target("https://github.com/some-owner/repo.rs/pull/7/files"),
+            Some(Target::Pull(repo.clone(), 7))
+        );
+        assert_eq!(
+            target("https://www.github.com/some-owner/repo.rs/discussions/3?sort=new"),
+            Some(Target::Discussion(repo.clone(), 3))
+        );
+        assert_eq!(repo.full_name(), "some-owner/repo.rs");
+        for raw in [
+            "https://github.com/owner/repo/blob/main/README.md",
+            "https://github.com/owner/repo/tree/main",
+            "https://github.com/owner/repo/issues",
+            "https://github.com/owner/repo/issues/new",
+            "https://github.com/owner/repo/issues/0",
+            "https://github.com/owner/repo/issues/99999999999",
+            "https://github.com/owner/repo/pull/x1",
+            "https://github.com/owner/repo/discussions/categories",
+            "https://github.com/settings/profile",
+            "https://github.com/notifications/beta",
+            "https://github.com/",
+        ] {
+            assert_eq!(target(raw), None, "{raw}");
         }
     }
 

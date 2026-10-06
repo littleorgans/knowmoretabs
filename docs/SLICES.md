@@ -175,18 +175,21 @@ and URLs that carry a token stay home.
 one file per page under `pages/content/`, with one line per attempt in
 `pages/content.jsonl`. An X post is read from the public X post API: its
 text, the post it quotes, an article's body, author, date and image
-descriptions. Plain HTTP reads every other page: readability finds the main
+descriptions. A GitHub repository, issue, pull request or discussion is read
+through `gh api` when gh is signed in: description, topics and README, or
+the opening post and first comments. Plain HTTP reads every other page, and
+GitHub pages without gh: readability finds the main
 text, and a page is recorded as ok, thin, an app shell, behind a login,
 blocked, paywalled, not found or not HTML. Passing failures are retried in
 the run and on the next one. `--dry-run`, `--limit` and `--refetch` keep
-`enrich`'s meaning, and `--url` captures one page. Next, each page takes the
-cheapest route that works: `gh` for GitHub, yt-dlp captions for videos, and a
-local headless Chrome for pages that need a browser to show their text, with
-`doctor` saying which optional tools are ready.
+`enrich`'s meaning, and `--url` captures one page. `doctor` says which ways
+of reading pages are ready and what the archive holds. Next, yt-dlp captions
+for videos, and a local headless Chrome for pages that need a browser to
+show their text.
 
 **Intent.** Opt in, because it sends the URLs you visited to their own sites, and X post
-numbers to the X post API, and stores page text privately; the later routes
-add optional local tools (yt-dlp, gh, Chrome). It follows `enrich`'s rules for what never leaves
+numbers to the X post API, and stores page text privately; routes use
+optional local tools when they are there (gh now, later yt-dlp and Chrome). It follows `enrich`'s rules for what never leaves
 the machine, through the same guard, fetcher, planner and log writer, rather
 than a second copy of them. Capture only: the markdown files are the store,
 and keyword retrieval over them is the `fulltext` entry, not this slice.
