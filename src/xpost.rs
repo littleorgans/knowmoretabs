@@ -317,8 +317,8 @@ fn alt_texts(post: &Post) -> impl Iterator<Item = (&'static str, &str)> {
 }
 
 /// `# Title`, the byline, the post's text, its article and its image
-/// descriptions, then the quoted post as a block quote. Ends with a
-/// newline without stripping the post's trailing whitespace.
+/// descriptions, then the quoted post as a block quote. Ends in one
+/// newline.
 fn markdown(post: &Post) -> String {
     let mut text = format!("# {}\n\n{}", title(post), body(post, false));
     if let Some(quote) = &post.quote {
@@ -327,24 +327,23 @@ fn markdown(post: &Post) -> String {
             None => format!("Quoting {}", body(quote, true)),
         };
         text.push_str("\n\n");
-        for line in quoted.lines() {
+        for line in quoted.trim_end().lines() {
             text.push_str(if line.is_empty() { ">" } else { "> " });
             text.push_str(line);
             text.push('\n');
         }
     }
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    text
+    format!("{}\n", text.trim_end())
 }
 
 /// A post without its quote: the byline, then each part a paragraph. A
-/// quoted article's title is a heading; the page's own is its title.
+/// quoted article's title is a heading; the page's own is its title. The
+/// text is trimmed at its edges only: after a blank line, a leading indent
+/// of four spaces would make it a code block.
 fn body(post: &Post, quoted: bool) -> String {
     let mut parts = vec![byline(post)];
     if !post.text.trim().is_empty() {
-        parts.push(post.text.clone());
+        parts.push(post.text.trim().to_owned());
     }
     if let Some(article) = &post.article {
         if quoted && !article.title.trim().is_empty() {
@@ -470,37 +469,22 @@ mod tests {
     }
 
     #[test]
-    fn post_text_keeps_its_original_whitespace() {
-        for text in ["  Indented text.\nTrailing spaces.  ", "First line.\n\n\n"] {
-            let page = read_value(&post(text)).page.unwrap();
-            let mut expected = format!(
-                "# Example Person (@example) on X\n\n\
-                 Example Person (@example), 2026-10-07T09:00:00Z\n\n{text}"
-            );
-            if !expected.ends_with('\n') {
-                expected.push('\n');
-            }
-            assert_eq!(page.markdown, expected);
-        }
-        let mut status = post("Public commentary.");
-        status["quote"] = post("  Quoted line.  \n\n\n");
-        assert!(
-            read_value(&status)
-                .page
-                .unwrap()
-                .markdown
-                .ends_with(">   Quoted line.  \n>\n>\n")
+    fn post_text_is_trimmed_at_its_edges_and_code_keeps_its_indent() {
+        let page = read_value(&post("    Indented text.\n  Second line.  \n\n")).page;
+        assert_eq!(
+            page.unwrap().markdown,
+            "# Example Person (@example) on X\n\n\
+             Example Person (@example), 2026-10-07T09:00:00Z\n\n\
+             Indented text.\n  Second line.\n"
         );
+        let mut status = post("Public commentary.");
+        status["quote"] = post("    Quoted line.  \n\n");
         status["article"] = json!({"content": {"blocks": [
             {"type": "code-block", "text": "    first()\n    second()"}
         ]}});
-        assert!(
-            read_value(&status)
-                .page
-                .unwrap()
-                .markdown
-                .contains("```\n    first()\n    second()\n```")
-        );
+        let markdown = read_value(&status).page.unwrap().markdown;
+        assert!(markdown.contains("```\n    first()\n    second()\n```"));
+        assert!(markdown.ends_with(">\n> Quoted line.\n"), "{markdown}");
     }
 
     #[test]
