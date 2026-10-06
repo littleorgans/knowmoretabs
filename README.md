@@ -267,9 +267,11 @@ GitHub, and Chrome for pages that need a browser to show their text. Without
 them it does what it can over plain HTTP. robots.txt is not consulted, as
 with `enrich`: every address is one you opened yourself.
 
-What `enrich` never fetches, `content` never fetches either, and it records
-each of those pages once with the reason. It also records X profiles and
-YouTube channels and playlists as not a document, without a request, and
+What `enrich` never fetches, `content` never fetches either. Forgotten pages,
+private network addresses, search results and URLs carrying tokens are
+counted in the report without being written to the content store.
+It records X profiles and YouTube channels and playlists as not a document,
+without a request, and
 anything that is not HTML as `not_html` with its type. A page that has text
 is `ok`, or `thin` when it has less than 1,500 characters; either way the
 text is kept. A page drawn entirely by scripts is `empty_shell`, a sign-in

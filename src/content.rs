@@ -4,10 +4,11 @@
 //! slice: content
 //! why: Content capture sends the URLs you visited to their own sites, so it
 //!      plans from the same `targets` rules as `enrich` before any request,
-//!      says in full with `--dry-run` what it would send, and records every
-//!      page the rules keep home once, with the reason, so the log accounts
-//!      for the whole library. A page known by several addresses that differ
-//!      only after `#` is fetched once and recorded under each. Hosts run in
+//!      says in full with `--dry-run` what it would send, and records pages
+//!      that are not documents once, with the reason. Forgotten, private,
+//!      token and search URLs stay out of the store. A page known by several
+//!      addresses that differ only after `#` is fetched once and recorded
+//!      under each. Hosts run in
 //!      parallel while each sees one request a second, and every result is
 //!      written as it arrives, so an interrupted run keeps what it captured.
 
@@ -160,7 +161,22 @@ fn plan(
             ..options
         },
     );
-    let (documents, not_documents): (Vec<Item>, Vec<Item>) = std::mem::take(&mut plan.todo)
+    let forgotten_urls: HashSet<Url> = state
+        .forgotten
+        .iter()
+        .filter_map(|raw| guard::page_url(raw))
+        .collect();
+    let (candidates, forgotten_pages): (Vec<Item>, Vec<Item>) = std::mem::take(&mut plan.todo)
+        .into_iter()
+        .partition(|item| {
+            !guard::page_url(&item.url).is_some_and(|url| forgotten_urls.contains(&url))
+        });
+    plan.not_fetched.extend(
+        forgotten_pages
+            .into_iter()
+            .map(|item| (item.url, Skip::Forgotten)),
+    );
+    let (documents, not_documents): (Vec<Item>, Vec<Item>) = candidates
         .into_iter()
         .partition(|item| Url::parse(&item.url).map_or(true, |url| !is_not_a_document(&url)));
     plan.todo = documents;
@@ -170,7 +186,10 @@ fn plan(
         .chain(
             plan.not_fetched
                 .iter()
-                .filter(|(url, skip)| *skip != Skip::Forgotten && !known.pages.contains_key(url))
+                .filter(|(url, skip)| {
+                    matches!(skip, Skip::NotWeb | Skip::NotADocument)
+                        && !known.pages.contains_key(url)
+                })
                 .cloned(),
         )
         .map(|(url, skip)| Line::new(&url, Status::Skipped).with_reason(skip.label()))
@@ -527,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    fn pages_kept_home_are_recorded_once_and_forgotten_ones_never() {
+    fn non_document_skips_are_recorded_once_and_private_urls_never() {
         let snapshots = [snapshot(&[
             "https://www.google.com/search?q=tide",
             "https://a.test/reset?token=abc123",
@@ -552,24 +571,9 @@ mod tests {
             lines,
             [
                 (
-                    "http://192.168.1.1/admin",
-                    Status::Skipped,
-                    "private network"
-                ),
-                (
                     "https://a.test/login",
                     Status::BehindLogin,
                     "login page, not fetched"
-                ),
-                (
-                    "https://a.test/reset?token=abc123",
-                    Status::Skipped,
-                    "token in URL"
-                ),
-                (
-                    "https://www.google.com/search?q=tide",
-                    Status::Skipped,
-                    "search results"
                 ),
                 (
                     "https://www.youtube.com/@someone",
@@ -589,6 +593,49 @@ mod tests {
             2,
             "recorded or not, it is counted"
         );
+    }
+
+    #[test]
+    fn privacy_skips_never_write_urls_to_the_content_store() {
+        let snapshots = [snapshot(&[
+            "https://www.google.com/search?q=tide",
+            "https://a.test/reset?token=abc123",
+            "http://192.168.1.1/admin",
+            "https://forgotten.test/",
+        ])];
+        let state = state(&["https://forgotten.test/"]);
+        let (plan, work) = plan(&snapshots, &state, &log(&[]), Options::default());
+        assert_eq!(plan.not_fetched.len(), 4);
+        assert!(work.fetches.is_empty());
+        let root = tempfile::tempdir().unwrap();
+        run(root.path(), work, &state, Log::default()).unwrap();
+        assert_eq!(
+            std::fs::read(content_store::log_path(root.path())).unwrap(),
+            [] as [u8; 0]
+        );
+        assert_eq!(
+            std::fs::read_dir(content_store::dir(root.path()))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn forgotten_fragment_variants_are_excluded_before_fetching() {
+        let snapshots = [snapshot(&[
+            "https://forgotten.test/page",
+            "https://forgotten.test/page#other",
+        ])];
+        let (plan, work) = plan(
+            &snapshots,
+            &state(&["https://forgotten.test/page#hidden"]),
+            &log(&[]),
+            Options::default(),
+        );
+        assert!(work.fetches.is_empty());
+        assert_eq!(work.unsent, []);
+        assert_eq!(plan.skip_counts()[&Skip::Forgotten], 2);
     }
 
     #[test]

@@ -127,11 +127,7 @@ impl Fetcher {
         let mut fetcher = Self::with(test_timeout().unwrap_or(TIMEOUT), test_address(), PACE);
         fetcher.forgotten = forgotten
             .iter()
-            .filter_map(|raw| {
-                let mut url = Url::parse(raw).ok()?;
-                url.set_fragment(None);
-                Some(url.to_string())
-            })
+            .filter_map(|raw| guard::page_url(raw).map(String::from))
             .collect();
         fetcher
     }
@@ -160,10 +156,9 @@ impl Fetcher {
     /// checked and paced first. One deadline covers the hops and the body.
     pub fn get(&self, raw: &str, accept: &str) -> Result<Response, Refusal> {
         let deadline = Instant::now() + self.timeout;
-        let Ok(mut url) = Url::parse(raw) else {
+        let Some(mut url) = guard::page_url(raw) else {
             return Err(Refusal::InvalidUrl);
         };
-        url.set_fragment(None);
         for hop in 0..=MAX_REDIRECTS {
             if !is_web(&url) {
                 return Err(Refusal::NotWeb);
