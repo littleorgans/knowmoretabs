@@ -12,6 +12,22 @@
     "article": {
       "id": "9",
       "title": "Synthetic snippets",
+      "media_entities": [
+        {
+          "id": "102",
+          "media_key": "3_102",
+          "media_id": "102",
+          "media_info": {
+            "__typename": "ApiImage",
+            "original_img_height": 600,
+            "original_img_width": 800,
+            "original_img_url": "https://example.com/102.jpg",
+            "color_info": {
+              "palette": []
+            }
+          }
+        }
+      ],
       "content": {
         "blocks": [
           {

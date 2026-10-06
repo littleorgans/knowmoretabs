@@ -8,8 +8,9 @@
 //!      uses, so it is asked as little as possible: only the post's number,
 //!      never the page's address, cookieless and one request a second.
 //!      What is kept is what a reader of the post sees as text: the post,
-//!      the post it quotes, an article's body, who wrote it and when, and
-//!      what its images say in their descriptions. One post only: a thread
+//!      the post it quotes, an article's body with a placeholder where it
+//!      shows an image or video, who wrote it and when, and what its
+//!      images say in their descriptions. One post only: a thread
 //!      is not unrolled. A deleted post is final, a private one waits for a
 //!      signed in browser, and a busy API is retried as any site is.
 
@@ -21,6 +22,7 @@ use crate::content_fetch::{self, Capture, Passing};
 use crate::content_store::{Completeness, Line, Page, Status, Tier};
 use crate::extract;
 use crate::fetch::Fetcher;
+use crate::head;
 
 /// The API's host: the one host every X post is paced on.
 pub const API_HOST: &str = "api.fxtwitter.com";
@@ -155,6 +157,8 @@ struct Author {
 struct Article {
     title: String,
     content: Option<ArticleContent>,
+    /// What each MEDIA entity's `mediaId` names.
+    media_entities: Vec<ArticleMedium>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -205,6 +209,33 @@ struct EntityData {
     markdown: String,
     #[serde(rename = "tweetId")]
     tweet_id: String,
+    #[serde(rename = "mediaItems")]
+    media_items: Vec<MediaItem>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct MediaItem {
+    #[serde(rename = "mediaId")]
+    media_id: String,
+}
+
+/// An article's image or video, as X itself lists it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ArticleMedium {
+    media_id: String,
+    media_info: MediaInfo,
+}
+
+/// `ApiImage`, `ApiVideo` or `ApiGif`. The published schema gives a
+/// description to videos and GIFs only; one on an image is read the same.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct MediaInfo {
+    #[serde(rename = "__typename")]
+    kind: String,
+    ext_alt_text: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -341,10 +372,16 @@ fn text_of(post: &Post) -> String {
 
 /// The rendered article parts, shared by completeness and the saved body.
 fn article_parts(article: &Article) -> impl Iterator<Item = String> + '_ {
+    let media = &article.media_entities;
     article
         .content
         .iter()
-        .flat_map(|content| content.blocks.iter().map(move |part| block(part, content)))
+        .flat_map(move |content| {
+            content
+                .blocks
+                .iter()
+                .map(move |part| block(part, content, media))
+        })
         .filter(|part| !part.trim().is_empty())
 }
 
@@ -403,7 +440,7 @@ fn body(post: &Post, quoted: bool) -> String {
 }
 
 /// An article paragraph as markdown, by its editor block type.
-fn block(block: &Block, content: &ArticleContent) -> String {
+fn block(block: &Block, content: &ArticleContent, media: &[ArticleMedium]) -> String {
     if block.kind == "atomic" {
         return block
             .entities
@@ -424,9 +461,19 @@ fn block(block: &Block, content: &ArticleContent) -> String {
                         (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
                             .then(|| format!("[Embedded post](https://x.com/i/status/{id})"))
                     }
+                    "MEDIA" => Some(
+                        value
+                            .data
+                            .media_items
+                            .iter()
+                            .map(|item| placeholder(&item.media_id, media))
+                            .collect::<Vec<_>>()
+                            .join("\n\n"),
+                    ),
                     _ => None,
                 }
             })
+            .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("\n\n");
     }
@@ -450,11 +497,40 @@ fn block(block: &Block, content: &ArticleContent) -> String {
     }
 }
 
+/// `[Image: description]`, or `[Image]` without one, where an article
+/// shows an image; `[Video]` for a video or GIF. An id the article does
+/// not list is an image. The description is one line, and its brackets
+/// and backslashes are escaped so it cannot end the placeholder early.
+fn placeholder(id: &str, media: &[ArticleMedium]) -> String {
+    let info = media
+        .iter()
+        .find(|medium| medium.media_id == id)
+        .map(|medium| &medium.media_info);
+    let kind = match info.map(|info| info.kind.as_str()) {
+        Some("ApiVideo" | "ApiGif") => "Video",
+        _ => "Image",
+    };
+    let alt = info
+        .and_then(|info| info.ext_alt_text.as_deref())
+        .map(head::collapse)
+        .unwrap_or_default();
+    if alt.is_empty() {
+        return format!("[{kind}]");
+    }
+    let alt = alt
+        .replace('\\', r"\\")
+        .replace('[', r"\[")
+        .replace(']', r"\]");
+    format!("[{kind}: {alt}]")
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::*;
+
+    const ARTICLE_FIXTURE: &[u8] = include_bytes!("../tests/fixtures/content/x-article.json");
 
     fn url(raw: &str) -> Url {
         Url::parse(raw).unwrap()
@@ -666,11 +742,10 @@ mod tests {
     }
 
     #[test]
-    fn an_article_keeps_atomic_code_and_embeds_in_order() {
+    fn an_article_keeps_atomic_code_embeds_and_images_in_order() {
         use crate::content_store::{self, Store};
 
-        let fixture = include_bytes!("../tests/fixtures/content/x-article.json");
-        let Capture { line, page } = read(fixture, line);
+        let Capture { line, page } = read(ARTICLE_FIXTURE, line);
         let page = page.unwrap();
         assert_eq!(line.status, Status::Ok);
         assert_eq!(page.completeness, Completeness::Full);
@@ -683,6 +758,7 @@ mod tests {
              Here is a plain snippet:\n\n```\n    sample()\n```\n\n\
              Here is the referenced post:\n\n\
              [Embedded post](https://x.com/i/status/101)\n\n\
+             [Image]\n\n\
              End of the article.\n"
         );
         assert_eq!(page.chars, extract::plain_chars(&page.markdown));
@@ -699,6 +775,139 @@ mod tests {
             line.content_sha256.as_deref(),
             Some(content_store::sha256_hex(body.as_bytes()).as_str())
         );
+    }
+
+    /// An article whose one paragraph introduces media `7`, with the
+    /// media it lists; its saved markdown.
+    fn media_article(media_entities: &serde_json::Value) -> String {
+        let mut status = post("");
+        status["article"] = json!({
+            "id": "9", "title": "Charts", "media_entities": media_entities,
+            "content": {"blocks": [
+                {"key": "a", "type": "unstyled", "text": "The chart:"},
+                {"key": "b", "type": "atomic", "text": " ",
+                    "entityRanges": [{"key": 3, "offset": 0, "length": 1}]},
+            ], "entityMap": [
+                {"key": "3", "value": {"type": "MEDIA", "mutability": "Immutable",
+                    "data": {"entityKey": "c", "mediaItems": [
+                        {"localMediaId": "c", "mediaCategory": "photo", "mediaId": "7"},
+                    ]}}},
+            ]},
+        });
+        read_value(&status).page.unwrap().markdown
+    }
+
+    fn medium(id: &str, info: &serde_json::Value) -> serde_json::Value {
+        json!({"id": id, "media_key": format!("3_{id}"), "media_id": id, "media_info": info})
+    }
+
+    const CHART_ARTICLE: &str = "# Charts\n\n\
+         Example Person (@example), 2026-10-07T09:00:00Z\n\n\
+         The chart:\n\n";
+
+    #[test]
+    fn an_article_image_is_a_placeholder_with_its_one_line_description() {
+        let info = json!({"__typename": "ApiImage",
+            "original_img_url": "https://example.com/7.jpg",
+            "ext_alt_text": " Tides  by\nhour [high](https://example.com) \\ low "});
+        assert_eq!(
+            media_article(&json!([medium("7", &info)])),
+            format!(
+                "{CHART_ARTICLE}\
+                 [Image: Tides by hour \\[high\\](https://example.com) \\\\ low]\n"
+            )
+        );
+    }
+
+    #[test]
+    fn an_article_image_without_a_description_is_a_bare_placeholder() {
+        let info = json!({"__typename": "ApiImage",
+            "original_img_url": "https://example.com/7.jpg"});
+        assert_eq!(
+            media_article(&json!([medium("7", &info)])),
+            format!("{CHART_ARTICLE}[Image]\n")
+        );
+        let blank = json!({"__typename": "ApiImage", "ext_alt_text": " \n "});
+        assert_eq!(
+            media_article(&json!([medium("7", &blank)])),
+            format!("{CHART_ARTICLE}[Image]\n")
+        );
+    }
+
+    #[test]
+    fn an_article_media_id_it_does_not_list_is_an_image() {
+        let video = json!({"__typename": "ApiVideo", "type": "video",
+            "ext_alt_text": "Not this one"});
+        assert_eq!(
+            media_article(&json!([medium("8", &video)])),
+            format!("{CHART_ARTICLE}[Image]\n")
+        );
+        assert_eq!(
+            media_article(&json!([])),
+            format!("{CHART_ARTICLE}[Image]\n")
+        );
+    }
+
+    #[test]
+    fn an_article_video_or_gif_is_a_video_placeholder() {
+        let video = json!({"__typename": "ApiVideo", "type": "video",
+            "ext_alt_text": "Waves at dusk"});
+        assert_eq!(
+            media_article(&json!([medium("7", &video)])),
+            format!("{CHART_ARTICLE}[Video: Waves at dusk]\n")
+        );
+        let gif = json!({"__typename": "ApiGif", "type": "animated_gif", "ext_alt_text": null});
+        assert_eq!(
+            media_article(&json!([medium("7", &gif)])),
+            format!("{CHART_ARTICLE}[Video]\n")
+        );
+    }
+
+    #[test]
+    fn an_article_keeps_each_media_item_without_empty_atomic_paragraphs() {
+        let expected = read(ARTICLE_FIXTURE, line)
+            .page
+            .unwrap()
+            .markdown
+            .replace("[Image]", "[Image]\n\n[Video]");
+        let mut answer: serde_json::Value = serde_json::from_slice(ARTICLE_FIXTURE).unwrap();
+        let article = &mut answer["status"]["article"];
+        article["media_entities"]
+            .as_array_mut()
+            .unwrap()
+            .push(medium(
+                "7",
+                &json!({"__typename": "ApiVideo", "ext_alt_text": null}),
+            ));
+        let content = &mut article["content"];
+        let entities = content["entityMap"].as_array_mut().unwrap();
+        let media = entities
+            .iter_mut()
+            .find(|entity| entity["key"] == "12")
+            .unwrap();
+        media["value"]["data"]["mediaItems"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"mediaId": "7"}));
+        entities.extend([
+            json!({"key": "13", "value": {"type": "MEDIA", "data": {"mediaItems": []}}}),
+            json!({"key": "14", "value": {"type": "MARKDOWN", "data": {"markdown": " \n "}}}),
+        ]);
+        let block = content["blocks"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .find(|block| block["key"] == "media")
+            .unwrap();
+        block["entityRanges"] = json!([
+            {"key": 13}, {"key": 14}, {"key": 12}, {"key": 13}, {"key": 14},
+        ]);
+        let Capture { line, page } = read_value(&answer["status"]);
+        let page = page.unwrap();
+        assert_eq!(line.status, Status::Ok);
+        assert_eq!(page.completeness, Completeness::Full);
+        assert!(page.markdown.contains("[Image]\n\n[Video]"));
+        assert_eq!(page.markdown, expected);
     }
 
     #[test]
