@@ -307,7 +307,7 @@ fn report(
 mod tests {
     use super::*;
     use crate::content_plan::plan;
-    use crate::content_plan::tests::{log, no_gh, no_ytdlp, snapshot, state};
+    use crate::content_test::{log, no_gh, no_ytdlp, snapshot, state};
     use crate::targets::Skip;
 
     #[test]

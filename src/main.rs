@@ -19,6 +19,8 @@ mod content_fetch;
 mod content_plan;
 mod content_route;
 mod content_store;
+#[cfg(test)]
+mod content_test;
 mod doctor;
 mod enrich;
 mod error;
