@@ -8,8 +8,8 @@
 //!      only ever replaced whole, under the archive lock and before its line,
 //!      so a crash leaves at worst an orphan file the next attempt replaces.
 //!      A line from a newer schema is not guessed at but counted, a status
-//!      this build does not know is counted and reads as unknown, and front
-//!      matter keys a later build added survive a refetch. An unchanged page is not
+//!      this build does not know reads as unknown, and front matter keys a
+//!      later build added survive a refetch. An unchanged page is not
 //!      rewritten, so its file keeps the date its text last changed.
 
 use std::collections::BTreeMap;
@@ -73,7 +73,7 @@ pub enum Status {
     Skipped,
     Error,
     Unavailable,
-    /// A status a newer build wrote: counted unreadable, kept final.
+    /// A status a newer build wrote: read as final, never rewritten.
     #[serde(other)]
     Unknown,
 }
@@ -198,10 +198,6 @@ impl Line {
 impl Keyed for Line {
     fn key(&self) -> &str {
         &self.url
-    }
-
-    fn is_understood(&self) -> bool {
-        self.status != Status::Unknown
     }
 }
 
@@ -486,10 +482,7 @@ mod tests {
             r#"{"schema_version":1,"url":"https://e.test/","attempted_at":"2026-10-0"#,
         );
         let log: Log = jsonl::parse(text);
-        assert_eq!(
-            log.unreadable, 4,
-            "unknown status, schema 2, no schema, torn"
-        );
+        assert_eq!(log.unreadable, 3, "schema 2, no schema, torn");
         assert_eq!(log.pages.len(), 2);
         assert_eq!(log.pages["https://a.test/"].status, Status::Ok);
         assert_eq!(log.pages["https://a.test/"].attempt, 2);
@@ -498,20 +491,6 @@ mod tests {
         assert_eq!(recorded(&log, "https://a.test/"), Recorded::Final);
         assert_eq!(recorded(&log, "https://b.test/"), Recorded::Final);
         assert_eq!(recorded(&log, "https://z.test/"), Recorded::Nothing);
-    }
-
-    #[test]
-    fn unknown_status_lines_are_counted_even_when_a_later_line_is_known() {
-        let mut future = serde_json::to_value(Line::new("https://a.test/", Status::Ok)).unwrap();
-        future["status"] = "archived".into();
-        let mut other = future.clone();
-        other["url"] = "https://b.test/".into();
-        let known = serde_json::to_string(&Line::new("https://a.test/", Status::Ok)).unwrap();
-        let log: Log = jsonl::parse(&format!("{future}\n{other}\n{known}\n"));
-        assert_eq!(log.unreadable, 2);
-        assert_eq!(log.pages["https://a.test/"].status, Status::Ok);
-        assert_eq!(log.pages["https://b.test/"].status, Status::Unknown);
-        assert_eq!(recorded(&log, "https://b.test/"), Recorded::Final);
     }
 
     #[test]
