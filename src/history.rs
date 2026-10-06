@@ -2,7 +2,7 @@
 //! knew about each tab's URL when the snapshot was taken, and about every
 //! page in the library (`library_history.rs`).
 //!
-//! slice: capture
+//! slice: history
 //! why: Chrome keeps about 90 days of visits and then forgets them; a
 //!      snapshot keeps them for as long as the archive exists. Reading them
 //!      must never put the browser's file at risk or cost the user a

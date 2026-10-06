@@ -1,7 +1,7 @@
 //! `knowmoretabs tag --prompt DIR`: a work folder the owner hands to an agent
 //! of their choice, which reads the pages and writes suggested tags back.
 //!
-//! slice: triage
+//! slice: tags
 //! why: The tool contains no model and makes no request, so tagging is a
 //!      handoff: this writes the instructions, the vocabulary and the pages,
 //!      and `tag --import` validates what comes back. `prompt.md` is the

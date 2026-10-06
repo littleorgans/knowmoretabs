@@ -1,6 +1,6 @@
 //! `knowmoretabs enrich`: what to fetch, in what order, and the report.
 //!
-//! slice: library
+//! slice: enrich
 //! why: Enrich is the one command that sends anything anywhere, so the
 //!      decision of what never leaves is made once, before any request, and
 //!      can be read in full with `--dry-run`: forgotten pages, the private

@@ -1,7 +1,7 @@
 //! The only network code in knowmoretabs: one cookieless GET per page, read
 //! until `</head>`, turned into a metadata record.
 //!
-//! slice: library
+//! slice: enrich
 //! why: `enrich` is opt-in because it sends the URLs you visited to their
 //!      own sites, so what it sends is kept to the minimum and every hop is
 //!      checked. No cookies, no referrer, no proxy from the environment; each

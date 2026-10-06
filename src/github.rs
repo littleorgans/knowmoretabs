@@ -1,7 +1,7 @@
 //! A public GitHub repository's topics and README, from the data its own page
 //! embeds for the browser.
 //!
-//! slice: library
+//! slice: enrich
 //! why: A repository's `<head>` says little more than its name, while its
 //!      topics and README say what it is about. Both are in the JSON the
 //!      repository page carries for its scripts, so the one cookieless fetch

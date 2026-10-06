@@ -1,7 +1,7 @@
 //! Reads a page's `<head>`: title, meta tags, canonical link, language and
 //! JSON-LD, from bytes in whatever charset the page declared.
 //!
-//! slice: library
+//! slice: enrich
 //! why: Enrich wants a dozen values out of the head, not a DOM. A scanner that
 //!      knows comments, quoted attributes and the elements whose content is
 //!      raw text does that in a few hundred lines with no parser dependency,

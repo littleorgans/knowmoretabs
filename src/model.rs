@@ -1,6 +1,6 @@
 //! The shape of `snapshot.json`, the archive's source of truth.
 //!
-//! slice: capture
+//! slice: capture, history
 //! why: Snapshots are immutable and every later slice reads them, so a field
 //!      added here is a field every reader must understand for as long as the
 //!      archive exists. These are plain data types with serde derives and no
