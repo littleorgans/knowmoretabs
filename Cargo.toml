@@ -13,12 +13,14 @@ categories = ["command-line-utilities"]
 # The crate ships the source, the tests and the three frontend assets the
 # binary embeds at build time. Everything else is project material, not
 # product: research, briefs, the vendored reference script, the frontend
-# fixtures, the slice matrix and its lint, and CI.
+# fixtures, the slice matrix and its lint, the classifier parity tool in
+# `examples/`, and CI.
 exclude = [
     "/.cargo/",
     "/.github/",
     "/.gitignore",
     "/docs/",
+    "/examples/",
     "/reference/",
     "/slices.toml",
     "/web/NOTES.md",
