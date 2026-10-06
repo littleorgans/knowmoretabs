@@ -143,12 +143,6 @@ except forgotten pages and pages on this machine. A page History no longer knows
         /// Say what a tag means, for you and for a tagging agent; "" clears it (repeatable)
         #[arg(long, num_args = 2, value_names = ["NAME", "TEXT"], action = ArgAction::Append)]
         define: Vec<String>,
-        /// Whenever CHILD is suggested, suggest PARENT too, e.g. DPO Training (repeatable)
-        #[arg(long, num_args = 2, value_names = ["CHILD", "PARENT"], action = ArgAction::Append)]
-        imply: Vec<String>,
-        /// Take a parent rule away (repeatable)
-        #[arg(long, num_args = 2, value_names = ["CHILD", "PARENT"], action = ArgAction::Append)]
-        unimply: Vec<String>,
         /// Include retired tags
         #[arg(long)]
         all: bool,
@@ -170,13 +164,16 @@ pub struct TagArgs {
     #[arg(
         long,
         value_name = "NAME",
-        required_unless_present_any = ["remove", "prompt", "import"],
+        required_unless_present_any = ["remove", "clear", "prompt", "import"],
         conflicts_with_all = ["prompt", "import"]
     )]
     pub add: Vec<String>,
     /// A tag to take off (repeatable)
     #[arg(long, value_name = "NAME", conflicts_with_all = ["prompt", "import"])]
     pub remove: Vec<String>,
+    /// Take back your decision about a tag: neither yours nor dismissed (repeatable)
+    #[arg(long, value_name = "NAME", conflicts_with_all = ["prompt", "import"])]
+    pub clear: Vec<String>,
     #[command(flatten)]
     pub prompt: PromptArgs,
     #[command(flatten)]
@@ -194,10 +191,10 @@ pub struct PromptArgs {
     )]
     pub dir: Option<PathBuf>,
     /// With --prompt: every page in the library, tagged or not
-    #[arg(long, requires = "prompt", conflicts_with_all = ["import", "urls", "add", "remove"])]
+    #[arg(long, requires = "prompt", conflicts_with_all = ["import", "urls", "add", "remove", "clear"])]
     pub all: bool,
     /// With --prompt: include the searches and referrers History recorded
-    #[arg(long, requires = "prompt", conflicts_with_all = ["import", "urls", "add", "remove"])]
+    #[arg(long, requires = "prompt", conflicts_with_all = ["import", "urls", "add", "remove", "clear"])]
     pub with_history: bool,
 }
 
@@ -207,16 +204,16 @@ pub struct ImportArgs {
     #[arg(long = "import", id = "import", value_name = "FILE")]
     pub file: Option<PathBuf>,
     /// With --import: who made the suggestions, instead of the file's "source"
-    #[arg(long, value_name = "NAME", requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove"])]
+    #[arg(long, value_name = "NAME", requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove", "clear"])]
     pub source: Option<String>,
     /// With --import: create tags the vocabulary does not have
-    #[arg(long, requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove"])]
+    #[arg(long, requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove", "clear"])]
     pub accept_new: bool,
     /// With --import: allow pages from the prompt to be missing
-    #[arg(long, requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove"])]
+    #[arg(long, requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove", "clear"])]
     pub partial: bool,
     /// With --import: validate and report; store nothing
-    #[arg(long, requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove"])]
+    #[arg(long, requires = "import", conflicts_with_all = ["prompt", "urls", "add", "remove", "clear"])]
     pub dry_run: bool,
 }
 
@@ -358,7 +355,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &cli.command,
-            Some(Command::Tag(TagArgs { urls, add, remove, prompt: PromptArgs { dir: None, .. }, import: ImportArgs { file: None, .. } }))
+            Some(Command::Tag(TagArgs { urls, add, remove, prompt: PromptArgs { dir: None, .. }, import: ImportArgs { file: None, .. }, .. }))
                 if urls.len() == 2 && add == &["Harness", "MCP"] && remove == &["Old"]
         ));
         assert!(Cli::try_parse_from(["knowmoretabs", "tag", "https://a.test/"]).is_err());
@@ -432,12 +429,9 @@ mod tests {
             "--define",
             "X",
             "",
-            "--imply",
-            "DPO",
-            "Training",
         ])
         .unwrap();
-        let Some(Command::Tags { define, imply, .. }) = &cli.command else {
+        let Some(Command::Tags { define, .. }) = &cli.command else {
             panic!("not tags");
         };
         assert_eq!(
@@ -447,8 +441,32 @@ mod tests {
                 ("X".into(), String::new())
             ]
         );
-        assert_eq!(pairs(imply), [("DPO".into(), "Training".into())]);
         assert!(Cli::try_parse_from(["knowmoretabs", "tags", "--define", "DPO"]).is_err());
+    }
+
+    #[test]
+    fn tags_has_no_parent_rules_and_tag_takes_clear() {
+        for rule in ["--imply", "--unimply"] {
+            assert!(Cli::try_parse_from(["knowmoretabs", "tags", rule, "A", "B"]).is_err());
+        }
+        let parse = |args: &[&str]| {
+            let mut all = vec!["knowmoretabs", "tag"];
+            all.extend_from_slice(args);
+            Cli::try_parse_from(all)
+        };
+        let cli = parse(&["https://a.test/", "--clear", "X", "--clear", "Y"]).unwrap();
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Tag(TagArgs { urls, add, remove, clear, .. }))
+                if urls.len() == 1 && add.is_empty() && remove.is_empty() && clear == &["X", "Y"]
+        ));
+        for bad in [
+            &["--prompt", "/w", "--clear", "X"][..],
+            &["--import", "/f", "--clear", "X"],
+            &["--clear", "X"],
+        ] {
+            assert!(parse(bad).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

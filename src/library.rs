@@ -97,6 +97,9 @@ impl PageTags {
 
 /// A vocabulary entry. Retiring records the time rather than deleting the
 /// entry, so a page's history stays readable and the name can come back.
+/// Tags are flat: the parent rules a development build stored under
+/// `implies` load into `extra` like any unknown field and are never read,
+/// until a vocabulary edit drops them ([`State::drop_parent_rules`]).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Term {
     pub created_at: Timestamp,
@@ -105,13 +108,12 @@ pub struct Term {
     /// What the tag means, in the owner's words: what a tagging agent reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<String>,
-    /// Parent tags that always hold when this one does (DPO implies
-    /// Training). Applied to imported suggestions, never to a page directly.
-    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
-    pub implies: BTreeSet<String>,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
 }
+
+/// The key a development build kept a term's parent tags under.
+const PARENT_RULES: &str = "implies";
 
 impl Term {
     pub fn new(created_at: Timestamp) -> Self {
@@ -119,7 +121,6 @@ impl Term {
             created_at,
             retired_at: None,
             definition: None,
-            implies: BTreeSet::new(),
             extra: serde_json::Map::new(),
         }
     }
@@ -222,23 +223,42 @@ impl State {
             .collect()
     }
 
-    /// A page's tags as the library shows them: what the owner added, in the
-    /// vocabulary's spelling and in tag order. A name `spellings` does not
-    /// resolve (retired, or never in the vocabulary) is not shown.
+    /// A page's tags as the library shows them: what the owner added,
+    /// [`spelled`].
     pub fn page_tags(&self, url: &str, spellings: &HashMap<String, &str>) -> Vec<String> {
-        let Some(page) = self.tags.get(url) else {
-            return Vec::new();
-        };
-        let mut tags: Vec<String> = page
-            .add
-            .iter()
-            .filter_map(|name| spellings.get(&fold(name)))
-            .map(|name| (*name).to_owned())
-            .collect();
-        tags.sort_by(|a, b| tag_order(a, b));
-        tags.dedup();
-        tags
+        self.tags
+            .get(url)
+            .map(|page| spelled(&page.add, spellings))
+            .unwrap_or_default()
     }
+
+    /// Takes every legacy parent rule out of the vocabulary, and says how
+    /// many there were. The one write that changes a field this build does
+    /// not model; only a vocabulary edit calls it.
+    pub fn drop_parent_rules(&mut self) -> usize {
+        self.vocabulary
+            .values_mut()
+            .filter_map(|term| term.extra.remove(PARENT_RULES))
+            .map(|rules| rules.as_array().map_or(1, Vec::len))
+            .sum()
+    }
+}
+
+/// `names` in the vocabulary's spelling and in tag order, without repeats.
+/// A name `spellings` does not resolve (retired, or never in the vocabulary)
+/// is left out.
+pub fn spelled<'a>(
+    names: impl IntoIterator<Item = &'a String>,
+    spellings: &HashMap<String, &str>,
+) -> Vec<String> {
+    let mut tags: Vec<String> = names
+        .into_iter()
+        .filter_map(|name| spellings.get(&fold(name)))
+        .map(|name| (*name).to_owned())
+        .collect();
+    tags.sort_by(|a, b| tag_order(a, b));
+    tags.dedup();
+    tags
 }
 
 /// Every URL the library would list: what `forget` may name. The same rule

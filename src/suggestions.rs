@@ -209,10 +209,8 @@ pub struct Report {
     /// Pages with at least one tag, and with none.
     pub tagged: usize,
     pub empty: usize,
-    /// Tags suggested, over all pages, parent rules included.
+    /// Tags suggested, over all pages.
     pub suggestions: usize,
-    /// Of those, how many only a parent rule added.
-    pub implied: usize,
     /// Pages whose answer from this source was already stored as it stands.
     pub unchanged: usize,
     /// Names `--accept-new` added to the vocabulary, or brought back.
@@ -488,8 +486,9 @@ pub fn import(root: &Path, options: &ImportOptions, log: Log) -> Result<Report, 
         missing,
         ..Report::default()
     };
-    // New names join the vocabulary before parent rules run, so a rule on a
-    // name just brought back applies. In a dry run the state is not written.
+    // New names join the vocabulary before the answers are spelled through
+    // it, so a name just created or brought back is kept. In a dry run the
+    // state is not written.
     let now = tags::now();
     for (name, _) in parsed.unknown.values() {
         match tags::admit(&mut state, name, now) {
@@ -511,8 +510,9 @@ pub fn import(root: &Path, options: &ImportOptions, log: Log) -> Result<Report, 
     Ok(report)
 }
 
-/// The lines to store: each answer with its parent rules applied, less
-/// those this source already gave exactly so, under the same version.
+/// The lines to store: each answer as the agent gave it, in the
+/// vocabulary's spelling and tag order, less those this source already gave
+/// exactly so, under the same version.
 fn suggest(
     state: &State,
     existing: &[Line],
@@ -521,10 +521,10 @@ fn suggest(
     now: Timestamp,
 ) -> Vec<Line> {
     let previous = latest(existing);
+    let spellings = state.spellings(false);
     let mut lines = Vec::new();
     for answer in answers {
-        let tags = tags::with_parents(state, &answer.tags);
-        report.implied += tags.len().saturating_sub(answer.tags.len());
+        let tags = library::spelled(&answer.tags, &spellings);
         report.suggestions += tags.len();
         if tags.is_empty() {
             report.empty += 1;
@@ -604,14 +604,11 @@ fn human_report(report: &Report, file: &Path, store: &Path) -> String {
     };
     let _ = write!(
         text,
-        ": {} with tags ({}",
+        ": {} with tags ({}), {} with none",
         report.tagged,
-        plural(report.suggestions, "suggestion")
+        plural(report.suggestions, "suggestion"),
+        report.empty
     );
-    if report.implied > 0 {
-        let _ = write!(text, ", {} from parent rules", report.implied);
-    }
-    let _ = write!(text, "), {} with none", report.empty);
     if report.unchanged > 0 {
         let _ = write!(text, "; {} already imported as they are", report.unchanged);
     }

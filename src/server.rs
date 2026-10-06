@@ -355,6 +355,7 @@ impl Server {
                 &request.urls,
                 &request.add,
                 &request.remove,
+                &[],
                 false,
                 self.log,
             )

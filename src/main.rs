@@ -97,16 +97,12 @@ fn main() -> ExitCode {
             create,
             retire,
             define,
-            imply,
-            unimply,
             all,
         }) => {
             let edit = tags::VocabularyEdit {
                 create: create.clone(),
                 retire: retire.clone(),
                 define: cli::pairs(define),
-                imply: cli::pairs(imply),
-                unimply: cli::pairs(unimply),
             };
             tags::tags_command(&root, &edit, *all, cli.json, log)
         }
@@ -163,7 +159,15 @@ fn tag(
         };
         return suggestions::import_command(root, &options, json, log);
     }
-    tags::tag_command(root, &args.urls, &args.add, &args.remove, json, log)
+    tags::tag_command(
+        root,
+        &args.urls,
+        &args.add,
+        &args.remove,
+        &args.clear,
+        json,
+        log,
+    )
 }
 
 /// The one way a command ends badly, so there is one answer to which stream

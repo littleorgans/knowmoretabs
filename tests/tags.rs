@@ -116,7 +116,7 @@ fn tag_writes_both_lists_and_creates_the_vocabulary() {
     assert_eq!(
         value,
         json!({
-            "changed": [A], "unchanged": [], "dismissed": [], "tags": {A: ["Harness"]},
+            "changed": [A], "unchanged": [], "dismissed": [], "cleared": [], "tags": {A: ["Harness"]},
             "created": [], "revived": [],
         })
     );
@@ -182,6 +182,14 @@ fn bad_names_and_unknown_urls_are_refused_and_nothing_is_written() {
             "it is named both to add and to remove",
         ),
         (
+            vec!["tag", A, "--add", "MCP", "--clear", "mcp"],
+            "it is named both to add and to clear",
+        ),
+        (
+            vec!["tag", A, "--remove", "MCP", "--clear", "MCP"],
+            "it is named both to remove and to clear",
+        ),
+        (
             vec!["tag", A, "https://nowhere.test/", "--add", "MCP"],
             "not in your library: https://nowhere.test/; nothing changed",
         ),
@@ -210,6 +218,61 @@ fn bad_names_and_unknown_urls_are_refused_and_nothing_is_written() {
     let output = fx.run(&["--json", "tags", "--retire", "Never"]);
     let value: Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(value["error"]["kind"], "unknown_tag");
+}
+
+/// Clearing takes a name out of both lists: the page is undecided about it
+/// again, which is neither a tag nor a dismissal.
+#[test]
+fn clear_returns_a_tag_to_undecided() {
+    let fx = Fixture::new();
+    archive(&fx);
+    // Removing a name the vocabulary never held records nothing.
+    assert_success(&fx.run(&["tags", "--create", "Y"]));
+    assert_success(&fx.run(&["tag", A, "--add", "X", "--remove", "Y"]));
+    assert_success(&fx.run(&["tag", B, "--add", "Keep"]));
+
+    let output = fx.run(&["tag", A, "--clear", "X", "--clear", "y"]);
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        "retagged 1 page; cleared X, Y on 1 page (undecided again)\n"
+    );
+    assert_eq!(
+        state(&fx)["tags"],
+        json!({B: {"add": ["Keep"], "remove": []}}),
+        "an emptied page entry is deleted"
+    );
+    assert_eq!(
+        vocabulary_names(&state(&fx)),
+        json!({"Keep": {"retired": false}, "X": {"retired": false}, "Y": {"retired": false}}),
+        "clearing keeps the vocabulary"
+    );
+
+    // The same request again, or a name never held, changes nothing.
+    let before = fs::read(fx.root.join("library.json")).unwrap();
+    for args in [
+        vec!["tag", A, "--clear", "X", "--clear", "Y"],
+        vec!["tag", A, "--clear", "Never"],
+    ] {
+        let output = fx.run(&args);
+        assert_success(&output);
+        assert_eq!(
+            stdout(&output),
+            "already tagged that way: 1 page; nothing changed\n",
+            "{args:?}"
+        );
+        assert_eq!(fs::read(fx.root.join("library.json")).unwrap(), before);
+    }
+
+    assert_success(&fx.run(&["tag", A, "--remove", "X"]));
+    let value = json_run(&fx, &["tag", A, B, "--clear", "X"]);
+    assert_eq!(
+        value,
+        json!({
+            "changed": [], "unchanged": [A, B], "dismissed": [], "cleared": [A],
+            "tags": {A: [], B: ["Keep"]}, "created": [], "revived": [],
+        })
+    );
 }
 
 /// The acceptance's undo: the request with its lists swapped restores what

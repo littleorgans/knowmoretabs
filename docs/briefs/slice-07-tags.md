@@ -132,7 +132,8 @@ prompt, and imports what comes back.
    - keywords in the title and description, never in README bodies (a passing
      mention is not a topic);
    - GitHub topics;
-   - parent tags, only where the implication always holds (e.g. DPO ⇒ Training).
+   - ~~parent tags, only where the implication always holds (e.g. DPO ⇒
+     Training)~~: dropped, tags are flat (§9).
 2. **`knowmoretabs tag --prompt DIR`** writes a work folder:
    - `prompt.md`: the owner's guidelines (tags are facets, "substantially
      about", favour recall), the vocabulary with definitions, the exact output
@@ -222,3 +223,8 @@ None open. New questions go here.
   heuristic hides them; 7b skips fetching them.
 - **Tags are facets.** Broad tags, overlapping tags and no exclusions are the
   intended design.
+- **Tags are flat; no parent rules.** Every tag is judged on the page's own
+  content and no tag follows from another. `tags --imply/--unimply` and the
+  import's parent expansion are removed; rules already in `library.json` load
+  and are ignored. `tag --clear` returns a tag to undecided without recording
+  a rejection. Decided 2026-10-06 (owner).
