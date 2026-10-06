@@ -8,9 +8,9 @@
 //!      that are not documents once, with the reason. Forgotten, private,
 //!      token and search URLs stay out of the store. A page known by several
 //!      addresses that differ only after `#` is fetched once and recorded
-//!      under each. Hosts run in
-//!      parallel while each sees one request a second, and every result is
-//!      written as it arrives, so an interrupted run keeps what it captured.
+//!      under each. Hosts run in parallel while each sees one request a
+//!      second, and every result is written as it arrives, so an interrupted
+//!      run keeps what it captured.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::Write as _;
@@ -41,8 +41,8 @@ const PROGRESS_EVERY: usize = 25;
 struct Work {
     /// One fetch per page, its fragment variants recorded with it.
     fetches: Vec<Fetch>,
-    /// Pages recorded without a request: login screens, and pages the rules
-    /// keep home that the log does not mention yet.
+    /// Pages recorded without a request: login screens, and pages that are
+    /// not web pages or not documents that the log does not mention yet.
     unsent: Vec<Line>,
 }
 
@@ -144,8 +144,9 @@ fn only<'a>(
 }
 
 /// The shared plan, with `content`'s own rules on top: pages that are not
-/// documents stay home, `--limit` counts what is left, fragment variants
-/// share a fetch, and pages kept home are recorded once.
+/// documents stay home, as does every variant of a forgotten page,
+/// `--limit` counts what is left, fragment variants share a fetch, and pages
+/// that are not web pages or not documents are recorded once.
 fn plan(
     snapshots: &[Snapshot],
     state: &State,
