@@ -300,11 +300,14 @@ and a refetch that finds the same text leaves the file as it was.
 From an X post it keeps the post's text, the post it quotes, an article's
 body with its code and a link to each post it embeds, who wrote it and
 when, and the descriptions of its images; one post, not the thread around
-it. A post the API does not find, or one deleted or suspended, is
-`not_found`; a private post or a protected account is `behind_login`; a
-post the API reports as blocked is `blocked`; a post with no text at all is
-`thin`. The API's 429 and 5xx answers are retried as a site's are. Two
-addresses of the same post are fetched once.
+it. Where an article shows an image, its body has `[Image: <description>]`,
+or `[Image]` when the image has no description; a video or GIF is
+`[Video]` the same way. The media itself is not kept. A post the API does
+not find, or one deleted or suspended, is `not_found`; a private post or a
+protected account is `behind_login`; a post the API reports as blocked is
+`blocked`; a post with no text at all is `thin`. The API's 429 and 5xx
+answers are retried as a site's are. Two addresses of the same post are
+fetched once.
 
 A repository (`github.com/<owner>/<repo>`), issue (`/issues/<n>`), pull
 request (`/pull/<n>`) or discussion (`/discussions/<n>`) is read with
