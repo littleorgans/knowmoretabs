@@ -268,24 +268,22 @@ them it does what it can over plain HTTP. robots.txt is not consulted, as
 with `enrich`: every address is one you opened yourself.
 
 What `enrich` never fetches, `content` never fetches either. Forgotten pages,
-private network addresses, search results and URLs carrying tokens are
-counted in the report without being written to the content store.
-It records X profiles and YouTube channels and playlists as not a document,
-without a request, and
-anything that is not HTML as `not_html` with its type. A page that has text
-is `ok`, or `thin` when it has less than 1,500 characters; either way the
-text is kept. A page drawn entirely by scripts is `empty_shell`, a sign-in
-form or a 401 is `behind_login`, a 403 is `blocked`, a 404 or 410 is
-`not_found`, and a short page whose publisher marks it as not free is
-`paywalled`, keeping what it showed. A timeout, a 429 or an HTTP 502, 503 or
-504 is tried twice more in the
-same run, waiting 2 and then 8 seconds or as long as the site's
-`Retry-After` asks, up to a minute. A longer `Retry-After` ends retries for
-that run. A site that answers 429 has its request interval doubled, up to
-eight seconds, for the rest of the run. A page still failing is `error` and is
-tried again on the next run; after three runs it is `unavailable`. Every
-other outcome stands until you pass `--refetch`, and a refetch that finds
-the same text leaves the file as it was.
+private network addresses, search results and URLs carrying tokens are counted
+in the report without being written to the content store. It records X
+profiles and YouTube channels and playlists as not a document, without a
+request, and anything that is not HTML as `not_html` with its type. A page
+that has text is `ok`, or `thin` when it has less than 1,500 characters;
+either way the text is kept. A page drawn entirely by scripts is
+`empty_shell`, a sign-in form or a 401 is `behind_login`, a 403 is `blocked`,
+a 404 or 410 is `not_found`, and a short page whose publisher marks it as not
+free is `paywalled`, keeping what it showed. A timeout, a 429 or an HTTP 502,
+503 or 504 is tried twice more in the same run, waiting 2 and then 8 seconds
+or as long as the site's `Retry-After` asks, up to a minute. A longer
+`Retry-After` ends retries for that run. A site that answers 429 has its
+request interval doubled, up to eight seconds, for the rest of the run. A page
+still failing is `error` and is tried again on the next run; after three runs
+it is `unavailable`. Every other outcome stands until you pass `--refetch`,
+and a refetch that finds the same text leaves the file as it was.
 
 ## Where the data lives
 
