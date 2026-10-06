@@ -11,7 +11,7 @@
 //!      of times with growing waits, honouring the site's own Retry-After,
 //!      and a site that says slow down gets fewer requests for the rest of
 //!      the run. The decisions are pure functions so they can be tested
-//!      without a network.
+//!      without a network, and the X post route answers by the same rules.
 
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
@@ -43,7 +43,7 @@ pub struct Capture {
 
 /// A failure that may pass: worth another try after a wait.
 #[derive(Debug, Clone)]
-struct Passing {
+pub struct Passing {
     line: Box<Line>,
     retry_after: Option<Duration>,
 }
@@ -51,9 +51,15 @@ struct Passing {
 /// Fetches and reads one page, retrying passing failures. Never fails: a
 /// failure is a capture too.
 pub fn capture(fetcher: &Fetcher, raw: &str) -> Capture {
+    retrying(|| once(fetcher, raw))
+}
+
+/// Tries `once` until it captures something or its passing failures have
+/// had their retries; every route retries by these rules.
+pub fn retrying(mut once: impl FnMut() -> Result<Capture, Passing>) -> Capture {
     let mut retry = 0;
     loop {
-        match once(fetcher, raw) {
+        match once() {
             Ok(capture) => return capture,
             Err(passing) => {
                 retry += 1;
@@ -73,7 +79,7 @@ pub fn capture(fetcher: &Fetcher, raw: &str) -> Capture {
 fn once(fetcher: &Fetcher, raw: &str) -> Result<Capture, Passing> {
     let response = match fetcher.get(raw, fetch::ACCEPT_HTML) {
         Ok(response) => response,
-        Err(refusal) => return refused(raw, refusal),
+        Err(refusal) => return refused(raw, Tier::Web, refusal),
     };
     if response.status == 429 {
         fetcher.slow_down(&response.url);
@@ -81,29 +87,32 @@ fn once(fetcher: &Fetcher, raw: &str) -> Result<Capture, Passing> {
     read(raw, response)
 }
 
-fn web_line(raw: &str, status: Status) -> Line {
+/// A line for page `raw`, read by `tier` without signing in.
+pub fn public_line(raw: &str, tier: Tier, status: Status) -> Line {
     let mut line = Line::new(raw, status);
-    line.tier = Some(Tier::Web);
+    line.tier = Some(tier);
     line.access = Some(Access::Public);
     line
 }
 
-fn refused(raw: &str, refusal: Refusal) -> Result<Capture, Passing> {
+/// What a GET that ended without a response says about page `raw`.
+pub fn refused(raw: &str, tier: Tier, refusal: Refusal) -> Result<Capture, Passing> {
     let reason = refusal.reason();
+    let ended = |status: Status| public_line(raw, tier, status).with_reason(reason.clone());
     let line = match refusal {
         Refusal::Login(url) => {
-            let mut line = web_line(raw, Status::BehindLogin).with_reason(reason);
+            let mut line = ended(Status::BehindLogin);
             line.final_url = Some(url.to_string());
             line
         }
-        refusal if refusal.is_rule() => web_line(raw, Status::Skipped).with_reason(reason),
+        refusal if refusal.is_rule() => ended(Status::Skipped),
         Refusal::Failed(_) if is_passing(&reason) => {
             return Err(Passing {
-                line: Box::new(web_line(raw, Status::Error).with_reason(reason)),
+                line: Box::new(ended(Status::Error)),
                 retry_after: None,
             });
         }
-        _ => web_line(raw, Status::Error).with_reason(reason),
+        _ => ended(Status::Error),
     };
     Ok(Capture { line, page: None })
 }
@@ -119,7 +128,7 @@ fn is_passing(reason: &str) -> bool {
 
 /// What an HTTP status says about a page, when it says something final or
 /// passing; `None` for a success.
-fn status_outcome(status: u16) -> Option<(Status, bool)> {
+pub fn status_outcome(status: u16) -> Option<(Status, bool)> {
     match status {
         200..=299 => None,
         401 => Some((Status::BehindLogin, false)),
@@ -134,7 +143,7 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
     let final_url = response.url.to_string();
     let status = response.status;
     let line = |state: Status, reason: Option<String>| {
-        let mut line = web_line(raw, state);
+        let mut line = public_line(raw, Tier::Web, state);
         line.reason = reason;
         line.final_url = Some(final_url.clone());
         line.http_status = Some(status);
@@ -144,13 +153,7 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
     if let Some((state, passing)) = status_outcome(status) {
         let failed = line(state, Some(format!("HTTP {status}")));
         if passing {
-            let retry_after = response
-                .header("retry-after")
-                .and_then(|value| retry_after(value, Timestamp::now()));
-            return Err(Passing {
-                line: Box::new(failed),
-                retry_after,
-            });
+            return Err(self::passing(&response, failed));
         }
         return done(failed);
     }
@@ -158,21 +161,9 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
     if !mime.is_empty() && !mime.contains("html") {
         return done(line(Status::NotHtml, Some(format!("not HTML ({mime})"))));
     }
-    if !response.is_identity() {
-        return done(line(
-            Status::Error,
-            Some("unsupported content encoding".to_owned()),
-        ));
-    }
-    let bytes = match response.read(BODY_CAP, false) {
+    let bytes = match body(&mut response, |state, reason| line(state, Some(reason))) {
         Ok(bytes) => bytes,
-        Err(reason) if is_passing(&reason) => {
-            return Err(Passing {
-                line: Box::new(line(Status::Error, Some(reason))),
-                retry_after: None,
-            });
-        }
-        Err(reason) => return done(line(Status::Error, Some(reason))),
+        Err(ended) => return *ended,
     };
     let html = match head::decode(
         &bytes,
@@ -213,6 +204,40 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
         line: captured,
         page,
     })
+}
+
+/// A passing failure `failed`, to be retried no sooner than `response`
+/// asks in its Retry-After.
+pub fn passing(response: &Response, failed: Line) -> Passing {
+    Passing {
+        line: Box::new(failed),
+        retry_after: response
+            .header("retry-after")
+            .and_then(|value| retry_after(value, Timestamp::now())),
+    }
+}
+
+/// Up to [`BODY_CAP`] of a response's body, sent as is. Otherwise how the
+/// attempt ends: `line` makes its line from a status and a reason.
+pub fn body(
+    response: &mut Response,
+    line: impl Fn(Status, String) -> Line,
+) -> Result<Vec<u8>, Box<Result<Capture, Passing>>> {
+    let done = |line: Line| Err(Box::new(Ok(Capture { line, page: None })));
+    if !response.is_identity() {
+        return done(line(
+            Status::Error,
+            "unsupported content encoding".to_owned(),
+        ));
+    }
+    match response.read(BODY_CAP, false) {
+        Ok(bytes) => Ok(bytes),
+        Err(reason) if is_passing(&reason) => Err(Box::new(Err(Passing {
+            line: Box::new(line(Status::Error, reason)),
+            retry_after: None,
+        }))),
+        Err(reason) => done(line(Status::Error, reason)),
+    }
 }
 
 fn class_status(class: Class) -> Status {
@@ -356,7 +381,7 @@ mod tests {
 
     #[test]
     fn refusals_keep_rules_home_and_retry_only_passing_failures() {
-        let status = |refusal| match refused("https://a.test/", refusal) {
+        let status = |refusal| match refused("https://a.test/", Tier::Web, refusal) {
             Ok(capture) => (capture.line.status, false),
             Err(passing) => (passing.line.status, true),
         };
@@ -377,6 +402,7 @@ mod tests {
         );
         let login = refused(
             "https://a.test/",
+            Tier::Web,
             Refusal::Login(url::Url::parse("https://a.test/login").unwrap()),
         )
         .unwrap()

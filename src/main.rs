@@ -16,6 +16,7 @@ mod capture;
 mod cli;
 mod content;
 mod content_fetch;
+mod content_route;
 mod content_store;
 mod enrich;
 mod error;
@@ -46,6 +47,7 @@ mod suggestions;
 mod tags;
 mod targets;
 mod triage;
+mod xpost;
 
 use std::fmt::Write as _;
 use std::process::ExitCode;

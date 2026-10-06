@@ -97,11 +97,13 @@ impl Status {
     }
 }
 
-/// The route that made an attempt. Only the generic web route exists yet.
+/// The route that made an attempt: the generic web route, or the X post
+/// API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
     Web,
+    X,
     #[serde(other)]
     Other,
 }
