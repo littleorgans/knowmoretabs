@@ -175,10 +175,25 @@ as what you can do that you could not before.
   show is `not_found`, and a repository with no README or a thread with only
   a title is `thin`. Without gh, GitHub pages are read as web pages, and the
   report says so.
+- **YouTube videos as text.** With yt-dlp and deno (or node) installed,
+  `content` reads a video (`/watch?v=`, `/shorts/`, `youtu.be`) through
+  yt-dlp: its title, channel, upload date, duration, chapters and
+  description, then a transcript from one caption track, English first
+  (made by a person, then YouTube's own), else the video's own language the
+  same way; a machine translation is never chosen. Rolling automatic
+  captions are read once each, and the transcript is grouped by chapter.
+  yt-dlp is given only the video's id, with no cookies and no configuration
+  file, one video at a time and a second between its requests. A video
+  without captions is `thin`, keeping its description; a private, removed
+  or missing video is `not_found`; an age check, members only or sign in
+  is `behind_login`; a bot check or rate limit is `blocked`. Without yt-dlp
+  or a JavaScript runtime, videos wait, unrecorded, and the report says how
+  many. The front matter records the caption language and whether the
+  captions are manual or automatic.
 - **Check what content can use.** `knowmoretabs doctor` reports whether each
   way of reading pages is ready, missing or degraded, with how to fix it:
-  the web tier, gh and its version, the X post API, yt-dlp with deno or node,
-  and the `--browser` binary; then whether the archive is private and its
+  the web tier, gh and its version, the X post API, yt-dlp with deno or node
+  for YouTube, and the `--browser` binary; then whether the archive is private and its
   pages by status. Offline by default; `--live` checks gh sign in (exit code
   only, output never read) and asks the X post API once for a fixed public
   post. `--json` for scripts. Exits 0 when the web tier is ready.

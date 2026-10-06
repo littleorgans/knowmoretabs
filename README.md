@@ -26,8 +26,9 @@ cargo install --git https://github.com/littleorgans/knowmoretabs knowmoretabs
 Or clone the repository and run `cargo build --release`; the binary is
 `target/release/knowmoretabs`, and it depends on nothing else. `content`
 works without any other tool; it reads GitHub through `gh` when gh is
-installed and signed in, and planned routes will let it use yt-dlp and
-Chrome. `knowmoretabs doctor` says which of them it can use.
+installed and signed in, and YouTube videos through yt-dlp when yt-dlp and
+deno (or node) are installed; a planned route will let it use Chrome.
+`knowmoretabs doctor` says which of them it can use.
 
 Nothing is tagged yet: the prebuilt binaries and the crates.io package
 described next arrive with v0.1.0, and until then the repository is the only
@@ -269,10 +270,11 @@ at once, and no more than 10 MB of a page. An X post (`x.com` or
 the post's number, not the page's address, without cookies, one request a
 second. A GitHub repository, issue, pull request or discussion is read
 through gh, GitHub's own command line tool, when it is installed and signed
-in. Planned routes will use yt-dlp for video captions and Chrome for pages
-that need a browser to show their text. Without these tools it does what it
-can over plain HTTP. robots.txt is not consulted, as with `enrich`: every
-address is one you opened yourself.
+in. A YouTube video is read through yt-dlp, which sends the video's id to
+YouTube. A planned route will use Chrome for pages that need a browser to
+show their text. Without these tools it does what it can over plain HTTP,
+and YouTube videos wait for yt-dlp. robots.txt is not consulted, as with
+`enrich`: every address is one you opened yourself.
 
 When article extraction misses a page's text, the fallback tries the whole
 body, removing menus, banners, footers and sidebars outside `<main>`. It
@@ -329,11 +331,41 @@ pages are read as web pages too, and the report says so, for example
 `GitHub API: gh not found, used the web page for 3 pages`. A dry run sends
 nothing, so it checks only that gh is installed.
 
+A YouTube video (`youtube.com/watch?v=<id>`, `/shorts/<id>` or
+`youtu.be/<id>`, on the `www`, `m` and `music` hosts too) is read through
+yt-dlp, an optional tool you install yourself, with deno or node for it to
+run YouTube's player code. Every address of one video is one fetch: a start
+time or a playlist attached to the address is ignored, and yt-dlp is given
+only the plain watch address rebuilt from the video's id, so the id is what
+YouTube receives. It runs without a shell, without cookies of any kind and
+without reading yt-dlp's configuration files, one video at a time, with a
+second between its requests and a minute at most per call, into a private
+scratch folder removed afterwards. It makes two calls: the first describes
+the video, the second downloads one caption track chosen from that
+description, never all of them. The track is English first, made by a
+person, then YouTube's automatic captions of English speech; else the
+video's own language, the same way. A track YouTube translated by machine
+is never chosen. From the video it keeps the title, channel, upload date,
+duration, chapters and description, then the transcript: automatic captions
+repeat each line as the next rolls in, so each line is kept once, and
+timing is dropped except that the transcript is grouped under each chapter
+with its start time. The front matter's `lang` is the caption language and
+`captions` says `manual` or `automatic`. A video without captions is
+`thin`, keeping its description. A private, removed or missing video is
+`not_found`; an age check, members only or sign in is `behind_login`, with
+no text; YouTube's bot check or a rate limit is `blocked`, and is not tried
+again in the run. A yt-dlp that fails or times out is `error`, tried again
+on the next run; yt-dlp retries its own requests, so a run does not.
+Channels and playlists are not documents. Without yt-dlp or a JavaScript
+runtime, videos are not fetched and nothing is recorded for them; the
+report says, for example, `3 YouTube pages waiting for yt-dlp (see
+knowmoretabs doctor)`. A dry run checks only that they are on your `PATH`.
+
 `knowmoretabs doctor` says, for each way `content` reads pages, whether it
 is ready, missing or degraded, and how to fix it: the web tier, which is
 compiled in; GitHub through gh, found with its version; the X post API; yt-dlp
-with deno or node for YouTube, and the `--browser` binary (Chrome by
-default) for headless reading, both ahead of their routes. Then the archive:
+with deno or node for YouTube; and the `--browser` binary (Chrome by
+default) for headless reading, ahead of its route. Then the archive:
 whether it is private, whether `pages/content` exists, and its pages by
 latest status. It is offline by default, with GitHub sign in marked as not
 checked. With `--live`, gh checks its own sign in (the `gh auth status` exit
@@ -373,7 +405,8 @@ editor. Everything under `export/` is derived and can be deleted.
 Nothing leaves the machine unless you run `enrich` or `content`. `save`,
 `serve`, `export` and the tag commands make no network requests of any kind;
 `enrich` and `content` are the only code that sends your pages' addresses,
-and what each sends is described above. `doctor` is offline by default.
+or a video's id to YouTube through yt-dlp, and what each sends is described
+above. `doctor` is offline by default.
 `doctor --live` lets gh check its own sign in with GitHub and asks the X
 post API for one fixed public post, sending nothing of yours. A
 `tag --prompt` folder is the one thing made to be handed on: it holds the
@@ -548,7 +581,7 @@ band of `slices.toml`. Beyond that:
 - No build step for the frontend: hand-written HTML, CSS and JS, the same
   assets for `file://` and `serve`.
 - One binary, no runtime. Optional local tools may widen what an opt-in
-  command can reach (gh for content capture; planned: yt-dlp and Chrome), never
+  command can reach (gh and yt-dlp for content capture; planned: Chrome), never
   what the binary needs to run.
 - Comments explain why, never what. Library code returns typed errors; no
   `unwrap()` outside tests and no `panic!` on user input. A clippy `allow` is
