@@ -88,7 +88,9 @@ as what you can do that you could not before.
   NAME` tags pages or untags them, and `knowmoretabs tags` lists your tags
   with how many pages carry each. A new name joins your vocabulary; names
   match without regard to case. `tags --retire NAME` hides a tag everywhere
-  and keeps it in `library.json`, and `--create` brings it back. `serve`
+  and keeps it in `library.json`, and `--create` brings it back. `tag
+  <URL>... --clear NAME` returns a tag to undecided on those pages: neither
+  yours nor dismissed, so a suggestion for it shows again. `serve`
   gains `POST /api/tags` and `POST /api/vocabulary` behind the same
   loopback, `Host` and `Origin` checks as forget, and every page in `serve`
   and `export` carries its tags. A `library.json` from before tags reads as
@@ -109,8 +111,11 @@ as what you can do that you could not before.
   every page in `serve` and `export` gains `suggested`: the tags suggested
   and not yet added or removed by you, each with its sources. `tags --define
   NAME TEXT` gives a tag a definition, shown by `tags` and given to the
-  agent, and `tags --imply CHILD PARENT` records a parent rule the import
-  applies. `knowmoretabs` still contains no model and sends nothing.
+  agent. Tags are flat: each is judged on the page alone and no tag follows
+  from another; a `library.json` holding parent rules from a development
+  build loads as before, the rules are ignored, and the next change to the
+  vocabulary drops them. `knowmoretabs` still contains no model and sends
+  nothing.
 - **Review suggested tags in the library.** Each row shows its suggestions
   after your own tags, dashed and a step quieter, with one mark per source
   that suggested them, so a tag two agents agree on reads apart from a

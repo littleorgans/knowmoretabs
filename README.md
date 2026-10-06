@@ -129,8 +129,9 @@ meaning is in the combination. `tag` puts them on pages or takes them off, and
 before joins your vocabulary, and names match without regard to case, so
 `mcp` finds `MCP`. `tags --retire NAME` hides a tag everywhere and keeps it,
 and every page it was on, in `library.json`; adding it to a page again brings
-it back. `tags --define NAME TEXT` says what a tag means, and
-`tags --imply DPO Training` records a parent rule that always holds.
+it back. `tags --define NAME TEXT` says what a tag means.
+`tag URL --clear NAME` takes back your decision about a tag on a page, so it
+is neither yours nor dismissed; a suggestion for it shows again.
 
 Nothing is tagged for you without asking, and `knowmoretabs` contains no model
 and makes no request to one. Instead it hands the work to an agent you choose:
@@ -162,7 +163,7 @@ knowmoretabs history --refresh   # read History now and update every library pag
 knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
-knowmoretabs tag <URL>... --add NAME --remove NAME   # tag pages, or untag them; both repeatable
+knowmoretabs tag <URL>... --add NAME --remove NAME --clear NAME   # tag pages, untag them, or take back a decision; all repeatable
 knowmoretabs tags                # your tags, with how many pages carry each; --create, --retire, --all
 knowmoretabs tags --define NAME TEXT   # what a tag means, for you and for a tagging agent
 knowmoretabs tag --prompt DIR    # a work folder for an agent: prompt.md and the pages not yet tagged

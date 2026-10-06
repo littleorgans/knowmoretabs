@@ -22,7 +22,7 @@ use serde::Serialize;
 use crate::archive::{self, Archive};
 use crate::capture::Log;
 use crate::error::Error;
-use crate::library::{self, Shape, State, Term, fold, tag_order};
+use crate::library::{self, Shape, State, VocabularyEntry, fold};
 use crate::metadata::{self, Status};
 use crate::suggestions::{self, PAGES_FILE, VOCABULARY_FILE};
 use crate::triage::plural;
@@ -72,8 +72,6 @@ struct VocabularyTag<'a> {
     name: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     definition: Option<&'a str>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    implies: Vec<String>,
 }
 
 /// `vocabulary.json`: what the agent was shown, and the version `--import`
@@ -160,7 +158,8 @@ pub fn write(root: &Path, options: &PromptOptions, log: Log) -> Result<Written, 
     let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
     let loaded = library::load(&archive)?;
     let state = State::read(root)?;
-    let tags = vocabulary(&state);
+    let active = state.active_vocabulary();
+    let tags = vocabulary(&active);
     if tags.is_empty() {
         return Err(Error::EmptyVocabulary);
     }
@@ -261,29 +260,14 @@ impl PageLine {
     }
 }
 
-/// The active vocabulary in tag order, parents resolved to active names.
-fn vocabulary(state: &State) -> Vec<VocabularyTag<'_>> {
-    let spellings = state.spellings(false);
-    let mut terms: Vec<(&String, &Term)> = state
-        .vocabulary
+/// The active vocabulary as the agent reads it: names and definitions, no
+/// creation times.
+fn vocabulary(active: &[VocabularyEntry]) -> Vec<VocabularyTag<'_>> {
+    active
         .iter()
-        .filter(|(_, term)| term.retired_at.is_none())
-        .collect();
-    terms.sort_by(|(a, _), (b, _)| tag_order(a, b));
-    terms
-        .into_iter()
-        .map(|(name, term)| {
-            let mut implies: Vec<String> = term
-                .implies
-                .iter()
-                .filter_map(|parent| spellings.get(&fold(parent)).map(|s| (*s).to_owned()))
-                .collect();
-            implies.sort_by(|a, b| tag_order(a, b));
-            VocabularyTag {
-                name,
-                definition: term.definition.as_deref(),
-                implies,
-            }
+        .map(|entry| VocabularyTag {
+            name: &entry.name,
+            definition: entry.definition.as_deref(),
         })
         .collect()
 }
@@ -364,22 +348,6 @@ fn render(
             tag.definition
                 .unwrap_or("(no definition yet: use the plain meaning of the name)"),
         );
-        match tag.implies.as_slice() {
-            [] => {}
-            [parent] => {
-                let _ = write!(
-                    md,
-                    " Whenever it applies, {parent} applies too; the import adds it if you leave it out."
-                );
-            }
-            parents => {
-                let _ = write!(
-                    md,
-                    " Whenever it applies, {} apply too; the import adds them if you leave them out.",
-                    parents.join(" and ")
-                );
-            }
-        }
         md.push('\n');
     }
     md.push_str("\n## What a page line holds\n\n");
@@ -429,8 +397,9 @@ const GUIDELINES: &str = "
 ## How the owner tags
 
 1. **Tags are flat facets.** Each tag answers one question on its own: is this page substantially \
-about this? There is no hierarchy. The meaning is in the combination: two tags together narrow a \
-filter, and one tag alone is meant to be broad. A page can carry several tags at once, and many do.
+about this? There is no hierarchy. Judge each tag on the page alone; no tag follows from another. \
+The meaning is in the combination: two tags together narrow a filter, and one tag alone is meant to \
+be broad. A page can carry several tags at once, and many do.
 2. **Broad tags are good.** Read every definition in its widest plain sense. A tag covers its whole \
 domain, not only its most typical example.
 3. **No exclusions.** Never leave a tag off because another tag also fits, or because another tag \
@@ -660,23 +629,16 @@ mod tests {
             VocabularyTag {
                 name: "DPO",
                 definition: Some("Direct Preference Optimization."),
-                implies: vec!["Training".into()],
             },
             VocabularyTag {
                 name: "Voice",
                 definition: None,
-                implies: Vec::new(),
-            },
-            VocabularyTag {
-                name: "X",
-                definition: Some("Ex."),
-                implies: vec!["A".into(), "B".into()],
             },
         ];
         let fields = BTreeSet::from(["url".to_owned(), "title".to_owned(), "topics".to_owned()]);
         let md = render(Path::new("/w"), &written, &tags, &fields, "check");
-        assert!(md.contains("- **DPO**: Direct Preference Optimization. Whenever it applies, Training applies too; the import adds it if you leave it out.\n"));
-        assert!(md.contains("- **X**: Ex. Whenever it applies, A and B apply too; the import adds them if you leave them out.\n"));
+        assert!(md.contains("- **DPO**: Direct Preference Optimization.\n"));
+        assert!(!md.contains("applies too"));
         assert!(
             md.contains("- **Voice**: (no definition yet: use the plain meaning of the name)\n")
         );

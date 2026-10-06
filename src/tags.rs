@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
-use crate::library::{self, State, Term, VocabularyEntry, fold, tag_order};
+use crate::library::{self, PageTags, State, Term, VocabularyEntry, fold, tag_order};
 use crate::out;
 use crate::triage::{already, plural};
 
@@ -110,6 +110,39 @@ fn strip(set: &mut BTreeSet<String>, name: &str) {
     set.retain(|entry| fold(entry) != folded);
 }
 
+/// Where a request puts a name on a page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Target {
+    Add,
+    Remove,
+    /// Neither list: the owner has not decided, so a suggestion shows again.
+    Clear,
+}
+
+impl Target {
+    /// Whether the page's `add` list holds the name afterwards, and whether
+    /// its `remove` list does.
+    fn lists(self) -> (bool, bool) {
+        match self {
+            Self::Add => (true, false),
+            Self::Remove => (false, true),
+            Self::Clear => (false, false),
+        }
+    }
+}
+
+/// Sets `page`'s decision on `name`, whatever spelling it was in before.
+fn decide(page: &mut PageTags, name: &str, (add, remove): (bool, bool)) {
+    strip(&mut page.add, name);
+    strip(&mut page.remove, name);
+    if add {
+        page.add.insert(name.to_owned());
+    }
+    if remove {
+        page.remove.insert(name.to_owned());
+    }
+}
+
 /// The previous decisions for just the names a request changed. Newly created
 /// vocabulary entries remain, but revival restores the old retirement time.
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -156,29 +189,38 @@ pub struct Outcome {
     pub created: Vec<String>,
     /// Retired names this request brought back by adding them to a page.
     pub revived: Vec<String>,
+    /// Names this request cleared, in the vocabulary's spelling: a decision
+    /// it changed on one of these is neither a tag nor a dismissal.
+    pub cleared: Vec<String>,
     /// The active vocabulary afterwards.
     pub vocabulary: Vec<VocabularyEntry>,
 }
 
-/// Adds `add` to and takes `remove` off every page in `urls`. Adding puts
-/// the name in the page's `add` list and out of its `remove` list; removing
-/// does the opposite, so the two lists never share a name. The outcome carries
-/// the previous decisions for exact undo. Names match the vocabulary
-/// without regard to case and are stored in its spelling; adding an unknown
-/// name creates it, adding a retired one brings it back, and removing a name
-/// the vocabulary has never held changes nothing. With `strict`, an unknown
-/// URL is an error and nothing is written, as for `forget`.
+/// Adds `add` to, takes `remove` off and clears `clear` from every page in
+/// `urls`. Adding puts the name in the page's `add` list and out of its
+/// `remove` list; removing does the opposite, so the two lists never share a
+/// name; clearing takes it out of both, so the page is undecided again. The
+/// outcome carries the previous decisions for exact undo. Names match the
+/// vocabulary without regard to case and are stored in its spelling; adding
+/// an unknown name creates it, adding a retired one brings it back, and
+/// removing or clearing a name the vocabulary has never held changes nothing.
+/// With `strict`, an unknown URL is an error and nothing is written, as for
+/// `forget`.
 pub fn apply(
     root: &Path,
     urls: &[String],
     add: &[String],
     remove: &[String],
+    clear: &[String],
     strict: bool,
     log: Log,
 ) -> Result<Outcome, Error> {
     let add = names(add)?;
     let remove = names(remove)?;
+    let clear = names(clear)?;
     disjoint(&add, &remove, "it is named both to add and to remove")?;
+    disjoint(&add, &clear, "it is named both to add and to clear")?;
+    disjoint(&remove, &clear, "it is named both to remove and to clear")?;
     let archive = Archive::open(root)?;
     let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
     let loaded = library::load(&archive)?;
@@ -210,48 +252,19 @@ pub fn apply(
     let mut dirty = false;
     // A request whose every URL went stale tags nothing, so it creates nothing.
     if !pages.is_empty() {
-        let now = now();
-        let mut adding = Vec::new();
-        for name in &add {
-            if let Some((spelling, term)) = state.term(name)
-                && term.retired_at.is_some()
-            {
-                outcome
-                    .undo
-                    .vocabulary
-                    .insert(spelling.to_owned(), term.retired_at);
-            }
-            let (spelling, admitted) = admit(&mut state, name, now);
-            match admitted {
-                Admitted::Known => {}
-                Admitted::Created => outcome.created.push(spelling.clone()),
-                Admitted::Revived => outcome.revived.push(spelling.clone()),
-            }
-            dirty |= admitted != Admitted::Known;
-            adding.push(spelling);
-        }
-        let removing: Vec<String> = remove
-            .iter()
-            .filter_map(|name| state.term(name).map(|(spelling, _)| spelling.to_owned()))
-            .collect();
+        let targets = targets(&mut state, &add, &remove, &clear, &mut outcome);
+        dirty |= !(outcome.created.is_empty() && outcome.revived.is_empty());
         for url in &pages {
-            for name in adding.iter().chain(&removing) {
+            for (name, target) in &targets {
                 let before = Decision::read(&state, url, name);
-                if before.add != adding.contains(name) || before.remove != removing.contains(name) {
+                if (before.add, before.remove) != target.lists() {
                     outcome.undo.tags.push(before);
                 }
             }
             let page = state.tags.entry(url.clone()).or_default();
             let was = (page.add.clone(), page.remove.clone());
-            for name in &adding {
-                strip(&mut page.remove, name);
-                strip(&mut page.add, name);
-                page.add.insert(name.clone());
-            }
-            for name in &removing {
-                strip(&mut page.add, name);
-                strip(&mut page.remove, name);
-                page.remove.insert(name.clone());
+            for (name, target) in &targets {
+                decide(page, name, target.lists());
             }
             dirty |= (&page.add, &page.remove) != (&was.0, &was.1);
             if page.is_empty() {
@@ -274,6 +287,51 @@ pub fn apply(
     }
     outcome.vocabulary = state.active_vocabulary();
     Ok(outcome)
+}
+
+/// Each name of a request in the vocabulary's spelling, with where it goes.
+/// A name to add is admitted first, and what that created or brought back is
+/// recorded in `outcome`; a name to remove or clear that the vocabulary has
+/// never held is left out.
+fn targets(
+    state: &mut State,
+    add: &[String],
+    remove: &[String],
+    clear: &[String],
+    outcome: &mut Outcome,
+) -> Vec<(String, Target)> {
+    let now = now();
+    let mut targets = Vec::new();
+    for name in add {
+        if let Some((spelling, term)) = state.term(name)
+            && term.retired_at.is_some()
+        {
+            outcome
+                .undo
+                .vocabulary
+                .insert(spelling.to_owned(), term.retired_at);
+        }
+        let (spelling, admitted) = admit(state, name, now);
+        match admitted {
+            Admitted::Known => {}
+            Admitted::Created => outcome.created.push(spelling.clone()),
+            Admitted::Revived => outcome.revived.push(spelling.clone()),
+        }
+        targets.push((spelling, Target::Add));
+    }
+    for (names, target) in [(remove, Target::Remove), (clear, Target::Clear)] {
+        for name in names {
+            if let Some((spelling, _)) = state.term(name) {
+                targets.push((spelling.to_owned(), target));
+            }
+        }
+    }
+    outcome.cleared = targets
+        .iter()
+        .filter(|(_, target)| *target == Target::Clear)
+        .map(|(spelling, _)| spelling.clone())
+        .collect();
+    targets
 }
 
 /// Restores touched decisions in one lock-guarded write. Unrelated names and
@@ -338,14 +396,7 @@ pub fn undo(root: &Path, undo: &Undo, log: Log) -> Result<Outcome, Error> {
         }
         outcome.undo.tags.push(previous);
         let page = state.tags.entry(decision.url.clone()).or_default();
-        strip(&mut page.add, &name);
-        strip(&mut page.remove, &name);
-        if decision.add {
-            page.add.insert(name.clone());
-        }
-        if decision.remove {
-            page.remove.insert(name);
-        }
+        decide(page, &name, (decision.add, decision.remove));
         if page.is_empty() {
             state.tags.remove(&decision.url);
         }
@@ -379,14 +430,12 @@ pub fn undo(root: &Path, undo: &Undo, log: Log) -> Result<Outcome, Error> {
 }
 
 /// What one `tags` command, or one `POST /api/vocabulary`, asks of the
-/// vocabulary. The pairs are (tag, definition) and (child, parent).
+/// vocabulary. The pairs are (tag, definition).
 #[derive(Debug, Default)]
 pub struct VocabularyEdit {
     pub create: Vec<String>,
     pub retire: Vec<String>,
     pub define: Vec<(String, String)>,
-    pub imply: Vec<(String, String)>,
-    pub unimply: Vec<(String, String)>,
 }
 
 #[derive(Debug, Default)]
@@ -396,9 +445,9 @@ pub struct VocabularyOutcome {
     pub retired: Vec<String>,
     /// Tags whose definition this request set, changed or cleared.
     pub defined: Vec<String>,
-    /// (child, parent) rules this request added or took away.
-    pub implied: Vec<(String, String)>,
-    pub unimplied: Vec<(String, String)>,
+    /// Parent rules a development build left in `library.json`, which this
+    /// edit took out: tags are flat.
+    pub dropped_rules: usize,
     /// Named to retire but never in the vocabulary. The CLI refuses these;
     /// the API ignores them, since there is nothing to retire.
     pub unknown: Vec<String>,
@@ -426,149 +475,29 @@ fn definition(name: &str, raw: &str) -> Result<Option<String>, Error> {
     })
 }
 
-/// Normalized pairs, first of each (folded) pair kept.
-fn pairs(raw: &[(String, String)]) -> Result<Vec<(String, String)>, Error> {
-    let mut seen = HashSet::new();
-    let mut pairs = Vec::new();
-    for (child, parent) in raw {
-        let (child, parent) = (normalize(child)?, normalize(parent)?);
-        if fold(&child) == fold(&parent) {
-            return Err(Error::TagName {
-                name: child,
-                reason: "a tag cannot imply itself",
-            });
-        }
-        if seen.insert((fold(&child), fold(&parent))) {
-            pairs.push((child, parent));
-        }
-    }
-    Ok(pairs)
-}
-
-/// Whether `from` reaches `to` through `implies`, in any number of steps.
-fn reaches(state: &State, from: &str, to: &str) -> bool {
-    let target = fold(to);
-    let mut stack = vec![fold(from)];
-    let mut seen = HashSet::new();
-    while let Some(name) = stack.pop() {
-        if name == target {
-            return true;
-        }
-        if !seen.insert(name.clone()) {
-            continue;
-        }
-        if let Some((_, term)) = state.term(&name) {
-            stack.extend(term.implies.iter().map(|parent| fold(parent)));
-        }
-    }
-    false
-}
-
-/// `names` and every active tag they imply, directly or through another,
-/// in the vocabulary's spelling and tag order. Parent rules are the one rule
-/// the tool applies itself: the owner declared that they always hold.
-pub fn with_parents(state: &State, names: &[String]) -> Vec<String> {
-    let active = state.spellings(false);
-    let mut out: Vec<String> = Vec::new();
-    let mut seen = HashSet::new();
-    let mut stack: Vec<String> = names.iter().rev().cloned().collect();
-    while let Some(name) = stack.pop() {
-        let folded = fold(&name);
-        if !seen.insert(folded.clone()) {
-            continue;
-        }
-        let Some(spelling) = active.get(&folded) else {
-            continue;
-        };
-        out.push((*spelling).to_owned());
-        if let Some((_, term)) = state.term(spelling) {
-            stack.extend(term.implies.iter().cloned());
-        }
-    }
-    out.sort_by(|a, b| tag_order(a, b));
-    out
-}
-
 /// The vocabulary a tagging agent was shown, as twelve hex digits: the
 /// start of the SHA-256 of the active tags in tag order, each with its
-/// definition and its parents. Computed, never stored, so two prompts from
-/// the same vocabulary carry the same version and any change a tagger could
-/// act on (a tag, a definition, a rule) gives a new one. Retired tags and
-/// creation times are not part of it.
+/// definition. Computed, never stored, so two prompts from the same
+/// vocabulary carry the same version and any change a tagger could act on
+/// (a tag or a definition) gives a new one. Retired tags and creation times
+/// are not part of it.
 pub fn vocabulary_version(state: &State) -> String {
     use sha2::{Digest, Sha256};
-    let active = state.spellings(false);
-    let mut terms: Vec<(&String, &Term)> = state
-        .vocabulary
-        .iter()
-        .filter(|(_, term)| term.retired_at.is_none())
-        .collect();
-    terms.sort_by(|(a, _), (b, _)| tag_order(a, b));
-    let canonical: Vec<serde_json::Value> = terms
+    let canonical: Vec<serde_json::Value> = state
+        .active_vocabulary()
         .into_iter()
-        .map(|(name, term)| {
-            let mut parents: Vec<&str> = term
-                .implies
-                .iter()
-                .filter_map(|parent| active.get(&fold(parent)).copied())
-                .collect();
-            parents.sort_by(|a, b| tag_order(a, b));
-            serde_json::json!([name, term.definition.as_deref().unwrap_or(""), parents])
-        })
+        .map(|entry| serde_json::json!([entry.name, entry.definition.unwrap_or_default()]))
         .collect();
     let digest = Sha256::digest(serde_json::Value::Array(canonical).to_string().as_bytes());
     format!("{digest:x}")[..12].to_owned()
 }
 
-/// Takes parent rules away, then adds them. A rule that would close a loop
-/// is refused.
-fn relate(
-    state: &mut State,
-    imply: &[(String, String)],
-    unimply: &[(String, String)],
-    outcome: &mut VocabularyOutcome,
-) -> Result<(), Error> {
-    for (child, parent) in unimply {
-        let (Some((child, _)), Some((parent, _))) = (state.term(child), state.term(parent)) else {
-            continue;
-        };
-        let (child, parent) = (child.to_owned(), parent.to_owned());
-        let term = state.vocabulary.get_mut(&child).expect("known term");
-        let before = term.implies.len();
-        term.implies.retain(|name| fold(name) != fold(&parent));
-        if term.implies.len() != before {
-            outcome.unimplied.push((child, parent));
-        }
-    }
-    for (child, parent) in imply {
-        let (Some((child, child_term)), Some((parent, _))) =
-            (state.term(child), state.term(parent))
-        else {
-            continue;
-        };
-        if child_term.implies.iter().any(|p| fold(p) == fold(parent)) {
-            continue;
-        }
-        let (child, parent) = (child.to_owned(), parent.to_owned());
-        if reaches(state, &parent, &child) {
-            return Err(Error::TagName {
-                name: child,
-                reason: "it would imply itself through its parents",
-            });
-        }
-        let term = state.vocabulary.get_mut(&child).expect("known term");
-        term.implies.insert(parent.clone());
-        outcome.implied.push((child, parent));
-    }
-    Ok(())
-}
-
-/// Creates, retires, defines and relates vocabulary entries. Creating a
-/// retired name brings it back; retiring records the time and never touches
-/// a page, so a page tagged with a retired name shows it again the day it
-/// comes back. Defining a name the vocabulary lacks creates it, as typing a
-/// new name does. A parent rule needs both names in the vocabulary and may
-/// not close a loop.
+/// Creates, retires and defines vocabulary entries. Creating a retired name
+/// brings it back; retiring records the time and never touches a page, so a
+/// page tagged with a retired name shows it again the day it comes back.
+/// Defining a name the vocabulary lacks creates it, as typing a new name
+/// does. Every edit also drops the parent rules a development build left,
+/// and that alone is a change worth writing.
 pub fn edit_vocabulary(
     root: &Path,
     edit: &VocabularyEdit,
@@ -590,8 +519,6 @@ pub fn edit_vocabulary(
         &retire,
         "it is named both to define and to retire",
     )?;
-    let imply = pairs(&edit.imply)?;
-    let unimply = pairs(&edit.unimply)?;
     let archive = Archive::open(root)?;
     let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
     let mut state = State::read(root)?;
@@ -610,19 +537,6 @@ pub fn edit_vocabulary(
             }
             Some(_) => {}
             None => outcome.unknown.push(name.clone()),
-        }
-    }
-    for (child, parent) in imply.iter().chain(&unimply) {
-        for name in [child, parent] {
-            if state.term(name).is_none()
-                && !create
-                    .iter()
-                    .chain(&defined_names)
-                    .any(|n| fold(n) == fold(name))
-                && !outcome.unknown.contains(name)
-            {
-                outcome.unknown.push(name.clone());
-            }
         }
     }
     if strict && !outcome.unknown.is_empty() {
@@ -644,13 +558,12 @@ pub fn edit_vocabulary(
             outcome.defined.push(spelling);
         }
     }
-    relate(&mut state, &imply, &unimply, &mut outcome)?;
+    outcome.dropped_rules = state.drop_parent_rules();
     let changed = !(outcome.created.is_empty()
         && outcome.revived.is_empty()
         && outcome.retired.is_empty()
         && outcome.defined.is_empty()
-        && outcome.implied.is_empty()
-        && outcome.unimplied.is_empty());
+        && outcome.dropped_rules == 0);
     if changed {
         state.write(root)?;
     }
@@ -664,15 +577,17 @@ pub fn tag_command(
     urls: &[String],
     add: &[String],
     remove: &[String],
+    clear: &[String],
     json: bool,
     log: Log,
 ) -> Result<(), Error> {
-    let outcome = apply(root, urls, add, remove, true, log)?;
+    let outcome = apply(root, urls, add, remove, clear, true, log)?;
     if json {
         out::json(&serde_json::json!({
             "changed": outcome.changed,
             "unchanged": outcome.unchanged,
             "dismissed": dismissed(&outcome).0,
+            "cleared": cleared(&outcome).0,
             "tags": outcome.tags,
             "created": outcome.created,
             "revived": outcome.revived,
@@ -683,31 +598,55 @@ pub fn tag_command(
     Ok(())
 }
 
-/// Pages whose shown tags stayed the same but whose decisions changed, and
-/// the names decided: removing a tag a page does not show (one only
-/// suggested, or none at all) still records it, so it is not suggested there
-/// again. Those pages are in `unchanged`, since `changed` counts shown tags.
-fn dismissed(outcome: &Outcome) -> (Vec<&str>, Vec<&str>) {
-    let mut urls = Vec::new();
+/// The pages and the names of the decisions this request changed that
+/// `keep` selects, each once, in request order.
+fn decided(outcome: &Outcome, keep: impl Fn(&Decision) -> bool) -> (Vec<&str>, Vec<&str>) {
+    let mut urls: Vec<&str> = Vec::new();
     let mut names: Vec<&str> = Vec::new();
-    for url in &outcome.unchanged {
-        let decided: Vec<&Decision> = outcome.undo.tags.iter().filter(|d| &d.url == url).collect();
-        if !decided.is_empty() {
-            urls.push(url.as_str());
+    for decision in outcome.undo.tags.iter().filter(|d| keep(d)) {
+        if !urls.contains(&decision.url.as_str()) {
+            urls.push(&decision.url);
         }
-        for decision in decided {
-            if !names.iter().any(|n| fold(n) == fold(&decision.name)) {
-                names.push(&decision.name);
-            }
+        if !names.iter().any(|n| fold(n) == fold(&decision.name)) {
+            names.push(&decision.name);
         }
     }
     (urls, names)
 }
 
+fn is_cleared(outcome: &Outcome, decision: &Decision) -> bool {
+    outcome
+        .cleared
+        .iter()
+        .any(|name| fold(name) == fold(&decision.name))
+}
+
+/// Pages whose shown tags stayed the same but whose decisions changed, and
+/// the names decided: removing a tag a page does not show (one only
+/// suggested, or none at all) still records it, so it is not suggested there
+/// again. Those pages are in `unchanged`, since `changed` counts shown tags.
+/// A cleared decision is not a dismissal.
+fn dismissed(outcome: &Outcome) -> (Vec<&str>, Vec<&str>) {
+    decided(outcome, |d| {
+        !is_cleared(outcome, d) && outcome.unchanged.contains(&d.url)
+    })
+}
+
+/// Pages where a cleared name was decided before, changed or not, and the
+/// names: they are undecided again.
+fn cleared(outcome: &Outcome) -> (Vec<&str>, Vec<&str>) {
+    decided(outcome, |d| is_cleared(outcome, d))
+}
+
 fn human_tag(outcome: &Outcome) -> String {
     let changed = outcome.changed.len();
     let (urls, names) = dismissed(outcome);
-    let unchanged = outcome.unchanged.len() - urls.len();
+    // Already tagged that way: no decision on the page changed at all.
+    let unchanged = outcome
+        .unchanged
+        .iter()
+        .filter(|url| !outcome.undo.tags.iter().any(|d| &d.url == *url))
+        .count();
     let mut parts = Vec::new();
     if changed > 0 {
         parts.push(format!("retagged {}", plural(changed, "page")));
@@ -720,6 +659,14 @@ fn human_tag(outcome: &Outcome) -> String {
         };
         parts.push(format!(
             "dismissed {} on {} ({was}, and {will} will not be suggested there again)",
+            names.join(", "),
+            plural(urls.len(), "page")
+        ));
+    }
+    let (urls, names) = cleared(outcome);
+    if !urls.is_empty() {
+        parts.push(format!(
+            "cleared {} on {} (undecided again)",
             names.join(", "),
             plural(urls.len(), "page")
         ));
@@ -754,12 +701,7 @@ pub fn tags_command(
     json: bool,
     log: Log,
 ) -> Result<(), Error> {
-    let edited = if edit.create.is_empty()
-        && edit.retire.is_empty()
-        && edit.define.is_empty()
-        && edit.imply.is_empty()
-        && edit.unimply.is_empty()
-    {
+    let edited = if edit.create.is_empty() && edit.retire.is_empty() && edit.define.is_empty() {
         VocabularyOutcome::default()
     } else {
         edit_vocabulary(root, edit, true, log)?
@@ -771,24 +713,10 @@ pub fn tags_command(
         .vocabulary
         .iter()
         .filter(|(_, term)| all || term.retired_at.is_none())
-        .map(|(name, term)| {
-            let mut parents: Vec<String> = term
-                .implies
-                .iter()
-                .map(|parent| {
-                    state
-                        .term(parent)
-                        .map_or(parent.as_str(), |(s, _)| s)
-                        .to_owned()
-                })
-                .collect();
-            parents.sort_by(|a, b| tag_order(a, b));
-            Listed {
-                name,
-                term,
-                pages: counts.get(&fold(name)).copied().unwrap_or(0),
-                parents,
-            }
+        .map(|(name, term)| Listed {
+            name,
+            term,
+            pages: counts.get(&fold(name)).copied().unwrap_or(0),
         })
         .collect();
     listed.sort_by(|a, b| tag_order(a.name, b.name));
@@ -805,7 +733,6 @@ struct Listed<'a> {
     name: &'a str,
     term: &'a Term,
     pages: usize,
-    parents: Vec<String>,
 }
 
 fn json_listing(listed: &[Listed], edited: &VocabularyOutcome, version: &str) -> serde_json::Value {
@@ -821,9 +748,6 @@ fn json_listing(listed: &[Listed], edited: &VocabularyOutcome, version: &str) ->
             if let Some(definition) = &row.term.definition {
                 entry["definition"] = serde_json::json!(definition);
             }
-            if !row.parents.is_empty() {
-                entry["implies"] = serde_json::json!(row.parents);
-            }
             entry
         })
         .collect();
@@ -834,8 +758,7 @@ fn json_listing(listed: &[Listed], edited: &VocabularyOutcome, version: &str) ->
         "revived": edited.revived,
         "retired": edited.retired,
         "defined": edited.defined,
-        "implied": edited.implied,
-        "unimplied": edited.unimplied,
+        "dropped_rules": edited.dropped_rules,
     })
 }
 
@@ -854,11 +777,11 @@ fn human_listing(listed: &[Listed], edited: &VocabularyOutcome) -> String {
             changes.push(format!("{verb} {}", names.join(", ")));
         }
     }
-    for (child, parent) in &edited.implied {
-        changes.push(format!("{child} now implies {parent}"));
-    }
-    for (child, parent) in &edited.unimplied {
-        changes.push(format!("{child} no longer implies {parent}"));
+    if edited.dropped_rules > 0 {
+        changes.push(format!(
+            "dropped {} (tags are flat)",
+            plural(edited.dropped_rules, "parent rule")
+        ));
     }
     if !changes.is_empty() {
         let _ = writeln!(text, "{}", changes.join("; "));
@@ -877,15 +800,8 @@ fn human_listing(listed: &[Listed], edited: &VocabularyOutcome) -> String {
         if row.term.retired_at.is_some() {
             text.push_str("  (retired)");
         }
-        let mut about = row.term.definition.clone().unwrap_or_default();
-        if !row.parents.is_empty() {
-            if !about.is_empty() {
-                about.push(' ');
-            }
-            let _ = write!(about, "(implies {})", row.parents.join(", "));
-        }
-        if !about.is_empty() {
-            let _ = write!(text, " — {about}");
+        if let Some(definition) = &row.term.definition {
+            let _ = write!(text, " — {definition}");
         }
         text.push('\n');
     }
@@ -997,6 +913,36 @@ mod tests {
             human_tag(&only),
             "dismissed MCP, Skills on 1 page (they were not tags you set there, \
              and they will not be suggested there again)"
+        );
+    }
+
+    #[test]
+    fn human_line_says_a_clear_returned_tags_to_undecided() {
+        let decision = |url: &str, name: &str, add: bool| Decision {
+            url: url.into(),
+            name: name.into(),
+            add,
+            remove: !add,
+        };
+        // A cleared add changed what "a" shows; a cleared remove did not
+        // change what "b" shows. Neither is a dismissal, and neither page
+        // was already tagged that way; "c" was.
+        let outcome = Outcome {
+            changed: vec!["a".into()],
+            unchanged: vec!["b".into(), "c".into()],
+            cleared: vec!["Agent".into(), "Skills".into()],
+            undo: Undo {
+                tags: vec![decision("a", "Agent", true), decision("b", "Skills", false)],
+                vocabulary: BTreeMap::new(),
+            },
+            ..Outcome::default()
+        };
+        assert_eq!(dismissed(&outcome), (vec![], vec![]));
+        assert_eq!(cleared(&outcome), (vec!["a", "b"], vec!["Agent", "Skills"]));
+        assert_eq!(
+            human_tag(&outcome),
+            "retagged 1 page; cleared Agent, Skills on 2 pages (undecided again) \
+             (1 was already tagged that way)"
         );
     }
 }

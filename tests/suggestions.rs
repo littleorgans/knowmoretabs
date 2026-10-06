@@ -1,6 +1,7 @@
-//! Suggested tags through the real binary: `tags --define` and `--imply`,
-//! the work folder `tag --prompt` writes, what `tag --import` refuses and
-//! what it stores, and how the library and export show the result.
+//! Suggested tags through the real binary: `tags --define`, the work folder
+//! `tag --prompt` writes, what `tag --import` refuses and what it stores,
+//! how the library and export show the result, and what becomes of the
+//! parent rules a development build left in `library.json`.
 
 mod common;
 
@@ -34,7 +35,7 @@ fn archive(fx: &Fixture) {
     assert_success(&fx.run(&["forget", HIDDEN]));
 }
 
-/// The vocabulary most tests use: three defined tags, one rule.
+/// The vocabulary most tests use: three defined tags.
 fn vocabulary(fx: &Fixture) {
     assert_success(&fx.run(&[
         "tags",
@@ -47,9 +48,6 @@ fn vocabulary(fx: &Fixture) {
         "--define",
         "Skills",
         "Reusable skills.",
-        "--imply",
-        "Harness",
-        "Agent",
     ]));
 }
 
@@ -63,6 +61,42 @@ fn json_run(fx: &Fixture, args: &[&str]) -> Value {
 
 fn state(fx: &Fixture) -> Value {
     serde_json::from_slice(&fs::read(fx.root.join("library.json")).unwrap()).unwrap()
+}
+
+fn write_state(fx: &Fixture, state: &Value) {
+    fs::write(
+        fx.root.join("library.json"),
+        serde_json::to_vec_pretty(state).unwrap(),
+    )
+    .unwrap();
+}
+
+/// A `library.json` as a development build with parent rules wrote it:
+/// `implies` on terms, beside the owner's tags and a field no build knows.
+fn legacy_state() -> Value {
+    json!({
+        "schema_version": 1,
+        "forgotten": [HIDDEN],
+        "tags": {A: {"add": ["Agent"], "remove": ["Skills"]}},
+        "vocabulary": {
+            "Agent": {"created_at": "2026-09-24T10:00:00Z", "definition": "AI agents."},
+            "Harness": {"created_at": "2026-09-24T10:00:00Z",
+                        "definition": "Coding-agent harnesses and what configures them.",
+                        "implies": ["Agent"]},
+            "Skills": {"created_at": "2026-09-24T10:00:00Z", "definition": "Reusable skills.",
+                       "implies": ["Agent", "Harness"]},
+        },
+        "notes": {A: "kept"},
+    })
+}
+
+/// `state` with every term's `implies` key taken out.
+fn without_rules(state: &Value) -> Value {
+    let mut state = state.clone();
+    for term in state["vocabulary"].as_object_mut().unwrap().values_mut() {
+        term.as_object_mut().unwrap().remove("implies");
+    }
+    state
 }
 
 fn work(fx: &Fixture) -> PathBuf {
@@ -119,7 +153,7 @@ fn page(library: &Value, url: &str) -> Value {
 // --- the vocabulary ---------------------------------------------------------
 
 #[test]
-fn definitions_and_parent_rules_live_in_the_vocabulary_and_show_in_tags() {
+fn definitions_live_in_the_vocabulary_and_show_in_tags() {
     let fx = Fixture::new();
     archive(&fx);
     let output = fx.run(&[
@@ -129,15 +163,12 @@ fn definitions_and_parent_rules_live_in_the_vocabulary_and_show_in_tags() {
         "--define",
         "DPO",
         "  Direct   preference\noptimisation. ",
-        "--imply",
-        "dpo",
-        "training",
     ]);
     assert_success(&output);
     assert_eq!(
         stdout(&output),
-        "created Training, DPO; defined DPO; DPO now implies Training\n\
-         0  DPO — Direct preference optimisation. (implies Training)\n\
+        "created Training, DPO; defined DPO\n\
+         0  DPO — Direct preference optimisation.\n\
          0  Training\n"
     );
     let written = state(&fx);
@@ -145,18 +176,13 @@ fn definitions_and_parent_rules_live_in_the_vocabulary_and_show_in_tags() {
         written["vocabulary"]["DPO"]["definition"],
         "Direct preference optimisation."
     );
-    assert_eq!(written["vocabulary"]["DPO"]["implies"], json!(["Training"]));
-    assert!(
-        written["vocabulary"]["Training"].get("implies").is_none(),
-        "no empty lists written"
-    );
 
     let listed = json_run(&fx, &["tags"]);
     assert_eq!(
         listed["vocabulary"][0]["definition"],
         "Direct preference optimisation."
     );
-    assert_eq!(listed["vocabulary"][0]["implies"], json!(["Training"]));
+    assert_eq!(listed["dropped_rules"], 0);
     let version = listed["version"].as_str().unwrap().to_owned();
     assert_eq!(version.len(), 12);
 
@@ -173,13 +199,10 @@ fn definitions_and_parent_rules_live_in_the_vocabulary_and_show_in_tags() {
             .get("definition")
             .is_none()
     );
-    let unimplied = json_run(&fx, &["tags", "--unimply", "DPO", "Training"]);
-    assert_eq!(unimplied["unimplied"], json!([["DPO", "Training"]]));
-    assert_ne!(unimplied["version"], version.as_str());
 }
 
 #[test]
-fn bad_definitions_and_rules_are_refused_and_nothing_is_written() {
+fn bad_definitions_are_refused_and_nothing_is_written() {
     let fx = Fixture::new();
     archive(&fx);
     vocabulary(&fx);
@@ -198,18 +221,6 @@ fn bad_definitions_and_rules_are_refused_and_nothing_is_written() {
             vec!["tags", "--define", "Agent", "x", "--retire", "agent"],
             "it is named both to define and to retire",
         ),
-        (
-            vec!["tags", "--imply", "Agent", "Nowhere"],
-            "no such tag: Nowhere",
-        ),
-        (
-            vec!["tags", "--imply", "Agent", "agent"],
-            "a tag cannot imply itself",
-        ),
-        (
-            vec!["tags", "--imply", "Agent", "Harness"],
-            "it would imply itself through its parents",
-        ),
     ] {
         let output = fx.run(&args);
         assert_eq!(output.status.code(), Some(1), "{args:?}");
@@ -223,6 +234,98 @@ fn bad_definitions_and_rules_are_refused_and_nothing_is_written() {
     let output = fx.run(&["--json", "tags", "--define", "Agent", &long]);
     let value: Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(value["error"]["kind"], "tag_definition");
+}
+
+// --- parent rules from a development build ---------------------------------
+
+/// Tags are flat: rules in an older `library.json` load, act on nothing, and
+/// ride through every write that is not a vocabulary edit.
+#[test]
+fn legacy_parent_rules_load_and_change_nothing() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let legacy = legacy_state();
+    write_state(&fx, &legacy);
+
+    let file = fx.home.path().join("tags.jsonl");
+    write_answer(&file, &[answer(B, &["Harness"])]);
+    assert_success(&import(&fx, &file, &[]));
+    assert_eq!(
+        stored(&fx)[0]["tags"],
+        json!(["Harness"]),
+        "no parent added"
+    );
+
+    let dir = work(&fx);
+    assert_success(&fx.run(&["tag", "--prompt", dir.to_str().unwrap(), "--all"]));
+    let prompt = fs::read_to_string(dir.join("prompt.md")).unwrap();
+    assert!(!prompt.contains("applies too"), "{prompt}");
+    assert!(
+        prompt.contains("- **Skills**: Reusable skills.\n"),
+        "{prompt}"
+    );
+    let vocabulary: Value =
+        serde_json::from_slice(&fs::read(dir.join("vocabulary.json")).unwrap()).unwrap();
+    assert_eq!(
+        vocabulary["tags"][1],
+        json!({"name": "Harness", "definition": "Coding-agent harnesses and what configures them."})
+    );
+
+    let listed = json_run(&fx, &["tags"]);
+    assert!(
+        listed["vocabulary"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row.get("implies").is_none()),
+        "{listed}"
+    );
+    assert_eq!(vocabulary["version"], listed["version"]);
+
+    // A retag is not a vocabulary edit: the rules stay as they were.
+    assert_success(&fx.run(&["tag", A, "--add", "Skills"]));
+    let written = state(&fx);
+    assert_eq!(
+        written["vocabulary"]["Harness"]["implies"],
+        json!(["Agent"])
+    );
+    assert_eq!(
+        written["vocabulary"]["Skills"]["implies"],
+        json!(["Agent", "Harness"])
+    );
+    assert_eq!(written["notes"], legacy["notes"]);
+
+    // A rule is not part of the version.
+    write_state(&fx, &without_rules(&written));
+    assert_eq!(json_run(&fx, &["tags"])["version"], listed["version"]);
+}
+
+/// How the rules leave: the next vocabulary edit drops them, says how many,
+/// and changes nothing else. An edit that is otherwise a no-op still writes
+/// once, and is a no-op the second time.
+#[test]
+fn a_vocabulary_edit_drops_legacy_parent_rules_and_changes_no_tag() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let legacy = legacy_state();
+    write_state(&fx, &legacy);
+    let version = json_run(&fx, &["tags"])["version"].clone();
+
+    let output = fx.run(&["tags", "--create", "Agent"]);
+    assert_success(&output);
+    assert!(
+        stdout(&output).starts_with("dropped 3 parent rules (tags are flat)\n"),
+        "{}",
+        stdout(&output)
+    );
+    assert_eq!(state(&fx), without_rules(&legacy));
+
+    let before = fs::read(fx.root.join("library.json")).unwrap();
+    let again = json_run(&fx, &["tags", "--create", "Agent"]);
+    assert_eq!(again["dropped_rules"], 0);
+    assert_eq!(again["created"], json!([]));
+    assert_eq!(again["version"], version);
+    assert_eq!(fs::read(fx.root.join("library.json")).unwrap(), before);
 }
 
 // --- the prompt -------------------------------------------------------------
@@ -288,6 +391,7 @@ fn the_prompt_carries_the_model_the_vocabulary_the_format_and_a_runnable_check()
     for needle in [
         // The owner's model.
         "**Tags are flat facets.**",
+        "There is no hierarchy. Judge each tag on the page alone; no tag follows from another.",
         "The meaning is in the combination",
         "**Broad tags are good.**",
         "**No exclusions.**",
@@ -295,9 +399,9 @@ fn the_prompt_carries_the_model_the_vocabulary_the_format_and_a_runnable_check()
         "**\"Substantially about\" is the bar.**",
         "A passing mention",
         "**Favour recall.**",
-        // The vocabulary, defined, with its rule.
+        // The vocabulary, defined.
         &format!("4 tags, vocabulary version `{version}`."),
-        "- **Harness**: Coding-agent harnesses and what configures them. Whenever it applies, Agent applies too; the import adds it if you leave it out.\n",
+        "- **Harness**: Coding-agent harnesses and what configures them.\n",
         "- **Agent**: AI agents.\n",
         "- **Undefined**: (no definition yet: use the plain meaning of the name)\n",
         // How to work.
@@ -318,6 +422,10 @@ fn the_prompt_carries_the_model_the_vocabulary_the_format_and_a_runnable_check()
         !prompt.contains("- `search`") && !prompt.contains("- `description`"),
         "only fields that occur are explained"
     );
+    assert!(
+        !prompt.contains("applies too"),
+        "no tag follows from another"
+    );
     // Paths are the only lines that may hold a backslash: Windows separates with one.
     let mut prose = prompt
         .lines()
@@ -329,7 +437,7 @@ fn the_prompt_carries_the_model_the_vocabulary_the_format_and_a_runnable_check()
     assert_eq!(vocabulary["version"], version.as_str());
     assert_eq!(
         vocabulary["tags"][1],
-        json!({"name": "Harness", "definition": "Coding-agent harnesses and what configures them.", "implies": ["Agent"]})
+        json!({"name": "Harness", "definition": "Coding-agent harnesses and what configures them."})
     );
     assert_eq!(
         vocabulary["tags"][3],
@@ -753,7 +861,7 @@ fn an_import_stores_one_line_per_page_with_its_source_date_and_version() {
     assert_eq!(
         stdout(&output),
         format!(
-            "valid: 3 pages from model one: 2 with tags (4 suggestions, 1 from parent rules), 1 with none. Nothing stored: {} is ready to import\n",
+            "valid: 3 pages from model one: 2 with tags (3 suggestions), 1 with none. Nothing stored: {} is ready to import\n",
             file.display()
         )
     );
@@ -763,7 +871,7 @@ fn an_import_stores_one_line_per_page_with_its_source_date_and_version() {
     assert_success(&output);
     assert!(
         stdout(&output).starts_with(
-            "imported suggestions for 3 pages from model one: 2 with tags (4 suggestions, 1 from parent rules), 1 with none. Stored in "
+            "imported suggestions for 3 pages from model one: 2 with tags (3 suggestions), 1 with none. Stored in "
         ),
         "{}",
         stdout(&output)
@@ -774,9 +882,9 @@ fn an_import_stores_one_line_per_page_with_its_source_date_and_version() {
     assert!(imported_at.ends_with('Z') && !imported_at.contains('.'));
     assert_eq!(
         lines[0],
-        json!({"url": A, "tags": ["Agent", "Harness"], "source": "model one",
+        json!({"url": A, "tags": ["Harness"], "source": "model one",
                "imported_at": imported_at, "vocabulary_version": version}),
-        "vocabulary spelling, deduplicated, parents added, no note"
+        "vocabulary spelling, deduplicated, no note"
     );
     assert_eq!(lines[1]["tags"], json!(["Agent", "Skills"]));
     assert_eq!(lines[2]["tags"], json!([]), "an empty answer is kept");
@@ -820,11 +928,11 @@ fn an_import_stores_one_line_per_page_with_its_source_date_and_version() {
 }
 
 #[test]
-fn accept_new_creates_or_brings_back_tags_and_parent_rules_apply_to_them() {
+fn accept_new_creates_or_brings_back_tags() {
     let fx = Fixture::new();
     archive(&fx);
     vocabulary(&fx);
-    assert_success(&fx.run(&["tags", "--create", "Old", "--imply", "Old", "Skills"]));
+    assert_success(&fx.run(&["tags", "--create", "Old"]));
     assert_success(&fx.run(&["tags", "--retire", "Old"]));
     let file = fx.home.path().join("tags.jsonl");
     write_answer(&file, &[answer(A, &["Invented", "old"])]);
@@ -853,7 +961,7 @@ fn accept_new_creates_or_brings_back_tags_and_parent_rules_apply_to_them() {
     let written = state(&fx);
     assert!(written["vocabulary"]["Invented"].is_object());
     assert!(written["vocabulary"]["Old"].get("retired_at").is_none());
-    assert_eq!(stored(&fx)[0]["tags"], json!(["Invented", "Old", "Skills"]));
+    assert_eq!(stored(&fx)[0]["tags"], json!(["Invented", "Old"]));
 }
 
 #[test]
@@ -929,6 +1037,97 @@ fn removing_a_suggested_tag_says_it_was_dismissed() {
     assert_eq!(value["changed"], json!([]));
 }
 
+/// Clearing takes back a decision without recording a rejection: the tag
+/// shows as suggested again only where a source's newest answer has it.
+#[test]
+fn a_cleared_tag_is_suggested_again_only_where_a_source_suggested_it() {
+    let fx = Fixture::new();
+    archive(&fx);
+    vocabulary(&fx);
+    let file = fx.home.path().join("tags.jsonl");
+    write_answer(&file, &[answer(B, &["Skills"])]);
+    assert_success(&import(&fx, &file, &[]));
+    assert_success(&fx.run(&["tag", B, "--remove", "Skills"]));
+    assert_eq!(page(&exported(&fx), B)["suggested"], json!([]));
+
+    let output = fx.run(&["tag", B, "--clear", "Skills"]);
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        "cleared Skills on 1 page (undecided again)\n"
+    );
+    assert_eq!(
+        page(&exported(&fx), B)["suggested"],
+        json!([{"name": "Skills", "sources": ["model-one"]}])
+    );
+
+    // No source suggested Agent on A, so clearing it leaves nothing.
+    assert_success(&fx.run(&["tag", A, "--add", "Agent"]));
+    assert_success(&fx.run(&["tag", A, "--clear", "Agent"]));
+    let library = exported(&fx);
+    assert_eq!(page(&library, A)["tags"], json!([]));
+    assert_eq!(page(&library, A)["suggested"], json!([]));
+}
+
+/// A line a parent rule expanded still names the parent, so clearing the
+/// parent shows it as that source's suggestion. Re-importing the raw answer
+/// from the same prompt appends one corrected line and touches no tag.
+#[test]
+fn a_reimport_of_the_raw_answer_stops_a_rule_added_parent_showing() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let mut legacy = legacy_state();
+    legacy["tags"] = json!({A: {"add": ["Agent"], "remove": []}});
+    write_state(&fx, &legacy);
+    let version = "e90506ccff8f";
+    let dir = work(&fx);
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("vocabulary.json"),
+        json!({"version": version, "tags": []}).to_string(),
+    )
+    .unwrap();
+    write_answer(
+        &dir.join("pages.jsonl"),
+        &[
+            json!({"url": A, "title": "Agent harness"}),
+            json!({"url": B, "title": "Skills"}),
+        ],
+    );
+    fs::create_dir_all(fx.root.join("tags")).unwrap();
+    write_answer(
+        &fx.root.join("tags").join("suggested.jsonl"),
+        &[
+            json!({"url": A, "tags": ["Agent", "Harness"], "source": "m",
+                 "imported_at": "2026-10-06T00:00:00Z", "vocabulary_version": version}),
+        ],
+    );
+
+    assert_success(&fx.run(&["tag", A, "--clear", "Agent"]));
+    assert_eq!(
+        page(&exported(&fx), A)["suggested"],
+        json!([{"name": "Agent", "sources": ["m"]}, {"name": "Harness", "sources": ["m"]}]),
+        "the rule's parent is back as a suggestion"
+    );
+
+    let before = fs::read(fx.root.join("library.json")).unwrap();
+    let file = dir.join("tags.jsonl");
+    write_answer(
+        &file,
+        &[json!({"url": A, "tags": ["Harness"], "source": "m"})],
+    );
+    assert_success(&import(&fx, &file, &["--partial"]));
+    let lines = stored(&fx);
+    assert_eq!(lines.len(), 2, "one line appended");
+    assert_eq!(lines[1]["tags"], json!(["Harness"]));
+    assert_eq!(lines[1]["vocabulary_version"], version);
+    assert_eq!(fs::read(fx.root.join("library.json")).unwrap(), before);
+    assert_eq!(
+        page(&exported(&fx), A)["suggested"],
+        json!([{"name": "Harness", "sources": ["m"]}])
+    );
+}
+
 #[test]
 fn export_shows_undecided_suggestions_with_their_sources() {
     let fx = Fixture::new();
@@ -938,7 +1137,7 @@ fn export_shows_undecided_suggestions_with_their_sources() {
     write_answer(
         &one,
         &[
-            json!({"url": A, "tags": ["Harness"], "source": "model-one"}),
+            json!({"url": A, "tags": ["Harness", "Agent"], "source": "model-one"}),
             json!({"url": B, "tags": ["Skills"], "source": "model-one"}),
             json!({"url": HIDDEN, "tags": ["Skills"], "source": "model-one"}),
         ],
