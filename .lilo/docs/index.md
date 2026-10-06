@@ -54,7 +54,7 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 - The encrypted-sessions preflight refuses a stale save with exit 3; `--force` cannot bypass it (`code:src/staleness.rs#check`, `code:src/error.rs#exit_code`).
 - Tabs on this machine (`localhost`, its subdomains, loopback) are left out of `snapshot.json` and of change detection; `session.snss` stays verbatim and keeps them (`code:src/capture.rs#leave_out_this_machine`, `code:src/local.rs#is_this_machine_url`).
 - Only `enrich` and `content` send page addresses off the machine; `doctor` is offline by default; `--live` lets gh check its own sign in and asks the X post API for one fixed public post, sending nothing of the owner's. `ureq` appears only in `code:src/fetch.rs`.
-- External tools run only through `code:src/tools.rs#run`: an argument vector, no shell, no input, a timeout, capped output, stderr cut to one line; `gh auth status` is read for its exit code only (`code:src/github_api.rs#Readiness`).
+- Content's external tools run only through `code:src/tools.rs`: `run` uses an argument vector, no shell, no input, a timeout, capped output and stderr cut to one line; `System::exit_code` runs `gh auth status` with only its exit code read (`code:src/github_api.rs#Readiness`).
 - `serve` binds 127.0.0.1 only (`code:src/server.rs`).
 - JSON is the archive's storage; SQLite, bundled, only reads a copy of the browser's `History` taken with its `-journal` and `-wal` (`code:src/history.rs#COMPANIONS`).
 - Foreground time sums positive durations only; the search walk stops at `MAX_HOPS` hops (`code:src/history.rs#MAX_HOPS`).
