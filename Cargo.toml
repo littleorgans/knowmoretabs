@@ -33,6 +33,17 @@ resolver = "3"
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
 directories = "6"
+# The DOM `dom_smoothie` builds on, used directly for what readability does
+# not do: the whole-page markdown when readability picks the wrong part of a
+# page, and the classifier's look at scripts, forms and app mounts. The same
+# version `dom_smoothie` requires, so the tree gains no second copy.
+dom_query = { version = "0.28", default-features = false, features = ["markdown"] }
+# Readability for `content`: a port of Mozilla's Readability that finds a
+# page's main text and writes it as markdown, one crate for both
+# (src/extract.rs). MIT, MSRV 1.75; chosen over `legible` and `readabilityrs`,
+# which have no markdown output, and over `html2md`, whose GPL does not fit
+# this crate's licence. Pure Rust, no network, no async.
+dom_smoothie = "0.18"
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
 # Reads a copy of the browser's own `History` database; the archive itself
 # stays JSON. `bundled` compiles one pinned SQLite into the binary, because
@@ -46,12 +57,13 @@ serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
-# The HTTP client for `enrich`, the one command that sends anything. `rustls`
-# with its bundled Mozilla roots, so TLS is compiled in on every platform and
-# no system OpenSSL, certificate store or proxy is involved; no cookie jar,
-# no gzip, no charset tables (src/fetch.rs, src/head.rs). A tilde pin because
-# the resolver hook that refuses private addresses is in ureq's `unversioned`
-# module, which may change in a minor release.
+# The HTTP client for `enrich` and `content`, the only commands that send
+# anything. `rustls` with its bundled Mozilla roots, so TLS is compiled in on
+# every platform and no system OpenSSL, certificate store or proxy is
+# involved; no cookie jar, no gzip, no charset tables (src/fetch.rs,
+# src/head.rs). A tilde pin because the resolver hook that refuses private
+# addresses is in ureq's `unversioned` module, which may change in a minor
+# release.
 ureq = { version = "~3.4", default-features = false, features = ["rustls"] }
 url = "2.5"
 

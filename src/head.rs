@@ -1,14 +1,15 @@
 //! Reads a page's `<head>`: title, meta tags, canonical link, language and
 //! JSON-LD, from bytes in whatever charset the page declared.
 //!
-//! slice: enrich
+//! slice: enrich, content
 //! why: Enrich wants a dozen values out of the head, not a DOM. A scanner that
 //!      knows comments, quoted attributes and the elements whose content is
 //!      raw text does that in a few hundred lines with no parser dependency,
 //!      and it stops at `</head>` because that is all it is ever given.
 //!      Charsets are the ones the web actually declares: UTF-8, UTF-16 by
 //!      byte-order mark, and windows-1252 under its many labels; any other
-//!      is named rather than decoded into nonsense.
+//!      is named rather than decoded into nonsense. `content` decodes whole
+//!      pages here too, and judges a sign-in page by the same head rule.
 
 use std::borrow::Cow;
 

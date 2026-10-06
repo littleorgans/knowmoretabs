@@ -1,6 +1,6 @@
 //! The command line: clap types for `knowmoretabs` and its subcommands.
 //!
-//! slice: capture, library, triage, browsers, tags, history, enrich
+//! slice: capture, library, triage, browsers, tags, history, enrich, content
 //! why: The whole CLI surface is visible in one file, so "what flags exist
 //!      and where are they allowed" is a question answered by reading forty
 //!      lines rather than grepping. Global options are global so that
@@ -110,6 +110,22 @@ and URLs that carry a token are never fetched; login screens are recorded as beh
 One request a second per site."
     )]
     Enrich(FetchArgs),
+    /// Capture the main text of library pages as markdown, kept private in the archive
+    #[command(
+        long_about = "Fetches each library page not captured before, without cookies, keeps its main text \
+as markdown in <root>/pages/content/, and appends one line per attempt to <root>/pages/content.jsonl. \
+This sends the URLs it fetches to their own sites. What enrich never fetches, content never fetches \
+either; X profiles and YouTube channels and playlists are recorded as not a document, and login screens \
+as behind a login, without a request. A page that failed is tried again on the next run, and after three \
+failed runs it is recorded as unavailable. One request a second per site. Never part of save."
+    )]
+    Content {
+        #[command(flatten)]
+        fetch: FetchArgs,
+        /// Capture only this library page (repeatable)
+        #[arg(long = "url", value_name = "URL")]
+        urls: Vec<String>,
+    },
     /// Show the History signals the library keeps for its pages, or refresh them
     #[command(
         long_about = "Shows what <root>/pages/history.json holds: how many library pages have History \
@@ -514,6 +530,33 @@ mod tests {
             }))
         ));
         assert!(Cli::try_parse_from(["knowmoretabs", "enrich", "--limit", "x"]).is_err());
+        assert!(
+            Cli::try_parse_from(["knowmoretabs", "enrich", "--url", "https://a.test/"]).is_err()
+        );
+    }
+
+    #[test]
+    fn content_shares_the_fetch_flags_and_takes_urls() {
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "content",
+            "--dry-run",
+            "--limit",
+            "5",
+            "--url",
+            "https://a.test/",
+            "--url",
+            "https://b.test/",
+            "--json",
+        ])
+        .unwrap();
+        assert!(cli.json);
+        let Some(Command::Content { fetch, urls }) = cli.command else {
+            panic!("content parsed as {:?}", cli.command);
+        };
+        assert!(fetch.dry_run && !fetch.refetch);
+        assert_eq!(fetch.limit, Some(5));
+        assert_eq!(urls, ["https://a.test/", "https://b.test/"]);
     }
 
     #[test]

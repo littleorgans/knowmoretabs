@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>example/tidepool: Clean field logger readings</title>
+<meta name="description" content="Clean field logger readings.">
+<script src="/assets/app.js"></script><script src="/assets/vendor.js"></script></head>
+<body>
+<div class="header"><a href="/">Code host</a><input type="search" placeholder="Search"><a href="/login">Sign in</a></div>
+<div class="repo-head"><a href="/example">example</a> / <strong>tidepool</strong> <span>Public</span></div>
+<nav class="tabs"><a href="#">Code</a><a href="#">Issues 3</a><a href="#">Pull requests 1</a></nav>
+<div class="file-list"><div>src</div><div>tests</div><div>README.md</div><div>Cargo.toml</div></div>
+<div id="readme"><article class="markdown-body">
+<h1>tidepool</h1>
+<p>Tidepool is a small command line tool that records water temperature and salinity readings from a field logger and turns them into tidy tables you can plot.</p>
+<h2>Install</h2>
+<pre><code>cargo install tidepool</code></pre>
+<h2>Usage</h2>
+<p>It reads the logger's CSV export, checks every row against the sensor's documented range, and writes a cleaned file beside the original so nothing is ever overwritten.</p>
+<pre><code>tidepool clean logger-export.csv</code></pre>
+<p>Readings outside the range are kept in a separate file with the reason they were set aside, so you can decide later whether the sensor or the pool was misbehaving.</p>
+<h2>Design</h2>
+<p>The tool has no network access and no configuration file. Everything it needs is given on the command line, and every run prints what it did and where it wrote.</p>
+<h2>Formats</h2>
+<p>Exports from three logger families are understood today. Each has its own column order and its own idea of what a missing reading looks like, and the reader for each is a small table rather than a separate parser.</p>
+<p>Times are converted to UTC on reading, with the logger's offset kept in a column of its own, so a season of readings taken across a clock change still lines up when plotted.</p>
+<h2>Testing</h2>
+<p>Every range in the table has a test that feeds it a reading just inside and just outside the limit. The sample exports in the tests folder are synthetic and were generated for this project.</p>
+<h2>Contributing</h2>
+<p>Contributions are welcome. Please open an issue describing the logger model you use before sending a change, so the range table can be checked against its manual.</p>
+<p>The range table lives in one file and every entry cites the page of the manual it came from, so a reviewer can check a change without owning the logger.</p>
+</article></div>
+<div class="sidebar"><h2>About</h2><p>Clean field logger readings.</p><a href="#">MIT license</a></div>
+<footer><a href="#">Terms</a><a href="#">Privacy</a></footer>
+</body></html>

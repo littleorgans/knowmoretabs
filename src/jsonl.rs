@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::archive::{self, Archive};
+use crate::archive::{self, Archive, Lock};
 use crate::error::Error;
 use crate::triage::plural;
 
@@ -75,12 +75,18 @@ impl<T: Serialize> Appender<T> {
 
     /// One whole line in one write, under the archive lock, synced.
     pub fn append(&mut self, line: &T) -> Result<(), Error> {
+        let lock = self.archive.lock(|| {})?;
+        self.append_locked(line, &lock)
+    }
+
+    /// [`Self::append`] for a caller already holding the archive lock, so
+    /// that a write before the line and the line itself are one step.
+    pub fn append_locked(&mut self, line: &T, _held: &Lock) -> Result<(), Error> {
         let mut bytes = serde_json::to_vec(line).map_err(|source| Error::Json {
             path: self.path.clone(),
             source,
         })?;
         bytes.push(b'\n');
-        let _lock = self.archive.lock(|| {})?;
         if !self.ends_with_newline()? {
             bytes.insert(0, b'\n');
         }

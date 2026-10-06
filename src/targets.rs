@@ -45,6 +45,9 @@ pub enum Skip {
     PrivateNetwork,
     SearchResults,
     Token,
+    /// A profile, channel or playlist on a site whose documents are posts
+    /// and videos.
+    NotADocument,
 }
 
 impl Skip {
@@ -55,6 +58,7 @@ impl Skip {
             Self::PrivateNetwork => "private network",
             Self::SearchResults => "search results",
             Self::Token => "token in URL",
+            Self::NotADocument => "not a document",
         }
     }
 }
@@ -64,6 +68,8 @@ impl Skip {
 pub enum Why {
     New,
     Refetch,
+    /// The last attempt failed in a way worth trying again.
+    Retry,
     /// A sign-in, sign-up or verification screen: recorded, never fetched.
     Login,
 }
@@ -73,6 +79,7 @@ impl Why {
         match self {
             Self::New => "new".to_owned(),
             Self::Refetch => "refetch".to_owned(),
+            Self::Retry => "retry after an error".to_owned(),
             Self::Login => "login page: recorded as behind_login, not fetched".to_owned(),
         }
     }
@@ -122,13 +129,23 @@ impl Plan {
     }
 }
 
+/// What a command's log already says about a URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Recorded {
+    Nothing,
+    /// An outcome that stands until the owner asks to fetch again.
+    Final,
+    /// A failure the command retries on its next run.
+    Failed,
+}
+
 /// Library pages newest sighting first, excluding prior attempts unless
-/// the owner explicitly asks to fetch them again. `attempted` says whether
-/// the command already recorded an attempt for a URL.
+/// the owner explicitly asks to fetch them again. `recorded` says what the
+/// command's log holds for a URL.
 pub fn plan(
     snapshots: &[Snapshot],
     state: &State,
-    attempted: impl Fn(&str) -> bool,
+    recorded: impl Fn(&str) -> Recorded,
     options: Options,
 ) -> Plan {
     let library = library::known_urls(snapshots);
@@ -151,17 +168,19 @@ pub fn plan(
             continue;
         }
         let Some(url) = parsed else { continue };
-        let attempted = attempted(raw);
-        if attempted && !options.refetch {
+        let recorded = recorded(raw);
+        if recorded == Recorded::Final && !options.refetch {
             plan.already_fetched += 1;
             continue;
         }
         let why = if guard::is_login_page(&url) {
             Why::Login
-        } else if attempted {
-            Why::Refetch
         } else {
-            Why::New
+            match recorded {
+                Recorded::Nothing => Why::New,
+                Recorded::Final => Why::Refetch,
+                Recorded::Failed => Why::Retry,
+            }
         };
         let item = Item {
             url: raw.to_owned(),

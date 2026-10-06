@@ -1,0 +1,403 @@
+//! What `content` keeps of one page over plain HTTP: the whole body, read
+//! through the guarded fetcher, tried again when the failure is passing,
+//! and turned into an attempt line and the page's text.
+//!
+//! slice: content
+//! why: The fetcher knows how to ask and nothing of what an answer means;
+//!      `content` needs the whole page, not its head, and a different
+//!      reading of the answer than `enrich`: a 403 is a block worth a signed
+//!      in browser later, a 404 is final, and a 429 or a 503 is a site
+//!      asking us to come back. Those passing failures are retried a couple
+//!      of times with growing waits, honouring the site's own Retry-After,
+//!      and a site that says slow down gets fewer requests for the rest of
+//!      the run. The decisions are pure functions so they can be tested
+//!      without a network.
+
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
+use std::time::Duration;
+
+use jiff::Timestamp;
+
+use crate::content_store::{Access, Completeness, Line, Page, Status, Tier};
+use crate::extract::{self, Class};
+use crate::fetch::{self, Fetcher, Refusal, Response};
+use crate::head;
+
+/// The most of a page's body read; enough for any article, not for a file.
+pub const BODY_CAP: usize = 10 * 1024 * 1024;
+/// Further tries in one run after a passing failure.
+const RETRIES: u32 = 2;
+/// The longest a site's Retry-After is waited for in a run.
+const RETRY_AFTER_CAP: Duration = Duration::from_secs(60);
+/// Runs ending in `error` before a page is `unavailable`.
+pub const RUNS_BEFORE_UNAVAILABLE: u32 = 3;
+
+/// One page's outcome: its line, without the run's attempt number yet, and
+/// its text when there is text to keep.
+#[derive(Debug, Clone)]
+pub struct Capture {
+    pub line: Line,
+    pub page: Option<Page>,
+}
+
+/// A failure that may pass: worth another try after a wait.
+#[derive(Debug, Clone)]
+struct Passing {
+    line: Box<Line>,
+    retry_after: Option<Duration>,
+}
+
+/// Fetches and reads one page, retrying passing failures. Never fails: a
+/// failure is a capture too.
+pub fn capture(fetcher: &Fetcher, raw: &str) -> Capture {
+    let mut retry = 0;
+    loop {
+        match once(fetcher, raw) {
+            Ok(capture) => return capture,
+            Err(passing) => {
+                retry += 1;
+                let jitter = Duration::from_millis(random() % 1000);
+                let Some(wait) = retry_wait(retry, passing.retry_after, jitter) else {
+                    return Capture {
+                        line: *passing.line,
+                        page: None,
+                    };
+                };
+                std::thread::sleep(wait);
+            }
+        }
+    }
+}
+
+fn once(fetcher: &Fetcher, raw: &str) -> Result<Capture, Passing> {
+    let response = match fetcher.get(raw, fetch::ACCEPT_HTML) {
+        Ok(response) => response,
+        Err(refusal) => return refused(raw, refusal),
+    };
+    if response.status == 429 {
+        fetcher.slow_down(&response.url);
+    }
+    read(raw, response)
+}
+
+fn web_line(raw: &str, status: Status) -> Line {
+    let mut line = Line::new(raw, status);
+    line.tier = Some(Tier::Web);
+    line.access = Some(Access::Public);
+    line
+}
+
+fn refused(raw: &str, refusal: Refusal) -> Result<Capture, Passing> {
+    let reason = refusal.reason();
+    let line = match refusal {
+        Refusal::Login(url) => {
+            let mut line = web_line(raw, Status::BehindLogin).with_reason(reason);
+            line.final_url = Some(url.to_string());
+            line
+        }
+        refusal if refusal.is_rule() => web_line(raw, Status::Skipped).with_reason(reason),
+        Refusal::Failed(_) if is_passing(&reason) => {
+            return Err(Passing {
+                line: Box::new(web_line(raw, Status::Error).with_reason(reason)),
+                retry_after: None,
+            });
+        }
+        _ => web_line(raw, Status::Error).with_reason(reason),
+    };
+    Ok(Capture { line, page: None })
+}
+
+/// Connection trouble that may be gone in a few seconds. A name that does
+/// not resolve is not.
+fn is_passing(reason: &str) -> bool {
+    matches!(
+        reason,
+        "timeout" | "connection reset" | "connection failed" | "connection closed early"
+    )
+}
+
+/// What an HTTP status says about a page, when it says something final or
+/// passing; `None` for a success.
+fn status_outcome(status: u16) -> Option<(Status, bool)> {
+    match status {
+        200..=299 => None,
+        401 => Some((Status::BehindLogin, false)),
+        403 => Some((Status::Blocked, false)),
+        404 | 410 => Some((Status::NotFound, false)),
+        429 | 502..=504 => Some((Status::Error, true)),
+        _ => Some((Status::Error, false)),
+    }
+}
+
+fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
+    let final_url = response.url.to_string();
+    let status = response.status;
+    let line = |state: Status, reason: Option<String>| {
+        let mut line = web_line(raw, state);
+        line.reason = reason;
+        line.final_url = Some(final_url.clone());
+        line.http_status = Some(status);
+        line
+    };
+    let done = |line: Line| Ok(Capture { line, page: None });
+    if let Some((state, passing)) = status_outcome(status) {
+        let failed = line(state, Some(format!("HTTP {status}")));
+        if passing {
+            let retry_after = response
+                .header("retry-after")
+                .and_then(|value| retry_after(value, Timestamp::now()));
+            return Err(Passing {
+                line: Box::new(failed),
+                retry_after,
+            });
+        }
+        return done(failed);
+    }
+    let mime = response.mime();
+    if !mime.is_empty() && !mime.contains("html") {
+        return done(line(Status::NotHtml, Some(format!("not HTML ({mime})"))));
+    }
+    if !response.is_identity() {
+        return done(line(
+            Status::Error,
+            Some("unsupported content encoding".to_owned()),
+        ));
+    }
+    let bytes = match response.read(BODY_CAP, false) {
+        Ok(bytes) => bytes,
+        Err(reason) if is_passing(&reason) => {
+            return Err(Passing {
+                line: Box::new(line(Status::Error, Some(reason))),
+                retry_after: None,
+            });
+        }
+        Err(reason) => return done(line(Status::Error, Some(reason))),
+    };
+    let html = match head::decode(
+        &bytes,
+        head::charset_param(&response.content_type).as_deref(),
+    ) {
+        Ok(html) => html,
+        Err(label) => {
+            return done(line(
+                Status::Error,
+                Some(format!("unsupported charset {label}")),
+            ));
+        }
+    };
+    let found = extract::page(&html, Some(&final_url));
+    let mut captured = line(class_status(found.class), found.reason.map(str::to_owned));
+    captured.lang.clone_from(&found.lang);
+    let page = (!found.markdown.is_empty()).then(|| {
+        captured.extractor = Some(found.extractor.to_owned());
+        let extractor = if found.extractor == extract::EXTRACTOR {
+            captured.extractor_version = Some(extract::EXTRACTOR_VERSION.to_owned());
+            format!("{} {}", extract::EXTRACTOR, extract::EXTRACTOR_VERSION)
+        } else {
+            found.extractor.to_owned()
+        };
+        Page {
+            title: found.title.clone(),
+            extractor,
+            completeness: if found.class == Class::Ok {
+                Completeness::Full
+            } else {
+                Completeness::Thin
+            },
+            chars: found.chars,
+            markdown: found.markdown,
+        }
+    });
+    Ok(Capture {
+        line: captured,
+        page,
+    })
+}
+
+fn class_status(class: Class) -> Status {
+    match class {
+        Class::Ok => Status::Ok,
+        Class::Thin => Status::Thin,
+        Class::EmptyShell => Status::EmptyShell,
+        Class::BehindLogin => Status::BehindLogin,
+        Class::Paywalled => Status::Paywalled,
+    }
+}
+
+/// How long to wait before retry number `retry` (1 or 2): 2 s, then 8 s,
+/// or longer when the site asked for longer, plus `jitter`. `None` when the
+/// retries are spent or the site asked for more than a run waits.
+fn retry_wait(retry: u32, retry_after: Option<Duration>, jitter: Duration) -> Option<Duration> {
+    if retry == 0 || retry > RETRIES {
+        return None;
+    }
+    let backoff = Duration::from_secs(2 * 4u64.pow(retry - 1));
+    match retry_after {
+        Some(asked) if asked > RETRY_AFTER_CAP => None,
+        Some(asked) => Some(backoff.max(asked) + jitter),
+        None => Some(backoff + jitter),
+    }
+}
+
+/// `Retry-After` as a wait from `now`: seconds, or an HTTP date. A date in
+/// the past is no wait.
+fn retry_after(value: &str, now: Timestamp) -> Option<Duration> {
+    let value = value.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return Some(Duration::from_secs(seconds));
+    }
+    let at = jiff::fmt::rfc2822::parse(value).ok()?.timestamp();
+    let seconds = at.as_second().saturating_sub(now.as_second());
+    Some(Duration::from_secs(u64::try_from(seconds).unwrap_or(0)))
+}
+
+/// A page's line for this run: its attempt number, and `unavailable` once
+/// the runs ending in `error` reach [`RUNS_BEFORE_UNAVAILABLE`].
+pub fn settle(mut line: Line, attempt: u32) -> Line {
+    line.attempt = attempt;
+    if line.status == Status::Error && attempt >= RUNS_BEFORE_UNAVAILABLE {
+        line.status = Status::Unavailable;
+        let reason = line.reason.take().unwrap_or_default();
+        line.reason = Some(format!("{reason}; failed on {attempt} runs"));
+    }
+    line
+}
+
+/// The attempt number for a page whose latest line is `previous`: one more
+/// after an `error`, else a fresh start.
+pub fn next_attempt(previous: Option<&Line>) -> u32 {
+    match previous {
+        Some(line) if line.status == Status::Error => line.attempt.saturating_add(1),
+        _ => 1,
+    }
+}
+
+/// Enough randomness to spread retries apart, with no dependency.
+fn random() -> u64 {
+    let mut hasher = RandomState::new().build_hasher();
+    hasher.write_u64(u64::from(std::process::id()));
+    hasher.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const JITTER: Duration = Duration::from_millis(300);
+
+    #[test]
+    fn retries_wait_two_then_eight_seconds_then_stop() {
+        assert_eq!(
+            retry_wait(1, None, JITTER),
+            Some(Duration::from_millis(2300))
+        );
+        assert_eq!(
+            retry_wait(2, None, JITTER),
+            Some(Duration::from_millis(8300))
+        );
+        assert_eq!(retry_wait(3, None, JITTER), None);
+        assert_eq!(retry_wait(0, None, JITTER), None);
+    }
+
+    #[test]
+    fn retry_after_is_honoured_up_to_a_minute() {
+        let secs = Duration::from_secs;
+        assert_eq!(
+            retry_wait(1, Some(secs(30)), JITTER),
+            Some(secs(30) + JITTER)
+        );
+        assert_eq!(retry_wait(2, Some(secs(1)), JITTER), Some(secs(8) + JITTER));
+        assert_eq!(
+            retry_wait(1, Some(secs(60)), JITTER),
+            Some(secs(60) + JITTER)
+        );
+        assert_eq!(retry_wait(1, Some(secs(61)), JITTER), None);
+    }
+
+    #[test]
+    fn retry_after_reads_seconds_and_http_dates() {
+        let now: Timestamp = "2026-10-07T09:00:00Z".parse().unwrap();
+        assert_eq!(retry_after(" 120 ", now), Some(Duration::from_secs(120)));
+        assert_eq!(
+            retry_after("Wed, 07 Oct 2026 09:00:30 GMT", now),
+            Some(Duration::from_secs(30))
+        );
+        assert_eq!(
+            retry_after("Wed, 07 Oct 2026 08:00:00 GMT", now),
+            Some(Duration::ZERO)
+        );
+        assert_eq!(retry_after("soon", now), None);
+        assert_eq!(retry_after("-5", now), None);
+    }
+
+    #[test]
+    fn http_statuses_map_to_the_vocabulary() {
+        assert_eq!(status_outcome(200), None);
+        assert_eq!(status_outcome(401), Some((Status::BehindLogin, false)));
+        assert_eq!(status_outcome(403), Some((Status::Blocked, false)));
+        assert_eq!(status_outcome(404), Some((Status::NotFound, false)));
+        assert_eq!(status_outcome(410), Some((Status::NotFound, false)));
+        for passing in [429, 502, 503, 504] {
+            assert_eq!(
+                status_outcome(passing),
+                Some((Status::Error, true)),
+                "{passing}"
+            );
+        }
+        for failed in [400, 500, 501, 418] {
+            assert_eq!(
+                status_outcome(failed),
+                Some((Status::Error, false)),
+                "{failed}"
+            );
+        }
+    }
+
+    #[test]
+    fn refusals_keep_rules_home_and_retry_only_passing_failures() {
+        let status = |refusal| match refused("https://a.test/", refusal) {
+            Ok(capture) => (capture.line.status, false),
+            Err(passing) => (passing.line.status, true),
+        };
+        assert_eq!(status(Refusal::PrivateAddress), (Status::Skipped, false));
+        assert_eq!(status(Refusal::TokenOrSearch), (Status::Skipped, false));
+        assert_eq!(status(Refusal::TooManyRedirects), (Status::Error, false));
+        assert_eq!(
+            status(Refusal::Failed("timeout".into())),
+            (Status::Error, true)
+        );
+        assert_eq!(
+            status(Refusal::Failed("connection reset".into())),
+            (Status::Error, true)
+        );
+        assert_eq!(
+            status(Refusal::Failed("host not found".into())),
+            (Status::Error, false)
+        );
+        let login = refused(
+            "https://a.test/",
+            Refusal::Login(url::Url::parse("https://a.test/login").unwrap()),
+        )
+        .unwrap()
+        .line;
+        assert_eq!(login.status, Status::BehindLogin);
+        assert_eq!(login.final_url.as_deref(), Some("https://a.test/login"));
+    }
+
+    #[test]
+    fn a_page_failing_on_three_runs_becomes_unavailable() {
+        let error = Line::new("https://a.test/", Status::Error).with_reason("HTTP 503");
+        assert_eq!(next_attempt(None), 1);
+        let first = settle(error.clone(), next_attempt(None));
+        assert_eq!((first.status, first.attempt), (Status::Error, 1));
+        let second = settle(error.clone(), next_attempt(Some(&first)));
+        assert_eq!((second.status, second.attempt), (Status::Error, 2));
+        let third = settle(error.clone(), next_attempt(Some(&second)));
+        assert_eq!((third.status, third.attempt), (Status::Unavailable, 3));
+        assert_eq!(third.reason.as_deref(), Some("HTTP 503; failed on 3 runs"));
+        assert_eq!(next_attempt(Some(&third)), 1, "a refetch starts again");
+        let ok = settle(Line::new("https://a.test/", Status::Ok), 3);
+        assert_eq!((ok.status, ok.attempt), (Status::Ok, 3));
+    }
+}

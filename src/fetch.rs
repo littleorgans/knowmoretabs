@@ -34,6 +34,9 @@ pub const MAX_REDIRECTS: usize = 10;
 pub const TIMEOUT: Duration = Duration::from_secs(15);
 /// One request per second to any one host.
 pub const PACE: Duration = Duration::from_secs(1);
+/// The slowest a host is paced after telling us to slow down, so that one
+/// paced request still fits inside [`TIMEOUT`].
+pub const MAX_PACE: Duration = Duration::from_secs(8);
 /// What a browser asks for when it wants a page.
 pub const ACCEPT_HTML: &str = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5";
 
@@ -222,6 +225,12 @@ impl Fetcher {
         }
         Err(Refusal::TooManyRedirects)
     }
+
+    /// Halves the request rate to `url`'s host for the rest of the run, down
+    /// to one request per [`MAX_PACE`]: what a 429 asks for.
+    pub fn slow_down(&self, url: &Url) {
+        self.pacer.slow_down(&guard::host_key(url));
+    }
 }
 
 impl Response {
@@ -247,6 +256,11 @@ impl Response {
                     .to_str()
                     .is_ok_and(|v| v.trim().eq_ignore_ascii_case("identity"))
             })
+    }
+
+    /// A response header's value, when it is text.
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.inner.headers().get(name).and_then(|v| v.to_str().ok())
     }
 
     /// At most `cap` bytes of the body, and no more than the chunk that ends
@@ -319,7 +333,8 @@ fn io_reason(err: &io::Error) -> String {
 /// takes the next free slot for its host, whichever worker asks.
 struct Pacer {
     interval: Duration,
-    next: Mutex<HashMap<String, Instant>>,
+    /// Each host's next free slot and its interval, when it has one.
+    next: Mutex<HashMap<String, (Instant, Duration)>>,
 }
 
 impl Pacer {
@@ -334,15 +349,27 @@ impl Pacer {
         let slot = {
             let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
             let now = Instant::now();
-            let slot = next.get(host).map_or(now, |at| (*at).max(now));
+            let (slot, interval) = next
+                .get(host)
+                .map_or((now, self.interval), |(at, interval)| {
+                    ((*at).max(now), *interval)
+                });
             if slot >= deadline {
                 return false;
             }
-            next.insert(host.to_owned(), slot + self.interval);
+            next.insert(host.to_owned(), (slot + interval, interval));
             slot
         };
         std::thread::sleep(slot.saturating_duration_since(Instant::now()));
         Instant::now() < deadline
+    }
+
+    fn slow_down(&self, host: &str) {
+        let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
+        let (_, interval) = next
+            .entry(host.to_owned())
+            .or_insert((Instant::now(), self.interval));
+        *interval = (*interval * 2).min(MAX_PACE.max(self.interval));
     }
 }
 
@@ -454,6 +481,28 @@ mod tests {
             elapsed >= Duration::from_millis(400),
             "three requests to one host need two intervals, took {elapsed:?}"
         );
+    }
+
+    #[test]
+    fn slowing_down_doubles_one_host_interval_up_to_the_cap() {
+        let pacer = Pacer::new(Duration::from_secs(1));
+        let interval = |host: &str| {
+            pacer
+                .next
+                .lock()
+                .unwrap()
+                .get(host)
+                .map(|(_, interval)| *interval)
+        };
+        pacer.slow_down("a.test");
+        assert_eq!(interval("a.test"), Some(Duration::from_secs(2)));
+        for _ in 0..5 {
+            pacer.slow_down("a.test");
+        }
+        assert_eq!(interval("a.test"), Some(MAX_PACE));
+        assert_eq!(interval("b.test"), None);
+        pacer.wait("b.test", Instant::now() + TIMEOUT);
+        assert_eq!(interval("b.test"), Some(Duration::from_secs(1)));
     }
 
     #[test]

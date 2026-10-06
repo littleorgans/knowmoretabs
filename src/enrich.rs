@@ -26,7 +26,7 @@ use crate::metadata;
 use crate::metadata_fetch;
 use crate::metadata_writer::{Line, Outcome};
 use crate::out;
-use crate::targets::{self, Options, Plan, Why};
+use crate::targets::{self, Options, Plan, Recorded, Why};
 use crate::triage::plural;
 
 /// A progress line every this many pages, on stderr.
@@ -66,7 +66,13 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
     let plan = targets::plan(
         &loaded.snapshots,
         &state,
-        |url| known.pages.contains_key(url),
+        |url| {
+            if known.pages.contains_key(url) {
+                Recorded::Final
+            } else {
+                Recorded::Nothing
+            }
+        },
         options,
     );
     if options.dry_run {
