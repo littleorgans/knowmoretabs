@@ -13,7 +13,8 @@ use std::fmt::Write as _;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, ExitStatus, Output, Stdio};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -637,7 +638,18 @@ fn a_page_that_never_answers_times_out_and_the_run_goes_on() {
 #[test]
 fn an_interrupted_run_leaves_whole_lines_and_the_next_run_finishes() {
     let fx = Fixture::new();
-    let site = Site::start(routes);
+    // Every request after the third waits until the test lets go, so the run
+    // is still mid page when the interrupt lands, however loaded the machine.
+    let gate = Arc::new(Mutex::new(()));
+    let closed = gate.lock().unwrap();
+    let server_gate = Arc::clone(&gate);
+    let sent = AtomicUsize::new(0);
+    let site = Site::start(move |host, path, port| {
+        if sent.fetch_add(1, Ordering::SeqCst) >= 3 {
+            drop(server_gate.lock());
+        }
+        routes(host, path, port)
+    });
     let urls: Vec<String> = (1..=8)
         .map(|n| format!("http://slowhost.test/{n}"))
         .collect();
@@ -653,20 +665,26 @@ fn an_interrupted_run_leaves_whole_lines_and_the_next_run_finishes() {
         assert!(Instant::now() < deadline, "no progress");
         std::thread::sleep(Duration::from_millis(50));
     }
-    interrupt(&mut child);
-    let written = lines(&fx);
-    assert!(written.len() >= 3 && written.len() < 8, "{}", written.len());
+    let status = interrupt(&mut child);
+    drop(closed);
+    assert!(!status.success(), "the run finished before the interrupt");
+    let text = fs::read_to_string(fx.root.join("pages").join("metadata.jsonl")).unwrap();
+    assert!(text.ends_with('\n'), "torn last line");
+    assert_eq!(lines(&fx).len(), 3);
 
     let output = enrich(&fx, &site, &["--json"]);
     assert_success(&output);
     let json: Value = serde_json::from_str(&stdout(&output)).unwrap();
-    assert_eq!(json["not_fetched"]["already fetched"], written.len());
+    assert_eq!(json["not_fetched"]["already fetched"], 3);
+    assert_eq!(lines(&fx).len(), 8, "a page fetched twice");
     assert_eq!(records(&fx).len(), 8);
     assert!(stderr(&output).is_empty(), "{}", stderr(&output));
 }
 
-/// Ctrl-C where there is one; a hard kill elsewhere, which is harsher.
-fn interrupt(child: &mut std::process::Child) {
+/// Ctrl-C where there is one; a hard kill elsewhere, which is harsher. A run
+/// that ignores SIGINT, as every job a script starts with `&` does, gets the
+/// hard kill too. Returns how the run ended.
+fn interrupt(child: &mut Child) -> ExitStatus {
     #[cfg(unix)]
     {
         let status = Command::new("kill")
@@ -674,10 +692,16 @@ fn interrupt(child: &mut std::process::Child) {
             .status()
             .unwrap();
         assert!(status.success());
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while Instant::now() < deadline {
+            if let Some(status) = child.try_wait().unwrap() {
+                return status;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
-    #[cfg(not(unix))]
     child.kill().unwrap();
-    child.wait().unwrap();
+    child.wait().unwrap()
 }
 
 #[test]
