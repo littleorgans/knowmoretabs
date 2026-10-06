@@ -248,7 +248,7 @@ the counts.
 
 ```
 knowmoretabs content --dry-run   # what would be fetched, what would not and why; sends nothing
-knowmoretabs content --limit 30  # capture at most 30 pages this run
+knowmoretabs content --limit 30  # fetch at most 30 pages this run; skipped and login pages do not count
 knowmoretabs content             # capture every page not captured before, and retry the failed ones
 knowmoretabs content --url URL   # capture only this library page; repeatable
 ```
