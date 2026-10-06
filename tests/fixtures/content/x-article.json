@@ -1,0 +1,185 @@
+{
+  "code": 200,
+  "status": {
+    "type": "status",
+    "text": "",
+    "created_timestamp": 1791363600,
+    "author": {
+      "name": "Example Person",
+      "screen_name": "example",
+      "protected": false
+    },
+    "article": {
+      "id": "9",
+      "title": "Synthetic snippets",
+      "content": {
+        "blocks": [
+          {
+            "key": "intro",
+            "type": "unstyled",
+            "text": "Here is the implementation:",
+            "data": {},
+            "entityRanges": [],
+            "inlineStyleRanges": []
+          },
+          {
+            "key": "code",
+            "type": "atomic",
+            "text": " ",
+            "data": {},
+            "entityRanges": [
+              {
+                "key": 4,
+                "offset": 0,
+                "length": 1
+              }
+            ],
+            "inlineStyleRanges": []
+          },
+          {
+            "key": "plain-intro",
+            "type": "unstyled",
+            "text": "Here is a plain snippet:",
+            "data": {},
+            "entityRanges": [],
+            "inlineStyleRanges": []
+          },
+          {
+            "key": "plain-code",
+            "type": "atomic",
+            "text": " ",
+            "data": {},
+            "entityRanges": [
+              {
+                "key": 10,
+                "offset": 0,
+                "length": 1
+              }
+            ],
+            "inlineStyleRanges": []
+          },
+          {
+            "key": "embed-intro",
+            "type": "unstyled",
+            "text": "Here is the referenced post:",
+            "data": {},
+            "entityRanges": [],
+            "inlineStyleRanges": []
+          },
+          {
+            "key": "embed",
+            "type": "atomic",
+            "text": " ",
+            "data": {},
+            "entityRanges": [
+              {
+                "key": 11,
+                "offset": 0,
+                "length": 1
+              }
+            ],
+            "inlineStyleRanges": []
+          },
+          {
+            "key": "media",
+            "type": "atomic",
+            "text": " ",
+            "data": {},
+            "entityRanges": [
+              {
+                "key": 12,
+                "offset": 0,
+                "length": 1
+              }
+            ],
+            "inlineStyleRanges": []
+          },
+          {
+            "key": "missing",
+            "type": "atomic",
+            "text": " ",
+            "data": {},
+            "entityRanges": [
+              {
+                "key": 99,
+                "offset": 0,
+                "length": 1
+              }
+            ],
+            "inlineStyleRanges": []
+          },
+          {
+            "key": "end",
+            "type": "unstyled",
+            "text": "End of the article.",
+            "data": {},
+            "entityRanges": [],
+            "inlineStyleRanges": []
+          }
+        ],
+        "entityMap": [
+          {
+            "key": "11",
+            "value": {
+              "type": "TWEET",
+              "mutability": "Immutable",
+              "data": {
+                "tweetId": "101"
+              }
+            }
+          },
+          {
+            "key": "4",
+            "value": {
+              "type": "MARKDOWN",
+              "mutability": "Mutable",
+              "data": {
+                "entityKey": "snippet",
+                "markdown": "```rust\nfn sample() {\n    let fence = \"```\";\n}\n```"
+              }
+            }
+          },
+          {
+            "key": "10",
+            "value": {
+              "type": "MARKDOWN",
+              "mutability": "Mutable",
+              "data": {
+                "entityKey": "plain",
+                "markdown": "```\n    sample()\n```"
+              }
+            }
+          },
+          {
+            "key": "12",
+            "value": {
+              "type": "MEDIA",
+              "mutability": "Immutable",
+              "data": {
+                "entityKey": "image",
+                "mediaItems": [
+                  {
+                    "localMediaId": "image",
+                    "mediaCategory": "photo",
+                    "mediaId": "102"
+                  }
+                ]
+              }
+            }
+          },
+          {
+            "key": "100",
+            "value": {
+              "type": "MARKDOWN",
+              "mutability": "Mutable",
+              "data": {
+                "entityKey": "unused",
+                "markdown": "Unreferenced entity must stay absent."
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

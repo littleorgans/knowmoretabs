@@ -148,6 +148,8 @@ struct Article {
 #[serde(default)]
 struct ArticleContent {
     blocks: Vec<Block>,
+    #[serde(rename = "entityMap")]
+    entities: Vec<Entity>,
 }
 
 /// One paragraph of an article, in the editor's own block types.
@@ -157,6 +159,39 @@ struct Block {
     #[serde(rename = "type")]
     kind: String,
     text: String,
+    #[serde(rename = "entityRanges")]
+    entities: Vec<EntityRange>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct EntityRange {
+    key: u64,
+}
+
+/// Entity keys are strings in the map and numbers in the block ranges.
+/// The map's array order does not determine a key.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Entity {
+    key: String,
+    value: EntityValue,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct EntityValue {
+    #[serde(rename = "type")]
+    kind: String,
+    data: EntityData,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct EntityData {
+    markdown: String,
+    #[serde(rename = "tweetId")]
+    tweet_id: String,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -281,7 +316,7 @@ fn text_of(post: &Post) -> String {
     let mut parts = vec![post.text.trim().to_owned()];
     if let Some(article) = &post.article {
         parts.push(article.title.trim().to_owned());
-        parts.extend(blocks(article).map(|block| block.text.trim().to_owned()));
+        parts.extend(article_parts(article));
     }
     parts.extend(alt_texts(post).map(|(_, alt)| alt.to_owned()));
     if let Some(quote) = &post.quote {
@@ -291,12 +326,13 @@ fn text_of(post: &Post) -> String {
     parts.join("\n")
 }
 
-fn blocks(article: &Article) -> impl Iterator<Item = &Block> {
+/// The rendered article parts, shared by completeness and the saved body.
+fn article_parts(article: &Article) -> impl Iterator<Item = String> + '_ {
     article
         .content
         .iter()
-        .flat_map(|content| content.blocks.iter())
-        .filter(|block| !block.text.trim().is_empty())
+        .flat_map(|content| content.blocks.iter().map(move |part| block(part, content)))
+        .filter(|part| !part.trim().is_empty())
 }
 
 /// Each image description, with what it describes.
@@ -347,15 +383,44 @@ fn body(post: &Post, quoted: bool) -> String {
         if quoted && !article.title.trim().is_empty() {
             parts.push(format!("## {}", article.title.trim()));
         }
-        parts.extend(blocks(article).map(block));
+        parts.extend(article_parts(article));
     }
     parts.extend(alt_texts(post).map(|(kind, alt)| format!("{kind}: {alt}")));
     parts.join("\n\n")
 }
 
 /// An article paragraph as markdown, by its editor block type.
-fn block(block: &Block) -> String {
+fn block(block: &Block, content: &ArticleContent) -> String {
+    if block.kind == "atomic" {
+        return block
+            .entities
+            .iter()
+            .filter_map(|range| {
+                let key = range.key.to_string();
+                let value = &content
+                    .entities
+                    .iter()
+                    .find(|entity| entity.key == key)?
+                    .value;
+                match value.kind.as_str() {
+                    // The API supplies Markdown, including the snippet's
+                    // fences and language. Preserve the source and indent.
+                    "MARKDOWN" => Some(value.data.markdown.trim().to_owned()),
+                    "TWEET" => {
+                        let id = &value.data.tweet_id;
+                        (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit()))
+                            .then(|| format!("[Embedded post](https://x.com/i/status/{id})"))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+    }
     let text = block.text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
     let prefix = match block.kind.as_str() {
         "header-one" => "### ",
         "header-two" => "#### ",
@@ -584,6 +649,42 @@ mod tests {
              https://x.com/i/article/9\n\n\
              Tides are long waves.\n\n#### Causes\n\n- The moon\n\n\
              ```\ntide = moon + sun\n```\n"
+        );
+    }
+
+    #[test]
+    fn an_article_keeps_atomic_code_and_embeds_in_order() {
+        use crate::content_store::{self, Store};
+
+        let fixture = include_bytes!("../tests/fixtures/content/x-article.json");
+        let Capture { line, page } = read(fixture, line);
+        let page = page.unwrap();
+        assert_eq!(line.status, Status::Ok);
+        assert_eq!(page.completeness, Completeness::Full);
+        assert_eq!(
+            page.markdown,
+            "# Synthetic snippets\n\n\
+             Example Person (@example), 2026-10-07T09:00:00Z\n\n\
+             Here is the implementation:\n\n\
+             ```rust\nfn sample() {\n    let fence = \"```\";\n}\n```\n\n\
+             Here is a plain snippet:\n\n```\n    sample()\n```\n\n\
+             Here is the referenced post:\n\n\
+             [Embedded post](https://x.com/i/status/101)\n\n\
+             End of the article.\n"
+        );
+        assert_eq!(page.chars, extract::plain_chars(&page.markdown));
+
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path()).unwrap();
+        let line = store.record(line, Some(&page)).unwrap();
+        let path = content_store::dir(root.path()).join(content_store::file_name(&line.url));
+        let saved = std::fs::read_to_string(path).unwrap();
+        let (front, body) = content_store::parse(&saved).unwrap();
+        assert_eq!(body, page.markdown);
+        assert_eq!(front["completeness"], "full");
+        assert_eq!(
+            line.content_sha256.as_deref(),
+            Some(content_store::sha256_hex(body.as_bytes()).as_str())
         );
     }
 
