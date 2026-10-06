@@ -13,7 +13,7 @@ logic, stop and ask whether the table is missing a column instead.
 1. **`docs/research/browsers.md`** — the whole thing. It is the specification
    for this slice: the path matrix, profile discovery, the safety rules, and a
    recommended zero-flag behaviour. It was verified against this machine.
-2. The project brief §2 and §5.
+2. `docs/BRIEF.md` §2 and §5 (at 2256595).
 3. `src/platform.rs` — the existing Chrome-on-macOS discovery. Slice 1 was
    told to leave room for exactly this; check whether it did, and say so.
 4. `docs/research/session-format.md` §5 — `Session_*` versus `Tabs_*`, which

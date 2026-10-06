@@ -14,5 +14,5 @@ Docs: `.lilo/docs/`, start at `index.md`.
 - `index.md`: purpose, responsibilities, vocabulary, rules, sources.
 - `verification-gates.md`: gates, CI jobs, expected failures.
 <!-- lilo-onboarding status=complete-quick date=2026-10-06 schema=1 -->
-<!-- lilo-digest sha256:b82e9799aefda5da .lilo/docs/index.md -->
+<!-- lilo-digest sha256:be5eed8783935e04 .lilo/docs/index.md -->
 <!-- lilo-digest sha256:1e3c4258923c2ed9 .lilo/docs/verification-gates.md -->

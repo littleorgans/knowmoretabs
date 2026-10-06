@@ -10,7 +10,7 @@ here. You are not writing any HTML, CSS or JavaScript.
 
 ## Required reading
 
-1. The project brief — all of it.
+1. `docs/BRIEF.md` (at 2256595) — all of it.
 2. `slices.toml` — slice `library`, and the `future` band for what not to build.
 3. `docs/design-decision.md` — why design B won and what changes in it.
 4. **`design-b/NOTES.md` §5 — the JSON contract. This is a contract, not a

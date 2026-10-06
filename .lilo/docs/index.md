@@ -1,7 +1,7 @@
 # knowmoretabs system map
 <!-- lilo-page kind=index schema=1 -->
 <!-- lilo-covers Cargo.toml Cargo.lock .cargo/config.toml xtask/Cargo.toml xtask/src/main.rs slices.toml src/*.rs web/index.html web/app.css web/app.js -->
-<!-- lilo-verified digest=15c21cf74a6ec1a0 commit=959c169c6354 date=2026-10-06 -->
+<!-- lilo-verified digest=15c21cf74a6ec1a0 commit=140f5db7d6a1 date=2026-10-06 -->
 
 > One Rust binary that snapshots the open tabs of Chromium browsers from their on-disk session files and serves the snapshots as a local, searchable library.
 
@@ -86,7 +86,7 @@ none yet
 
 | id | path | fingerprint | consulted | disposition | claims | watched |
 | --- | --- | --- | --- | --- | --- | --- |
-| S1 | README.md | d9ee3bd0f30e | 2026-10-06 | used | index.md#purpose-and-scope, index.md#rules | |
+| S1 | README.md | 6547a40a3784 | 2026-10-06 | used | index.md#purpose-and-scope, index.md#rules | |
 | S2 | docs/SLICES.md | c4e1c70a9f8d | 2026-10-06 | used | index.md#vocabulary | |
-| S4 | docs/design-decision.md | c6ac2c2e09bb | 2026-10-06 | read, nothing kept | | |
-| S5 | docs/briefs/slice-07b-history.md | 74bb36f60d57 | 2026-10-06 | used | index.md#vocabulary, index.md#rules | |
+| S4 | docs/design-decision.md | d72a87609962 | 2026-10-06 | read, nothing kept | | |
+| S5 | docs/briefs/slice-07b-history.md | e583b4ab1abf | 2026-10-06 | used | index.md#vocabulary, index.md#rules | |

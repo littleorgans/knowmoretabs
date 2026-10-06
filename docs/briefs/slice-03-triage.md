@@ -6,7 +6,7 @@ script.
 
 ## Required reading
 
-1. The project brief — all of it, especially §2 principles and §5 storage.
+1. `docs/BRIEF.md` (at 2256595) — all of it, especially §2 principles and §5 storage.
 2. `slices.toml` — slice `triage`, and the `future` band.
 3. **`web/fixtures/serve.py`** — a working Python stand-in for the server you
    are about to write. It defines the API surface exactly, and the shipped

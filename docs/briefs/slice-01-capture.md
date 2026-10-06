@@ -6,7 +6,7 @@ it earns its place rather than being a horizontal slice of its own.
 
 ## Required reading, in order
 
-1. The project brief — the product, the principles, the conventions. All of it.
+1. `docs/BRIEF.md` (at 2256595) — the product, the principles, the conventions. All of it.
 2. `slices.toml` — slice 1 is what you are building; the `future` band is what
    you are not.
 3. `docs/research/rust-stack.md` — **the stack is decided.** Implement it. If
@@ -101,7 +101,7 @@ the issue tracker instead.
 
 ## Storage
 
-Per the project brief §5. Specifics for you to get right:
+Per `docs/BRIEF.md` §5 (at 2256595). Specifics for you to get right:
 
 - Snapshot directory names are UTC and sort lexicographically:
   `2026-09-20-084415Z`. Same-second collisions get `-2`, `-3`.
@@ -133,7 +133,7 @@ user-visible change.
 - `Cargo.toml` exactly as `docs/research/rust-stack.md` specifies, including the
   `[lints]` table. `cargo clippy` must be clean at the configured level.
 - `xtask` crate implementing `cargo xtask slices`, enforcing the five rules in
-  the project brief §6, and generating `docs/SLICES.md`. Keep it under ~300 lines;
+  `docs/BRIEF.md` §6 (at 2256595; the rules now sit on `lint` in `xtask/src/main.rs`), and generating `docs/SLICES.md`. Keep it under ~300 lines;
   it is a helper, not a product. It must fail on a bad marker and pass on this
   repo.
 - Every source file you write carries its `slice:` / `why:` header. Make the
@@ -143,7 +143,7 @@ user-visible change.
   `ubuntu-latest`** — the GitHub-hosted credit pool is exhausted and a workflow
   using it simply will not run. Jobs: fmt, clippy, test, `xtask slices`.
 - `README.md`: what it is, the two commands that matter, install, where data
-  lives, the non-goals from the project brief §1, and an honest note about the
+  lives, the non-goals from `docs/BRIEF.md` §1 (at 2256595), and an honest note about the
   encrypted-sessions clock. Write it for someone who has never seen the project.
   No badges for CI that has never run, no roadmap fiction.
 
@@ -179,7 +179,7 @@ the repo, in a test, in a fixture, or in your report. Counts only.**
 
 - Paths you own: `Cargo.toml`, `Cargo.lock`, `src/**`, `tests/**`, `xtask/**`,
   `.github/**`, `README.md`, `docs/SLICES.md` (generated only).
-- Paths you must not touch: the project brief, `slices.toml`, `docs/research/**`,
+- Paths you must not touch: `docs/BRIEF.md` (at 2256595), `slices.toml`, `docs/research/**`,
   `docs/briefs/**`, `reference/**`, `design/**`, `design-b/**`.
 - **Run no git commands at all.** Not `add`, not `commit`, not `status`, not
   `diff`. Another agent is working in this checkout and the orchestrator handles

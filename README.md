@@ -417,7 +417,9 @@ Every source file starts with a `slice:` / `why:` header naming the slice or
 slices it belongs to and why it exists; `cargo xtask slices` enforces it.
 `slices.toml` is the reasoning behind what is built and what is not,
 `docs/SLICES.md` the build order generated from it, and `docs/briefs/` the
-brief each slice was built from. Releases are built by
+brief each slice was built from. Those briefs cite `docs/BRIEF.md`, the
+original project brief, retired after commit 2256595;
+`git show 2256595:docs/BRIEF.md` reads it. Releases are built by
 `.github/workflows/release.yml` from a `v*` tag.
 
 `save` and `serve` carry almost all the value; when a decision is close, pick
@@ -425,9 +427,11 @@ the option that keeps those two excellent. A feature that serves a fifth of the
 value for half the work does not ship: cut it and record it in the `future`
 band of `slices.toml`. Beyond that:
 
-- The archive is sacred. A snapshot is never overwritten, a browser file is
-  never modified, and a failure mid-run leaves the previous state exactly as
-  it was.
+- The archive is sacred. A browser file is never modified. A snapshot is
+  published whole by one rename and never written again, and `library.json`
+  and `pages/history.json` are replaced whole, so a failure mid-write leaves
+  the previous file as it was. `pages/metadata.jsonl` is append-only instead:
+  an interrupted `enrich` keeps every record it completed.
 - Plain files first. JSON snapshots are the source of truth and anything
   derived is rebuildable. No database until a measured query is slow; no
   async, since a single-user localhost server does not need it; no config

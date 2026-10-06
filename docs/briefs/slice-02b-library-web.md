@@ -5,7 +5,7 @@
 
 ## Required reading
 
-1. The project brief §1, §2, §8.
+1. `docs/BRIEF.md` §1, §2, §8 (at 2256595).
 2. `docs/design-decision.md` — **the whole thing.** It records a bake-off
    between two blind designs, why B won, and the three changes B needs.
 3. `design-b/NOTES.md` — the design you are promoting. Its §5 is the JSON
@@ -39,7 +39,7 @@ web/
 
 Then **delete `design/` and `design-b/`.** Both are preserved in git history and
 `docs/design-decision.md` records what each contributed. Two prototype
-directories beside a production one is exactly the clutter the project brief §2.7
+directories beside a production one is exactly the clutter `docs/BRIEF.md` §2.7 (at 2256595)
 is against.
 
 Slice 2a pointed its `include_str!` at `design-b/` with a comment marking the
@@ -50,7 +50,7 @@ seam. Move it to `web/` and remove the comment.
 ### 1. The masthead — take A's line
 
 B opens with "Library". A opened with **"Every tab you ever had open."** and A's
-line does the emotional work the project brief §8 asks for: the archive as
+line does the emotional work `docs/BRIEF.md` §8 (at 2256595) asks for: the archive as
 something you are glad to own, not a backlog. Use A's headline with B's subhead
 underneath it — B's subhead ("2,113 pages across 41 snapshots, Mar 14 2026 to
 Sep 21 2026. 155 sites; 65 pages present in every snapshot.") is genuinely

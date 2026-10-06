@@ -1,7 +1,7 @@
 # Slice 7: Tags
 
 **Status:** approved 2026-09-23. Nothing here is built yet. §9 records the owner's
-decisions; §8 is for open questions. Of §7's project brief changes, 1 is applied; 3's
+decisions; §8 is for open questions. Of §7's `docs/BRIEF.md` (at 2256595) changes, 1 is applied; 3's
 README wording lands with 7b, when `enrich` exists.
 
 **Ships, in four parts:**
@@ -187,7 +187,7 @@ output of two different agents.
   ten times more than noise, and made it stricter overall unless balanced
   across tags.
 
-## 7. Changes to the project brief and the README (approved)
+## 7. Changes to `docs/BRIEF.md` (at 2256595) and the README (approved)
 
 1. **Non-goals:** "No tag taxonomy" → "No tag hierarchy: tags are flat facets
    the owner controls".
