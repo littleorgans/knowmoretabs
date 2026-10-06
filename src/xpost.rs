@@ -46,6 +46,19 @@ pub fn api_url(id: &str) -> String {
     format!("https://{API_HOST}/{API_VERSION}/status/{id}")
 }
 
+/// The public post the API's own documentation uses as its example:
+/// `doctor --live` asks for it, never for one of the owner's.
+const SAMPLE_POST: &str = "20";
+
+/// The HTTP status the API answers for [`SAMPLE_POST`], or why it gave
+/// none.
+pub fn reachable(fetcher: &Fetcher) -> Result<u16, String> {
+    fetcher
+        .get(&api_url(SAMPLE_POST), ACCEPT_JSON)
+        .map(|response| response.status)
+        .map_err(|refusal| refusal.reason())
+}
+
 /// Asks the API for post `id`, recorded for library page `raw`, retrying
 /// passing failures as the web route does. Never fails: a failure is a
 /// capture too.

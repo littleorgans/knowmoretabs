@@ -97,13 +97,14 @@ impl Status {
     }
 }
 
-/// The route that made an attempt: the generic web route, or the X post
-/// API.
+/// The route that made an attempt: the generic web route, the X post API,
+/// or the GitHub API through `gh`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
     Web,
     X,
+    Github,
     #[serde(other)]
     Other,
 }

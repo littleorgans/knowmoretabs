@@ -1,64 +1,37 @@
-//! `knowmoretabs content`: which library pages to capture, capturing them,
-//! and the report.
+//! `knowmoretabs content`: capturing the planned pages, and the report.
 //!
 //! slice: content
-//! why: Content capture sends the URLs you visited to their own sites, so it
-//!      plans from the same `targets` rules as `enrich` before any request,
-//!      says in full with `--dry-run` what it would send, and records pages
-//!      that are not documents once, with the reason. Pages the shared
-//!      rules keep home (forgotten, private, token, search and non web URLs)
-//!      are counted and stay out of the store. A page known by several
-//!      addresses that differ only after `#` is fetched once and recorded
-//!      under each. A page is routed by its address: an X post goes to the
-//!      X post API, once per post and paced on the API's host, and every
-//!      other document to its own site. Hosts run in parallel while each
-//!      sees one request a second, and every result is written as it
-//!      arrives, so an interrupted run keeps what it captured.
+//! why: Content capture sends the URLs you visited to their own sites, so
+//!      it captures exactly what `content_plan` settled before any request,
+//!      and `--dry-run` stops there. Hosts run in parallel while each sees
+//!      one request a second, and a host whose route allows more (`gh`,
+//!      four at a time) is spread over that many lanes. Every result is
+//!      written as it arrives, so an interrupted run keeps what it captured,
+//!      and the report says how each page ended, how long fetches took, and
+//!      when GitHub pages were read from the web because `gh` could not.
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use url::Url;
-
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::content_fetch::{self, Capture};
-use crate::content_route::Route;
+use crate::content_plan::{self, Work};
 use crate::content_store::{self, Line, Status, Store};
 use crate::error::Error;
 use crate::fetch::Fetcher;
-use crate::guard;
+use crate::github_api::Readiness;
 use crate::library::{self, State};
-use crate::model::Snapshot;
 use crate::out;
-use crate::targets::{self, Item, Options, Plan, Skip, Why};
+use crate::targets::{self, Options, Plan};
+use crate::tools::System;
 use crate::triage::plural;
 
 /// A progress line every this many fetches, on stderr.
 const PROGRESS_EVERY: usize = 25;
-
-/// What the run will do beyond the shared plan.
-#[derive(Debug, Default)]
-struct Work {
-    /// One fetch per page, its fragment variants recorded with it.
-    fetches: Vec<Fetch>,
-    /// Pages recorded without a request: login screens, and pages that are
-    /// not documents.
-    unsent: Vec<Line>,
-}
-
-#[derive(Debug)]
-struct Fetch {
-    /// The first library URL of the group; the fetcher drops its fragment.
-    url: String,
-    host: String,
-    route: Route,
-    /// Every library URL the fetch stands for, with its attempt number.
-    pages: Vec<(String, u32)>,
-}
 
 /// What a run did.
 #[derive(Debug, Default)]
@@ -99,144 +72,30 @@ pub fn command(
     if let Some(note) = known.unreadable_note(&content_store::log_path(root)) {
         log.warn(&note);
     }
-    let snapshots = only(&loaded.snapshots, urls)?;
-    let (plan, work) = plan(&snapshots, &state, &known, options);
+    let snapshots = content_plan::only(&loaded.snapshots, urls)?;
+    // A dry run sends nothing, so it does not let `gh` ask GitHub whether
+    // it is signed in.
+    let github = || {
+        if options.dry_run {
+            Readiness::assumed(&System)
+        } else {
+            Readiness::check(&System)
+        }
+    };
+    let (plan, work) = content_plan::plan(&snapshots, &state, &known, options, github);
     if options.dry_run {
         targets::report_dry_run(&plan, options, json, log);
         return Ok(());
     }
     let started = Instant::now();
+    let notes = work.notes();
     let tally = if work.fetches.is_empty() && work.unsent.is_empty() {
         Tally::default()
     } else {
         run(root, work, &state, log)?
     };
-    report(&plan, &tally, started.elapsed(), root, json, log);
+    report(&plan, &tally, &notes, started.elapsed(), root, json, log);
     Ok(())
-}
-
-/// The snapshots narrowed to `urls`, each of which must be a library page;
-/// all of them when `urls` is empty.
-fn only<'a>(
-    snapshots: &'a [Snapshot],
-    urls: &[String],
-) -> Result<std::borrow::Cow<'a, [Snapshot]>, Error> {
-    if urls.is_empty() {
-        return Ok(std::borrow::Cow::Borrowed(snapshots));
-    }
-    let library = library::known_urls(snapshots);
-    let unknown: Vec<String> = urls
-        .iter()
-        .filter(|url| !library.contains(url.as_str()))
-        .cloned()
-        .collect();
-    if !unknown.is_empty() {
-        return Err(Error::NotInLibrary(unknown));
-    }
-    let wanted: HashSet<&str> = urls.iter().map(String::as_str).collect();
-    Ok(std::borrow::Cow::Owned(
-        snapshots
-            .iter()
-            .map(|snapshot| {
-                let mut snapshot = snapshot.clone();
-                snapshot
-                    .tabs
-                    .retain(|tab| wanted.contains(tab.url.as_str()));
-                snapshot
-            })
-            .collect(),
-    ))
-}
-
-/// The shared plan, with `content`'s own rules on top: pages that are not
-/// documents stay home, as does every variant of a forgotten page,
-/// `--limit` counts what is left, fragment variants share a fetch, and pages
-/// that are not documents are recorded once. Pages the shared rules keep
-/// home are counted, never recorded, as with `enrich`.
-fn plan(
-    snapshots: &[Snapshot],
-    state: &State,
-    known: &content_store::Log,
-    options: Options,
-) -> (Plan, Work) {
-    let mut plan = targets::plan(
-        snapshots,
-        state,
-        |url| content_store::recorded(known, url),
-        Options {
-            limit: None,
-            ..options
-        },
-    );
-    let forgotten_urls: HashSet<Url> = state
-        .forgotten
-        .iter()
-        .filter_map(|raw| guard::page_url(raw))
-        .collect();
-    let (candidates, forgotten_pages): (Vec<Item>, Vec<Item>) = std::mem::take(&mut plan.todo)
-        .into_iter()
-        .partition(|item| {
-            !guard::page_url(&item.url).is_some_and(|url| forgotten_urls.contains(&url))
-        });
-    plan.not_fetched.extend(
-        forgotten_pages
-            .into_iter()
-            .map(|item| (item.url, Skip::Forgotten)),
-    );
-    let mut documents = Vec::new();
-    let mut not_documents = Vec::new();
-    for mut item in candidates {
-        match Url::parse(&item.url).map_or(Some(Route::Web), |url| Route::of(&url)) {
-            Some(route) => {
-                if let Some(host) = route.host() {
-                    host.clone_into(&mut item.host);
-                }
-                documents.push((item, route));
-            }
-            None => not_documents.push(item),
-        }
-    }
-    let (todo, mut routes): (Vec<Item>, Vec<Route>) = documents.into_iter().unzip();
-    plan.todo = todo;
-    let mut unsent: Vec<Line> = not_documents
-        .iter()
-        .map(|item| Line::new(&item.url, Status::Skipped).with_reason(Skip::NotADocument.label()))
-        .collect();
-    plan.not_fetched.extend(
-        not_documents
-            .into_iter()
-            .map(|item| (item.url, Skip::NotADocument)),
-    );
-    if let Some(limit) = options.limit {
-        plan.more = plan.todo.len().saturating_sub(limit);
-        plan.todo.truncate(limit);
-        routes.truncate(limit);
-    }
-    let attempt = |url: &str| content_fetch::next_attempt(known.pages.get(url));
-    let mut fetches: Vec<Fetch> = Vec::new();
-    let mut by_page: HashMap<String, usize> = HashMap::new();
-    for (item, route) in plan.todo.iter().zip(routes) {
-        if item.why == Why::Login {
-            let line =
-                Line::new(&item.url, Status::BehindLogin).with_reason("login page, not fetched");
-            unsent.push(content_fetch::settle(line, attempt(&item.url)));
-            continue;
-        }
-        let page = route.key(&item.url);
-        let pair = (item.url.clone(), attempt(&item.url));
-        if let Some(&i) = by_page.get(&page) {
-            fetches[i].pages.push(pair);
-        } else {
-            by_page.insert(page, fetches.len());
-            fetches.push(Fetch {
-                url: item.url.clone(),
-                host: item.host.clone(),
-                route,
-                pages: vec![pair],
-            });
-        }
-    }
-    (plan, Work { fetches, unsent })
 }
 
 /// Records the pages that need no request, then fetches the rest, each
@@ -268,13 +127,14 @@ fn run(root: &Path, work: Work, state: &State, log: Log) -> Result<Tally, Error>
         record(line, None)?;
     }
     let fetcher = Fetcher::new(&state.forgotten);
+    let gh = work.github.as_ref().and_then(Readiness::gh);
     targets::by_host(
         work.fetches
             .iter()
             .map(|fetch| (fetch.host.as_str(), fetch)),
         |fetch| {
             let started = Instant::now();
-            let Capture { line, page } = fetch.route.capture(&fetcher, &fetch.url);
+            let Capture { line, page } = fetch.route.capture(&fetcher, gh, &fetch.url);
             {
                 let mut tally = tally.lock().unwrap_or_else(PoisonError::into_inner);
                 tally.fetches += 1;
@@ -307,7 +167,15 @@ fn spread(durations: &[Duration]) -> Option<(Duration, Duration)> {
     Some((*sorted.get(sorted.len() / 2)?, *sorted.last()?))
 }
 
-fn report(plan: &Plan, tally: &Tally, took: Duration, root: &Path, json: bool, log: Log) {
+fn report(
+    plan: &Plan,
+    tally: &Tally,
+    notes: &[String],
+    took: Duration,
+    root: &Path,
+    json: bool,
+    log: Log,
+) {
     let recorded: usize = tally.statuses.values().sum();
     let spread = spread(&tally.durations);
     if json {
@@ -325,6 +193,7 @@ fn report(plan: &Plan, tally: &Tally, took: Duration, root: &Path, json: bool, l
             "deferred": 0,
             "not_fetched": targets::counts_json(plan)["not_fetched"],
             "more": plan.more,
+            "notes": notes,
             "seconds": seconds(took),
             "fetch_seconds": spread.map(|(median, longest)| serde_json::json!({
                 "median": seconds(median), "longest": seconds(longest),
@@ -375,6 +244,9 @@ fn report(plan: &Plan, tally: &Tally, took: Duration, root: &Path, json: bool, l
             content_store::log_path(root).display()
         );
     }
+    for note in notes {
+        let _ = writeln!(text, "{note}");
+    }
     let _ = writeln!(text, "{}", targets::not_fetched_line(plan));
     if plan.more > 0 {
         let _ = writeln!(text, "{} left for another run", plural(plan.more, "page"));
@@ -385,179 +257,9 @@ fn report(plan: &Plan, tally: &Tally, took: Duration, root: &Path, json: bool, l
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::xpost;
-
-    fn snapshot(urls: &[&str]) -> Snapshot {
-        let tabs: Vec<serde_json::Value> = urls
-            .iter()
-            .enumerate()
-            .map(|(i, url)| {
-                serde_json::json!({"tab_id": i, "window": 1, "position": i, "url": url,
-                    "title": "", "pinned": false, "active": false, "group": null,
-                    "last_active": null, "window_id": 1})
-            })
-            .collect();
-        serde_json::from_value(serde_json::json!({
-            "schema_version": 1, "id": "2026-10-07-090000Z", "captured_at": "2026-10-07T09:00:00Z",
-            "source": {"browser": null, "profile": null, "profile_display": null, "path": "/x",
-                "file": "session.snss", "sha256": "", "bytes": 0, "saved_at": null,
-                "session_started_at": null},
-            "stats": {"file_version": 3, "command_table": "session", "commands": 0,
-                "commands_by_id": {}, "unknown_commands": 0, "unknown_command_ids": [],
-                "malformed_commands": 0, "truncated_bytes": 0, "marker_count": 1, "marker_ok": true,
-                "windows": 0, "tabs": 0, "groups": 0, "dropped_tabs": 0,
-                "dropped_tab_reasons": {"no_navigations": 0, "window_missing": 0, "window_closed": 0},
-                "navigation_fallbacks": 0, "groups_without_metadata": 0},
-            "windows": [], "groups": [], "tabs": tabs,
-        }))
-        .unwrap()
-    }
-
-    fn state(forgotten: &[&str]) -> State {
-        serde_json::from_value(serde_json::json!({"schema_version": 1, "forgotten": forgotten}))
-            .unwrap()
-    }
-
-    fn log(lines: &[(&str, Status, u32)]) -> content_store::Log {
-        let mut log = content_store::Log::default();
-        for (url, status, attempt) in lines {
-            let mut line = Line::new(url, *status);
-            line.attempt = *attempt;
-            log.pages.insert((*url).to_owned(), line);
-        }
-        log
-    }
-
-    fn unsent(work: &Work) -> Vec<(&str, Status, &str)> {
-        work.unsent
-            .iter()
-            .map(|line| {
-                (
-                    line.url.as_str(),
-                    line.status,
-                    line.reason.as_deref().unwrap_or(""),
-                )
-            })
-            .collect()
-    }
-
-    #[test]
-    fn fragment_variants_share_one_fetch_and_are_recorded_each() {
-        let snapshots = [snapshot(&[
-            "https://a.test/p#one",
-            "https://b.test/",
-            "https://a.test/p",
-            "https://a.test/p#two",
-        ])];
-        let known = log(&[("https://a.test/p#two", Status::Error, 1)]);
-        let (plan, work) = plan(&snapshots, &state(&[]), &known, Options::default());
-        assert_eq!(plan.todo.len(), 4);
-        let fetches: Vec<(&str, Vec<(&str, u32)>)> = work
-            .fetches
-            .iter()
-            .map(|f| {
-                (
-                    f.url.as_str(),
-                    f.pages.iter().map(|(u, n)| (u.as_str(), *n)).collect(),
-                )
-            })
-            .collect();
-        assert_eq!(
-            fetches,
-            [
-                (
-                    "https://a.test/p#one",
-                    vec![
-                        ("https://a.test/p#one", 1),
-                        ("https://a.test/p", 1),
-                        ("https://a.test/p#two", 2)
-                    ]
-                ),
-                ("https://b.test/", vec![("https://b.test/", 1)]),
-            ]
-        );
-        assert_eq!(unsent(&work), []);
-    }
-
-    #[test]
-    fn one_post_is_fetched_once_from_the_api_host() {
-        let snapshots = [snapshot(&[
-            "https://x.com/someone/status/42",
-            "https://twitter.com/someone/status/42#top",
-            "https://x.com/other/status/43",
-            "https://a.test/",
-        ])];
-        let (plan, work) = plan(&snapshots, &state(&[]), &log(&[]), Options::default());
-        let hosts: Vec<&str> = plan.todo.iter().map(|i| i.host.as_str()).collect();
-        assert_eq!(
-            hosts,
-            [xpost::API_HOST, xpost::API_HOST, xpost::API_HOST, "a.test"]
-        );
-        assert_eq!(plan.sites(), 2);
-        let fetches: Vec<(&str, &Route, usize)> = work
-            .fetches
-            .iter()
-            .map(|f| (f.host.as_str(), &f.route, f.pages.len()))
-            .collect();
-        assert_eq!(
-            fetches,
-            [
-                (xpost::API_HOST, &Route::XPost("42".to_owned()), 2),
-                (xpost::API_HOST, &Route::XPost("43".to_owned()), 1),
-                ("a.test", &Route::Web, 1),
-            ]
-        );
-    }
-
-    #[test]
-    fn non_document_skips_are_recorded_once_and_private_urls_never() {
-        let snapshots = [snapshot(&[
-            "https://www.google.com/search?q=tide",
-            "https://a.test/reset?token=abc123",
-            "http://192.168.1.1/admin",
-            "https://forgotten.test/",
-            "https://x.com/someone",
-            "https://www.youtube.com/@someone",
-            "https://a.test/login",
-            "https://already.test/search?q=x",
-            "https://x.com/someone/status/123",
-        ])];
-        let known = log(&[("https://already.test/search?q=x", Status::Skipped, 1)]);
-        let (plan, work) = plan(
-            &snapshots,
-            &state(&["https://forgotten.test/"]),
-            &known,
-            Options::default(),
-        );
-        let mut lines = unsent(&work);
-        lines.sort_unstable();
-        assert_eq!(
-            lines,
-            [
-                (
-                    "https://a.test/login",
-                    Status::BehindLogin,
-                    "login page, not fetched"
-                ),
-                (
-                    "https://www.youtube.com/@someone",
-                    Status::Skipped,
-                    "not a document"
-                ),
-                ("https://x.com/someone", Status::Skipped, "not a document"),
-            ]
-        );
-        let fetched: Vec<&str> = work.fetches.iter().map(|f| f.url.as_str()).collect();
-        assert_eq!(fetched, ["https://x.com/someone/status/123"]);
-        let counts = plan.skip_counts();
-        assert_eq!(counts[&Skip::Forgotten], 1);
-        assert_eq!(counts[&Skip::NotADocument], 2);
-        assert_eq!(
-            counts[&Skip::SearchResults],
-            2,
-            "recorded or not, it is counted"
-        );
-    }
+    use crate::content_plan::plan;
+    use crate::content_plan::tests::{log, no_gh, snapshot, state};
+    use crate::targets::Skip;
 
     #[test]
     fn shared_skips_never_write_urls_to_the_content_store() {
@@ -570,7 +272,7 @@ mod tests {
             "data:text/plain,hello",
         ])];
         let state = state(&["https://forgotten.test/"]);
-        let (plan, work) = plan(&snapshots, &state, &log(&[]), Options::default());
+        let (plan, work) = plan(&snapshots, &state, &log(&[]), Options::default(), no_gh);
         assert_eq!(plan.not_fetched.len(), 6);
         assert_eq!(plan.skip_counts()[&Skip::NotWeb], 2);
         assert!(work.fetches.is_empty());
@@ -586,78 +288,6 @@ mod tests {
                 .count(),
             0
         );
-    }
-
-    #[test]
-    fn forgotten_fragment_variants_are_excluded_before_fetching() {
-        let snapshots = [snapshot(&[
-            "https://forgotten.test/page",
-            "https://forgotten.test/page#other",
-        ])];
-        let (plan, work) = plan(
-            &snapshots,
-            &state(&["https://forgotten.test/page#hidden"]),
-            &log(&[]),
-            Options::default(),
-        );
-        assert!(work.fetches.is_empty());
-        assert_eq!(work.unsent, []);
-        assert_eq!(plan.skip_counts()[&Skip::Forgotten], 2);
-    }
-
-    #[test]
-    fn errors_are_retried_finals_wait_for_refetch_and_the_limit_counts_documents() {
-        let snapshots = [snapshot(&[
-            "https://x.com/someone",
-            "https://a.test/1",
-            "https://a.test/2",
-            "https://a.test/3",
-            "https://a.test/4",
-        ])];
-        let known = log(&[
-            ("https://a.test/1", Status::Error, 2),
-            ("https://a.test/2", Status::Ok, 1),
-            ("https://a.test/3", Status::Unavailable, 3),
-        ]);
-        let limited = Options {
-            limit: Some(1),
-            ..Options::default()
-        };
-        let (plan, work) = plan(&snapshots, &state(&[]), &known, limited);
-        let todo: Vec<(&str, Why)> = plan
-            .todo
-            .iter()
-            .map(|i| (i.url.as_str(), i.why.clone()))
-            .collect();
-        assert_eq!(todo, [("https://a.test/1", Why::Retry)]);
-        assert_eq!((plan.more, plan.already_fetched), (1, 2));
-        assert_eq!(work.fetches[0].pages, [("https://a.test/1".to_owned(), 3)]);
-
-        let refetch = Options {
-            refetch: true,
-            ..Options::default()
-        };
-        let (plan, work) = super::plan(&snapshots, &state(&[]), &known, refetch);
-        let whys: Vec<Why> = plan.todo.iter().map(|i| i.why.clone()).collect();
-        assert_eq!(whys, [Why::Retry, Why::Refetch, Why::Refetch, Why::New]);
-        let attempts: Vec<u32> = work.fetches.iter().map(|f| f.pages[0].1).collect();
-        assert_eq!(attempts, [3, 1, 1, 1]);
-    }
-
-    #[test]
-    fn urls_narrow_the_library_and_must_belong_to_it() {
-        let snapshots = [snapshot(&["https://a.test/", "https://b.test/"])];
-        let narrowed = only(&snapshots, &["https://b.test/".to_owned()]).unwrap();
-        let urls: Vec<&str> = narrowed[0].tabs.iter().map(|t| t.url.as_str()).collect();
-        assert_eq!(urls, ["https://b.test/"]);
-        assert_eq!(only(&snapshots, &[]).unwrap().len(), 1);
-        let Err(Error::NotInLibrary(unknown)) = only(
-            &snapshots,
-            &["https://c.test/".to_owned(), "https://a.test/".to_owned()],
-        ) else {
-            panic!("an unknown URL is refused");
-        };
-        assert_eq!(unknown, ["https://c.test/"]);
     }
 
     #[test]

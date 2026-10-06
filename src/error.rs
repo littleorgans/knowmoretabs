@@ -1,6 +1,6 @@
 //! Typed errors for the whole binary and their one-line rendering.
 //!
-//! slice: capture, library, triage, browsers, platforms, tags, history
+//! slice: capture, library, triage, browsers, platforms, tags, history, content
 //! why: A failed `save` has to tell the user what to do next in one line,
 //!      keep the categories apart so tests and scripts can tell "no Chrome
 //!      here" from "archive unwritable", and never show a backtrace. Each
@@ -95,6 +95,8 @@ pub enum Error {
     LibraryState { path: PathBuf, reason: String },
     #[error("not in your library: {}; nothing changed", .0.join(", "))]
     NotInLibrary(Vec<String>),
+    #[error("content capture is not ready: the generic web tier is unavailable")]
+    NotReady,
     #[error("cannot use {name:?} as a tag: {reason}; nothing changed")]
     TagName { name: String, reason: &'static str },
     #[error("no such tag: {}; nothing changed", .0.join(", "))]
@@ -150,6 +152,7 @@ impl Error {
             Self::Json { .. } => "json",
             Self::LibraryState { .. } => "library_state",
             Self::NotInLibrary(_) => "not_in_library",
+            Self::NotReady => "not_ready",
             Self::TagName { .. } => "tag_name",
             Self::UnknownTag(_) => "unknown_tag",
             Self::TagDefinition { .. } => "tag_definition",

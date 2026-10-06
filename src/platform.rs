@@ -232,7 +232,7 @@ pub struct Roots {
     /// prefixing it.
     chrome_user_data: Option<PathBuf>,
     /// Windows: `%LOCALAPPDATA%`, else `FOLDERID_LocalAppData`.
-    local_app_data: PathBuf,
+    pub local_app_data: PathBuf,
 }
 
 impl Roots {
