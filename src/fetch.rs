@@ -75,6 +75,39 @@ pub enum Refusal {
     Failed(String),
 }
 
+impl Refusal {
+    /// What a log line says about it, the same for every command.
+    pub fn reason(&self) -> String {
+        match self {
+            Self::InvalidUrl => "not a valid URL".to_owned(),
+            Self::NotWeb => "redirected away from the web".to_owned(),
+            Self::PrivateNetwork { redirected: false } => "private network".to_owned(),
+            Self::PrivateNetwork { redirected: true } => {
+                "redirected to a private network".to_owned()
+            }
+            Self::PrivateAddress => "private network address".to_owned(),
+            Self::Forgotten => "forgotten page, not fetched".to_owned(),
+            Self::TokenOrSearch => "token or search URL, not fetched".to_owned(),
+            Self::Login(_) => "redirected to a login page".to_owned(),
+            Self::InvalidRedirect { status } => format!("HTTP {status} to an invalid URL"),
+            Self::TooManyRedirects => "too many redirects".to_owned(),
+            Self::Failed(reason) => reason.clone(),
+        }
+    }
+
+    /// A rule kept the request home, as opposed to a request that failed.
+    pub fn is_rule(&self) -> bool {
+        matches!(
+            self,
+            Self::NotWeb
+                | Self::PrivateNetwork { .. }
+                | Self::PrivateAddress
+                | Self::Forgotten
+                | Self::TokenOrSearch
+        )
+    }
+}
+
 /// The final response, its body not yet read. The request's deadline
 /// still covers reading it.
 pub struct Response {

@@ -110,20 +110,7 @@ fn main() -> ExitCode {
             };
             tags::tags_command(&root, &edit, *all, cli.json, log)
         }
-        Some(Command::Enrich {
-            dry_run,
-            limit,
-            refetch,
-        }) => enrich::command(
-            &root,
-            targets::Options {
-                dry_run: *dry_run,
-                limit: *limit,
-                refetch: *refetch,
-            },
-            cli.json,
-            log,
-        ),
+        Some(Command::Enrich(fetch)) => enrich::command(&root, (*fetch).into(), cli.json, log),
         Some(Command::History { refresh: true }) => {
             library_history::refresh_command(&capture_options(&cli, root), cli.json, log)
         }

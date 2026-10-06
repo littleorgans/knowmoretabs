@@ -21,6 +21,7 @@ use serde::de::DeserializeOwned;
 
 use crate::archive::{self, Archive};
 use crate::error::Error;
+use crate::triage::plural;
 
 /// A record that belongs to one URL; the latest line for a URL wins.
 pub trait Keyed {
@@ -124,6 +125,21 @@ impl<R> Default for Latest<R> {
             pages: HashMap::new(),
             unreadable: 0,
         }
+    }
+}
+
+impl<R> Latest<R> {
+    /// The warning a command gives when lines of the log at `path` could
+    /// not be read; `None` when every line could.
+    pub fn unreadable_note(&self, path: &Path) -> Option<String> {
+        (self.unreadable > 0).then(|| {
+            format!(
+                "{} of {} could not be read and {} ignored",
+                plural(self.unreadable, "line"),
+                path.display(),
+                if self.unreadable == 1 { "was" } else { "were" }
+            )
+        })
     }
 }
 

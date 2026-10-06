@@ -8,10 +8,9 @@
 //!      second, and every result is appended as it arrives so an interrupted
 //!      run keeps what it already fetched.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::Instant;
 
@@ -27,11 +26,9 @@ use crate::metadata;
 use crate::metadata_fetch;
 use crate::metadata_writer::{Line, Outcome};
 use crate::out;
-use crate::targets::{self, Item, Options, Plan, Why};
+use crate::targets::{self, Options, Plan, Why};
 use crate::triage::plural;
 
-/// Hosts fetched at once. Each host still gets one request a second.
-const WORKERS: usize = 8;
 /// A progress line every this many pages, on stderr.
 const PROGRESS_EVERY: usize = 25;
 
@@ -63,13 +60,8 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
     let loaded = library::load(&archive)?;
     let state = State::read(root)?;
     let known = metadata::read(root)?;
-    if known.unreadable > 0 {
-        log.warn(&format!(
-            "{} of {} could not be read and {} ignored",
-            plural(known.unreadable, "line"),
-            metadata::path(root).display(),
-            if known.unreadable == 1 { "was" } else { "were" }
-        ));
+    if let Some(note) = known.unreadable_note(&metadata::path(root)) {
+        log.warn(&note);
     }
     let plan = targets::plan(
         &loaded.snapshots,
@@ -78,7 +70,7 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
         options,
     );
     if options.dry_run {
-        report_dry_run(&plan, options, json, log);
+        targets::report_dry_run(&plan, options, json, log);
         return Ok(());
     }
     let started = Instant::now();
@@ -119,61 +111,26 @@ fn run(root: &Path, plan: &Plan, state: &State, log: Log) -> Result<Tally, Error
         ));
         Ok(())
     };
-    let mut hosts: Vec<(&str, Vec<&Item>)> = Vec::new();
-    let mut index: HashMap<&str, usize> = HashMap::new();
+    let mut pages = Vec::new();
     for item in &plan.todo {
         if item.why == Why::Login {
             record(
                 &Line::new(&item.url, Outcome::BehindLogin).with_reason("login page, not fetched"),
             )?;
-            continue;
+        } else {
+            pages.push((item.host.as_str(), item));
         }
-        let i = *index.entry(&item.host).or_insert_with(|| {
-            hosts.push((&item.host, Vec::new()));
-            hosts.len() - 1
-        });
-        hosts[i].1.push(item);
     }
-    hosts.sort_by_key(|(_, items)| std::cmp::Reverse(items.len()));
-    let total: usize = hosts.iter().map(|(_, items)| items.len()).sum();
-    let queue = Mutex::new(hosts.into_iter().collect::<VecDeque<_>>());
     let fetcher = Fetcher::new(&state.forgotten);
-    let done = AtomicUsize::new(0);
-    let stop = AtomicBool::new(false);
-    let failed: Mutex<Option<Error>> = Mutex::new(None);
-    std::thread::scope(|scope| {
-        for _ in 0..WORKERS {
-            scope.spawn(|| {
-                while !stop.load(Ordering::Relaxed) {
-                    let next = queue
-                        .lock()
-                        .unwrap_or_else(PoisonError::into_inner)
-                        .pop_front();
-                    let Some((_, items)) = next else { break };
-                    for item in items {
-                        if stop.load(Ordering::Relaxed) {
-                            return;
-                        }
-                        if let Err(err) = record(&metadata_fetch::fetch(&fetcher, &item.url)) {
-                            stop.store(true, Ordering::Relaxed);
-                            failed
-                                .lock()
-                                .unwrap_or_else(PoisonError::into_inner)
-                                .get_or_insert(err);
-                            return;
-                        }
-                        let n = done.fetch_add(1, Ordering::Relaxed) + 1;
-                        if n.is_multiple_of(PROGRESS_EVERY) && n < total {
-                            log.progress(&format!("fetched {n} of {total}"));
-                        }
-                    }
-                }
-            });
-        }
-    });
-    if let Some(err) = failed.into_inner().unwrap_or_else(PoisonError::into_inner) {
-        return Err(err);
-    }
+    targets::by_host(
+        pages,
+        |item| record(&metadata_fetch::fetch(&fetcher, &item.url)),
+        |n, total| {
+            if n.is_multiple_of(PROGRESS_EVERY) && n < total {
+                log.progress(&format!("fetched {n} of {total}"));
+            }
+        },
+    )?;
     Ok(tally.into_inner().unwrap_or_else(PoisonError::into_inner))
 }
 
@@ -186,91 +143,6 @@ fn status_word(status: Outcome) -> &'static str {
     }
 }
 
-fn report_dry_run(plan: &Plan, options: Options, json: bool, log: Log) {
-    if json {
-        out::json(&serde_json::json!({
-            "dry_run": true,
-            "fetch": plan.todo.iter().map(|item| serde_json::json!({
-                "url": item.url, "why": item.why.label(),
-            })).collect::<Vec<_>>(),
-            "not_fetched": plan.not_fetched.iter().map(|(url, skip)| serde_json::json!({
-                "url": url, "reason": skip.label(),
-            })).collect::<Vec<_>>(),
-            "counts": counts_json(plan),
-            "more": plan.more,
-            "sites": plan.sites(),
-            "seconds_at_least": plan.seconds_at_least(),
-        }));
-        return;
-    }
-    if log.quiet {
-        return;
-    }
-    let mut text = String::new();
-    if plan.todo.is_empty() {
-        let _ = writeln!(text, "would fetch nothing");
-    } else {
-        let _ = writeln!(
-            text,
-            "would fetch {}{} from {}{}:",
-            plural(plan.todo.len(), "page"),
-            match options.limit {
-                Some(limit) if plan.more > 0 =>
-                    format!(" of {} (--limit {limit})", plan.todo.len() + plan.more),
-                _ => String::new(),
-            },
-            plural(plan.sites(), "site"),
-            match plan.seconds_at_least() {
-                0 => String::new(),
-                n => format!(", at least {n} s at one request a second per site"),
-            }
-        );
-        for item in &plan.todo {
-            let _ = writeln!(text, "  {}  ({})", item.url, item.why.label());
-        }
-    }
-    if !plan.not_fetched.is_empty() {
-        let _ = writeln!(
-            text,
-            "would not fetch {}:",
-            plural(plan.not_fetched.len(), "page")
-        );
-        for (url, skip) in &plan.not_fetched {
-            let _ = writeln!(text, "  {url}  ({})", skip.label());
-        }
-    }
-    let _ = writeln!(text, "{}", not_fetched_line(plan));
-    out::block(&text);
-}
-
-fn counts_json(plan: &Plan) -> serde_json::Value {
-    let mut not_fetched: BTreeMap<&str, usize> = plan
-        .skip_counts()
-        .into_iter()
-        .map(|(skip, n)| (skip.label(), n))
-        .collect();
-    not_fetched.insert("already fetched", plan.already_fetched);
-    serde_json::json!({
-        "fetch": plan.todo.len(),
-        "not_fetched": not_fetched,
-    })
-}
-
-/// `not fetched: 412 already fetched, 40 forgotten, ...`
-fn not_fetched_line(plan: &Plan) -> String {
-    let mut parts = vec![format!("{} already fetched", plan.already_fetched)];
-    parts.extend(
-        plan.skip_counts()
-            .into_iter()
-            .map(|(skip, n)| format!("{n} {}", skip.label())),
-    );
-    let mut line = format!("not fetched: {}", parts.join(", "));
-    if plan.already_fetched > 0 {
-        line.push_str("; --refetch fetches pages again");
-    }
-    line
-}
-
 fn report_run(plan: &Plan, tally: &Tally, seconds: f64, path: &Path, json: bool, log: Log) {
     if json {
         out::json(&serde_json::json!({
@@ -279,7 +151,7 @@ fn report_run(plan: &Plan, tally: &Tally, seconds: f64, path: &Path, json: bool,
             "behind_login": tally.behind_login,
             "skipped": tally.skipped,
             "errors": tally.errors,
-            "not_fetched": counts_json(plan)["not_fetched"],
+            "not_fetched": targets::counts_json(plan)["not_fetched"],
             "more": plan.more,
             "seconds": (seconds * 10.0).round() / 10.0,
             "path": path,
@@ -308,36 +180,13 @@ fn report_run(plan: &Plan, tally: &Tally, seconds: f64, path: &Path, json: bool,
         );
         for (label, counts) in [("skipped", &tally.skipped), ("errors", &tally.errors)] {
             if !counts.is_empty() {
-                let _ = writeln!(text, "  {label}: {}", breakdown(counts));
+                let _ = writeln!(text, "  {label}: {}", targets::breakdown(counts));
             }
         }
     }
-    let _ = writeln!(text, "{}", not_fetched_line(plan));
+    let _ = writeln!(text, "{}", targets::not_fetched_line(plan));
     if plan.more > 0 {
         let _ = writeln!(text, "{} left for another run", plural(plan.more, "page"));
     }
     out::block(&text);
-}
-
-/// `3 timeout, 1 HTTP 404`, most common first.
-fn breakdown(counts: &BTreeMap<String, usize>) -> String {
-    let mut sorted: Vec<_> = counts.iter().collect();
-    sorted.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
-    sorted
-        .iter()
-        .map(|(reason, n)| format!("{n} {reason}"))
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn breakdowns_put_the_common_reason_first() {
-        let counts: BTreeMap<String, usize> =
-            [("HTTP 404".into(), 1), ("timeout".into(), 3)].into();
-        assert_eq!(breakdown(&counts), "3 timeout, 1 HTTP 404");
-    }
 }

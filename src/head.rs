@@ -36,6 +36,27 @@ impl Head {
             .find(|(k, _)| k == key)
             .map(|(_, v)| v.as_str())
     }
+
+    /// A page that is only a sign-in form: a title that says so and nothing
+    /// that describes the page itself.
+    pub fn is_sign_in_page(&self) -> bool {
+        let Some(title) = &self.title else {
+            return false;
+        };
+        let title = title.to_lowercase();
+        let says_sign_in = ["sign in", "signin", "sign-in", "log in", "login", "log-in"]
+            .iter()
+            .any(|phrase| has_word(&title, phrase));
+        says_sign_in && self.meta("description").is_none() && self.meta("og:description").is_none()
+    }
+}
+
+fn has_word(text: &str, phrase: &str) -> bool {
+    text.match_indices(phrase).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + phrase.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
 }
 
 /// Incremental boundary detection keeps comments, attributes and raw text
@@ -682,6 +703,20 @@ pub fn text_of(html: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_sign_in_title_without_a_description_is_a_sign_in_page() {
+        let page = |html: &str| scan(html).is_sign_in_page();
+        assert!(page("<title>Sign in - Example</title>"));
+        assert!(page("<title>Login | App</title>"));
+        assert!(!page(
+            "<title>Sign in</title><meta name=description content=\"A real page\">"
+        ));
+        assert!(!page(
+            "<title>Why login forms fail</title><meta property=og:description content=x>"
+        ));
+        assert!(!page("<title>Blogin' about loginess</title>"));
+    }
 
     #[test]
     fn boundaries_survive_every_byte_split() {

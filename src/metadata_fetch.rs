@@ -32,35 +32,16 @@ pub fn fetch(fetcher: &Fetcher, raw: &str) -> Line {
 }
 
 fn refused(raw: &str, refusal: Refusal) -> Line {
-    let (status, reason) = match refusal {
-        Refusal::InvalidUrl => (Outcome::Error, "not a valid URL".to_owned()),
-        Refusal::NotWeb => (Outcome::Skipped, "redirected away from the web".to_owned()),
-        Refusal::PrivateNetwork { redirected: false } => {
-            (Outcome::Skipped, "private network".to_owned())
-        }
-        Refusal::PrivateNetwork { redirected: true } => (
-            Outcome::Skipped,
-            "redirected to a private network".to_owned(),
-        ),
-        Refusal::PrivateAddress => (Outcome::Skipped, "private network address".to_owned()),
-        Refusal::Forgotten => (Outcome::Skipped, "forgotten page, not fetched".to_owned()),
-        Refusal::TokenOrSearch => (
-            Outcome::Skipped,
-            "token or search URL, not fetched".to_owned(),
-        ),
+    let reason = refusal.reason();
+    match refusal {
         Refusal::Login(url) => {
-            let mut record =
-                Line::new(raw, Outcome::BehindLogin).with_reason("redirected to a login page");
+            let mut record = Line::new(raw, Outcome::BehindLogin).with_reason(reason);
             record.final_url = Some(url.to_string());
-            return record;
+            record
         }
-        Refusal::InvalidRedirect { status } => {
-            (Outcome::Error, format!("HTTP {status} to an invalid URL"))
-        }
-        Refusal::TooManyRedirects => (Outcome::Error, "too many redirects".to_owned()),
-        Refusal::Failed(reason) => (Outcome::Error, reason),
-    };
-    Line::new(raw, status).with_reason(reason)
+        refusal if refusal.is_rule() => Line::new(raw, Outcome::Skipped).with_reason(reason),
+        _ => Line::new(raw, Outcome::Error).with_reason(reason),
+    }
 }
 
 fn read_page(raw: &str, mut response: Response) -> Line {
@@ -111,7 +92,7 @@ fn read_page(raw: &str, mut response: Response) -> Line {
         );
     }
     let found = head::scan(&text);
-    if is_sign_in_page(&found) {
+    if found.is_sign_in_page() {
         let mut record =
             with_response(Line::new(raw, Outcome::BehindLogin).with_reason("sign-in page"));
         record.title.clone_from(&found.title);
@@ -202,44 +183,9 @@ fn jsonld_types(blocks: &[String]) -> Vec<String> {
     found
 }
 
-/// A page that is only a sign-in form: a title that says so and nothing
-/// that describes the page itself.
-fn is_sign_in_page(found: &Head) -> bool {
-    let Some(title) = &found.title else {
-        return false;
-    };
-    let title = title.to_lowercase();
-    let says_sign_in = ["sign in", "signin", "sign-in", "log in", "login", "log-in"]
-        .iter()
-        .any(|phrase| has_word(&title, phrase));
-    says_sign_in && found.meta("description").is_none() && found.meta("og:description").is_none()
-}
-
-fn has_word(text: &str, phrase: &str) -> bool {
-    text.match_indices(phrase).any(|(at, _)| {
-        let before = text[..at].chars().next_back();
-        let after = text[at + phrase.len()..].chars().next();
-        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_sign_in_title_without_a_description_is_a_sign_in_page() {
-        let page = |html: &str| is_sign_in_page(&head::scan(html));
-        assert!(page("<title>Sign in - Example</title>"));
-        assert!(page("<title>Login | App</title>"));
-        assert!(!page(
-            "<title>Sign in</title><meta name=description content=\"A real page\">"
-        ));
-        assert!(!page(
-            "<title>Why login forms fail</title><meta property=og:description content=x>"
-        ));
-        assert!(!page("<title>Blogin' about loginess</title>"));
-    }
 
     #[test]
     fn json_ld_types_are_collected_through_graphs_and_arrays() {
