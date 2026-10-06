@@ -157,6 +157,12 @@ as what you can do that you could not before.
   three. A page known by addresses that differ only after `#` is fetched
   once. `--dry-run`, `--limit N`, `--refetch` and `--url URL`; never part of
   `save`.
+- **X posts as text.** `content` reads an X post (`x.com` or `twitter.com`,
+  `/<user>/status/<id>`) from the public X post API at `api.fxtwitter.com`,
+  sending only the post's number, and keeps its text, the post it quotes, an
+  article's body, the author, the date and the descriptions of its images.
+  One post, not its thread. A missing, deleted or suspended post is
+  `not_found` and a private post or protected account `behind_login`.
 
 ### Changed
 

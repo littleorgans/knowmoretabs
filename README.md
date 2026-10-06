@@ -258,14 +258,17 @@ it, never as part of `save`. It sends the addresses of pages you visited to
 their own sites, to read each page's main text, and stores that text as
 markdown, private to you: one file per page under `pages/content/`, named by
 the SHA-256 of the page's address, with one line per attempt in
-`pages/content.jsonl`. Today it reads every page over plain HTTP, the same
-way `enrich` does: without cookies, one request a second per site, a few
-sites at once, and no more than 10 MB of a page. Planned routes will also
-send the addresses of X posts to the public X post API, and use optional
-local tools when they are installed: yt-dlp for video captions, gh for
-GitHub, and Chrome for pages that need a browser to show their text. Without
-them it does what it can over plain HTTP. robots.txt is not consulted, as
-with `enrich`: every address is one you opened yourself.
+`pages/content.jsonl`. It reads most pages over plain HTTP, the same way
+`enrich` does: without cookies, one request a second per site, a few sites
+at once, and no more than 10 MB of a page. An X post (`x.com` or
+`twitter.com`, `/<user>/status/<id>`) is read from the public X post API at
+`api.fxtwitter.com` instead, the one third party service it uses: it sends
+the post's number, not the page's address, without cookies, one request a
+second. Planned routes will use optional local tools when they are
+installed: yt-dlp for video captions, gh for GitHub, and Chrome for pages
+that need a browser to show their text. Without them it does what it can
+over plain HTTP. robots.txt is not consulted, as with `enrich`: every
+address is one you opened yourself.
 
 When article extraction misses a page's text, the fallback tries the whole
 body, removing menus, banners, footers and sidebars outside `<main>`. It
@@ -289,6 +292,14 @@ request interval doubled, up to eight seconds, for the rest of the run. A page
 still failing is `error` and is tried again on the next run; after three runs
 it is `unavailable`. Every other outcome stands until you pass `--refetch`,
 and a refetch that finds the same text leaves the file as it was.
+
+From an X post it keeps the post's text, the post it quotes, an article's
+body, who wrote it and when, and the descriptions of its images and videos;
+one post, not the thread around it. A post the API does not find, or one
+deleted or suspended, is `not_found`; a private post or a protected account
+is `behind_login`; a post with no text at all is `thin`. The API's 429 and
+5xx answers are retried as a site's are. Two addresses of the same post are
+fetched once.
 
 ## Where the data lives
 

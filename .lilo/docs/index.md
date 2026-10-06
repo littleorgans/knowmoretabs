@@ -23,7 +23,7 @@ Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (`c
 - Tags and suggestions: `code:src/tags.rs`, `code:src/prompt.rs`, `code:src/suggestions.rs`.
 - Enrich, the opt-in head fetch: `code:src/enrich.rs`, `code:src/metadata_fetch.rs`, `code:src/head.rs`, `code:src/github.rs`, `code:src/metadata.rs`, `code:src/metadata_writer.rs`.
 - Shared by the network commands: the URL refusal rules `code:src/guard.rs`, the guarded GET and pacer `code:src/fetch.rs`, the planner and per-host workers `code:src/targets.rs`, the append-only logs `code:src/jsonl.rs`.
-- Content, the opt-in page text capture: `code:src/content.rs`, `code:src/content_fetch.rs`, `code:src/content_store.rs`, `code:src/extract.rs`; classifier parity tool `code:examples/content_parity.rs`.
+- Content, the opt-in page text capture: `code:src/content.rs`, `code:src/content_fetch.rs`, `code:src/content_store.rs`, `code:src/extract.rs`; the router `code:src/content_route.rs` and the X post route `code:src/xpost.rs`; classifier parity tool `code:examples/content_parity.rs`.
 - Slice lint and matrix generator: `code:xtask/src/main.rs`.
 
 ## Reading path
