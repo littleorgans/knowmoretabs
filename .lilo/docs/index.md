@@ -1,17 +1,17 @@
 # knowmoretabs system map
 <!-- lilo-page kind=index schema=1 -->
 <!-- lilo-covers Cargo.toml Cargo.lock .cargo/config.toml xtask/Cargo.toml xtask/src/main.rs slices.toml src/*.rs web/index.html web/app.css web/app.js -->
-<!-- lilo-verified digest=b5b0fc3c632dd5b4 commit=59265b590b58 date=2026-10-06 -->
+<!-- lilo-verified digest=15c21cf74a6ec1a0 commit=959c169c6354 date=2026-10-06 -->
 
 > One Rust binary that snapshots the open tabs of Chromium browsers from their on-disk session files and serves the snapshots as a local, searchable library.
 
 ## Purpose and scope
 
-knowmoretabs saves a dated, immutable snapshot of every open window and tab by reading the browser's own session file, so nothing is installed in the browser. The snapshots become a library of every page ever open: search, history per page, forget and restore, tags. `save` and `serve` carry almost all the value; when a decision is close, keep those two excellent (claimed by S3, unverified).
+knowmoretabs saves a dated, immutable snapshot of every open window and tab by reading the browser's own session file, so nothing is installed in the browser. The snapshots become a library of every page ever open: search, history per page, forget and restore, tags. `save` and `serve` carry almost all the value; when a decision is close, keep those two excellent (claimed by S1, unverified).
 
 Browsers: Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and Vivaldi on macOS, Linux and Windows (`code:src/platform.rs`). Arc is refused (`code:src/error.rs#ArcUnsupported`).
 
-Non-goals: sync, accounts, cloud, telemetry, full-text indexing, tag hierarchy, touching or closing live tabs, modifying browser files (claimed by S3, unverified).
+Non-goals: sync, accounts, cloud, telemetry, full-text indexing, tag hierarchy, touching or closing live tabs, modifying browser files (claimed by S1, unverified).
 
 ## Responsibilities
 
@@ -58,6 +58,7 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 - Imported suggestions never change the owner's tags; tag names match without regard to case (`code:src/suggestions.rs`, `code:src/library.rs#fold`).
 - The frontend is hand-written HTML, CSS and JS with no build step, embedded with `include_str!` (`code:src/assets.rs`); committed files are LF, and Windows CI fails on a checkout that rewrites them (`code:.github/workflows/ci.yml`).
 - Unsafe code is forbidden; clippy `all` and `pedantic` deny; `print_stdout` and `print_stderr` are denied, so user output goes through `code:src/out.rs` (`code:Cargo.toml`).
+- Committed fixtures are synthetic or redacted, never a real URL or title from a browser; `reference/` is vendored prior art and read-only (claimed by S1, unverified).
 - Every `.rs` file under `src/` and `xtask/src/` carries a `slice:` naming a slice in `slices.toml` and a `why:`; the slice matrix doc is generated from `slices.toml` and never hand-edited (`code:xtask/src/main.rs#lint`).
 
 ## Components
@@ -80,14 +81,12 @@ none yet
 
 - Quick look map: no component, interaction or decision pages yet.
 - Unmapped: SNSS command tables and pruning, the `serve` JSON API, the frontend state model, `enrich` fetch safety (private address refusal), the release pipeline in `.github/workflows/release.yml`.
-- Unresolved: the slice matrix still lists `notes-tags` as deliberately not built, while tags ship in `code:src/tags.rs`.
 
 ## Sources
 
 | id | path | fingerprint | consulted | disposition | claims | watched |
 | --- | --- | --- | --- | --- | --- | --- |
-| S1 | README.md | c60f6f5d6511 | 2026-10-06 | used | index.md#purpose-and-scope, index.md#rules | |
-| S2 | docs/SLICES.md | 48465e3671c2 | 2026-10-06 | used | index.md#vocabulary | |
-| S3 | docs/BRIEF.md | a2a1f83526e8 | 2026-10-06 | used | index.md#purpose-and-scope, index.md#rules | |
-| S4 | docs/design-decision.md | 11da190f2400 | 2026-10-06 | read, nothing kept | | |
-| S5 | docs/briefs/slice-07b-history.md | 7de35080900b | 2026-10-06 | used | index.md#vocabulary, index.md#rules | |
+| S1 | README.md | d9ee3bd0f30e | 2026-10-06 | used | index.md#purpose-and-scope, index.md#rules | |
+| S2 | docs/SLICES.md | c4e1c70a9f8d | 2026-10-06 | used | index.md#vocabulary | |
+| S4 | docs/design-decision.md | c6ac2c2e09bb | 2026-10-06 | read, nothing kept | | |
+| S5 | docs/briefs/slice-07b-history.md | 74bb36f60d57 | 2026-10-06 | used | index.md#vocabulary, index.md#rules | |
