@@ -426,7 +426,8 @@ emits today.
         "foreground_seconds": 1834,            // optional
         "search": { "term": "eza ls", "hops": 1 },                            // optional; serve, or export --with-history
         "referrer": { "url": "https://…", "title": "…" }                      // optional, as search; title only when the URL is a page here
-      }
+      },
+      "image": "3f2a…"                         // optional, serve only: 64 lowercase hex, the name of its kept preview
     }
   ]
 }
@@ -463,6 +464,9 @@ Rules the backend must keep:
   `referrer` unless `export --with-history` is given. A referrer is never a
   page on this machine, and an export never names a forgotten page as one.
   `referrer.title` is the library's own title for that URL, when it is a page.
+- A page's `image` is present only in serve, only when its latest line in
+  `pages/images.jsonl` is `ok` and the file is on disk. It names the image
+  for `GET api/image/<image>`; the row shows it as a decorative thumbnail.
 - Unknown fields anywhere are ignored by the client. Add, never rename.
   Rows the client cannot read are dropped and counted, not fatal (§4).
 - The export host writes the JSON into
@@ -471,11 +475,12 @@ Rules the backend must keep:
   valid JSON). The serve host serves the same `index.html` with that element
   empty.
 
-Serve API, all same-origin, all JSON:
+Serve API, all same-origin, all JSON but the image:
 
 | method | path | body | response |
 |---|---|---|---|
 | GET | `api/library` | | the document above |
+| GET | `api/image/<64 lowercase hex>` | | the kept JPEG, `image/jpeg`; any other name is a 404 |
 | POST | `api/forget` | `{ "urls": ["…"] }` | `{ "urls": ["…"], "counts": {…}, "forgotten": ["…"] }` |
 | POST | `api/restore` | `{ "urls": ["…"] }` | `{ "urls": ["…"], "counts": {…}, "restored": ["…"] }` |
 | POST | `api/tags` | `{ "urls": ["…"], "add": ["…"], "remove": ["…"] }` | `{ "urls": ["…"], "tags": { "<url>": ["…"] }, "vocabulary": […], "counts": {…}, "undo": {…} }` |
@@ -597,7 +602,7 @@ padding. Everything is unminified.
   wraps.
 - `prefers-reduced-motion` disables the only transition.
 - CSP: `default-src 'none'; script-src 'self'; style-src 'self';
-  connect-src 'self'; base-uri 'none'; form-action 'none'`. No
+  connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'`. No
   `'unsafe-inline'` anywhere. `<meta name="referrer" content="no-referrer">`.
   Every external link is `target="_blank" rel="noopener noreferrer"`. Under
   `file://` the page makes zero requests; under serve it makes exactly the
