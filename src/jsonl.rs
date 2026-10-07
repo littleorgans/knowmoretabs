@@ -69,6 +69,7 @@ impl<T: Serialize> Appender<T> {
     pub fn open_locked(root: &Path, path: PathBuf, _held: &Lock) -> Result<Self, Error> {
         if let Some(dir) = path.parent() {
             archive::create_private_dir(dir).map_err(Error::io("create", dir))?;
+            archive::make_private(dir).map_err(Error::io("make private", dir))?;
         }
         let mut options = File::options();
         options.read(true).append(true).create(true);
@@ -78,19 +79,7 @@ impl<T: Serialize> Appender<T> {
             options.mode(0o600);
         }
         let file = options.open(&path).map_err(Error::io("open", &path))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = file
-                .metadata()
-                .map_err(Error::io("read", &path))?
-                .permissions()
-                .mode();
-            if mode & 0o777 != 0o600 {
-                file.set_permissions(fs::Permissions::from_mode(0o600))
-                    .map_err(Error::io("make private", &path))?;
-            }
-        }
+        archive::make_private(&path).map_err(Error::io("make private", &path))?;
         Ok(Self {
             archive: Archive::at(root),
             path,
@@ -160,7 +149,19 @@ impl<T: Serialize> Store<T> {
         let lock = archive.lock(|| {})?;
         let log = Appender::open_locked(root, log, &lock)?;
         archive::create_private_dir(&dir).map_err(Error::io("create", &dir))?;
+        archive::make_private(&dir).map_err(Error::io("make private", &dir))?;
         archive::clean_stale_staging(&dir)?;
+        for entry in fs::read_dir(&dir).map_err(Error::io("list", &dir))? {
+            let entry = entry.map_err(Error::io("list", &dir))?;
+            let path = entry.path();
+            if entry
+                .file_type()
+                .map_err(Error::io("read", &path))?
+                .is_file()
+            {
+                archive::make_private(&path).map_err(Error::io("make private", &path))?;
+            }
+        }
         drop(lock);
         Ok(Self { archive, dir, log })
     }

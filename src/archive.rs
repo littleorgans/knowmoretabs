@@ -373,6 +373,26 @@ pub fn create_private_dir(path: &Path) -> std::io::Result<()> {
     builder.create(path)
 }
 
+/// Repairs an existing store entry's Unix permissions without replacing
+/// it: directories are `0700`, files `0600`. Caller holds the archive lock.
+/// Windows entries retain the ACL inherited from their parent.
+// Windows has no Unix permissions to repair; callers share one fallible API.
+#[allow(clippy::unnecessary_wraps)]
+pub fn make_private(path: &Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = fs::metadata(path)?;
+        let mode = if metadata.is_dir() { 0o700 } else { 0o600 };
+        if metadata.permissions().mode() & 0o7777 != mode {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode))?;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
+}
+
 /// Directory fsync is what makes a rename survive a crash on Unix. Windows
 /// has no directory-flush operation exposed by the standard library, so this
 /// is the strongest portable sequence available there: each staged file is

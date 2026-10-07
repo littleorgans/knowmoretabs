@@ -408,6 +408,61 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    fn reopening_a_store_repairs_existing_modes_without_rewriting_images() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let image = super::dir(root).join(file_name("https://a.test/"));
+        Store::open(root)
+            .unwrap()
+            .record(ok_line("https://a.test/"), Some(b"jpeg"))
+            .unwrap();
+        let before = fs::metadata(&image).unwrap();
+        for (path, mode) in [
+            (root.join(metadata::DIR), 0o755),
+            (super::dir(root), 0o755),
+            (image.clone(), 0o644),
+            (log_path(root), 0o644),
+        ] {
+            fs::set_permissions(path, fs::Permissions::from_mode(mode)).unwrap();
+        }
+        let held = archive::Archive::at(root).lock(|| {}).unwrap();
+        let (ready, started) = std::sync::mpsc::channel();
+        let opening = std::thread::spawn({
+            let root = root.to_path_buf();
+            move || {
+                ready.send(()).unwrap();
+                Store::open(&root)
+            }
+        });
+        started.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(
+            fs::metadata(&image).unwrap().permissions().mode() & 0o777,
+            0o644
+        );
+        drop(held);
+        opening.join().unwrap().unwrap();
+        for path in [root.join(metadata::DIR), super::dir(root)] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o700
+            );
+        }
+        for path in [&image, &log_path(root)] {
+            assert_eq!(
+                fs::metadata(path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+        let after = fs::metadata(&image).unwrap();
+        assert_eq!(after.ino(), before.ino());
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+        assert_eq!(fs::read(image).unwrap(), b"jpeg");
+    }
+
+    #[cfg(unix)]
+    #[test]
     fn images_and_their_directory_are_private() {
         use std::os::unix::fs::PermissionsExt;
         let dir = tempfile::tempdir().unwrap();
