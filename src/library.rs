@@ -338,6 +338,10 @@ struct Page {
     /// snapshot that recorded signals for it; absent when neither does.
     #[serde(skip_serializing_if = "Option::is_none")]
     history: Option<PageHistory>,
+    /// The hex name `serve` answers the page's kept image by; only `serve`
+    /// sets it, so an export never carries images.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
 }
 
 /// A tab's `model::TabHistory`, with the referrer named as the library
@@ -426,6 +430,15 @@ pub struct Listed<'a> {
 }
 
 impl Library {
+    /// Names each page's kept image, from `image_store::kept`.
+    #[must_use]
+    pub fn with_images(mut self, mut kept: HashMap<String, String>) -> Self {
+        for page in &mut self.pages {
+            page.image = kept.remove(&page.url);
+        }
+        self
+    }
+
     /// Every page, in library order: what a prompt lists.
     pub fn listed(&self) -> impl Iterator<Item = Listed<'_>> {
         self.pages.iter().map(|page| {
@@ -506,6 +519,7 @@ pub fn build(
                     tags: state.page_tags(&tab.url, &spellings),
                     suggested: suggested.get(&tab.url).cloned().unwrap_or_default(),
                     history: None,
+                    image: None,
                 });
                 index
             });

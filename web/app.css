@@ -212,6 +212,12 @@ main { flex: 1; }
 .body .u { grid-column: 1; }
 .body .tags { grid-column: 1 / -1; grid-row: 3; }
 .body .grp { grid-column: 2; grid-row: 2; }
+/* a kept preview (serve only) beside the title and address, in a box no
+   taller than those two lines, so a row with one is as tall as a row
+   without and the chips keep the full width */
+.body.pic { grid-template-columns: minmax(0, 1fr) auto auto; }
+.body.pic .t { grid-column: 1 / 3; }
+.thumb { grid-column: 3; grid-row: 1 / 3; align-self: start; display: block; width: 4.5rem; height: 2.5rem; object-fit: cover; background: var(--bg-2); border: 1px solid var(--line); }
 .t:hover { text-decoration: underline; text-underline-offset: 0.18em; }
 .t i { color: var(--ink-3); }
 .u { font-size: 0.75rem; color: var(--ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 4ch; }
@@ -451,6 +457,8 @@ dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--ink); vertical-al
   .cell, .hero, .head, .snap-head, .band h3, .win h3 { padding-inline: 1rem; }
   .hero::before { font-size: 1.5rem; letter-spacing: 0.8em; }
   .row { column-gap: 0.75rem; }
+  .body.pic { grid-template-columns: minmax(0, 1fr) auto; }   /* the title needs the width more */
+  .thumb { display: none; }
   /* the toolbar in three lines: help + search + clear, then the two filters, then the two pickers */
   .tools label.q { flex: 1 1 0; min-width: 0; border-right: 0; }
   #reset { order: 1; border-left: 1px solid var(--line); }   /* after the search, on its line, however late it shows */

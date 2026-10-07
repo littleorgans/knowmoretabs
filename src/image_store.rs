@@ -11,7 +11,11 @@
 //!      before its line, and only when its bytes changed, so a backup's
 //!      history stays flat. A line that failed keeps the candidates it
 //!      tried, so the next run retries them without fetching the page.
+//!      `serve` reads kept images here too, by the hex name alone, so no
+//!      other input ever reaches a path.
 
+use std::collections::{HashMap, HashSet};
+use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
@@ -19,7 +23,6 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::archive;
 use crate::content_fetch::Attempted;
 use crate::content_store::sha256_hex;
 use crate::error::Error;
@@ -27,6 +30,7 @@ use crate::image_pick::{Candidate, Source};
 use crate::jsonl::{self, Keyed};
 use crate::metadata;
 use crate::targets::{Outcome, Recorded};
+use crate::{archive, capture};
 
 pub const LOG_FILE: &str = "images.jsonl";
 pub const DIR: &str = "images";
@@ -44,8 +48,15 @@ pub fn dir(root: &Path) -> PathBuf {
 /// A page's image file: the lowercase hex SHA-256 of its exact URL, as
 /// its text file is named.
 pub fn file_name(url: &str) -> String {
-    format!("{}.jpg", sha256_hex(url.as_bytes()))
+    named(&sha256_hex(url.as_bytes()))
 }
+
+fn named(hex: &str) -> String {
+    format!("{hex}.jpg")
+}
+
+/// Where `serve` answers with a kept image, by its hex name.
+pub const ROUTE: &str = "/api/image/";
 
 /// What became of a page's image. Only `error` is tried again on a plain
 /// run.
@@ -199,6 +210,55 @@ pub fn recorded(log: &Log, url: &str) -> Recorded {
         None => Recorded::Nothing,
         Some(Status::Error) => Recorded::Failed,
         Some(_) => Recorded::Final,
+    }
+}
+
+/// The pages whose latest line is `ok` and whose image is on disk, each
+/// with the hex name `serve` answers it by: one read of the log and one of
+/// the directory, however large the library. A log or directory that
+/// cannot be read costs the images, not the library.
+pub fn kept(root: &Path, log: capture::Log) -> HashMap<String, String> {
+    read_kept(root).unwrap_or_else(|err| {
+        log.warn(&format!("{err}; the library shows no preview images"));
+        HashMap::new()
+    })
+}
+
+fn read_kept(root: &Path) -> Result<HashMap<String, String>, Error> {
+    let dir = dir(root);
+    let files = match fs::read_dir(&dir) {
+        Ok(entries) => entries
+            .map(|entry| entry.map(|entry| entry.file_name()))
+            .collect::<Result<HashSet<OsString>, _>>()
+            .map_err(Error::io("read", &dir))?,
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(HashMap::new()),
+        Err(err) => return Err(Error::io("read", &dir)(err)),
+    };
+    Ok(read(root)?
+        .pages
+        .into_iter()
+        .filter(|(_, line)| line.status == Status::Ok)
+        .filter_map(|(url, _)| {
+            let hex = sha256_hex(url.as_bytes());
+            files
+                .contains(OsStr::new(&named(&hex)))
+                .then_some((url, hex))
+        })
+        .collect())
+}
+
+/// A kept image's bytes by its name: exactly 64 lowercase hex characters,
+/// else `None`, as for a name with no file. No lock: an image is replaced
+/// by a rename, so a read sees the old file or the new one whole.
+pub fn served(root: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
+    if name.len() != 64 || !name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+        return Ok(None);
+    }
+    let path = dir(root).join(named(name));
+    match fs::read(&path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(Error::io("read", &path)(err)),
     }
 }
 

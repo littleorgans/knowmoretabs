@@ -7,8 +7,9 @@
 //!      library. Owning the HTTP layer keeps the three defences (loopback
 //!      bind, Host check, Origin check) and every input bound in one file a
 //!      reviewer can read top to bottom, with no dormant dependency between
-//!      them and the socket. Eight routes, one client, no keep-alive: each
-//!      connection carries one request and is closed.
+//!      them and the socket. Nine routes, one client, no keep-alive: each
+//!      connection carries one request and is closed. The image route's name
+//!      is checked where the images live (`image_store::served`).
 
 use std::fmt::Write as _;
 use std::io::{self, Read, Write};
@@ -25,7 +26,7 @@ use crate::capture::Log;
 use crate::error::Error;
 use crate::library::{self, Shape};
 use crate::triage::{self, Action};
-use crate::{assets, export, library_history, out, suggestions, tags};
+use crate::{assets, export, image_store, library_history, out, suggestions, tags};
 
 /// Request line plus headers, including the final CRLF CRLF. A browser's own
 /// headers fit in a few hundred bytes; the margin is for localhost cookies.
@@ -240,6 +241,13 @@ impl Server {
             ("POST", "/api/restore") => self.triage(head, body, Action::Restore),
             ("POST", "/api/tags") => self.tags(head, body),
             ("POST", "/api/vocabulary") => self.vocabulary(head, body),
+            ("GET", _) if path.starts_with(image_store::ROUTE) => {
+                match image_store::served(&self.root, &path[image_store::ROUTE.len()..]) {
+                    Ok(Some(jpeg)) => Response::ok("image/jpeg", jpeg),
+                    Ok(None) => Response::error(Status::NotFound, "no such image"),
+                    Err(err) => self.failure(&err),
+                }
+            }
             (_, "/" | "/index.html" | "/app.css" | "/app.js" | "/api/library") => {
                 Response::method_not_allowed("GET")
             }
@@ -299,7 +307,8 @@ impl Server {
             &state,
             &suggested,
             Shape::Serve,
-        );
+        )
+        .with_images(image_store::kept(&self.root, self.log));
         serde_json::to_vec(&library).map_err(|source| Error::Json {
             path: self.root.join(library::STATE_FILE),
             source,

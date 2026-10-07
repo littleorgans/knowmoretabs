@@ -94,14 +94,26 @@ impl Plan {
 
     /// What `--dry-run` says about images, when there is image work.
     pub fn note(&self) -> Option<String> {
-        (!self.is_empty()).then(|| {
-            format!(
-                "images: one for each of up to {} once its text is settled, and {} retried from an earlier run",
-                plural(self.after_text, "page"),
-                plural(self.retries.len(), "page")
-            )
-        })
+        note(self.after_text, self.retries.len())
     }
+}
+
+/// Names only the work there is: a run with only retries pending used to
+/// promise images "for each of up to 0 pages".
+fn note(after_text: usize, retries: usize) -> Option<String> {
+    let parts: Vec<String> = [
+        (after_text > 0).then(|| {
+            format!(
+                "one for each of up to {} once its text is settled",
+                plural(after_text, "page")
+            )
+        }),
+        (retries > 0).then(|| format!("{} retried from an earlier run", plural(retries, "page"))),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| format!("images: {}", parts.join(", and ")))
 }
 
 /// The library pages whose latest image line is `error`, by the shared
@@ -379,6 +391,26 @@ mod tests {
         }
         assert!(!wants_image(Text::Error));
         assert!(!wants_image(Text::Skipped));
+    }
+
+    #[test]
+    fn the_dry_run_note_names_only_the_work_there_is() {
+        assert_eq!(note(0, 0), None);
+        assert_eq!(
+            note(10, 0).as_deref(),
+            Some("images: one for each of up to 10 pages once its text is settled")
+        );
+        assert_eq!(
+            note(0, 3).as_deref(),
+            Some("images: 3 pages retried from an earlier run")
+        );
+        assert_eq!(
+            note(1, 1).as_deref(),
+            Some(
+                "images: one for each of up to 1 page once its text is settled, \
+                 and 1 page retried from an earlier run"
+            )
+        );
     }
 
     #[test]

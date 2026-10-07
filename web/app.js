@@ -118,7 +118,8 @@ function derive(lib) {
   const P = lib.pages || [];
   S.pages = P.map((p, i) => { p = typeof p?.url === 'string' ? p : { url: '' }; return { ...p, i, seen: [], title: p.title || '', domain: p.domain || '', forgotten: !!p.forgotten,
     hay: ((p.title || '') + ' ' + p.url).toLowerCase(), addr: p.url,
-    name: (p.title || p.url).replace(/^[^\p{L}\p{N}]+/u, ''), link: /^https?:\/\//i.test(p.url) }; });
+    name: (p.title || p.url).replace(/^[^\p{L}\p{N}]+/u, ''), link: /^https?:\/\//i.test(p.url),
+    image: host.mode === 'serve' && /^[0-9a-f]{64}$/.test(p.image) ? p.image : '' }; });   // a kept preview, by the name serve answers it under
   // Tags: a library from before 7a has neither key and reads as untagged. A
   // page tag the vocabulary does not list is still shown, and joins it.
   setVocab(Array.isArray(lib.vocabulary) ? lib.vocabulary : []);
@@ -270,12 +271,15 @@ function tagsHTML(p) {
   const add = host.tag ? `<button type="button" class="tag add" tabindex="-1" data-act="tag" aria-label="Add a tag" title="Add or remove tags (+)">${list.length ? '+' : '+ tag'}</button>` : '';
   return `<span class="tags">${chips}${more}${add}</span>`;
 }
+// Decorative: the title is the row's label, so the image is silent to a
+// screen reader and takes no focus.
+function thumbHTML(p) { return p.image ? `<img class="thumb" src="api/image/${p.image}" alt="" loading="lazy" decoding="async">` : ''; }
 function rowHTML(p) {
   const s = S.snaps[p.last];
   return `<li class="row${p.open ? ' open' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}${S.exp.has(p.i) ? ' exp' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
     `<span class="pick"><input type="checkbox" tabindex="-1" aria-label="Select"${S.sel.has(p.i) ? ' checked' : ''}></span>` +
     `<span class="strip" title="Seen in ${p.n} of ${S.snaps.length} snapshots"></span>` +
-    `<span class="body">${titleHTML(p)}<span class="u">${esc(p.addr)}</span>${tagsHTML(p)}${grpHTML(p.grp, true)}</span>` +
+    `<span class="body${p.image ? ' pic' : ''}">${titleHTML(p)}<span class="u">${esc(p.addr)}</span>${tagsHTML(p)}${grpHTML(p.grp, true)}${thumbHTML(p)}</span>` +
     `<time class="last" datetime="${s.captured_at}" title="Last seen ${F.full.format(s.date)} UTC">${ago(s.date)}</time>` +
     `<button class="more" type="button" tabindex="-1" aria-label="History" aria-expanded="${S.exp.has(p.i)}">›</button>` +
     (S.exp.has(p.i) ? histHTML(p) : '') + '</li>';
