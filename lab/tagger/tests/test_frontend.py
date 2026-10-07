@@ -7,7 +7,9 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize("case", ["search", "flips", "switchedSet", "acceptAfterFlip", "exportWait", "exportCommand"])
+@pytest.mark.parametrize(
+    "case", ["search", "flips", "switchedSet", "acceptAfterFlip", "confirmAllPending", "exportWait", "exportCommand"]
+)
 def test_frontend_round_trips(case):
     node = shutil.which("node")
     if node is None:

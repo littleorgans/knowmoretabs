@@ -63,7 +63,7 @@
   }
   async function confirmAll() {
     const todo = decidable().filter(open);
-    for (const p of todo) await put(p, { status: "decided" });
+    await Promise.all(todo.map((p) => put(p, { status: "decided" })));  // queued at once, so export waits for all
     K.toast(`Confirmed ${todo.length} page${todo.length === 1 ? "" : "s"}`);
     K.changed();
   }

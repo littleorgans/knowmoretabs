@@ -100,6 +100,24 @@ async function acceptAfterFlip() {
   assert.equal(K.set.pages[0].status, 'decided');
 }
 
+async function confirmAllPending() {
+  const { K, node } = setup('review.js');
+  K.set = { id: 1, pages: [0, 1].map((index) => ({ index, status: 'open', sugg: [{ tag: 'A', checked: true }] })) };
+  const requests = [];
+  K.api = (route, body) => new Promise((resolve) => requests.push(() => resolve({
+    index: Number(route.split('/').pop()), status: body.status, sugg: [{ tag: 'A', checked: true }],
+  })));
+  node('view-review').click({ target: { closest(selector) {
+    return selector === '[data-act]' ? { dataset: { act: 'confirm-all' }, disabled: false } : null;
+  } } });
+  let settled = false;
+  K.review.pending.then(() => { settled = true; }); // what an export pressed now waits for
+  await turn(); requests.shift()(); await turn(); await turn();
+  assert.equal(settled, false, 'export must wait for every page Confirm all is saving');
+  requests.shift()(); await turn(); await turn();
+  assert.deepEqual(K.set.pages.map((p) => p.status), ['decided', 'decided']);
+}
+
 async function exportWait() {
   const { K } = setup('app.js');
   await turn();
@@ -124,5 +142,5 @@ async function exportCommand() {
   assert.ok(html.includes("--import '/tmp/owner'\\''s data/answers.jsonl'"), 'answer path must be shell quoted');
 }
 
-const cases = { search, flips, switchedSet, acceptAfterFlip, exportWait, exportCommand };
+const cases = { search, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });
