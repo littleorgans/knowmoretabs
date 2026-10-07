@@ -365,7 +365,7 @@ pub fn run(
             images.map_or(Ok(()), |images| images.after(fetcher, &written, found))
         },
         |n, total| {
-            if n.is_multiple_of(PROGRESS_EVERY) && n < total {
+            if targets::progress_due(n, total, PROGRESS_EVERY) {
                 log.progress(&format!("rendered {n} of {total}"));
             }
         },

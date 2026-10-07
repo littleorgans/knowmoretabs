@@ -133,7 +133,7 @@ fn run(root: &Path, plan: &Plan, state: &State, log: Log) -> Result<Tally, Error
         pages,
         |item| record(&metadata_fetch::fetch(&fetcher, &item.url)),
         |n, total| {
-            if n.is_multiple_of(PROGRESS_EVERY) && n < total {
+            if targets::progress_due(n, total, PROGRESS_EVERY) {
                 log.progress(&format!("fetched {n} of {total}"));
             }
         },

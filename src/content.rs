@@ -276,7 +276,7 @@ fn run(
                 .map_or(Ok(()), |images| images.after(&fetcher, &lines, &found))
         },
         |n, total| {
-            if n.is_multiple_of(PROGRESS_EVERY) && n < total {
+            if targets::progress_due(n, total, PROGRESS_EVERY) {
                 log.progress(&format!("fetched {n} of {total}"));
             }
         },
