@@ -83,10 +83,11 @@ pub fn signals_covered() -> bool {
     static INSTALLED: OnceLock<bool> = OnceLock::new();
     *INSTALLED.get_or_init(|| {
         ctrlc::try_set_handler(|| {
-            // `stop` runs whole under the lock, and once it has, nothing
-            // more starts. It is the only lock taken here: never the
+            // The lock is held to the exit, so nothing starts or is ended
+            // meanwhile. It is the only lock taken here: never the
             // archive's, which the system releases at exit.
-            lock(&REGISTRY).stop();
+            let mut held = lock(&REGISTRY);
+            held.stop();
             std::process::exit(INTERRUPTED);
         })
         .is_ok()
