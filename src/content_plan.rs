@@ -24,7 +24,7 @@ use url::Url;
 
 use crate::browser;
 use crate::content_fetch;
-use crate::content_headless::{self, Render};
+use crate::content_headless::{Render, escalates};
 use crate::content_route::Route;
 use crate::content_store::{self, Line, Status};
 use crate::github_api::Readiness;
@@ -128,6 +128,7 @@ pub fn plan(
 ) -> (Plan, Work) {
     let rendering = OnceCell::new();
     let browser_waiting = Cell::new(0);
+    let forgotten = Forgotten::of(state);
     let mut plan = targets::plan(
         snapshots,
         state,
@@ -136,10 +137,8 @@ pub fn plan(
             // it still reads thin or empty.
             Recorded::Final
                 if !options.refetch
-                    && known
-                        .pages
-                        .get(url)
-                        .is_some_and(content_headless::escalates) =>
+                    && !forgotten.covers(url)
+                    && known.pages.get(url).is_some_and(escalates) =>
             {
                 if rendering.get_or_init(&browser).path().is_some() {
                     Recorded::Render
@@ -155,7 +154,6 @@ pub fn plan(
             ..options
         },
     );
-    let forgotten = Forgotten::of(state);
     let (candidates, forgotten_pages): (Vec<Item>, Vec<Item>) = std::mem::take(&mut plan.todo)
         .into_iter()
         .partition(|item| !forgotten.covers(&item.url));

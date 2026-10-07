@@ -606,6 +606,40 @@ fn pages_read_thin_before_are_rendered_once_per_document_without_an_http_read() 
 }
 
 #[test]
+fn forgotten_fragment_variants_never_wait_for_or_ask_about_a_browser() {
+    let url = "https://a.test/thin#part";
+    let snapshots = [snapshot(&[url])];
+    let mut known = content_store::Log::default();
+    known.pages.insert(
+        url.to_owned(),
+        content_fetch::public_line(url, Tier::Web, Status::Thin).with_reason("short text"),
+    );
+    let never = || -> browser::Readiness { panic!("a forgotten document needs no browser") };
+    let (_, work) = plan(
+        &snapshots,
+        &state(&["https://a.test/thin"]),
+        &known,
+        Options::default(),
+        no_gh,
+        no_ytdlp,
+        no_browser,
+    );
+    assert_eq!(work.browser_waiting, 0, "forgotten pages are ineligible");
+    assert!(work.renders.is_empty());
+    assert!(work.fetches.is_empty());
+    let (_, work) = plan(
+        &snapshots,
+        &state(&["https://a.test/thin"]),
+        &known,
+        Options::default(),
+        no_gh,
+        no_ytdlp,
+        never,
+    );
+    assert!(work.browser.is_none());
+}
+
+#[test]
 fn without_a_browser_they_wait_and_refetch_reads_them_over_http_again() {
     let (snapshots, known) = read_before();
     let ready = || browser::Readiness::Ready("/opt/Google Chrome".into());
