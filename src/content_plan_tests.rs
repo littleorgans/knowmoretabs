@@ -4,8 +4,28 @@
 //! why: Synthetic snapshots and attempt logs settle which pages are planned, routed and grouped without any request or tool run.
 
 use super::*;
-use crate::content_test::{log, no_gh, no_ytdlp, snapshot, state, unsent};
+use crate::browser;
+use crate::content_store::Tier;
+use crate::content_test::{log, no_browser, no_gh, no_ytdlp, snapshot, state, unsent};
 use crate::xpost;
+
+/// The plan for `snapshots` with nothing known or forgotten, no `gh` and
+/// no browser.
+fn fresh(
+    snapshots: &[Snapshot],
+    options: Options,
+    youtube: impl Fn() -> ytdlp::Readiness,
+) -> (Plan, Work) {
+    plan(
+        snapshots,
+        &state(&[]),
+        &log(&[]),
+        options,
+        no_gh,
+        youtube,
+        no_browser,
+    )
+}
 
 #[test]
 fn fragment_variants_share_one_fetch_and_are_recorded_each() {
@@ -23,6 +43,7 @@ fn fragment_variants_share_one_fetch_and_are_recorded_each() {
         Options::default(),
         no_gh,
         no_ytdlp,
+        no_browser,
     );
     assert_eq!(plan.todo.len(), 4);
     let fetches: Vec<(&str, Vec<(&str, u32)>)> = work
@@ -67,6 +88,7 @@ fn one_post_is_fetched_once_from_the_api_host() {
         Options::default(),
         no_gh,
         no_ytdlp,
+        no_browser,
     );
     let hosts: Vec<&str> = plan.todo.iter().map(|i| i.host.as_str()).collect();
     assert_eq!(
@@ -118,6 +140,7 @@ fn estimates_count_paced_fetches_and_exclude_gh() {
         Options::default(),
         ready,
         no_ytdlp,
+        no_browser,
     );
     assert_eq!(
         work.seconds_at_least(),
@@ -131,6 +154,7 @@ fn estimates_count_paced_fetches_and_exclude_gh() {
         Options::default(),
         no_gh,
         no_ytdlp,
+        no_browser,
     );
     assert_eq!(
         web.seconds_at_least(),
@@ -150,6 +174,7 @@ fn estimates_count_paced_fetches_and_exclude_gh() {
         Options::default(),
         ready,
         no_ytdlp,
+        no_browser,
     );
     assert_eq!(
         gh_only.seconds_at_least(),
@@ -186,6 +211,7 @@ fn github_documents_go_to_gh_in_lanes_or_to_the_web_with_a_note() {
         Options::default(),
         ready,
         no_ytdlp,
+        no_browser,
     );
     assert_eq!(asked.get(), 1, "readiness is asked once");
     let fetches: Vec<(&str, bool, usize)> = work
@@ -223,6 +249,7 @@ fn github_documents_go_to_gh_in_lanes_or_to_the_web_with_a_note() {
         Options::default(),
         no_gh,
         no_ytdlp,
+        no_browser,
     );
     assert!(work.fetches.iter().all(|f| f.route == Route::Web));
     assert_eq!(plan.sites(), 2);
@@ -234,7 +261,15 @@ fn github_documents_go_to_gh_in_lanes_or_to_the_web_with_a_note() {
         limit: Some(1),
         ..Options::default()
     };
-    let (_, work) = super::plan(&snapshots, &state(&[]), &log(&[]), limited, no_gh, no_ytdlp);
+    let (_, work) = super::plan(
+        &snapshots,
+        &state(&[]),
+        &log(&[]),
+        limited,
+        no_gh,
+        no_ytdlp,
+        no_browser,
+    );
     assert_eq!(
         work.notes(),
         ["GitHub API: gh not found, used the web page for 1 page"]
@@ -249,6 +284,7 @@ fn github_documents_go_to_gh_in_lanes_or_to_the_web_with_a_note() {
         Options::default(),
         never,
         no_ytdlp,
+        no_browser,
     );
     assert_eq!(work.github, None);
     assert_eq!(github_api::CONCURRENT, 4);
@@ -275,6 +311,7 @@ fn non_document_skips_are_recorded_once_and_private_urls_never() {
         Options::default(),
         no_gh,
         no_ytdlp,
+        no_browser,
     );
     let mut lines = unsent(&work);
     lines.sort_unstable();
@@ -319,6 +356,7 @@ fn forgotten_fragment_variants_are_excluded_before_fetching() {
         Options::default(),
         no_gh,
         no_ytdlp,
+        no_browser,
     );
     assert!(work.fetches.is_empty());
     assert_eq!(work.unsent, []);
@@ -343,7 +381,15 @@ fn errors_are_retried_finals_wait_for_refetch_and_the_limit_counts_documents() {
         limit: Some(1),
         ..Options::default()
     };
-    let (plan, work) = plan(&snapshots, &state(&[]), &known, limited, no_gh, no_ytdlp);
+    let (plan, work) = plan(
+        &snapshots,
+        &state(&[]),
+        &known,
+        limited,
+        no_gh,
+        no_ytdlp,
+        no_browser,
+    );
     let todo: Vec<(&str, Why)> = plan
         .todo
         .iter()
@@ -357,7 +403,15 @@ fn errors_are_retried_finals_wait_for_refetch_and_the_limit_counts_documents() {
         refetch: true,
         ..Options::default()
     };
-    let (plan, work) = super::plan(&snapshots, &state(&[]), &known, refetch, no_gh, no_ytdlp);
+    let (plan, work) = super::plan(
+        &snapshots,
+        &state(&[]),
+        &known,
+        refetch,
+        no_gh,
+        no_ytdlp,
+        no_browser,
+    );
     let whys: Vec<Why> = plan.todo.iter().map(|i| i.why.clone()).collect();
     assert_eq!(whys, [Why::Retry, Why::Refetch, Why::Refetch, Why::New]);
     let attempts: Vec<u32> = work.fetches.iter().map(|f| f.pages[0].1).collect();
@@ -381,14 +435,7 @@ fn videos_wait_for_yt_dlp_unrecorded_or_go_one_at_a_time_once_per_id() {
         asked.set(asked.get() + 1);
         ytdlp::Readiness::NoRuntime("/opt/bin/yt-dlp".into(), None)
     };
-    let (plan, work) = plan(
-        &snapshots,
-        &state(&[]),
-        &log(&[]),
-        Options::default(),
-        no_gh,
-        missing,
-    );
+    let (plan, work) = fresh(&snapshots, Options::default(), missing);
     assert_eq!(asked.get(), 1, "readiness is asked once");
     let todo: Vec<&str> = plan.todo.iter().map(|i| i.url.as_str()).collect();
     assert_eq!(
@@ -413,7 +460,7 @@ fn videos_wait_for_yt_dlp_unrecorded_or_go_one_at_a_time_once_per_id() {
         limit: Some(1),
         ..Options::default()
     };
-    let (plan, work) = super::plan(&snapshots, &state(&[]), &log(&[]), limited, no_gh, missing);
+    let (plan, work) = fresh(&snapshots, limited, missing);
     assert_eq!((plan.todo.len(), plan.more, work.waiting), (1, 1, 3));
 
     let ready = || {
@@ -426,14 +473,7 @@ fn videos_wait_for_yt_dlp_unrecorded_or_go_one_at_a_time_once_per_id() {
             },
         })
     };
-    let (_, work) = super::plan(
-        &snapshots,
-        &state(&[]),
-        &log(&[]),
-        Options::default(),
-        no_gh,
-        ready,
-    );
+    let (_, work) = fresh(&snapshots, Options::default(), ready);
     let fetches: Vec<(&str, &Route, usize)> = work
         .fetches
         .iter()
@@ -457,13 +497,156 @@ fn videos_wait_for_yt_dlp_unrecorded_or_go_one_at_a_time_once_per_id() {
 
     let never = || -> ytdlp::Readiness { panic!("no video, so yt-dlp is not asked") };
     let web_only = [snapshot(&["https://a.test/", "https://www.youtube.com/"])];
+    let (_, work) = fresh(&web_only, Options::default(), never);
+    assert_eq!(work.youtube, None);
+}
+
+/// Library pages an earlier run read as thin, as a script shell, as an
+/// app shell, and rendered, and one never read.
+fn read_before() -> ([Snapshot; 1], content_store::Log) {
+    let snapshots = [snapshot(&[
+        "https://a.test/thin",
+        "https://a.test/thin#part",
+        "https://a.test/shell",
+        "https://a.test/app",
+        "https://a.test/rendered",
+        "https://a.test/new",
+    ])];
+    let mut known = content_store::Log::default();
+    for (url, tier, status, reason) in [
+        ("https://a.test/thin", Tier::Web, Status::Thin, "short text"),
+        (
+            "https://a.test/thin#part",
+            Tier::Web,
+            Status::Thin,
+            "short text",
+        ),
+        (
+            "https://a.test/shell",
+            Tier::Web,
+            Status::EmptyShell,
+            "drawn by scripts",
+        ),
+        (
+            "https://a.test/app",
+            Tier::Web,
+            Status::EmptyShell,
+            "app shell",
+        ),
+        (
+            "https://a.test/rendered",
+            Tier::Headless,
+            Status::Thin,
+            "short text; rendering added no text",
+        ),
+    ] {
+        let line = content_fetch::public_line(url, tier, status).with_reason(reason);
+        known.pages.insert(url.to_owned(), line);
+    }
+    (snapshots, known)
+}
+
+#[test]
+fn pages_read_thin_before_are_rendered_once_per_document_without_an_http_read() {
+    let (snapshots, known) = read_before();
+    let asked = std::cell::Cell::new(0);
+    let ready = || {
+        asked.set(asked.get() + 1);
+        browser::Readiness::Ready("/opt/Google Chrome".into())
+    };
+    let (plan, work) = plan(
+        &snapshots,
+        &state(&[]),
+        &known,
+        Options::default(),
+        no_gh,
+        no_ytdlp,
+        ready,
+    );
+    assert_eq!(asked.get(), 1, "readiness is asked once");
+    let whys: Vec<(&str, Why)> = plan
+        .todo
+        .iter()
+        .map(|i| (i.url.as_str(), i.why.clone()))
+        .collect();
+    assert_eq!(
+        whys,
+        [
+            ("https://a.test/thin", Why::Render),
+            ("https://a.test/thin#part", Why::Render),
+            ("https://a.test/shell", Why::Render),
+            ("https://a.test/new", Why::New),
+        ]
+    );
+    assert_eq!(plan.already_fetched, 2, "an app shell and a render stand");
+    let renders: Vec<(&str, Vec<&str>)> = work
+        .renders
+        .iter()
+        .map(|r| {
+            (
+                r.url.as_str(),
+                r.pages.iter().map(|line| line.url.as_str()).collect(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        renders,
+        [
+            (
+                "https://a.test/thin",
+                vec!["https://a.test/thin", "https://a.test/thin#part"]
+            ),
+            ("https://a.test/shell", vec!["https://a.test/shell"]),
+        ],
+        "one render per document, with no new HTTP read"
+    );
+    let fetched: Vec<&str> = work.fetches.iter().map(|f| f.url.as_str()).collect();
+    assert_eq!(fetched, ["https://a.test/new"]);
+    assert_eq!(work.browser_waiting, 0);
+}
+
+#[test]
+fn without_a_browser_they_wait_and_refetch_reads_them_over_http_again() {
+    let (snapshots, known) = read_before();
+    let ready = || browser::Readiness::Ready("/opt/Google Chrome".into());
+    let (plan, work) = plan(
+        &snapshots,
+        &state(&[]),
+        &known,
+        Options::default(),
+        no_gh,
+        no_ytdlp,
+        no_browser,
+    );
+    assert_eq!(plan.todo.len(), 1);
+    assert_eq!(plan.already_fetched, 5);
+    assert_eq!((work.renders.len(), work.browser_waiting), (0, 3));
+
+    let refetch = Options {
+        refetch: true,
+        ..Options::default()
+    };
+    let (plan, work) = super::plan(
+        &snapshots,
+        &state(&[]),
+        &known,
+        refetch,
+        no_gh,
+        no_ytdlp,
+        ready,
+    );
+    assert!(plan.todo.iter().all(|i| i.why != Why::Render));
+    assert_eq!((work.renders.len(), work.fetches.len()), (0, 5));
+
+    let never = || -> browser::Readiness { panic!("no web page, so no browser is asked") };
     let (_, work) = super::plan(
-        &web_only,
+        &[snapshot(&["https://x.com/someone/status/42"])],
         &state(&[]),
         &log(&[]),
         Options::default(),
         no_gh,
+        no_ytdlp,
         never,
     );
-    assert_eq!(work.youtube, None);
+    assert_eq!(work.browser, None);
 }

@@ -482,10 +482,6 @@ fn all_public<'a>(addresses: impl IntoIterator<Item = &'a SocketAddr>) -> bool {
 /// checked address that answers before `deadline`. The checked address is
 /// the one connected to, so a name is never resolved twice. `test_address`
 /// stands in for every host, as it does for the fetcher.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "the relay is wired in with the headless tier")
-)]
 pub fn connect_public(
     host: &str,
     port: u16,
@@ -521,10 +517,6 @@ pub fn connect_public(
 }
 
 /// The addresses of `url`'s host, refused unless every one is public.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "the relay is wired in with the headless tier")
-)]
 fn resolve_public(url: &Url, port: u16) -> Result<Vec<SocketAddr>, Refusal> {
     let not_found = || Refusal::Failed("host not found".to_owned());
     let addresses: Vec<SocketAddr> = match url.host() {

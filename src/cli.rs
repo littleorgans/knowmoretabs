@@ -137,6 +137,9 @@ second per site. Never part of save."
         /// Capture text only: no preview images this run
         #[arg(long)]
         no_images: bool,
+        /// Render nothing in a browser this run: pages that need one wait
+        #[arg(long)]
+        no_browser: bool,
     },
     /// Say which ways of reading pages this machine can use, and what the archive holds of page text
     #[command(
@@ -582,11 +585,12 @@ mod tests {
             fetch,
             urls,
             no_images,
+            no_browser,
         }) = cli.command
         else {
             panic!("content parsed as {:?}", cli.command);
         };
-        assert!(fetch.dry_run && !fetch.refetch && !no_images);
+        assert!(fetch.dry_run && !fetch.refetch && !no_images && !no_browser);
         assert_eq!(fetch.limit, Some(5));
         assert_eq!(urls, ["https://a.test/", "https://b.test/"]);
         let cli = Cli::try_parse_from(["knowmoretabs", "content", "--no-images"]).unwrap();
@@ -598,6 +602,15 @@ mod tests {
             })
         ));
         assert!(Cli::try_parse_from(["knowmoretabs", "enrich", "--no-images"]).is_err());
+        let cli = Cli::try_parse_from(["knowmoretabs", "content", "--no-browser"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Content {
+                no_browser: true,
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["knowmoretabs", "enrich", "--no-browser"]).is_err());
     }
 
     #[test]

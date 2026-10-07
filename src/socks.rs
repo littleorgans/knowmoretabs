@@ -13,10 +13,6 @@
 //!      checking the address it connects to. Refusals are counted, so a run
 //!      can say what it kept home. Stopping it closes every tunnel still
 //!      open, so nothing outlives the browser it served.
-#![allow(
-    dead_code,
-    reason = "the browser starts the relay with the headless tier"
-)]
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};

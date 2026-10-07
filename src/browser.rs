@@ -17,7 +17,6 @@
 //!      for a run that has one. Closing is ordered and bounded: the browser
 //!      asked to close, its process group ended, the relay stopped, the
 //!      scratch profile removed.
-#![allow(dead_code, reason = "the headless tier drives the browser in step 6")]
 
 use std::ffi::OsString;
 use std::fs;
@@ -33,7 +32,7 @@ use url::Url;
 use crate::capture::Log;
 use crate::cdp::{self, Command, Socket};
 use crate::content_fetch::{self, BODY_CAP, Capture, Passing};
-use crate::content_store::Tier;
+use crate::content_store::{Line, Tier};
 use crate::fetch::{self, Fetcher, Refusal};
 use crate::guard;
 use crate::platform;
@@ -113,9 +112,10 @@ pub fn name(path: &Path) -> String {
 /// What rendering a page came to.
 #[derive(Debug, Clone)]
 pub enum Outcome {
-    /// Rendered and read: what its HTML says, or that it ended on a
-    /// sign-in screen.
+    /// Rendered and read: what its HTML says.
     Read(Box<Capture>),
+    /// It ended on a sign-in screen; the line says where.
+    SignIn(Box<Line>),
     /// Not rendered, and why: the page keeps what it had.
     NotRendered(String),
 }
@@ -507,7 +507,7 @@ fn after(
         Err(login @ Refusal::Login(_)) => {
             let reason = login.reason();
             return match content_fetch::refused(raw, Tier::Headless, login) {
-                Ok(capture) => Ok(Ok(Outcome::Read(Box::new(capture)))),
+                Ok(capture) => Ok(Ok(Outcome::SignIn(Box::new(capture.line)))),
                 Err(_) => not_rendered(reason),
             };
         }
@@ -691,6 +691,7 @@ mod tests {
         match after(&fetcher, "https://a.test/page", &navigated, read, false) {
             Ok(Ok(Outcome::NotRendered(why))) => why,
             Ok(Ok(Outcome::Read(capture))) => format!("read {:?}", capture.line.status),
+            Ok(Ok(Outcome::SignIn(line))) => format!("sign-in {:?}", line.status),
             Ok(Err(Broken(why))) => format!("broken {why}"),
             Err(_) => "passing".to_owned(),
         }
@@ -703,7 +704,7 @@ mod tests {
         assert_eq!(verdict(read(page, "text/html", 200, html())), "read Ok");
         assert_eq!(
             verdict(read("https://a.test/login", "text/html", 200, html())),
-            "read BehindLogin"
+            "sign-in BehindLogin"
         );
         assert_eq!(
             verdict(read(
@@ -751,15 +752,15 @@ mod tests {
         let fetcher = Fetcher::new(&BTreeSet::new());
         let navigated = Url::parse("https://a.test/page").unwrap();
         let landed = read("https://a.test/account?next=/page", "text/html", 200, None);
-        let Ok(Ok(Outcome::Read(capture))) =
+        let Ok(Ok(Outcome::SignIn(line))) =
             after(&fetcher, "https://a.test/page", &navigated, landed, false)
         else {
             panic!("a sign-in screen is read as one");
         };
-        assert_eq!(capture.line.status, Status::BehindLogin);
-        assert_eq!(capture.line.tier, Some(Tier::Headless));
+        assert_eq!(line.status, Status::BehindLogin);
+        assert_eq!(line.tier, Some(Tier::Headless));
         assert_eq!(
-            capture.line.final_url.as_deref(),
+            line.final_url.as_deref(),
             Some("https://a.test/account?next=/page")
         );
     }

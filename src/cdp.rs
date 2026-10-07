@@ -13,7 +13,6 @@
 //!      message is capped at what the largest page knowmoretabs keeps can
 //!      take on the wire, so a browser that hangs or floods cannot stall a
 //!      run or exhaust its memory.
-#![allow(dead_code, reason = "the headless tier drives the browser in step 6")]
 
 use std::collections::VecDeque;
 use std::io;
