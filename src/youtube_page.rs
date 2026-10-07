@@ -19,6 +19,7 @@ use serde::Deserialize;
 
 use crate::content_store::{Captions, Completeness, Page};
 use crate::extract;
+use crate::image_pick::{Candidate, Found, Source};
 
 /// What yt-dlp's info JSON says about a video; only what is kept or
 /// chosen from is read.
@@ -42,6 +43,49 @@ pub struct Info {
     /// Captions `YouTube` made, by language; the original speech's track is
     /// `<lang>-orig`, and translations carry `tlang` in their address.
     pub automatic_captions: BTreeMap<String, Vec<Track>>,
+    /// The thumbnail yt-dlp prefers, its size unstated.
+    pub thumbnail: Option<String>,
+    pub thumbnails: Vec<Thumbnail>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct Thumbnail {
+    pub url: String,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// The widest thumbnail a video's image is taken from.
+const THUMBNAIL_WIDTH: u32 = 1280;
+
+/// A video's images, best first: the thumbnail yt-dlp prefers, then the
+/// listed ones no wider than [`THUMBNAIL_WIDTH`], largest first, in case
+/// the preferred one does not exist.
+pub fn images(info: &Info) -> Found {
+    let mut sized: Vec<(u64, &str)> = info
+        .thumbnails
+        .iter()
+        .filter_map(|t| match (t.width, t.height) {
+            (Some(w), Some(h)) if w <= THUMBNAIL_WIDTH => {
+                Some((u64::from(w) * u64::from(h), t.url.as_str()))
+            }
+            _ => None,
+        })
+        .collect();
+    sized.sort_by_key(|(area, _)| std::cmp::Reverse(*area));
+    Found::Candidates(
+        info.thumbnail
+            .as_deref()
+            .into_iter()
+            .chain(sized.into_iter().map(|(_, url)| url))
+            .filter(|url| !url.is_empty())
+            .map(|url| Candidate {
+                url: url.to_owned(),
+                source: Source::YoutubeThumbnail,
+            })
+            .collect(),
+    )
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -768,5 +812,32 @@ mod tests {
         assert_eq!(seconds("00:01:02.500"), Some(62.5));
         assert_eq!(seconds("01:02.500"), Some(62.5));
         assert_eq!(seconds("soon"), None);
+    }
+
+    #[test]
+    fn a_video_image_is_the_preferred_thumbnail_then_listed_ones_by_size() {
+        let video = info(&json!({
+            "thumbnail": "https://i.test/vi/abc/maxresdefault.webp",
+            "thumbnails": [
+                {"url": "https://i.test/vi/abc/default.jpg", "width": 120, "height": 90},
+                {"url": "https://i.test/vi/abc/huge.jpg", "width": 1920, "height": 1080},
+                {"url": "https://i.test/vi/abc/unsized.jpg"},
+                {"url": "https://i.test/vi/abc/hqdefault.jpg", "width": 480, "height": 360},
+            ],
+        }));
+        let Found::Candidates(found) = images(&video) else {
+            panic!("a video names candidates");
+        };
+        let urls: Vec<&str> = found.iter().map(|c| c.url.as_str()).collect();
+        assert_eq!(
+            urls,
+            [
+                "https://i.test/vi/abc/maxresdefault.webp",
+                "https://i.test/vi/abc/hqdefault.jpg",
+                "https://i.test/vi/abc/default.jpg",
+            ]
+        );
+        assert!(found.iter().all(|c| c.source == Source::YoutubeThumbnail));
+        assert_eq!(images(&info(&json!({}))), Found::Candidates(Vec::new()));
     }
 }

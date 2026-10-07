@@ -22,7 +22,8 @@ use serde::Deserialize;
 use crate::content_fetch::{self, BODY_CAP, Capture, Passing};
 use crate::content_store::{Line, Page, Status, Tier};
 use crate::github::{Repo, Target};
-use crate::github_page::{self, Graph, GraphError, RepoInfo, ThreadKind};
+use crate::github_page::{self, Graph, GraphError, GraphRepo, RepoInfo, ThreadKind};
+use crate::image_pick::Found;
 use crate::tools::{self, Limits, Probe};
 
 /// The host every `gh api` call goes to.
@@ -121,9 +122,10 @@ fn found(probe: &impl Probe) -> Option<Gh> {
 }
 
 /// Reads `target` for library page `raw`, retrying passing failures as
-/// every route does. Never fails: a failure is a capture too.
-pub fn capture(gh: &Gh, raw: &str, target: &Target) -> Capture {
-    let attempt = Attempt { gh, raw };
+/// every route does, and with `images` asks a repository for its social
+/// preview. Never fails: a failure is a capture too.
+pub fn capture(gh: &Gh, raw: &str, target: &Target, images: bool) -> Capture {
+    let attempt = Attempt { gh, raw, images };
     content_fetch::retrying(|| match target {
         Target::Repo(repo) => attempt.repo(repo),
         Target::Issue(repo, n) | Target::Pull(repo, n) => {
@@ -224,6 +226,9 @@ fn parse_include(stdout: &[u8]) -> Option<Answer> {
 struct Attempt<'a> {
     gh: &'a Gh,
     raw: &'a str,
+    /// Whether the run keeps images, which costs a repository one more
+    /// call.
+    images: bool,
 }
 
 impl Attempt<'_> {
@@ -235,10 +240,7 @@ impl Attempt<'_> {
     }
 
     fn ended(&self, status: Status, reason: String, http: Option<u16>) -> Ended {
-        Box::new(Ok(Capture {
-            line: self.line(status, Some(reason), http),
-            page: None,
-        }))
+        Box::new(Ok(Capture::ended(self.line(status, Some(reason), http))))
     }
 
     /// One `gh api` call and the answer it printed, whatever its status.
@@ -351,9 +353,33 @@ impl Attempt<'_> {
                 None => Some(String::from_utf8_lossy(&readme.body).into_owned()),
             },
         };
+        let preview = self.images.then(|| self.preview(repo)).flatten();
+        let images = github_page::images(repo, preview.as_ref(), readme.as_deref());
         let mut line = self.line(Status::Ok, None, Some(answer.status));
         line.final_url.clone_from(&info.html_url);
-        Ok(self.kept(line, github_page::repo_page(repo, &info, readme.as_deref())))
+        Ok(self.kept(
+            line,
+            github_page::repo_page(repo, &info, readme.as_deref()),
+            images,
+        ))
+    }
+
+    /// A repository's social preview, through one GraphQL call; `None`
+    /// when the call fails, which costs the page only that image.
+    fn preview(&self, repo: &Repo) -> Option<GraphRepo> {
+        let query = format!("query={}", github_page::preview_query());
+        let owner = format!("owner={}", repo.owner);
+        let name = format!("name={}", repo.name);
+        let answer = self
+            .ask(&["graphql", "-f", &query, "-f", &owner, "-f", &name])
+            .ok()?;
+        if !(200..300).contains(&answer.status) {
+            return None;
+        }
+        serde_json::from_slice::<Graph>(&answer.body)
+            .ok()?
+            .data?
+            .repository
     }
 
     fn thread(&self, repo: &Repo, number: u32, kind: ThreadKind) -> Result<Capture, Passing> {
@@ -401,17 +427,22 @@ impl Attempt<'_> {
         if repository.is_private {
             return Err(self.ended(Status::BehindLogin, "private repository".to_owned(), http));
         }
+        let images = github_page::images(repo, Some(&repository), None);
         let Some(thread) = repository.issue.or(repository.discussion) else {
             return Err(self.ended(Status::NotFound, NOT_FOUND.to_owned(), http));
         };
         let mut line = self.line(Status::Ok, None, http);
         line.final_url = Some(thread.url.clone()).filter(|url| !url.is_empty());
-        Ok(self.kept(line, github_page::thread_page(repo, number, &thread)))
+        Ok(self.kept(
+            line,
+            github_page::thread_page(repo, number, &thread),
+            images,
+        ))
     }
 
-    /// `line` with what every kept page records, and the page; `thin` with
-    /// its reason when the page has no text beyond its title.
-    fn kept(&self, mut line: Line, (page, thin): (Page, Option<&str>)) -> Capture {
+    /// `line` with what every kept page records, the page and its images;
+    /// `thin` with its reason when the page has no text beyond its title.
+    fn kept(&self, mut line: Line, (page, thin): (Page, Option<&str>), images: Found) -> Capture {
         if let Some(reason) = thin {
             line.status = Status::Thin;
             line.reason = Some(reason.to_owned());
@@ -424,6 +455,7 @@ impl Attempt<'_> {
                 extractor: self.gh.extractor(),
                 ..page
             }),
+            images,
         }
     }
 }
@@ -530,6 +562,7 @@ mod tests {
         let attempt = Attempt {
             gh: &gh(),
             raw: RAW,
+            images: true,
         };
         let status = |answer: Answer| ended(attempt.refusal(&answer).unwrap());
         let none = json!({});
@@ -632,16 +665,21 @@ mod tests {
         let attempt = Attempt {
             gh: &gh(),
             raw: RAW,
+            images: true,
         };
         let line = attempt.line(Status::Ok, None, Some(200));
         let info = RepoInfo::default();
-        let capture = attempt.kept(line.clone(), repo_page(&repo(), &info, Some("Text.")));
+        let capture = attempt.kept(
+            line.clone(),
+            repo_page(&repo(), &info, Some("Text.")),
+            Found::Unread,
+        );
         assert_eq!(capture.line.status, Status::Ok);
         assert_eq!(capture.line.tier, Some(Tier::Github));
         assert_eq!(capture.line.extractor.as_deref(), Some("gh"));
         assert_eq!(capture.line.extractor_version.as_deref(), Some("2.102.0"));
         assert_eq!(capture.page.unwrap().extractor, "gh 2.102.0");
-        let thin = attempt.kept(line, repo_page(&repo(), &info, None));
+        let thin = attempt.kept(line, repo_page(&repo(), &info, None), Found::Unread);
         assert_eq!(
             (thin.line.status, thin.line.reason.as_deref()),
             (Status::Thin, Some("no README"))

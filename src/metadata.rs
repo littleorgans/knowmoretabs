@@ -80,6 +80,9 @@ pub struct OpenGraph {
     pub kind: Option<String>,
     #[serde(default)]
     pub site_name: Option<String>,
+    /// `og:image` as the page wrote it; relative is possible.
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -89,6 +92,9 @@ pub struct Twitter {
     pub title: Option<String>,
     #[serde(default)]
     pub description: Option<String>,
+    /// `twitter:image` as the page wrote it; relative is possible.
+    #[serde(default)]
+    pub image: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]

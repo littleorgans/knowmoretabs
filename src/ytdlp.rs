@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use crate::content_fetch::{self, BODY_CAP, Capture};
 use crate::content_store::{Captions, Line, Page, Status, Tier};
+use crate::image_pick::Found;
 use crate::tools::{self, Limits, Probe};
 use crate::triage::plural;
 use crate::youtube;
@@ -238,10 +239,7 @@ impl Attempt<'_> {
 
     /// How an attempt ends early: a capture with no text.
     fn ended(&self, status: Status, reason: impl Into<String>) -> Box<Capture> {
-        Box::new(Capture {
-            line: self.line(status).with_reason(reason),
-            page: None,
-        })
+        Box::new(Capture::ended(self.line(status).with_reason(reason)))
     }
 
     fn read(&self, id: &str) -> Result<Capture, Box<Capture>> {
@@ -262,11 +260,12 @@ impl Attempt<'_> {
                 .map_err(|_| self.ended(Status::Error, "yt-dlp's video information is not JSON"))?;
         let mut line = self.line(Status::Ok);
         line.final_url.clone_from(&info.webpage_url);
+        let images = youtube_page::images(&info);
         let Some(choice) = youtube_page::choose(&info) else {
             line.status = Status::Thin;
             line.reason = Some("no captions".to_owned());
             line.lang.clone_from(&info.language);
-            return Ok(self.kept(line, youtube_page::page(&info, &[], None)));
+            return Ok(self.kept(line, youtube_page::page(&info, &[], None), images));
         };
         self.call(&caption_args(dir, &info_path, &choice))?;
         let vtt = self.file(
@@ -284,7 +283,11 @@ impl Attempt<'_> {
             line.reason = Some("captions empty".to_owned());
         }
         line.lang = Some(choice.lang());
-        Ok(self.kept(line, youtube_page::page(&info, &said, Some(choice.kind))))
+        Ok(self.kept(
+            line,
+            youtube_page::page(&info, &said, Some(choice.kind)),
+            images,
+        ))
     }
 
     /// One bounded yt-dlp run; a run that did not exit 0 ends the attempt.
@@ -324,8 +327,8 @@ impl Attempt<'_> {
         }
     }
 
-    /// `line` with what every kept page records, and the page.
-    fn kept(&self, mut line: Line, page: Page) -> Capture {
+    /// `line` with what every kept page records, the page, and its images.
+    fn kept(&self, mut line: Line, page: Page, images: Found) -> Capture {
         line.extractor = Some(NAME.to_owned());
         line.extractor_version.clone_from(&self.tool.version);
         let extractor = match &self.tool.version {
@@ -335,6 +338,7 @@ impl Attempt<'_> {
         Capture {
             line,
             page: Some(Page { extractor, ..page }),
+            images,
         }
     }
 }
@@ -644,6 +648,7 @@ mod tests {
         let capture = attempt.kept(
             attempt.line(Status::Ok),
             youtube_page::page(&info, &[], Some(Captions::Automatic)),
+            Found::Unread,
         );
         assert_eq!(capture.line.tier, Some(Tier::Youtube));
         assert_eq!(capture.line.extractor.as_deref(), Some("yt-dlp"));

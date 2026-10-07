@@ -123,7 +123,10 @@ video at a time: the description, chapters and one caption track, English first,
 language. Without yt-dlp they wait for a later run. What enrich never fetches, content never fetches \
 either; X profiles and YouTube channels and playlists are recorded as not a document, and login screens \
 as behind a login, without a request. A page that failed is tried again on the next run, and after three \
-failed runs it is recorded as unavailable. One request a second per site. Never part of save."
+failed runs it is recorded as unavailable. Each captured page also gets one preview image, fetched from \
+the address the page or its route names, which may be on another host: kept as a JPEG of at most 768 \
+pixels in <root>/pages/images/, with one line per attempt in <root>/pages/images.jsonl. One request a \
+second per site. Never part of save."
     )]
     Content {
         #[command(flatten)]
@@ -131,6 +134,9 @@ failed runs it is recorded as unavailable. One request a second per site. Never 
         /// Capture only this library page (repeatable)
         #[arg(long = "url", value_name = "URL")]
         urls: Vec<String>,
+        /// Capture text only: no preview images this run
+        #[arg(long)]
+        no_images: bool,
     },
     /// Say which ways of reading pages this machine can use, and what the archive holds of page text
     #[command(
@@ -572,12 +578,26 @@ mod tests {
         ])
         .unwrap();
         assert!(cli.json);
-        let Some(Command::Content { fetch, urls }) = cli.command else {
+        let Some(Command::Content {
+            fetch,
+            urls,
+            no_images,
+        }) = cli.command
+        else {
             panic!("content parsed as {:?}", cli.command);
         };
-        assert!(fetch.dry_run && !fetch.refetch);
+        assert!(fetch.dry_run && !fetch.refetch && !no_images);
         assert_eq!(fetch.limit, Some(5));
         assert_eq!(urls, ["https://a.test/", "https://b.test/"]);
+        let cli = Cli::try_parse_from(["knowmoretabs", "content", "--no-images"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Content {
+                no_images: true,
+                ..
+            })
+        ));
+        assert!(Cli::try_parse_from(["knowmoretabs", "enrich", "--no-images"]).is_err());
     }
 
     #[test]

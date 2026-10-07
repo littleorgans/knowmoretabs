@@ -22,6 +22,8 @@
 mod extract;
 #[path = "../src/head.rs"]
 mod head;
+#[path = "../src/jsonld.rs"]
+mod jsonld;
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;

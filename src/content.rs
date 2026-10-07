@@ -8,11 +8,12 @@
 //!      four at a time) is spread over that many lanes. Every result is
 //!      written as it arrives, so an interrupted run keeps what it captured,
 //!      and the report says how each page ended, how long fetches took,
-//!      when GitHub pages were read from the web because `gh` could not, and
-//!      how many videos wait for yt-dlp.
+//!      when GitHub pages were read from the web because `gh` could not,
+//!      how many videos wait for yt-dlp, and how each page's image ended.
+//!      Unless `--no-images`, each page's image follows its text.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
@@ -21,16 +22,18 @@ use std::time::{Duration, Instant};
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::content_fetch::{self, Capture};
+use crate::content_image::{self, Images};
 use crate::content_plan::{self, Work};
 use crate::content_route::Tools;
 use crate::content_store::{self, Line, Status, Store};
 use crate::error::Error;
 use crate::fetch::Fetcher;
 use crate::github_api::Readiness;
+use crate::image_store;
 use crate::library::{self, State};
 use crate::model::Snapshot;
 use crate::out;
-use crate::targets::{self, Options, Plan};
+use crate::targets::{self, Counts, Options, Outcome as _, Plan};
 use crate::tools::System;
 use crate::triage::plural;
 use crate::ytdlp;
@@ -41,27 +44,21 @@ const PROGRESS_EVERY: usize = 25;
 /// What a run did.
 #[derive(Debug, Default)]
 struct Tally {
-    statuses: BTreeMap<Status, usize>,
-    reasons: BTreeMap<Status, BTreeMap<String, usize>>,
+    counts: Counts<Status>,
     fetches: usize,
     /// How long each fetch took, retries and extraction included.
     durations: Vec<Duration>,
     /// Video pages left for a run with yt-dlp, unrecorded.
     waiting: usize,
+    /// How each page's image ended, when images were captured.
+    images: Option<Counts<image_store::Status>>,
 }
 
 impl Tally {
     fn add(&mut self, line: &Line) {
-        *self.statuses.entry(line.status).or_default() += 1;
-        if !matches!(line.status, Status::Ok) {
-            let reason = line.reason.clone().unwrap_or_default();
-            *self
-                .reasons
-                .entry(line.status)
-                .or_default()
-                .entry(reason)
-                .or_default() += 1;
-        }
+        let reason =
+            (line.status != Status::Ok).then(|| line.reason.as_deref().unwrap_or_default());
+        self.counts.add(line.status, reason);
     }
 }
 
@@ -69,6 +66,7 @@ pub fn command(
     root: &Path,
     options: Options,
     urls: &[String],
+    no_images: bool,
     json: bool,
     log: Log,
 ) -> Result<(), Error> {
@@ -97,17 +95,26 @@ pub fn command(
         }
     };
     let (plan, work) = content_plan::plan(&snapshots, &state, &known, options, github, youtube);
-    let notes = work.notes();
+    let images = if no_images {
+        None
+    } else {
+        Some(content_image::Plan::new(
+            root, &snapshots, &state, &work, options, log,
+        )?)
+    };
+    let mut notes = work.notes();
     if options.dry_run {
+        notes.extend(images.as_ref().and_then(content_image::Plan::note));
         targets::report_dry_run(&plan, options, json, log, work.seconds_at_least(), &notes);
         return Ok(());
     }
     let started = Instant::now();
     let waiting = work.waiting;
-    let mut tally = if work.fetches.is_empty() && work.unsent.is_empty() {
+    let images = images.filter(|images| !images.is_empty());
+    let mut tally = if work.fetches.is_empty() && work.unsent.is_empty() && images.is_none() {
         Tally::default()
     } else {
-        run(root, work, &state, log)?
+        run(root, work, &state, images, log)?
     };
     tally.waiting = waiting;
     report(&plan, &tally, &notes, started.elapsed(), root, json, log);
@@ -145,11 +152,21 @@ fn only<'a>(snapshots: &'a [Snapshot], urls: &[String]) -> Result<Cow<'a, [Snaps
 }
 
 /// Records the pages that need no request, then fetches the rest, each
-/// host's pages in order on one of the shared workers.
-fn run(root: &Path, work: Work, state: &State, log: Log) -> Result<Tally, Error> {
+/// host's pages in order on one of the shared workers, each page's image
+/// after its text, then retries the images that failed before.
+fn run(
+    root: &Path,
+    work: Work,
+    state: &State,
+    images: Option<content_image::Plan>,
+    log: Log,
+) -> Result<Tally, Error> {
     let store = Mutex::new(Store::open(root)?);
+    let images = images
+        .map(|plan| Images::open(root, plan, log))
+        .transpose()?;
     let tally = Mutex::new(Tally::default());
-    let record = |line: Line, page: Option<&content_store::Page>| -> Result<(), Error> {
+    let record = |line: Line, page: Option<&content_store::Page>| -> Result<Status, Error> {
         let line = store
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -167,7 +184,7 @@ fn run(root: &Path, work: Work, state: &State, log: Log) -> Result<Tally, Error>
                 .map(|r| format!(" ({r})"))
                 .unwrap_or_default()
         ));
-        Ok(())
+        Ok(line.status)
     };
     for line in work.unsent {
         record(line, None)?;
@@ -183,18 +200,29 @@ fn run(root: &Path, work: Work, state: &State, log: Log) -> Result<Tally, Error>
             .map(|fetch| (fetch.host.as_str(), fetch)),
         |fetch| {
             let started = Instant::now();
-            let Capture { line, page } = fetch.route.capture(&fetcher, tools, &fetch.url);
+            let Capture {
+                line,
+                page,
+                images: found,
+            } = fetch
+                .route
+                .capture(&fetcher, tools, &fetch.url, images.is_some());
             {
                 let mut tally = tally.lock().unwrap_or_else(PoisonError::into_inner);
                 tally.fetches += 1;
                 tally.durations.push(started.elapsed());
             }
+            let mut settled = Vec::with_capacity(fetch.pages.len());
             for (url, attempt) in &fetch.pages {
                 let mut line = line.clone();
                 line.url.clone_from(url);
-                record(content_fetch::settle(line, *attempt), page.as_ref())?;
+                let status = record(content_fetch::settle(line, *attempt), page.as_ref())?;
+                settled.push((url.as_str(), status));
             }
-            Ok(())
+            match &images {
+                Some(images) => images.after(&fetcher, &settled, &found),
+                None => Ok(()),
+            }
         },
         |n, total| {
             if n.is_multiple_of(PROGRESS_EVERY) && n < total {
@@ -202,7 +230,12 @@ fn run(root: &Path, work: Work, state: &State, log: Log) -> Result<Tally, Error>
             }
         },
     )?;
-    Ok(tally.into_inner().unwrap_or_else(PoisonError::into_inner))
+    if let Some(images) = &images {
+        images.retry(&fetcher)?;
+    }
+    let mut tally = tally.into_inner().unwrap_or_else(PoisonError::into_inner);
+    tally.images = images.map(Images::counts);
+    Ok(tally)
 }
 
 fn seconds(duration: Duration) -> f64 {
@@ -225,20 +258,15 @@ fn report(
     json: bool,
     log: Log,
 ) {
-    let recorded: usize = tally.statuses.values().sum();
+    let recorded = tally.counts.total();
     let spread = spread(&tally.durations);
     if json {
-        let words = |counts: &BTreeMap<Status, usize>| -> BTreeMap<&str, usize> {
-            counts
-                .iter()
-                .map(|(status, n)| (status.word(), *n))
-                .collect()
-        };
-        out::json(&serde_json::json!({
+        let (statuses, reasons) = tally.counts.json();
+        let mut report = serde_json::json!({
             "recorded": recorded,
             "fetched": tally.fetches,
-            "statuses": words(&tally.statuses),
-            "reasons": tally.reasons.iter().map(|(status, reasons)| (status.word(), reasons)).collect::<BTreeMap<_, _>>(),
+            "statuses": statuses,
+            "reasons": reasons,
             "deferred": tally.waiting,
             "not_fetched": targets::counts_json(plan)["not_fetched"],
             "more": plan.more,
@@ -249,7 +277,11 @@ fn report(
             })),
             "log": content_store::log_path(root),
             "dir": content_store::dir(root),
-        }));
+        });
+        if let Some(images) = &tally.images {
+            report["images"] = content_image::report_json(images, root);
+        }
+        out::json(&report);
         return;
     }
     if log.quiet {
@@ -259,12 +291,7 @@ fn report(
     if recorded == 0 {
         let _ = writeln!(text, "nothing to capture");
     } else {
-        let counts = tally
-            .statuses
-            .iter()
-            .map(|(status, n)| format!("{n} {}", status.word()))
-            .collect::<Vec<_>>()
-            .join(", ");
+        let counts = tally.counts.summary();
         let _ = writeln!(
             text,
             "recorded {} in {} s, {}: {counts}",
@@ -275,8 +302,8 @@ fn report(
                 n => format!("{n} fetches"),
             },
         );
-        for (status, reasons) in &tally.reasons {
-            let _ = writeln!(text, "  {}: {}", status.word(), targets::breakdown(reasons));
+        for line in tally.counts.reason_lines() {
+            let _ = writeln!(text, "{line}");
         }
         if let Some((median, longest)) = spread {
             let _ = writeln!(
@@ -292,6 +319,9 @@ fn report(
             content_store::dir(root).display(),
             content_store::log_path(root).display()
         );
+    }
+    if let Some(images) = &tally.images {
+        text.push_str(&content_image::report(images, root));
     }
     for note in notes {
         let _ = writeln!(text, "{note}");
@@ -333,7 +363,7 @@ mod tests {
         assert_eq!(plan.skip_counts()[&Skip::NotWeb], 2);
         assert!(work.fetches.is_empty());
         let root = tempfile::tempdir().unwrap();
-        run(root.path(), work, &state, Log::default()).unwrap();
+        run(root.path(), work, &state, None, Log::default()).unwrap();
         assert_eq!(
             std::fs::read(content_store::log_path(root.path())).unwrap(),
             [] as [u8; 0]

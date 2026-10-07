@@ -46,6 +46,11 @@ dom_query = { version = "0.28", default-features = false, features = ["markdown"
 # which have no markdown output, and over `html2md`, whose GPL does not fit
 # this crate's licence. Pure Rust, no network, no async.
 dom_smoothie = "0.18"
+# Decodes the one preview image `content` keeps of a page and writes it
+# again as a small JPEG (src/image_fetch.rs). Pure Rust, no thread pool and
+# no C: only the four formats the web serves images in, so AVIF (C or
+# encode only) and the rest are left out. MIT OR Apache-2.0, MSRV 1.88.
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
 # Reads a copy of the browser's own `History` database; the archive itself
 # stays JSON. `bundled` compiles one pinned SQLite into the binary, because
@@ -53,6 +58,10 @@ jiff = { version = "0.2", default-features = false, features = ["std", "serde"] 
 # elsewhere varies in version from machine to machine
 # (docs/briefs/slice-07b-history.md §2).
 rusqlite = { version = "0.40", features = ["bundled"] }
+# The colour management `image` already depends on, used directly to bring
+# an image with its own colour profile into sRGB before it is kept
+# (src/image_fetch.rs). BSD-3-Clause OR Apache-2.0; adds no crate.
+moxcms = "0.8"
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

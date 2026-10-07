@@ -16,7 +16,7 @@
 //!      that has it.
 
 use std::cell::OnceCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use url::Url;
 
@@ -24,10 +24,9 @@ use crate::content_fetch;
 use crate::content_route::Route;
 use crate::content_store::{self, Line, Status};
 use crate::github_api::Readiness;
-use crate::guard;
 use crate::library::State;
 use crate::model::Snapshot;
-use crate::targets::{self, Item, Options, Plan, Skip, Why};
+use crate::targets::{self, Forgotten, Item, Options, Plan, Skip, Why};
 use crate::triage::plural;
 use crate::ytdlp;
 
@@ -116,16 +115,10 @@ pub fn plan(
             ..options
         },
     );
-    let forgotten_urls: HashSet<Url> = state
-        .forgotten
-        .iter()
-        .filter_map(|raw| guard::page_url(raw))
-        .collect();
+    let forgotten = Forgotten::of(state);
     let (candidates, forgotten_pages): (Vec<Item>, Vec<Item>) = std::mem::take(&mut plan.todo)
         .into_iter()
-        .partition(|item| {
-            !guard::page_url(&item.url).is_some_and(|url| forgotten_urls.contains(&url))
-        });
+        .partition(|item| !forgotten.covers(&item.url));
     plan.not_fetched.extend(
         forgotten_pages
             .into_iter()

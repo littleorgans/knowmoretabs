@@ -23,6 +23,7 @@ use crate::content_store::{Completeness, Line, Page, Status, Tier};
 use crate::extract;
 use crate::fetch::Fetcher;
 use crate::head;
+use crate::image_pick::{Candidate, Found, Source};
 
 /// The API's host: the one host every X post is paced on.
 pub const API_HOST: &str = "api.fxtwitter.com";
@@ -88,17 +89,14 @@ fn once(fetcher: &Fetcher, raw: &str, id: &str) -> Result<Capture, Passing> {
         if passing {
             return Err(content_fetch::passing(&response, failed));
         }
-        return Ok(Capture {
-            line: failed,
-            page: None,
-        });
+        return Ok(Capture::ended(failed));
     }
     let mime = response.mime();
     if !mime.is_empty() && !mime.contains("json") {
-        return Ok(Capture {
-            line: line(Status::Error, Some(format!("not JSON ({mime})"))),
-            page: None,
-        });
+        return Ok(Capture::ended(line(
+            Status::Error,
+            Some(format!("not JSON ({mime})")),
+        )));
     }
     let bytes = match content_fetch::body(&mut response, |state, reason| line(state, Some(reason)))
     {
@@ -159,6 +157,8 @@ struct Article {
     content: Option<ArticleContent>,
     /// What each MEDIA entity's `mediaId` names.
     media_entities: Vec<ArticleMedium>,
+    /// The image the article opens with.
+    cover_media: Option<ArticleMedium>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -236,12 +236,16 @@ struct MediaInfo {
     #[serde(rename = "__typename")]
     kind: String,
     ext_alt_text: Option<String>,
+    /// An image's address, or a video's still.
+    original_img_url: Option<String>,
+    media_url_https: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct Media {
     photos: Vec<Medium>,
+    videos: Vec<Video>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -249,17 +253,21 @@ struct Media {
 struct Medium {
     #[serde(rename = "type")]
     kind: String,
+    url: Option<String>,
     #[serde(rename = "altText")]
     alt_text: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Video {
+    thumbnail_url: Option<String>,
 }
 
 /// The line and text for the body of a successful answer; `line` makes
 /// the response's line for a status.
 fn read(bytes: &[u8], line: impl Fn(Status) -> Line) -> Capture {
-    let done = |state: Status, reason: String| Capture {
-        line: line(state).with_reason(reason),
-        page: None,
-    };
+    let done = |state: Status, reason: String| Capture::ended(line(state).with_reason(reason));
     let Ok(answer) = serde_json::from_slice::<Answer>(bytes) else {
         return done(Status::Error, "not a post answer".to_owned());
     };
@@ -300,7 +308,42 @@ fn read(bytes: &[u8], line: impl Fn(Status) -> Line) -> Capture {
     Capture {
         line,
         page: Some(page),
+        images: images(&post).map_or(Found::TextOnly, |url| {
+            Found::Candidates(vec![Candidate {
+                url,
+                source: Source::XMedia,
+            }])
+        }),
     }
+}
+
+/// The image a post shows: its first photo, else its first video's
+/// thumbnail, else its article's cover or first image, else the same of
+/// the post it quotes. A post of text alone has none.
+fn images(post: &Post) -> Option<String> {
+    if unavailable(post).is_some() {
+        return None;
+    }
+    let media = post.media.as_ref();
+    let photo = media.and_then(|m| m.photos.iter().find_map(|p| p.url.clone()));
+    let thumbnail = || media.and_then(|m| m.videos.iter().find_map(|v| v.thumbnail_url.clone()));
+    let article = || {
+        let article = post.article.as_ref()?;
+        article
+            .cover_media
+            .iter()
+            .chain(&article.media_entities)
+            .find_map(|medium| {
+                let info = &medium.media_info;
+                info.original_img_url
+                    .clone()
+                    .or_else(|| info.media_url_https.clone())
+            })
+    };
+    photo
+        .or_else(thumbnail)
+        .or_else(article)
+        .or_else(|| post.quote.as_deref().and_then(images))
 }
 
 /// Why a post cannot be read: a tombstone's reason, or a protected
@@ -586,6 +629,56 @@ mod tests {
     }
 
     #[test]
+    fn a_post_image_is_its_photo_else_its_video_thumbnail_else_its_quote() {
+        let image = |status: &serde_json::Value| match read_value(status).images {
+            Found::Candidates(found) => {
+                assert!(found.iter().all(|c| c.source == Source::XMedia));
+                found.into_iter().map(|c| c.url).collect::<Vec<_>>()
+            }
+            other => panic!("expected candidates, got {other:?}"),
+        };
+        let mut status = post("Two kinds of media.");
+        status["media"] = json!({
+            "photos": [{"type": "photo", "url": "https://img.test/photo.jpg"}],
+            "videos": [{"type": "video", "url": "https://video.test/v.mp4",
+                "thumbnail_url": "https://img.test/thumb.jpg"}],
+        });
+        assert_eq!(image(&status), ["https://img.test/photo.jpg"]);
+        status["media"] = json!({"videos": [{"type": "video", "url": "https://video.test/v.mp4",
+            "thumbnail_url": "https://img.test/thumb.jpg"}]});
+        assert_eq!(image(&status), ["https://img.test/thumb.jpg"]);
+
+        let mut quoting = post("Look at this.");
+        let mut quoted = post("Quoted with a photo.");
+        quoted["media"] = json!({"photos": [{"type": "photo", "url": "https://img.test/q.jpg"}]});
+        quoting["quote"] = quoted;
+        assert_eq!(image(&quoting), ["https://img.test/q.jpg"]);
+        quoting["quote"] = json!({"type": "tombstone", "provider": "twitter",
+            "reason": "deleted", "media": {"photos": [{"url": "https://img.test/gone.jpg"}]}});
+        assert_eq!(read_value(&quoting).images, Found::TextOnly);
+
+        let mut article = post("");
+        article["article"] = json!({"title": "Long read",
+            "media_entities": [{"media_id": "2", "media_info": {"__typename": "ApiImage",
+                "original_img_url": "https://img.test/inline.jpg"}}],
+            "cover_media": {"media_id": "1", "media_info": {"__typename": "ApiImage",
+                "original_img_url": "https://img.test/cover.jpg"}}});
+        assert_eq!(image(&article), ["https://img.test/cover.jpg"]);
+        article["article"]["cover_media"] = json!(null);
+        assert_eq!(image(&article), ["https://img.test/inline.jpg"]);
+
+        assert_eq!(read_value(&post("Words only.")).images, Found::TextOnly);
+        let mut protected = post("Hidden.");
+        protected["author"]["protected"] = json!(true);
+        protected["media"] = json!({"photos": [{"url": "https://img.test/private.jpg"}]});
+        assert_eq!(
+            read_value(&protected).images,
+            Found::Unread,
+            "a protected account's media is not kept"
+        );
+    }
+
+    #[test]
     fn a_post_keeps_its_text_author_date_and_image_descriptions() {
         let mut status = post("First line of the post.\n\nSecond paragraph.");
         status["media"] = json!({"photos": [
@@ -593,7 +686,7 @@ mod tests {
                 "altText": "A chart of tides"},
             {"type": "photo", "url": "https://img.test/2.jpg", "width": 1, "height": 1},
         ]});
-        let Capture { line, page } = read_value(&status);
+        let Capture { line, page, .. } = read_value(&status);
         let page = page.unwrap();
         assert_eq!((line.status, line.reason), (Status::Ok, None));
         assert_eq!(line.tier, Some(Tier::X));
@@ -681,7 +774,7 @@ mod tests {
         ] {
             let mut status = post("Public commentary.");
             status["quote"] = quote;
-            let Capture { line, page } = read_value(&status);
+            let Capture { line, page, .. } = read_value(&status);
             assert_eq!(line.status, Status::Ok);
             let root = tempfile::tempdir().unwrap();
             let mut store = Store::open(root.path()).unwrap();
@@ -709,7 +802,7 @@ mod tests {
         let mut quote = post("Restricted quote text.");
         quote["author"]["protected"] = json!(true);
         status["quote"] = quote;
-        let Capture { line, page } = read_value(&status);
+        let Capture { line, page, .. } = read_value(&status);
         assert_eq!(line.status, Status::Thin);
         assert_eq!(page.unwrap().completeness, Completeness::Thin);
     }
@@ -728,7 +821,7 @@ mod tests {
                 {"key": "e", "type": "code-block", "text": "tide = moon + sun"},
             ], "entityMap": []},
         });
-        let Capture { line, page } = read_value(&status);
+        let Capture { line, page, .. } = read_value(&status);
         let page = page.unwrap();
         assert_eq!(line.status, Status::Ok);
         assert_eq!(page.title.as_deref(), Some("On Tides"));
@@ -746,7 +839,7 @@ mod tests {
     fn an_article_keeps_atomic_code_embeds_and_images_in_order() {
         use crate::content_store::{self, Store};
 
-        let Capture { line, page } = read(ARTICLE_FIXTURE, line);
+        let Capture { line, page, .. } = read(ARTICLE_FIXTURE, line);
         let page = page.unwrap();
         assert_eq!(line.status, Status::Ok);
         assert_eq!(page.completeness, Completeness::Full);
@@ -903,7 +996,7 @@ mod tests {
         block["entityRanges"] = json!([
             {"key": 13}, {"key": 14}, {"key": 12}, {"key": 13}, {"key": 14},
         ]);
-        let Capture { line, page } = read_value(&answer["status"]);
+        let Capture { line, page, .. } = read_value(&answer["status"]);
         let page = page.unwrap();
         assert_eq!(line.status, Status::Ok);
         assert_eq!(page.completeness, Completeness::Full);
@@ -915,7 +1008,7 @@ mod tests {
     fn a_post_without_text_is_thin() {
         let mut status = post("  ");
         status["media"] = json!({"videos": [{"type": "video", "url": "https://v.test/1.mp4"}]});
-        let Capture { line, page } = read_value(&status);
+        let Capture { line, page, .. } = read_value(&status);
         assert_eq!(
             (line.status, line.reason.as_deref()),
             (Status::Thin, Some("no text in the post"))
@@ -938,7 +1031,7 @@ mod tests {
             (tombstone("blocked"), Status::Blocked, "post blocked"),
             (protected, Status::BehindLogin, "protected account"),
         ] {
-            let Capture { line, page } = read_value(&status);
+            let Capture { line, page, .. } = read_value(&status);
             assert_eq!(
                 (line.status, line.reason.as_deref()),
                 (expected, Some(reason))

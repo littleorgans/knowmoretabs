@@ -227,6 +227,26 @@ pub fn plan(
     plan
 }
 
+/// Every forgotten page by the address sent for it: a page opened at
+/// another fragment of a forgotten page is forgotten too.
+pub struct Forgotten(HashSet<Url>);
+
+impl Forgotten {
+    pub fn of(state: &State) -> Self {
+        Self(
+            state
+                .forgotten
+                .iter()
+                .filter_map(|raw| guard::page_url(raw))
+                .collect(),
+        )
+    }
+
+    pub fn covers(&self, raw: &str) -> bool {
+        guard::page_url(raw).is_some_and(|url| self.0.contains(&url))
+    }
+}
+
 /// The rules for a web page on a public-looking host.
 fn skip_reason(url: &Url) -> Option<Skip> {
     if guard::is_private_host(url) {
@@ -396,6 +416,79 @@ pub fn not_fetched_line(plan: &Plan) -> String {
         line.push_str("; --refetch fetches pages again");
     }
     line
+}
+
+/// A log's closed set of outcomes, as its reports name them.
+pub trait Outcome: Copy + Ord {
+    fn word(self) -> &'static str;
+}
+
+/// How many pages ended in each outcome, and why those that did not end
+/// well ended as they did.
+#[derive(Debug)]
+pub struct Counts<S> {
+    statuses: BTreeMap<S, usize>,
+    reasons: BTreeMap<S, BTreeMap<String, usize>>,
+}
+
+impl<S> Default for Counts<S> {
+    fn default() -> Self {
+        Self {
+            statuses: BTreeMap::new(),
+            reasons: BTreeMap::new(),
+        }
+    }
+}
+
+impl<S: Outcome> Counts<S> {
+    /// One page ended in `status`, for `reason` when it did not end well.
+    pub fn add(&mut self, status: S, reason: Option<&str>) {
+        *self.statuses.entry(status).or_default() += 1;
+        if let Some(reason) = reason {
+            *self
+                .reasons
+                .entry(status)
+                .or_default()
+                .entry(reason.to_owned())
+                .or_default() += 1;
+        }
+    }
+
+    pub fn total(&self) -> usize {
+        self.statuses.values().sum()
+    }
+
+    /// `3 ok, 1 thin`.
+    pub fn summary(&self) -> String {
+        self.statuses
+            .iter()
+            .map(|(status, n)| format!("{n} {}", status.word()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// `  thin: 2 short text`, one line per outcome that has reasons.
+    pub fn reason_lines(&self) -> Vec<String> {
+        self.reasons
+            .iter()
+            .map(|(status, reasons)| format!("  {}: {}", status.word(), breakdown(reasons)))
+            .collect()
+    }
+
+    /// The counts by outcome, and the reasons by outcome.
+    pub fn json(&self) -> (serde_json::Value, serde_json::Value) {
+        let statuses: BTreeMap<&str, usize> = self
+            .statuses
+            .iter()
+            .map(|(status, n)| (status.word(), *n))
+            .collect();
+        let reasons: BTreeMap<&str, &BTreeMap<String, usize>> = self
+            .reasons
+            .iter()
+            .map(|(status, reasons)| (status.word(), reasons))
+            .collect();
+        (serde_json::json!(statuses), serde_json::json!(reasons))
+    }
 }
 
 /// `3 timeout, 1 HTTP 404`, most common first.

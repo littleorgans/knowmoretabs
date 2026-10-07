@@ -19,6 +19,7 @@ use dom_query::{Document, NodeRef};
 use dom_smoothie::{Config, Readability, TextMode};
 
 use crate::head;
+use crate::jsonld;
 
 pub const EXTRACTOR: &str = "dom_smoothie";
 /// The `dom_smoothie` release in `Cargo.lock`; a unit test holds them equal.
@@ -68,6 +69,8 @@ pub struct Extract {
     pub visible: usize,
     /// Why a page is not `ok`.
     pub reason: Option<&'static str>,
+    /// The HTML of the article readability found, when the text is its.
+    pub article: Option<String>,
 }
 
 /// Classifies a decoded page and keeps its text. `url` is where the page
@@ -92,6 +95,7 @@ pub fn page(html: &str, url: Option<&str>) -> Extract {
         chars: 0,
         visible,
         reason: None,
+        article: None,
     };
     let stop = |mut verdict: Extract, class, reason| {
         verdict.class = class;
@@ -141,6 +145,9 @@ pub fn page(html: &str, url: Option<&str>) -> Extract {
             chars = whole_chars;
             verdict.extractor = FULL_PAGE;
         }
+    }
+    if verdict.extractor == EXTRACTOR {
+        verdict.article = article.map(|a| a.content.to_string());
     }
     verdict.markdown = with_title(verdict.title.as_deref(), &body);
     verdict.chars = chars;
@@ -192,13 +199,21 @@ fn visible_text(document: &Document) -> String {
 
 /// The body as markdown, its [`CHROME`] outside `main` left out.
 fn whole_page(html: &str) -> String {
-    let document = Document::from(html);
-    document.select(CHROME).filter(":not(main *)").remove();
+    let document = without_chrome(html);
     let body = document.select("body");
     body.nodes()
         .first()
         .map(|node| node.md(Some(&NOT_TEXT)).to_string())
         .unwrap_or_default()
+}
+
+/// The page with its [`CHROME`] outside `main` left out: what the
+/// whole-page text is read from, and where a page's own images are looked
+/// for when readability found no article.
+pub fn without_chrome(html: &str) -> Document {
+    let document = Document::from(html);
+    document.select(CHROME).filter(":not(main *)").remove();
+    document
 }
 
 /// `# Title`, a blank line and the body, unless the body already starts
@@ -244,18 +259,16 @@ fn asks_for_javascript(text: &str) -> bool {
 /// `isAccessibleForFree: false`, or a locked content tier.
 fn paywalled(document: &Document) -> bool {
     fn not_free(value: &serde_json::Value) -> bool {
-        match value {
-            serde_json::Value::Object(map) => map.iter().any(|(key, value)| {
-                (key == "isAccessibleForFree"
-                    && (value == &serde_json::Value::Bool(false)
-                        || value
-                            .as_str()
-                            .is_some_and(|v| v.eq_ignore_ascii_case("false"))))
-                    || not_free(value)
-            }),
-            serde_json::Value::Array(items) => items.iter().any(not_free),
-            _ => false,
-        }
+        let mut found = false;
+        jsonld::walk(value, &mut |map, _| {
+            found |= map.get("isAccessibleForFree").is_some_and(|free| {
+                free == &serde_json::Value::Bool(false)
+                    || free
+                        .as_str()
+                        .is_some_and(|v| v.eq_ignore_ascii_case("false"))
+            });
+        });
+        found
     }
     let locked = document
         .select(r#"meta[property="article:content_tier"], meta[name="article:content_tier"]"#)
