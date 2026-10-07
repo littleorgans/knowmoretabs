@@ -25,6 +25,7 @@ use std::time::Duration;
 use crate::content_fetch::{self, BODY_CAP, Capture};
 use crate::content_store::{Captions, Line, Page, Status, Tier};
 use crate::image_pick::Found;
+use crate::process_tree;
 use crate::tools::{self, Limits, Probe};
 use crate::triage::plural;
 use crate::youtube;
@@ -243,15 +244,12 @@ impl Attempt<'_> {
     }
 
     fn read(&self, id: &str) -> Result<Capture, Box<Capture>> {
-        let scratch = tempfile::Builder::new()
-            .prefix("knowmoretabs-yt-dlp-")
-            .tempdir()
-            .map_err(|err| {
-                self.ended(
-                    Status::Error,
-                    format!("no scratch directory: {}", err.kind()),
-                )
-            })?;
+        let scratch = process_tree::scratch("knowmoretabs-yt-dlp-").map_err(|err| {
+            self.ended(
+                Status::Error,
+                format!("no scratch directory: {}", err.kind()),
+            )
+        })?;
         let dir = scratch.path();
         self.call(&describe_args(self.tool, dir, id))?;
         let info_path = dir.join(format!("{VIDEO}.info.json"));

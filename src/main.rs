@@ -50,6 +50,7 @@ mod metadata_writer;
 mod model;
 mod out;
 mod platform;
+mod process_tree;
 mod prompt;
 mod server;
 mod session;
