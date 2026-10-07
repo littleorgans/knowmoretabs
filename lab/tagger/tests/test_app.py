@@ -15,7 +15,7 @@ from unittest.mock import patch
 import numpy as np
 import synthetic_archive
 
-from tagger import dataset
+from tagger import cli, dataset
 from tagger.app import engine, server
 from tagger.app.store import SOURCE, Store
 from tagger.heads import unit
@@ -23,6 +23,29 @@ from tagger.paths import Paths
 
 TOPICS = list(synthetic_archive.TOPICS)
 DIM = len(TOPICS) + 4
+
+
+class CliTests(unittest.TestCase):
+    def test_app_model_load_cannot_contact_the_hub(self):
+        def cached_only(*args, **kwargs):
+            self.assertTrue(kwargs.get("local_files_only"))
+            raise SystemExit
+
+        with patch("sentence_transformers.SentenceTransformer", side_effect=cached_only), self.assertRaises(SystemExit):
+            server.run(Paths(Path(tempfile.gettempdir())), None, 0, True)
+
+    def test_app_forces_offline_before_loading_the_model(self):
+        old_umask = os.umask(0o077)
+        self.addCleanup(os.umask, old_umask)
+        with (
+            patch.dict(os.environ, {"HF_HUB_OFFLINE": "0", "HF_HUB_DISABLE_TELEMETRY": "0"}),
+            patch("sys.argv", ["tagger", "--data", tempfile.gettempdir(), "app", "--smoke"]),
+            patch("tagger.app.server.run") as run,
+        ):
+            cli.main()
+            run.assert_called_once()
+            self.assertEqual("1", os.environ["HF_HUB_OFFLINE"])
+            self.assertEqual("1", os.environ["HF_HUB_DISABLE_TELEMETRY"])
 
 
 def topic_of(key: str) -> str:
@@ -83,6 +106,8 @@ class EngineTests(Fixture):
         self.assertIn(0, positives)  # a tag nobody holds yet still gets a finite threshold
         self.assertTrue(np.isfinite(self.lib.threshold).all())
         self.assertEqual(self.stats["heads"], len(heads))
+        self.assertEqual(int(self.lib.Y.any(axis=1).sum()), self.stats["labelled_pages"])
+        np.testing.assert_array_equal(self.lib.rules.fitted.rows, np.arange(self.stats["labelled_pages"]))
 
     def test_search_fuses_sources_and_skips_forgotten_pages(self):
         q = fake_encode(["espresso grinder"])[0]
@@ -96,6 +121,9 @@ class EngineTests(Fixture):
         for h in hits:
             kw = h["sources"]["keyword"]
             self.assertEqual(kw["score"] > 0, kw["rank"] > 0)
+            self.assertAlmostEqual(
+                h["fused"], sum(1 / (engine.RRF_K + s["rank"]) for s in h["sources"].values() if s["rank"])
+            )
         forgotten = [i for i, r in enumerate(self.lib.records) if r["forgotten"]]
         self.assertTrue(forgotten)
         every = engine.search(self.lib, q, "espresso", 10_000)
@@ -160,6 +188,8 @@ class StoreTests(unittest.TestCase):
         self.assertFalse(latest[("u1", "A")]["value"])
         self.assertEqual(b["id"], latest[("u1", "A")]["session"])
         self.assertTrue(latest[("u1", "B")]["value"])
+        answers = [json.loads(line) for line in Path(again.export()["answers"]).read_text().splitlines()]
+        self.assertEqual([{"url": "u1", "tags": ["B"], "source": SOURCE}], answers)
 
     def test_marks_name_only_offered_tags(self):
         store = Store(self.tmp)
@@ -168,6 +198,32 @@ class StoreTests(unittest.TestCase):
             store.update(s["id"], 0, {"Z": True}, None)
         with self.assertRaises(ValueError):
             store.update(s["id"], 0, None, "maybe")
+
+    def test_invalid_status_does_not_change_marks_in_memory(self):
+        store = Store(self.tmp)
+        s = store.create("q", False, ["u1"], ["A"], [self.sugg(("A", True))])
+        with self.assertRaises(ValueError):
+            store.update(s["id"], 0, {"A": False}, "maybe")
+        self.assertTrue(store.session(s["id"])["pages"][0]["marks"]["A"])
+        self.assertEqual(Store(self.tmp).state, store.state)
+
+    def test_undo_reject_restores_flips_even_after_restart(self):
+        store = Store(self.tmp)
+        s = store.create("q", False, ["u1"], ["A", "B"], [self.sugg(("A", True), ("B", True))])
+        store.update(s["id"], 0, {"B": False}, None)
+        store.update(s["id"], 0, {"A": False, "B": False}, "decided")
+        again = Store(self.tmp)
+        page = again.update(s["id"], 0, None, "open")
+        self.assertEqual({"A": True, "B": False}, page["marks"])
+        self.assertEqual({}, again.decisions())
+
+    def test_editing_an_older_decided_set_is_the_latest_decision(self):
+        store = Store(self.tmp)
+        sets = [store.create("q", False, ["u1"], ["A"], [self.sugg(("A", True))]) for _ in range(2)]
+        store.update(sets[0]["id"], 0, None, "decided")
+        store.update(sets[1]["id"], 0, None, "decided")
+        store.update(sets[0]["id"], 0, {"A": False}, None)
+        self.assertFalse(Store(self.tmp).decisions()[("u1", "A")]["value"])
 
     def test_export_writes_private_answers_and_log_alone_in_a_folder(self):
         store = Store(self.tmp)

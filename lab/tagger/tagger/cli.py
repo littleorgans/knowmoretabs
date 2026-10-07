@@ -10,7 +10,7 @@ from .paths import resolve
 def main() -> None:
     os.umask(0o077)  # per page outputs are private to the owner (0600)
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
-    os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
+    os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     parser = argparse.ArgumentParser(prog="tagger")
     parser.add_argument("--data", help="data directory (default: $KMT_TAGGER_DATA)")
     steps = parser.add_subparsers(dest="step", required=True)
@@ -81,7 +81,7 @@ def main() -> None:
 
         compare.run(paths, args.other)
     elif args.step == "app":
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")  # the model is cached; the app never goes online
+        os.environ["HF_HUB_OFFLINE"] = "1"  # the model is cached; the app never goes online
         from .app import server
 
         server.run(paths, Path(args.root) if args.root else None, args.port, args.smoke)

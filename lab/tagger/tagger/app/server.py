@@ -262,7 +262,7 @@ def run(paths: Paths, root: Path | None, port: int, smoke_only: bool) -> None:
     from ..zeroshot import encode_queries
 
     start = time.perf_counter()
-    st, model = load_text(MODELS[engine.MODEL])
+    st, model = load_text(MODELS[engine.MODEL], local_files_only=True)
 
     def encode(texts: list[str]) -> np.ndarray:
         return encode_queries(st, texts)

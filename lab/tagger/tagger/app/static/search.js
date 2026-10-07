@@ -6,6 +6,8 @@
   const K = window.KMT;
   const S = K.state.search;
   const SOURCES = { text: "text", keyword: "keyword", image: "image" };
+  let request = 0;
+  let searching = false;
 
   function source(h) {
     return Object.entries(h.sources).map(([k, v]) =>
@@ -26,10 +28,16 @@
     Object.assign(S, { query: q, images: K.$("s-img").checked, n: n || 20 });
     if (changed) S.picked = [];
     K.save();
-    K.$("s-pos").textContent = "Searching…";
+    const current = ++request;
+    searching = true;
+    K.results = null;
+    K.changed();
     try {
-      K.results = await K.api("/api/search", { query: S.query, images: S.images, n: S.n });
-    } catch (err) { K.results = null; K.fail(err); }
+      const results = await K.api("/api/search", { query: S.query, images: S.images, n: S.n });
+      if (current !== request) return;
+      K.results = results;
+    } catch (err) { if (current !== request) return; K.fail(err); }
+    searching = false;
     K.changed();
   }
 
@@ -40,7 +48,7 @@
       K.$("s-img").checked = S.images;
       K.$("s-img").disabled = K.lib && !K.lib.images;
       K.$("s-grid").innerHTML = r ? r.hits.map(hit).join("") : "";
-      K.$("s-pos").innerHTML = r ? `<b>${r.hits.length}</b> results` : S.query ? "" : `${K.lib ? K.lib.pages : ""} pages in your library`;
+      K.$("s-pos").innerHTML = searching ? "Searching…" : r ? `<b>${r.hits.length}</b> results` : S.query ? "" : `${K.lib ? K.lib.pages : ""} pages in your library`;
       K.$("s-ms").textContent = r ? `query ${r.ms.encode} ms · rank ${r.ms.rank} ms` : "";
       const max = K.lib ? K.lib.sizes[1] : 50;
       K.$("s-more").hidden = !r || S.n >= max || r.hits.length < S.n;

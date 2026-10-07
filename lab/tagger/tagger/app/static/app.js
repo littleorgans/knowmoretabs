@@ -71,12 +71,13 @@
   /* ---- export ---- */
   K.exportNow = async () => {
     try {
+      await K.review.pending;
       const x = await K.api("/api/export", {});
-      const cmd = `knowmoretabs tag --import ${x.answers} --dry-run`;
+      const cmd = `knowmoretabs --root '/path/to/archive-copy' tag --import '${x.answers.replace(/'/g, "'\\''")}' --dry-run`;
       K.$("export-body").innerHTML = x.decided
         ? `<p class="lede">${x.decided} decisions (${x.flipped} flipped from the model): ${x.answer_tags} tags kept on ${x.answer_pages} pages.</p>` +
           `<dl><dt>Answers</dt><dd><code>${K.esc(x.answers)}</code></dd><dt>Log</dt><dd><code>${K.esc(x.decisions)}</code></dd></dl>` +
-          `<p>Check it, then drop <code>--dry-run</code> to import (source <code>${K.esc(x.source)}</code>):</p><pre>${K.esc(cmd)}</pre>`
+          `<p>Replace <code>/path/to/archive-copy</code> with a writable copy of your archive and check it. Drop <code>--dry-run</code> to import into that copy (source <code>${K.esc(x.source)}</code>):</p><pre>${K.esc(cmd)}</pre>`
         : `<p class="lede">Nothing decided yet, so the files are empty. Review a set first.</p>`;
       K.$("export").showModal();
     } catch (err) { K.fail(err); }

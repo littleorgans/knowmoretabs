@@ -61,12 +61,16 @@ def rss_mb() -> int:
     return round(psutil.Process().memory_info().rss / 1e6)
 
 
-def load(model: Model):
+def load(model: Model, *, local_files_only: bool = False):
     from sentence_transformers import SentenceTransformer
 
     start = time.perf_counter()
     st = SentenceTransformer(
-        model.repo, device=device(), config_kwargs=model.config_kwargs, model_kwargs={"dtype": DTYPE}
+        model.repo,
+        device=device(),
+        config_kwargs=model.config_kwargs,
+        model_kwargs={"dtype": DTYPE},
+        local_files_only=local_files_only,
     )
     stats = {
         "load_s": round(time.perf_counter() - start, 2),
@@ -159,8 +163,8 @@ def embed_input(st, model: Model, records: list[dict], name: str) -> tuple[np.nd
     return emb, {**run, "max_tokens": CHUNKED_TOKENS, "pooling": f"mean of {MAX_TOKENS} token chunks"}
 
 
-def load_text(model: Model):
-    st, stats = load(model)
+def load_text(model: Model, *, local_files_only: bool = False):
+    st, stats = load(model, local_files_only=local_files_only)
     st.max_seq_length = MAX_TOKENS
     return st, stats
 

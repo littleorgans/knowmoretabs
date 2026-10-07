@@ -23,10 +23,14 @@
     return q;
   }
 
-  async function put(p, body) {
-    const next = await K.api(`/api/sessions/${set().id}/pages/${p.index}`, body);
-    const i = set().pages.findIndex((x) => x.index === p.index);
-    set().pages[i] = next;
+  function put(p, body, s = set()) {
+    const next = K.review.pending.then(async () => {
+      const i = s.pages.findIndex((x) => x.index === p.index);
+      const saved = await K.api(`/api/sessions/${s.id}/pages/${p.index}`, typeof body === "function" ? body(s.pages[i]) : body);
+      s.pages[i] = saved;
+      return saved;
+    });
+    K.review.pending = next.catch(() => {});
     return next;
   }
   const marks = (p, f) => Object.fromEntries(p.sugg.map((s) => [s.tag, f ? f(s) : s.checked]));
@@ -54,9 +58,7 @@
   }
 
   async function flipInGrid(p, tag) {
-    const m = marks(p);
-    m[tag] = !m[tag];
-    await put(p, open(p) ? { marks: m } : { marks: m, status: "decided" });
+    await put(p, (latest) => ({ marks: { [tag]: !latest.sugg.find((x) => x.tag === tag).checked } }));
     K.changed();
   }
   async function confirmAll() {
@@ -88,27 +90,31 @@
   const current = () => queue()[0];
 
   async function flip(p, tag) {
-    const m = marks(p, tag === null ? () => true : (s) => (s.tag === tag ? !s.checked : s.checked));
-    await put(p, { marks: m });
+    await put(p, (latest) => ({ marks: tag === null ? marks(latest, () => true) : { [tag]: !latest.sugg.find((x) => x.tag === tag).checked } }));
     K.changed();
   }
 
   function commit(p, body, dir, say) {
     if (busy || !p) return;
     busy = true;
+    const s = set();
     const b = K.$("r-acts").querySelector(`[data-act="${dir === "up" ? "skip" : dir === "no" ? "reject" : "accept"}"]`);
     b.classList.remove("flash"); b.getBoundingClientRect(); b.classList.add("flash");
+    const saving = put(p, body, s);
+    saving.catch(() => {}); // handled after the animation, even if the request fails first
     K.flyOut(card(), dir, async () => {
       try {
-        const next = await put(p, body);
-        if (front === p.index) front = null;
-        K.toast(say(next), undo);
+        const next = await saving;
+        if (set() === s) {
+          if (front === p.index) front = null;
+          K.toast(say(next), undo);
+        }
       } catch (err) { K.fail(err); }
       busy = false;
       K.changed();
     });
   }
-  const accept = () => { const p = current(); if (p) commit(p, { marks: marks(p), status: "decided" }, kept(p).length ? "yes" : "no", sayDecided); };
+  const accept = () => { const p = current(); if (p) commit(p, { status: "decided" }, kept(p).length ? "yes" : "no", sayDecided); };
   const reject = () => { const p = current(); if (p) commit(p, { marks: marks(p, () => false), status: "decided" }, "no", sayDecided); };
   const skip = () => { const p = current(); if (p) commit(p, { status: "skipped" }, "up", (x) => `Skipped “${K.short(K.title(x))}”. It comes back at the end.`); };
   function sayDecided(p) {
@@ -152,6 +158,7 @@
   }
 
   K.review = {
+    pending: Promise.resolve(),
     render() {
       const s = set();
       const swipe = K.state.mode === "swipe";
@@ -192,7 +199,7 @@
       if (k === "ArrowRight" || k === "l" || (k === "Enter" && !e.target.closest("button, a"))) return accept(), true;
       if (k === "ArrowLeft" || k === "h") return reject(), true;
       if (k === "ArrowUp" || k === "s") return skip(), true;
-      if (k === "u" || (k === "z" && (e.metaKey || e.ctrlKey))) return undo(), true;
+      if (k === "u" || (k === "z" && (e.metaKey || e.ctrlKey))) return undo().catch(K.fail), true;
       const p = current();
       if (!p || busy) return false;
       if (k === "a") return flip(p, null).catch(K.fail), true;

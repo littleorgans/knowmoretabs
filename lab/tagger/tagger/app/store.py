@@ -72,12 +72,18 @@ class Store:
             unknown = set(marks) - set(page["marks"])
             if unknown or not all(isinstance(v, bool) for v in marks.values()):
                 raise ValueError("marks name only the page's offered tags, as true or false")
+        if status is not None and status not in STATUSES:
+            raise ValueError(f"status is one of {', '.join(STATUSES)}")
+        if status == "decided" and page["status"] != "decided":
+            page["before_marks"] = page["marks"].copy()
+        elif status == "open" and "before_marks" in page:
+            page["marks"] = page.pop("before_marks")
+        if marks is not None:
             page["marks"].update(marks)
         if status is not None:
-            if status not in STATUSES:
-                raise ValueError(f"status is one of {', '.join(STATUSES)}")
             page["status"] = status
-            page["at"] = None if status == "open" else time.time()
+        if status is not None or (marks is not None and page["status"] == "decided"):
+            page["at"] = None if page["status"] == "open" else time.time()
         self._save()
         return page
 
