@@ -1,7 +1,7 @@
 """Step 3: a fixed 20% test split, a 5 fold CV grid on the other 80%, then one test score.
 
 Leakage boundary: `cross_validate` receives only the training rows; `score_test_once` is the only
-reader of the test rows, and it runs after the pick is made from CV results alone.
+scoring path for held out rows, and it runs after the pick is made from CV results alone.
 """
 
 import json
@@ -121,7 +121,7 @@ def pick(results: dict) -> str:
 
 
 def score_test_once(paths: Paths, lab: Labels, chosen: list[str], sp: dict) -> dict:
-    """The only reader of the test rows: fit on all training rows, score the test rows."""
+    """Fit on all training rows, score the held out rows after the CV pick."""
     out = {}
     for name in chosen:
         feat, head = feature(paths, lab, name)
@@ -148,10 +148,14 @@ def run(paths: Paths, final: bool) -> None:
     if not final:
         return
     path = paths.eval / "final.json"
-    if path.exists() and read_json(path)["best"] != best:
-        raise SystemExit("final.json holds a different pick; the test split is scored once")
-    test = score_test_once(paths, lab, [best, *BASELINES], sp)
-    write_json(path, {"best": best, "test": test})
+    if path.exists():
+        saved = read_json(path)
+        if saved["best"] != best:
+            raise SystemExit("final.json holds a different pick; the test split is scored once")
+        test = saved["test"]
+    else:
+        test = score_test_once(paths, lab, [best, *BASELINES], sp)
+        write_json(path, {"best": best, "test": test})
     for name, r in test.items():
         print(
             json.dumps(

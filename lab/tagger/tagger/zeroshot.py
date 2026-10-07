@@ -159,7 +159,7 @@ def run(paths: Paths) -> None:
         latency[key]["search_ms_median"] = search_ms(docs, queries[(key, "name")][0])
         latency[key]["search_pages"] = int(docs.shape[0])
         release(st)
-    best = read_json(paths.eval / "final.json")["best"]
+    best = read_json(paths.eval / "cv_summary.json")["best"]
     model_key, input_name, _ = best.split("-")
     text_input = "B" + input_name[1:] if input_name.startswith("C") else input_name
     variant = max(variants, key=lambda v: results[f"{model_key}-{text_input}-{v}"]["macro_ap"])

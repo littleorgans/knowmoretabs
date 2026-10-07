@@ -28,6 +28,7 @@ export KMT_TAGGER_DATA=<thread home>/data   # holds snapshot-2026-10-07/ and zer
 | 8 | `uv run --locked tagger report` | `out/results.md` |
 
 Steps skip work whose output exists; use a fresh data directory to recompute.
+`eval --final` reuses its saved test result and refuses a different CV pick.
 `KMT_TAGGER_SNAPSHOT` points at a snapshot elsewhere. `suggest` builds the binary
 (`cargo build --release --locked`) and dry runs the import against `import-check/`, a copy of the snapshot.
 
@@ -36,5 +37,13 @@ Reproduce: run everything into a fresh data directory, then
 
 ## Leakage boundary
 
-`evaluate.cross_validate` receives only the CV pool rows; `evaluate.score_test_once` is the only reader of the test rows.
+`evaluate.cross_validate` receives only the CV pool rows; `evaluate.score_test_once` is the only scoring path for held out rows.
 Every head (`heads.fit_lr`, `fit_knn`, `fit_prior`) sees only its fit rows and tunes C, k and thresholds on inner folds of them.
+`zeroshot.run` takes its input choice from `cv_summary.json` and can run before test scoring.
+Its learning curve keeps the supervised pick's text input, so k = 0 matches that input's zero shot AP.
+k counts selected positives per tag; sampled pages supply all their labels, including additional positives and implicit negatives.
+
+Synthetic regression checks: `uv run --offline --locked python -m unittest discover -s tests -v`.
+The suggestion report includes OOF precision and a proxy weighted by exported tag counts.
+Missing tags need owner review to measure their actual precision.
+Clustering uses ordinary k-means on unit rows; its centroids are unconstrained.

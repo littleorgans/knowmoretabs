@@ -1,6 +1,6 @@
 """Step 5: unsupervised clusters over the best config's embeddings, compared with the owner's tags.
 
-Spherical k-means on unit rows of the labelled pages. k is the number of trained tags, for a like for
+K-means on unit rows of the labelled pages. k is the number of trained tags, for a like for
 like comparison; the cosine silhouette curve is reported, and on this data it is flat. Descriptors are
 c-TF-IDF terms from titles and URL hosts only; page text is never read here.
 """

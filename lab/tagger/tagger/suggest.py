@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from .evaluate import feature, fit_and_score, labels, outer_folds
+from .metrics import evaluate
 from .paths import Paths, read_json, write_json
 
 REPO = Path(__file__).resolve().parents[3]
@@ -72,6 +73,7 @@ def run(paths: Paths) -> None:
     best = read_json(paths.eval / "final.json")["best"]
     lab = labels(paths)
     scores, pred, thresholds = predictions(paths, lab, best)
+    oof = evaluate(lab.Y[lab.labelled], scores[lab.labelled], pred[lab.labelled], lab.tags)
     paths.out.mkdir(parents=True, exist_ok=True)
     answers = paths.out / f"{source_name(best)}.jsonl"
     side = paths.out / f"{source_name(best)}-scores.csv"
@@ -101,6 +103,7 @@ def run(paths: Paths) -> None:
                         ]
                     )
     report = dry_run(paths, answers, source_name(best))
+    counts = (pred & ~lab.Y.astype(bool)).sum(axis=0)
     summary = {
         "best": best,
         "source": source_name(best),
@@ -112,6 +115,11 @@ def run(paths: Paths) -> None:
             if any(pred[i, j] and t not in lab.records[i]["tags"] for j, t in enumerate(lab.tags))
         ),
         "dry_run": report,
+        "oof_micro_precision_proxy": oof["micro"]["precision"],
+        "suggestion_tag_weighted_precision_proxy": (
+            float(sum(counts[j] * oof["per_tag"][t]["precision"] for j, t in enumerate(lab.tags)) / associations)
+            if associations else None
+        ),
     }
     write_json(paths.out / "suggest-summary.json", summary)
     print(json.dumps(summary))

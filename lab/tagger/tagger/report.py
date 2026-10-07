@@ -50,13 +50,21 @@ def zeroshot_section(z: dict, best: str, best_cv: dict, cv: dict) -> list[str]:
         ],
     )
     c = z["curve"]
+    curve_key = f"{c['model']}-{c['input']}-{c['query']}"
     L += [
         "",
         f"### Label efficiency ({c['model']}-{c['input']}, {c['query']} query)",
         "",
         f"Prototype = unit(query + mean of k positives sampled from each outer fit fold), {c['repeats']} seeded repeats, mean ± SD. "
         f"Threshold per tag: best F1 on the sampled labelled pages; at k = 0 there are no labels, so {c['zero_k_rule']}. "
-        "Where a fold has fewer than k positives for a tag, all are used.",
+        "Where a fold has fewer than k positives for a tag, all are used. "
+        "Sampled pages are fully labelled reviews: their union supplies positives and implicit negatives for every tag. "
+        "Thresholds use those fit pages, including the positives forming the prototype; evaluation remains on held out outer rows. "
+        "k counts selected positives per tag. Full labels on the union reveal additional positives and negatives.",
+        f"The k = 0 AP ({f(c['by_k']['0']['macro_ap_mean'])}) uses {curve_key}, the supervised pick's text input. "
+        f"The best zero shot AP ({f(results[top]['macro_ap'])}) uses {top}. "
+        "This is a fixed input learning curve; its zero point matches the zero shot score for that same input. "
+        "Input and query variant selection use CV labels; zero shot scores and the k = 0 threshold do not fit labels.",
         "",
     ]
     rows = [
@@ -217,6 +225,11 @@ def run(paths: Paths) -> None:
             if k in report
         )
         + f", created {len(report.get('created', []))}, revived {len(report.get('revived', []))}.",
+        f"OOF micro precision on all labelled pages: {f(suggest['oof_micro_precision_proxy'])}. "
+        f"Weighting each tag's OOF precision by its exported suggestion count gives a set precision proxy of "
+        f"{f(suggest['suggestion_tag_weighted_precision_proxy'])}. "
+        "Exported suggestions exclude known positives, so these proxies cannot establish the precision of missing tags. "
+        "Every exported labelled association is an implicit negative under the recorded labels; owner review is needed to estimate true precision.",
         "",
         "## Cost on this Mac",
         "",
@@ -263,11 +276,14 @@ def run(paths: Paths) -> None:
         "",
         "## Unsupervised clusters vs owner tags",
         "",
-        f"Spherical k-means over {clusters['config']} embeddings of {clusters['pages']} labelled pages; k = {clusters['k']}, the number of trained tags. "
+        f"K-means on unit rows of {clusters['config']} embeddings of {clusters['pages']} labelled pages; k = {clusters['k']}, the number of trained tags. "
         f"Cosine silhouette is flat across k ({', '.join(f'{k}: {v:.3f}' for k, v in sorted(clusters['silhouette'].items(), key=lambda kv: int(kv[0])))}), so it cannot choose k. Descriptors: c-TF-IDF over title words and URL hosts.",
         f"Clusters with no matching tag (best Jaccard < {s['no_match_jaccard_below']}): {s['clusters_without_matching_tag']}. "
         f"Tags split across clusters (no cluster holds half its pages): {s['tags_split']} of {len(clusters['tags'])}. "
         f"Mean best cluster F1 over trained tags: {f(s['mean_best_cluster_f1_trained'])}.",
+        "Best match Jaccard is intersection / union. Purity is the largest single tag intersection / cluster size. "
+        "Per tag best cluster F1 is the maximum of 2 * intersection / (cluster size + tag support). "
+        "Centroids are ordinary k-means means and are not constrained to unit norm.",
         "",
     ]
     L += table(
