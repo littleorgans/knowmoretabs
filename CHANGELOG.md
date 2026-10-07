@@ -190,6 +190,25 @@ as what you can do that you could not before.
   or a JavaScript runtime, videos wait, unrecorded, and the report says how
   many. The front matter records the caption language and whether the
   captions are manual or automatic.
+- **One preview image per page.** `content` also keeps the image that best
+  shows each captured page: an X post's photo, video thumbnail or article
+  cover, a YouTube thumbnail, a repository's own social preview or its README's
+  first picture before GitHub's generated card, else the page's `og:image`,
+  `twitter:image`, JSON-LD or `itemprop` image, else the largest image in
+  its main text; an image a site shows on three or more of your pages comes
+  after the page's own. Main text and README candidates exclude logos,
+  icons, avatars, badges, ads, tracking pixels and SVGs. Pages that are
+  images are kept too.
+  It downloads one preview image per page from the address the page names,
+  which may be on another host; images stay in the private archive, as a
+  JPEG of at most 768 pixels, quality 80, upright, in sRGB and without the
+  original's metadata, in `pages/images/` with one line per attempt in
+  `pages/images.jsonl`. Images are fetched like pages (no cookies, one
+  request a second per site, at most 8 MiB, three candidates per page),
+  checked by their own bytes and refused by their dimensions before
+  decoding. A failure that may pass is `error` and retried next run from
+  the candidates the line kept; after three runs it is `unavailable`.
+  `--no-images` skips images for a run, and `--dry-run` counts them.
 - **Check what content can use.** `knowmoretabs doctor` reports whether each
   way of reading pages is ready, missing or degraded, with how to fix it:
   the web tier, gh and its version, the X post API, yt-dlp with deno or node

@@ -122,20 +122,20 @@ impl Route {
         }
     }
 
-    /// Reads page `raw`. A GitHub page without a usable `gh` is read from
+    /// Reads page `raw`, and with `images` whatever more its route asks to
+    /// name its image. A GitHub page without a usable `gh` is read from
     /// the web, as the plan routes it; the plan never routes a video here
     /// without yt-dlp, so one that arrives without it is an `error`.
-    pub fn capture(&self, fetcher: &Fetcher, tools: Tools, raw: &str) -> Capture {
+    pub fn capture(&self, fetcher: &Fetcher, tools: Tools, raw: &str, images: bool) -> Capture {
         match (self, tools.gh, tools.ytdlp) {
             (Self::XPost(id), ..) => xpost::capture(fetcher, raw, id),
-            (Self::Github(target), Some(gh), _) => github_api::capture(gh, raw, target),
+            (Self::Github(target), Some(gh), _) => github_api::capture(gh, raw, target, images),
             (Self::Youtube(id), _, Some(tool)) => ytdlp::capture(tool, raw, id),
-            (Self::Youtube(_), _, None) => Capture {
-                line: content_fetch::public_line(raw, Tier::Youtube, Status::Error)
+            (Self::Youtube(_), _, None) => Capture::ended(
+                content_fetch::public_line(raw, Tier::Youtube, Status::Error)
                     .with_reason("yt-dlp not ready"),
-                page: None,
-            },
-            (Self::Web | Self::Github(_), ..) => content_fetch::capture(fetcher, raw),
+            ),
+            (Self::Web | Self::Github(_), ..) => content_fetch::capture(fetcher, raw, images),
         }
     }
 }

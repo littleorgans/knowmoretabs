@@ -16,12 +16,30 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::marker::PhantomData;
 use std::path::{Path, PathBuf};
 
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use serde::de::{DeserializeOwned, Error as _};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::archive::{self, Archive, Lock};
 use crate::error::Error;
 use crate::triage::plural;
+
+/// A line's `schema_version`, when it is `V`: a line from another schema
+/// is unreadable, not misread.
+pub fn schema<'de, D: Deserializer<'de>, const V: u32>(deserializer: D) -> Result<u32, D::Error> {
+    let version = u32::deserialize(deserializer)?;
+    if version == V {
+        Ok(version)
+    } else {
+        Err(D::Error::custom(format!(
+            "schema_version {version} is not {V}"
+        )))
+    }
+}
+
+/// The attempt number of a line that does not say: a page's first run.
+pub fn first_attempt() -> u32 {
+    1
+}
 
 /// A record that belongs to one URL; the latest line for a URL wins.
 pub trait Keyed {
@@ -60,19 +78,7 @@ impl<T: Serialize> Appender<T> {
             options.mode(0o600);
         }
         let file = options.open(&path).map_err(Error::io("open", &path))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mode = file
-                .metadata()
-                .map_err(Error::io("read", &path))?
-                .permissions()
-                .mode();
-            if mode & 0o777 != 0o600 {
-                file.set_permissions(fs::Permissions::from_mode(0o600))
-                    .map_err(Error::io("make private", &path))?;
-            }
-        }
+        archive::make_private(&path).map_err(Error::io("make private", &path))?;
         Ok(Self {
             archive: Archive::at(root),
             path,
@@ -121,6 +127,52 @@ impl<T: Serialize> Appender<T> {
             .and_then(|_| self.file.read_exact(&mut last))
             .map_err(Error::io("read", &self.path))?;
         Ok(last[0] == b'\n')
+    }
+}
+
+/// A log and the directory of files its lines stand for, written as one:
+/// every write to either holds the archive lock, a file before its line.
+#[derive(Debug)]
+pub struct Store<T> {
+    archive: Archive,
+    dir: PathBuf,
+    log: Appender<T>,
+}
+
+impl<T: Serialize> Store<T> {
+    /// Opens the log at `log` and the directory `dir`, both private, and
+    /// removes what an interrupted run left staged in `dir`, all under one
+    /// hold of the archive lock, so every write the store makes holds it.
+    pub fn open(root: &Path, log: PathBuf, dir: PathBuf) -> Result<Self, Error> {
+        let archive = Archive::at(root);
+        let lock = archive.lock(|| {})?;
+        let log = Appender::open_locked(root, log, &lock)?;
+        archive::create_private_dir(&dir).map_err(Error::io("create", &dir))?;
+        archive::make_private(&dir).map_err(Error::io("make private", &dir))?;
+        archive::clean_stale_staging(&dir)?;
+        for entry in fs::read_dir(&dir).map_err(Error::io("list", &dir))? {
+            let entry = entry.map_err(Error::io("list", &dir))?;
+            let path = entry.path();
+            if entry
+                .file_type()
+                .map_err(Error::io("read", &path))?
+                .is_file()
+            {
+                archive::make_private(&path).map_err(Error::io("make private", &path))?;
+            }
+        }
+        drop(lock);
+        Ok(Self { archive, dir, log })
+    }
+
+    /// Records one line under one hold of the archive lock: `files` first
+    /// writes what the line stands for in the directory it is given and
+    /// returns the line, which is then appended. Returns the line written.
+    pub fn record(&mut self, files: impl FnOnce(&Path) -> Result<T, Error>) -> Result<T, Error> {
+        let lock = self.archive.lock(|| {})?;
+        let line = files(&self.dir)?;
+        self.log.append_locked(&line, &lock)?;
+        Ok(line)
     }
 }
 
@@ -312,5 +364,60 @@ mod tests {
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
         assert_eq!(read_log(dir.path()).pages.len(), 1);
+    }
+
+    #[test]
+    fn opening_a_store_writes_nothing_until_it_holds_the_archive_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().to_path_buf();
+        let files = root.join("pages").join("files");
+        let held = Archive::at(&root).lock(|| {}).unwrap();
+        let (ready, started) = std::sync::mpsc::channel();
+        let opening = std::thread::spawn({
+            let root = root.clone();
+            let files = files.clone();
+            move || {
+                // Check each actual directory creation, including after an
+                // Appender::open that would release its own lock too early.
+                let probe = fs::File::options()
+                    .read(true)
+                    .write(true)
+                    .open(root.join(archive::LOCK_FILE))
+                    .unwrap();
+                archive::DIRECTORY_CREATION_LOCK_PROBE.with(|slot| {
+                    *slot.borrow_mut() = Some(probe);
+                });
+                ready.send(()).unwrap();
+                Store::<Entry>::open(&root, log(&root), files).map(|_| ())
+            }
+        });
+        started.recv().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let wrote_early = root.join("pages").exists();
+        drop(held);
+        opening.join().unwrap().unwrap();
+        assert!(!wrote_early, "nothing before the lock");
+        assert!(log(&root).is_file());
+        assert!(files.is_dir());
+    }
+
+    #[test]
+    fn opening_a_store_clears_staged_leftovers_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let files = root.join("pages").join("files");
+        fs::create_dir_all(&files).unwrap();
+        fs::write(
+            files.join(format!("{}abcdef", archive::STAGING_PREFIX)),
+            "half",
+        )
+        .unwrap();
+        fs::write(files.join("kept.md"), "kept").unwrap();
+        Store::<Entry>::open(root, log(root), files.clone()).unwrap();
+        let names: Vec<String> = fs::read_dir(&files)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, ["kept.md"]);
     }
 }

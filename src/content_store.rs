@@ -19,16 +19,15 @@ use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
-use serde::de::Error as _;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
-use crate::archive::{self, Archive};
+use crate::archive;
 use crate::error::Error;
-use crate::jsonl::{self, Appender, Keyed};
+use crate::jsonl::{self, Keyed};
 use crate::metadata;
-use crate::targets::Recorded;
+use crate::targets::{Outcome, Recorded};
 
 pub const LOG_FILE: &str = "content.jsonl";
 pub const DIR: &str = "content";
@@ -78,8 +77,8 @@ pub enum Status {
     Unknown,
 }
 
-impl Status {
-    pub fn word(self) -> &'static str {
+impl Outcome for Status {
+    fn word(self) -> &'static str {
         match self {
             Self::Ok => "ok",
             Self::Thin => "thin",
@@ -123,7 +122,7 @@ pub enum Access {
 /// written; fields a newer build adds are ignored on reading.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Line {
-    #[serde(deserialize_with = "known_schema")]
+    #[serde(deserialize_with = "jsonl::schema::<_, SCHEMA_VERSION>")]
     pub schema_version: u32,
     pub url: String,
     pub attempted_at: Timestamp,
@@ -151,24 +150,8 @@ pub struct Line {
     pub lang: Option<String>,
     /// Which run this is for the page: 1, then one more for each run that
     /// tries again after an `error`.
-    #[serde(default = "first")]
+    #[serde(default = "jsonl::first_attempt")]
     pub attempt: u32,
-}
-
-fn first() -> u32 {
-    1
-}
-
-/// A line from another schema is unreadable, not misread.
-fn known_schema<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
-    let version = u32::deserialize(deserializer)?;
-    if version == SCHEMA_VERSION {
-        Ok(version)
-    } else {
-        Err(D::Error::custom(format!(
-            "schema_version {version} is not {SCHEMA_VERSION}"
-        )))
-    }
 }
 
 impl Line {
@@ -337,35 +320,26 @@ pub fn parse(text: &str) -> Option<(BTreeMap<String, Value>, &str)> {
 
 /// Where a run writes: the log, and the directory of content files.
 #[derive(Debug)]
-pub struct Store {
-    archive: Archive,
-    dir: PathBuf,
-    log: Appender<Line>,
-}
+pub struct Store(jsonl::Store<Line>);
 
 impl Store {
     /// Opens the log and the content directory, both private, and removes
     /// what an interrupted run left staged there, all under one hold of the
     /// archive lock, so every write `content` makes holds it.
     pub fn open(root: &Path) -> Result<Self, Error> {
-        let archive = Archive::at(root);
-        let lock = archive.lock(|| {})?;
-        let log = Appender::open_locked(root, log_path(root), &lock)?;
-        let dir = dir(root);
-        archive::create_private_dir(&dir).map_err(Error::io("create", &dir))?;
-        archive::clean_stale_staging(&dir)?;
-        drop(lock);
-        Ok(Self { archive, dir, log })
+        jsonl::Store::open(root, log_path(root), dir(root)).map(Self)
     }
 
     /// Records one attempt: the page's file first, when there is text to
     /// keep, then its line, both under one hold of the archive lock. A file
     /// whose body is unchanged is left as it is. Returns the line written.
     pub fn record(&mut self, mut line: Line, page: Option<&Page>) -> Result<Line, Error> {
-        let lock = self.archive.lock(|| {})?;
-        if let Some(page) = page {
+        self.0.record(|dir| {
+            let Some(page) = page else {
+                return Ok(line);
+            };
             let hash = sha256_hex(page.markdown.as_bytes());
-            let path = self.dir.join(file_name(&line.url));
+            let path = dir.join(file_name(&line.url));
             let existing = match fs::read(&path) {
                 Ok(bytes) => Some(String::from_utf8_lossy(&bytes).into_owned()),
                 Err(err) if err.kind() == ErrorKind::NotFound => None,
@@ -381,9 +355,8 @@ impl Store {
                 let carried = previous.map(|(front, _)| front).unwrap_or_default();
                 archive::replace_file(&path, render(&line, page, &carried).as_bytes())?;
             }
-        }
-        self.log.append_locked(&line, &lock)?;
-        Ok(line)
+            Ok(line)
+        })
     }
 }
 
@@ -616,59 +589,6 @@ mod tests {
             fs::read_to_string(log_path(root)).unwrap().lines().count(),
             4
         );
-    }
-
-    #[test]
-    fn opening_a_store_writes_nothing_until_it_holds_the_archive_lock() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path().to_path_buf();
-        let held = Archive::at(&root).lock(|| {}).unwrap();
-        let (ready, started) = std::sync::mpsc::channel();
-        let opening = std::thread::spawn({
-            let root = root.clone();
-            move || {
-                // Check each actual directory creation, including after an
-                // Appender::open that would release its own lock too early.
-                let probe = fs::File::options()
-                    .read(true)
-                    .write(true)
-                    .open(root.join(archive::LOCK_FILE))
-                    .unwrap();
-                archive::DIRECTORY_CREATION_LOCK_PROBE.with(|slot| {
-                    *slot.borrow_mut() = Some(probe);
-                });
-                ready.send(()).unwrap();
-                Store::open(&root).map(|_| ())
-            }
-        });
-        started.recv().unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(300));
-        let wrote_early = root.join(metadata::DIR).exists();
-        drop(held);
-        opening.join().unwrap().unwrap();
-        assert!(!wrote_early, "nothing before the lock");
-        assert!(log_path(&root).is_file());
-        assert!(super::dir(&root).is_dir());
-    }
-
-    #[test]
-    fn opening_a_store_clears_staged_leftovers_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let content = super::dir(root);
-        fs::create_dir_all(&content).unwrap();
-        fs::write(
-            content.join(format!("{}x", archive::STAGING_PREFIX)),
-            "half",
-        )
-        .unwrap();
-        fs::write(content.join("kept.md"), "kept").unwrap();
-        Store::open(root).unwrap();
-        let names: Vec<String> = fs::read_dir(&content)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        assert_eq!(names, ["kept.md"]);
     }
 
     #[cfg(unix)]

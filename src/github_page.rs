@@ -14,10 +14,13 @@
 use std::fmt::Write as _;
 
 use serde::Deserialize;
+use url::Url;
 
 use crate::content_store::{Completeness, Page};
 use crate::extract;
 use crate::github::Repo;
+use crate::image_page;
+use crate::image_pick::{Candidate, Found, Source};
 
 /// The comments kept of a thread, from its start: the question and its
 /// first answers, which is where a thread says what it is about, in one
@@ -50,7 +53,49 @@ pub fn thread_query(kind: ThreadKind) -> String {
     };
     format!(
         "query($owner:String!,$name:String!,$number:Int!)\
-         {{repository(owner:$owner,name:$name){{isPrivate {thread}}}}}"
+         {{repository(owner:$owner,name:$name){{isPrivate {PREVIEW} {thread}}}}}"
+    )
+}
+
+/// A repository's social preview: the image GitHub shows when it is
+/// shared, and whether its owner chose it or GitHub drew it.
+const PREVIEW: &str = "openGraphImageUrl usesCustomOpenGraphImage";
+
+/// The GraphQL query for a repository's social preview alone.
+pub fn preview_query() -> String {
+    format!(
+        "query($owner:String!,$name:String!){{repository(owner:$owner,name:$name){{{PREVIEW}}}}}"
+    )
+}
+
+/// A repository's images, best first: the social preview its owner chose,
+/// the first picture its README shows, then the card GitHub generated.
+/// `preview` is what the GraphQL API said, when it was asked.
+pub fn images(repo: &Repo, preview: Option<&GraphRepo>, readme: Option<&str>) -> Found {
+    let (custom, generated) = match preview {
+        Some(graph) => match graph.preview.clone() {
+            Some(url) if graph.custom_preview => (Some(url), None),
+            url => (None, url),
+        },
+        None => (None, None),
+    };
+    let files = Url::parse(&format!(
+        "https://raw.githubusercontent.com/{}/{}/HEAD/",
+        repo.owner, repo.name
+    ))
+    .ok();
+    let readme = readme
+        .zip(files.as_ref())
+        .and_then(|(markdown, files)| image_page::readme_image(markdown, files));
+    Found::Candidates(
+        [
+            (custom, Source::GithubSocial),
+            (readme, Source::GithubReadme),
+            (generated, Source::GithubCard),
+        ]
+        .into_iter()
+        .filter_map(|(url, source)| Some(Candidate { url: url?, source }))
+        .collect(),
     )
 }
 
@@ -90,6 +135,11 @@ pub struct GraphData {
 pub struct GraphRepo {
     #[serde(rename = "isPrivate")]
     pub is_private: bool,
+    #[serde(rename = "openGraphImageUrl")]
+    pub preview: Option<String>,
+    /// The owner chose the preview; otherwise GitHub generated it.
+    #[serde(rename = "usesCustomOpenGraphImage")]
+    pub custom_preview: bool,
     #[serde(rename = "issueOrPullRequest")]
     pub issue: Option<Thread>,
     pub discussion: Option<Thread>,
@@ -441,7 +491,9 @@ mod tests {
     #[test]
     fn the_thread_query_asks_for_the_first_comments_and_privacy() {
         let issue = thread_query(ThreadKind::IssueOrPull);
-        assert!(issue.contains("isPrivate issueOrPullRequest(number:$number)"));
+        assert!(issue.contains(&format!(
+            "isPrivate {PREVIEW} issueOrPullRequest(number:$number)"
+        )));
         assert!(issue.contains(&format!("comments(first:{COMMENTS})")));
         assert!(issue.contains("...on PullRequest{state "));
         let discussion = thread_query(ThreadKind::Discussion);
@@ -451,6 +503,65 @@ mod tests {
         assert_eq!(
             discussion.matches('{').count(),
             discussion.matches('}').count()
+        );
+    }
+
+    #[test]
+    fn a_repository_image_is_its_own_preview_then_its_readme_then_the_card() {
+        let repo = Repo {
+            owner: "owner".to_owned(),
+            name: "repo".to_owned(),
+        };
+        let graph = |url: &str, custom: bool| GraphRepo {
+            preview: Some(url.to_owned()),
+            custom_preview: custom,
+            ..GraphRepo::default()
+        };
+        let named = |found: Found| match found {
+            Found::Candidates(found) => found
+                .into_iter()
+                .map(|c| (c.url, c.source))
+                .collect::<Vec<_>>(),
+            other => panic!("expected candidates, got {other:?}"),
+        };
+        let readme = "[![ci](https://img.shields.io/x)](y)\n![Screenshot](docs/shot.png)\n";
+        let shot = "https://raw.githubusercontent.com/owner/repo/HEAD/docs/shot.png".to_owned();
+        let custom = "https://repository-images.test/social.png".to_owned();
+        let card = "https://opengraph.githubassets.com/1/owner/repo".to_owned();
+        assert_eq!(
+            named(images(&repo, Some(&graph(&custom, true)), Some(readme))),
+            [
+                (custom.clone(), Source::GithubSocial),
+                (shot.clone(), Source::GithubReadme)
+            ]
+        );
+        assert_eq!(
+            named(images(&repo, Some(&graph(&card, false)), Some(readme))),
+            [
+                (shot.clone(), Source::GithubReadme),
+                (card.clone(), Source::GithubCard)
+            ]
+        );
+        assert_eq!(
+            named(images(&repo, Some(&graph(&card, false)), None)),
+            [(card, Source::GithubCard)]
+        );
+        assert_eq!(
+            named(images(&repo, None, Some(readme))),
+            [(shot, Source::GithubReadme)],
+            "without an answer about the preview"
+        );
+        let answer: Graph = serde_json::from_str(
+            r#"{"data":{"repository":{"openGraphImageUrl":"https://x.test/p.png","usesCustomOpenGraphImage":true}}}"#,
+        )
+        .unwrap();
+        let read = answer.data.unwrap().repository.unwrap();
+        assert_eq!(read.preview.as_deref(), Some("https://x.test/p.png"));
+        assert!(read.custom_preview);
+        assert!(preview_query().contains(PREVIEW));
+        assert_eq!(
+            preview_query().matches('{').count(),
+            preview_query().matches('}').count()
         );
     }
 }

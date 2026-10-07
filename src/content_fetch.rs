@@ -23,6 +23,8 @@ use crate::content_store::{Access, Completeness, Line, Page, Status, Tier};
 use crate::extract::{self, Class};
 use crate::fetch::{self, Fetcher, Refusal, Response};
 use crate::head;
+use crate::image_page;
+use crate::image_pick::{self, Found};
 
 /// The most of a page's body read; enough for any article, not for a file.
 pub const BODY_CAP: usize = 10 * 1024 * 1024;
@@ -33,45 +35,65 @@ const RETRY_AFTER_CAP: Duration = Duration::from_secs(60);
 /// Runs ending in `error` before a page is `unavailable`.
 pub const RUNS_BEFORE_UNAVAILABLE: u32 = 3;
 
-/// One page's outcome: its line, without the run's attempt number yet, and
-/// its text when there is text to keep.
+/// One page's outcome: its line, without the run's attempt number yet, its
+/// text when there is text to keep, and what it says about its image.
 #[derive(Debug, Clone)]
 pub struct Capture {
     pub line: Line,
     pub page: Option<Page>,
+    pub images: Found,
 }
 
-/// A failure that may pass: worth another try after a wait.
+impl Capture {
+    /// An attempt that ended without reading the page.
+    pub fn ended(line: Line) -> Self {
+        Self {
+            line,
+            page: None,
+            images: Found::Unread,
+        }
+    }
+}
+
+/// A failure that may pass: worth another try after a wait. `T` is how
+/// the attempt ends once its retries are spent.
 #[derive(Debug, Clone)]
-pub struct Passing {
-    line: Box<Line>,
+pub struct Passing<T = Capture> {
+    failed: Box<T>,
     retry_after: Option<Duration>,
+}
+
+impl<T> Passing<T> {
+    /// Failure `failed`, to be retried no sooner than `retry_after`.
+    pub fn after(failed: T, retry_after: Option<Duration>) -> Self {
+        Self {
+            failed: Box::new(failed),
+            retry_after,
+        }
+    }
 }
 
 impl Passing {
     /// Failure `line`, to be retried no sooner than `retry_after`.
     pub fn new(line: Line, retry_after: Option<Duration>) -> Self {
-        Self {
-            line: Box::new(line),
-            retry_after,
-        }
+        Self::after(Capture::ended(line), retry_after)
     }
 
     #[cfg(test)]
     pub fn line(&self) -> &Line {
-        &self.line
+        &self.failed.line
     }
 }
 
-/// Fetches and reads one page, retrying passing failures. Never fails: a
-/// failure is a capture too.
-pub fn capture(fetcher: &Fetcher, raw: &str) -> Capture {
-    retrying(|| once(fetcher, raw))
+/// Fetches and reads one page, retrying passing failures, and with
+/// `images` the images it names. Never fails: a failure is a capture too.
+pub fn capture(fetcher: &Fetcher, raw: &str, images: bool) -> Capture {
+    retrying(|| once(fetcher, raw, images))
 }
 
 /// Tries `once` until it captures something or its passing failures have
-/// had their retries; every route retries by these rules.
-pub fn retrying(mut once: impl FnMut() -> Result<Capture, Passing>) -> Capture {
+/// had their retries; every route, and every image, retries by these rules.
+pub fn retrying<T>(mut once: impl FnMut() -> Result<T, Passing<T>>) -> T {
     let mut retry = 0;
     loop {
         match once() {
@@ -80,10 +102,7 @@ pub fn retrying(mut once: impl FnMut() -> Result<Capture, Passing>) -> Capture {
                 retry += 1;
                 let jitter = Duration::from_millis(random() % 1000);
                 let Some(wait) = retry_wait(retry, passing.retry_after, jitter) else {
-                    return Capture {
-                        line: *passing.line,
-                        page: None,
-                    };
+                    return *passing.failed;
                 };
                 std::thread::sleep(wait);
             }
@@ -91,7 +110,7 @@ pub fn retrying(mut once: impl FnMut() -> Result<Capture, Passing>) -> Capture {
     }
 }
 
-fn once(fetcher: &Fetcher, raw: &str) -> Result<Capture, Passing> {
+fn once(fetcher: &Fetcher, raw: &str, images: bool) -> Result<Capture, Passing> {
     let response = match fetcher.get(raw, fetch::ACCEPT_HTML) {
         Ok(response) => response,
         Err(refusal) => return refused(raw, Tier::Web, refusal),
@@ -99,7 +118,7 @@ fn once(fetcher: &Fetcher, raw: &str) -> Result<Capture, Passing> {
     if response.status == 429 {
         fetcher.slow_down(&response.url);
     }
-    read(raw, response)
+    read(raw, response, images)
 }
 
 /// A line for page `raw`, read by `tier` without signing in.
@@ -126,12 +145,12 @@ pub fn refused(raw: &str, tier: Tier, refusal: Refusal) -> Result<Capture, Passi
         }
         _ => ended(Status::Error),
     };
-    Ok(Capture { line, page: None })
+    Ok(Capture::ended(line))
 }
 
 /// Connection trouble that may be gone in a few seconds. A name that does
 /// not resolve is not.
-fn is_passing(reason: &str) -> bool {
+pub fn is_passing(reason: &str) -> bool {
     matches!(
         reason,
         "timeout" | "connection reset" | "connection failed" | "connection closed early"
@@ -151,7 +170,7 @@ pub fn status_outcome(status: u16) -> Option<(Status, bool)> {
     }
 }
 
-fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
+fn read(raw: &str, mut response: Response, images: bool) -> Result<Capture, Passing> {
     let final_url = response.url.to_string();
     let status = response.status;
     let line = |state: Status, reason: Option<String>| {
@@ -161,7 +180,7 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
         line.http_status = Some(status);
         line
     };
-    let done = |line: Line| Ok(Capture { line, page: None });
+    let done = |line: Line| Ok(Capture::ended(line));
     if let Some((state, passing)) = status_outcome(status) {
         let failed = line(state, Some(format!("HTTP {status}")));
         if passing {
@@ -171,7 +190,9 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
     }
     let mime = response.mime();
     if !mime.is_empty() && !mime.contains("html") {
-        return done(line(Status::NotHtml, Some(format!("not HTML ({mime})"))));
+        let mut ended = Capture::ended(line(Status::NotHtml, Some(format!("not HTML ({mime})"))));
+        ended.images = image_pick::not_html(&mime, &final_url);
+        return Ok(ended);
     }
     let bytes = match body(&mut response, |state, reason| line(state, Some(reason))) {
         Ok(bytes) => bytes,
@@ -190,6 +211,12 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
         }
     };
     let found = extract::page(&html, Some(&final_url));
+    // A sign-in screen's head describes the screen, not the page.
+    let images = if !images || found.class == Class::BehindLogin {
+        Found::Unread
+    } else {
+        image_page::page(&html, found.article.as_deref(), &response.url)
+    };
     let mut captured = line(class_status(found.class), found.reason.map(str::to_owned));
     captured.lang.clone_from(&found.lang);
     let page = (!found.markdown.is_empty()).then(|| {
@@ -216,18 +243,21 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
     Ok(Capture {
         line: captured,
         page,
+        images,
     })
 }
 
 /// A passing failure `failed`, to be retried no sooner than `response`
 /// asks in its Retry-After.
 pub fn passing(response: &Response, failed: Line) -> Passing {
-    Passing::new(
-        failed,
-        response
-            .header("retry-after")
-            .and_then(|value| retry_after(value, Timestamp::now())),
-    )
+    Passing::new(failed, asked_wait(response))
+}
+
+/// How long `response` asks us to wait in its Retry-After.
+pub fn asked_wait(response: &Response) -> Option<Duration> {
+    response
+        .header("retry-after")
+        .and_then(|value| retry_after(value, Timestamp::now()))
 }
 
 /// Up to [`BODY_CAP`] of a response's body, sent as is. Otherwise how the
@@ -236,7 +266,7 @@ pub fn body(
     response: &mut Response,
     line: impl Fn(Status, String) -> Line,
 ) -> Result<Vec<u8>, Box<Result<Capture, Passing>>> {
-    let done = |line: Line| Err(Box::new(Ok(Capture { line, page: None })));
+    let done = |line: Line| Err(Box::new(Ok(Capture::ended(line))));
     if !response.is_identity() {
         return done(line(
             Status::Error,
@@ -290,23 +320,59 @@ pub fn retry_after(value: &str, now: Timestamp) -> Option<Duration> {
     Some(Duration::from_secs(u64::try_from(seconds).unwrap_or(0)))
 }
 
+/// A log line whose page is tried again on the next run while it says
+/// `error`, until [`RUNS_BEFORE_UNAVAILABLE`] runs have.
+pub trait Attempted {
+    fn is_error(&self) -> bool;
+    fn attempt(&self) -> u32;
+    fn set_attempt(&mut self, attempt: u32);
+    fn reason(&self) -> Option<&str>;
+    /// The page is given up on: `unavailable`, saying `reason`.
+    fn give_up(&mut self, reason: String);
+}
+
+impl Attempted for Line {
+    fn is_error(&self) -> bool {
+        self.status == Status::Error
+    }
+
+    fn attempt(&self) -> u32 {
+        self.attempt
+    }
+
+    fn set_attempt(&mut self, attempt: u32) {
+        self.attempt = attempt;
+    }
+
+    fn reason(&self) -> Option<&str> {
+        self.reason.as_deref()
+    }
+
+    fn give_up(&mut self, reason: String) {
+        self.status = Status::Unavailable;
+        self.reason = Some(reason);
+    }
+}
+
 /// A page's line for this run: its attempt number, and `unavailable` once
 /// the runs ending in `error` reach [`RUNS_BEFORE_UNAVAILABLE`].
-pub fn settle(mut line: Line, attempt: u32) -> Line {
-    line.attempt = attempt;
-    if line.status == Status::Error && attempt >= RUNS_BEFORE_UNAVAILABLE {
-        line.status = Status::Unavailable;
-        let reason = line.reason.take().unwrap_or_default();
-        line.reason = Some(format!("{reason}; failed on {attempt} runs"));
+pub fn settle<L: Attempted>(mut line: L, attempt: u32) -> L {
+    line.set_attempt(attempt);
+    if line.is_error() && attempt >= RUNS_BEFORE_UNAVAILABLE {
+        let reason = format!(
+            "{}; failed on {attempt} runs",
+            line.reason().unwrap_or_default()
+        );
+        line.give_up(reason);
     }
     line
 }
 
 /// The attempt number for a page whose latest line is `previous`: one more
 /// after an `error`, else a fresh start.
-pub fn next_attempt(previous: Option<&Line>) -> u32 {
+pub fn next_attempt<L: Attempted>(previous: Option<&L>) -> u32 {
     match previous {
-        Some(line) if line.status == Status::Error => line.attempt.saturating_add(1),
+        Some(line) if line.is_error() => line.attempt().saturating_add(1),
         _ => 1,
     }
 }
@@ -396,7 +462,7 @@ mod tests {
     fn refusals_keep_rules_home_and_retry_only_passing_failures() {
         let status = |refusal| match refused("https://a.test/", Tier::Web, refusal) {
             Ok(capture) => (capture.line.status, false),
-            Err(passing) => (passing.line.status, true),
+            Err(passing) => (passing.line().status, true),
         };
         assert_eq!(status(Refusal::PrivateAddress), (Status::Skipped, false));
         assert_eq!(status(Refusal::TokenOrSearch), (Status::Skipped, false));
@@ -427,8 +493,8 @@ mod tests {
     #[test]
     fn a_page_failing_on_three_runs_becomes_unavailable() {
         let error = Line::new("https://a.test/", Status::Error).with_reason("HTTP 503");
-        assert_eq!(next_attempt(None), 1);
-        let first = settle(error.clone(), next_attempt(None));
+        assert_eq!(next_attempt::<Line>(None), 1);
+        let first = settle(error.clone(), next_attempt::<Line>(None));
         assert_eq!((first.status, first.attempt), (Status::Error, 1));
         let second = settle(error.clone(), next_attempt(Some(&first)));
         assert_eq!((second.status, second.attempt), (Status::Error, 2));

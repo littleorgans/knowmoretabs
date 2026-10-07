@@ -16,6 +16,7 @@ mod capture;
 mod cli;
 mod content;
 mod content_fetch;
+mod content_image;
 mod content_plan;
 mod content_route;
 mod content_store;
@@ -33,7 +34,12 @@ mod github_page;
 mod guard;
 mod head;
 mod history;
+mod image_fetch;
+mod image_page;
+mod image_pick;
+mod image_store;
 mod jsonl;
+mod jsonld;
 mod library;
 mod library_commands;
 mod library_history;
@@ -127,9 +133,11 @@ fn main() -> ExitCode {
             tags::tags_command(&root, &edit, *all, cli.json, log)
         }
         Some(Command::Enrich(fetch)) => enrich::command(&root, (*fetch).into(), cli.json, log),
-        Some(Command::Content { fetch, urls }) => {
-            content::command(&root, (*fetch).into(), urls, cli.json, log)
-        }
+        Some(Command::Content {
+            fetch,
+            urls,
+            no_images,
+        }) => content::command(&root, (*fetch).into(), urls, *no_images, cli.json, log),
         Some(Command::Doctor { live }) => {
             doctor::command(&root, cli.browser.as_deref(), *live, cli.json, log)
         }

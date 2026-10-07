@@ -25,6 +25,7 @@ use crate::fetch::Fetcher;
 use crate::github_api::Readiness;
 use crate::out;
 use crate::platform;
+use crate::targets::Outcome as _;
 use crate::tools::{Probe, System};
 use crate::xpost;
 use crate::ytdlp;

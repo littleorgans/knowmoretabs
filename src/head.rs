@@ -269,7 +269,7 @@ fn attr<'a>(attrs: &'a [(String, String)], name: &str) -> Option<&'a str> {
 /// A tag's attributes from just after its name, and where the tag ends.
 /// Every index this stops at sits on or just past an ASCII byte, so slicing
 /// the `str` there is always on a character boundary.
-fn attributes(html: &str, mut i: usize) -> (Vec<(String, String)>, usize) {
+pub fn attributes(html: &str, mut i: usize) -> (Vec<(String, String)>, usize) {
     let b = html.as_bytes();
     let mut attrs: Vec<(String, String)> = Vec::new();
     let mut names = std::collections::HashSet::new();

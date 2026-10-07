@@ -15,6 +15,7 @@ use url::Url;
 use crate::fetch::{self, Fetcher, Refusal, Response};
 use crate::github;
 use crate::head::{self, Head};
+use crate::jsonld;
 use crate::metadata_writer::{Line, Outcome};
 
 /// `YouTube`'s meta tags start about 0.7 MB into its pages.
@@ -145,40 +146,23 @@ fn fill(record: &mut Line, found: &Head, url: &Url) {
 /// Every `@type` in the page's JSON-LD, `@graph` and nesting included, in
 /// the order met and without the schema.org prefix.
 fn jsonld_types(blocks: &[String]) -> Vec<String> {
-    fn walk(value: &serde_json::Value, found: &mut Vec<String>) {
-        match value {
-            serde_json::Value::Object(map) => {
-                let types = match map.get("@type") {
-                    Some(serde_json::Value::Array(items)) => items.iter().collect(),
-                    Some(one) => vec![one],
-                    None => Vec::new(),
-                };
-                for name in types.into_iter().filter_map(serde_json::Value::as_str) {
-                    let name = ["https://schema.org/", "http://schema.org/"]
-                        .iter()
-                        .fold(name.trim(), |n, prefix| n.strip_prefix(prefix).unwrap_or(n));
-                    if !name.is_empty() && found.len() < 16 && !found.iter().any(|f| f == name) {
-                        found.push(name.to_owned());
-                    }
+    let mut found: Vec<String> = Vec::new();
+    for value in jsonld::parse(blocks) {
+        jsonld::walk(&value, &mut |map, _| {
+            let types = match map.get("@type") {
+                Some(serde_json::Value::Array(items)) => items.iter().collect(),
+                Some(one) => vec![one],
+                None => Vec::new(),
+            };
+            for name in types.into_iter().filter_map(serde_json::Value::as_str) {
+                let name = ["https://schema.org/", "http://schema.org/"]
+                    .iter()
+                    .fold(name.trim(), |n, prefix| n.strip_prefix(prefix).unwrap_or(n));
+                if !name.is_empty() && found.len() < 16 && !found.iter().any(|f| f == name) {
+                    found.push(name.to_owned());
                 }
-                map.values().for_each(|v| walk(v, found));
             }
-            serde_json::Value::Array(items) => items.iter().for_each(|v| walk(v, found)),
-            _ => {}
-        }
-    }
-    let mut found = Vec::new();
-    for block in blocks {
-        // Some pages wrap the JSON in an HTML comment or CDATA.
-        let text = block
-            .trim()
-            .trim_start_matches("<!--")
-            .trim_end_matches("-->")
-            .trim_start_matches("//<![CDATA[")
-            .trim_end_matches("//]]>");
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(text) {
-            walk(&value, &mut found);
-        }
+        });
     }
     found
 }
