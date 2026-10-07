@@ -326,45 +326,95 @@ fn io_reason(err: &io::Error) -> String {
 
 /// Spaces requests to each host. Every request, redirect hops included,
 /// takes the next free slot for its host, whichever worker asks.
+///
+/// The rule: a request is released only once a full interval has passed
+/// since its host's last release, each release timed under the lock as it
+/// is granted. A booked slot only orders the waiters; one that wakes to
+/// find the last release later than it planned for, because it or another
+/// waiter woke late, books again. No lock is held across a sleep.
 struct Pacer {
     interval: Duration,
-    /// Each host's next free slot and its interval, when it has one.
-    next: Mutex<HashMap<String, (Instant, Duration)>>,
+    hosts: Mutex<HashMap<String, Pace>>,
+}
+
+/// One host's pacing.
+struct Pace {
+    interval: Duration,
+    /// The next slot no waiter has booked.
+    next: Instant,
+    /// When the last request to this host was released.
+    last: Option<Instant>,
 }
 
 impl Pacer {
     fn new(interval: Duration) -> Self {
         Self {
             interval,
-            next: Mutex::new(HashMap::new()),
+            hosts: Mutex::new(HashMap::new()),
         }
     }
 
     fn wait(&self, host: &str, deadline: Instant) -> bool {
-        let slot = {
-            let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
-            let now = Instant::now();
-            let (slot, interval) = next
-                .get(host)
-                .map_or((now, self.interval), |(at, interval)| {
-                    ((*at).max(now), *interval)
-                });
-            if slot >= deadline {
-                return false;
-            }
-            next.insert(host.to_owned(), (slot + interval, interval));
-            slot
-        };
-        std::thread::sleep(slot.saturating_duration_since(Instant::now()));
-        Instant::now() < deadline
+        self.wait_on(host, deadline, Instant::now, std::thread::sleep)
+    }
+
+    /// [`Pacer::wait`] on a given clock, so a late wakeup can be simulated.
+    fn wait_on(
+        &self,
+        host: &str,
+        deadline: Instant,
+        clock: impl Fn() -> Instant,
+        mut sleep: impl FnMut(Duration),
+    ) -> bool {
+        let mut booked = None;
+        loop {
+            let slot = {
+                let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
+                let now = clock();
+                let pace = self.pace(&mut hosts, host, now);
+                let ready = pace.last.map_or(now, |last| last + pace.interval);
+                let slot = match booked {
+                    Some(slot) if slot > now || ready <= now => slot,
+                    _ => {
+                        let slot = pace.next.max(now).max(ready);
+                        if slot >= deadline {
+                            return false;
+                        }
+                        pace.next = slot + pace.interval;
+                        slot
+                    }
+                };
+                if slot <= now {
+                    let go = now < deadline;
+                    if go {
+                        pace.last = Some(now);
+                    }
+                    return go;
+                }
+                slot
+            };
+            booked = Some(slot);
+            sleep(slot.saturating_duration_since(clock()));
+        }
     }
 
     fn slow_down(&self, host: &str) {
-        let mut next = self.next.lock().unwrap_or_else(PoisonError::into_inner);
-        let (_, interval) = next
-            .entry(host.to_owned())
-            .or_insert((Instant::now(), self.interval));
-        *interval = (*interval * 2).min(MAX_PACE.max(self.interval));
+        let mut hosts = self.hosts.lock().unwrap_or_else(PoisonError::into_inner);
+        let pace = self.pace(&mut hosts, host, Instant::now());
+        pace.interval = (pace.interval * 2).min(MAX_PACE.max(self.interval));
+    }
+
+    fn pace<'a>(
+        &self,
+        hosts: &'a mut HashMap<String, Pace>,
+        host: &str,
+        now: Instant,
+    ) -> &'a mut Pace {
+        hosts.entry(host.to_owned()).or_insert_with(|| Pace {
+            interval: self.interval,
+            next: now,
+            last: None,
+        })
     }
 }
 
@@ -441,6 +491,7 @@ fn test_timeout() -> Option<Duration> {
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::io::{BufRead, BufReader, Write};
     use std::net::TcpListener;
     use std::sync::Arc;
@@ -478,16 +529,66 @@ mod tests {
         );
     }
 
+    /// Waits for `a.test` on a simulated clock, which only `sleep` moves,
+    /// and returns when the request was released.
+    fn released(pacer: &Pacer, clock: &Cell<Instant>, sleep: impl FnMut(Duration)) -> Instant {
+        assert!(pacer.wait_on("a.test", clock.get() + TIMEOUT, || clock.get(), sleep));
+        clock.get()
+    }
+
+    /// A sleep on `clock` that wakes `late` after it should.
+    fn oversleep(clock: &Cell<Instant>, late: Duration) -> impl FnMut(Duration) + '_ {
+        move |pause| clock.set(clock.get() + pause + late)
+    }
+
+    #[test]
+    fn a_late_wakeup_never_brings_the_next_request_closer() {
+        let interval = Duration::from_millis(200);
+        let pacer = Pacer::new(interval);
+        let clock = Cell::new(Instant::now());
+        let first = released(&pacer, &clock, oversleep(&clock, Duration::ZERO));
+        let second = released(
+            &pacer,
+            &clock,
+            oversleep(&clock, Duration::from_millis(150)),
+        );
+        let third = released(&pacer, &clock, oversleep(&clock, Duration::ZERO));
+        assert_eq!(second - first, Duration::from_millis(350));
+        assert_eq!(third - second, interval, "paced from the late release");
+    }
+
+    #[test]
+    fn a_waiter_overtaken_while_asleep_waits_a_full_interval_after() {
+        let interval = Duration::from_millis(200);
+        let pacer = Pacer::new(interval);
+        let clock = Cell::new(Instant::now());
+        let first = released(&pacer, &clock, oversleep(&clock, Duration::ZERO));
+        let mut ahead = None;
+        let behind = released(&pacer, &clock, |pause| {
+            if ahead.is_none() {
+                // Asleep with the earlier slot booked: the waiter booked after
+                // it goes first, then this one wakes 50 ms after that.
+                ahead = Some(released(&pacer, &clock, oversleep(&clock, Duration::ZERO)));
+                clock.set(clock.get() + Duration::from_millis(50));
+            } else {
+                clock.set(clock.get() + pause);
+            }
+        });
+        let ahead = ahead.unwrap();
+        assert_eq!(ahead - first, 2 * interval);
+        assert_eq!(behind - ahead, interval, "paced from the one ahead");
+    }
+
     #[test]
     fn slowing_down_doubles_one_host_interval_up_to_the_cap() {
         let pacer = Pacer::new(Duration::from_secs(1));
         let interval = |host: &str| {
             pacer
-                .next
+                .hosts
                 .lock()
                 .unwrap()
                 .get(host)
-                .map(|(_, interval)| *interval)
+                .map(|pace| pace.interval)
         };
         pacer.slow_down("a.test");
         assert_eq!(interval("a.test"), Some(Duration::from_secs(2)));

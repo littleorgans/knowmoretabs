@@ -3,7 +3,8 @@
 //! slice: content
 //! why: Each kind of document has a cheapest way to its text: an X post
 //!      through the X post API, a GitHub repository, issue, pull request or
-//!      discussion through `gh api`, anything else from its own site.
+//!      discussion through `gh api`, a `YouTube` video's captions through
+//!      yt-dlp, anything else from its own site.
 //!      Choosing it from the address, before any request, lets the plan say
 //!      which host every request goes to, fetch one document once whatever
 //!      address it was opened at, and keep profiles, channels and playlists
@@ -13,11 +14,15 @@
 use url::Url;
 
 use crate::content_fetch::{self, Capture};
+use crate::content_store::{Status, Tier};
 use crate::fetch::Fetcher;
 use crate::github::Target;
 use crate::github_api::{self, Gh};
 use crate::guard;
+use crate::targets::Cost;
 use crate::xpost;
+use crate::youtube::Address;
+use crate::ytdlp::{self, YtDlp};
 
 /// How a document is read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -28,6 +33,15 @@ pub enum Route {
     XPost(String),
     /// From the GitHub API through `gh`.
     Github(Target),
+    /// From `YouTube` through yt-dlp, by the video's id.
+    Youtube(String),
+}
+
+/// The external tools a run found ready.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Tools<'a> {
+    pub gh: Option<&'a Gh>,
+    pub ytdlp: Option<&'a YtDlp>,
 }
 
 impl Route {
@@ -35,6 +49,13 @@ impl Route {
     /// and `YouTube` that list documents rather than being one: profiles,
     /// timelines, channels and playlists.
     pub fn of(url: &Url) -> Option<Self> {
+        if let Some(address) = Address::of(url) {
+            return match address {
+                Address::Video(id) => Some(Self::Youtube(id)),
+                Address::Listing => None,
+                Address::Other => Some(Self::Web),
+            };
+        }
         let host = guard::host_key(url);
         let host = host
             .strip_prefix("www.")
@@ -44,22 +65,6 @@ impl Route {
         match host {
             "x.com" | "twitter.com" => xpost::post_id(url).map(Self::XPost),
             "github.com" => Some(Target::of(url).map_or(Self::Web, Self::Github)),
-            "youtube.com" => {
-                let first = url
-                    .path_segments()
-                    .into_iter()
-                    .flatten()
-                    .find(|segment| !segment.is_empty());
-                match first {
-                    Some(first)
-                        if first.starts_with('@')
-                            || ["channel", "c", "user", "playlist"].contains(&first) =>
-                    {
-                        None
-                    }
-                    _ => Some(Self::Web),
-                }
-            }
             _ => Some(Self::Web),
         }
     }
@@ -70,26 +75,41 @@ impl Route {
             Self::Web => None,
             Self::XPost(_) => Some(xpost::API_HOST),
             Self::Github(_) => Some(github_api::API_HOST),
+            Self::Youtube(_) => Some(ytdlp::HOST),
         }
     }
 
     /// How many of its host's requests may run at once: one for a host
-    /// paced a request a second, more for a tool with limits of its own.
+    /// paced a request a second or a tool run one at a time, more for a
+    /// tool with limits of its own.
     pub fn lanes(&self) -> usize {
         match self {
-            Self::Web | Self::XPost(_) => 1,
+            Self::Web | Self::XPost(_) | Self::Youtube(_) => 1,
             Self::Github(_) => github_api::CONCURRENT,
         }
     }
 
+    /// The least time one fetch holds its queue, for the dry run's
+    /// estimate: a second for a paced request, longer for a tool that waits
+    /// between its own requests, none for a tool with lanes and limits of
+    /// its own.
+    pub fn cost(&self) -> Cost {
+        match self {
+            Self::Web | Self::XPost(_) => Cost::Paced,
+            Self::Github(_) => Cost::Tool(0),
+            Self::Youtube(_) => Cost::Tool(ytdlp::SECONDS_AT_LEAST),
+        }
+    }
+
     /// What one fetch stands for: page `raw` without its fragment, the
-    /// post, or the repository or numbered thread, whatever address it was
-    /// opened at. Issues, pull requests and discussions share one number
+    /// post, the video, or the repository or numbered thread, whatever
+    /// address it was opened at. Issues, pull requests and discussions share one number
     /// space per repository, and GitHub names ignore case.
     pub fn key(&self, raw: &str) -> String {
         match self {
             Self::Web => without_fragment(raw),
             Self::XPost(id) => xpost::api_url(id),
+            Self::Youtube(id) => format!("youtube:{id}"),
             Self::Github(target) => {
                 let repo = target.repo().full_name().to_ascii_lowercase();
                 match target {
@@ -103,12 +123,19 @@ impl Route {
     }
 
     /// Reads page `raw`. A GitHub page without a usable `gh` is read from
-    /// the web, as the plan routes it.
-    pub fn capture(&self, fetcher: &Fetcher, gh: Option<&Gh>, raw: &str) -> Capture {
-        match (self, gh) {
-            (Self::XPost(id), _) => xpost::capture(fetcher, raw, id),
-            (Self::Github(target), Some(gh)) => github_api::capture(gh, raw, target),
-            (Self::Web | Self::Github(_), _) => content_fetch::capture(fetcher, raw),
+    /// the web, as the plan routes it; the plan never routes a video here
+    /// without yt-dlp, so one that arrives without it is an `error`.
+    pub fn capture(&self, fetcher: &Fetcher, tools: Tools, raw: &str) -> Capture {
+        match (self, tools.gh, tools.ytdlp) {
+            (Self::XPost(id), ..) => xpost::capture(fetcher, raw, id),
+            (Self::Github(target), Some(gh), _) => github_api::capture(gh, raw, target),
+            (Self::Youtube(id), _, Some(tool)) => ytdlp::capture(tool, raw, id),
+            (Self::Youtube(_), _, None) => Capture {
+                line: content_fetch::public_line(raw, Tier::Youtube, Status::Error)
+                    .with_reason("yt-dlp not ready"),
+                page: None,
+            },
+            (Self::Web | Self::Github(_), ..) => content_fetch::capture(fetcher, raw),
         }
     }
 }
@@ -174,6 +201,38 @@ mod tests {
         ] {
             assert!(route(raw).is_some(), "{raw}");
         }
+    }
+
+    #[test]
+    fn videos_route_to_yt_dlp_once_per_id_and_other_youtube_pages_to_the_web() {
+        let video = Route::Youtube("aBc-12_xYz9".to_owned());
+        let addresses = [
+            "https://www.youtube.com/watch?v=aBc-12_xYz9",
+            "https://m.youtube.com/watch?v=aBc-12_xYz9&t=95s",
+            "https://music.youtube.com/watch?v=aBc-12_xYz9&list=PL0000",
+            "https://www.youtube.com/shorts/aBc-12_xYz9",
+            "https://youtu.be/aBc-12_xYz9?si=abc",
+        ];
+        for raw in addresses {
+            let routed = route(raw).unwrap();
+            assert_eq!(routed, video, "{raw}");
+            assert_eq!(routed.key(raw), "youtube:aBc-12_xYz9", "{raw}");
+        }
+        assert_eq!(video.host(), Some(ytdlp::HOST));
+        assert_eq!(video.lanes(), 1, "one video at a time");
+        assert_eq!(video.cost(), Cost::Tool(ytdlp::SECONDS_AT_LEAST));
+        for raw in [
+            "https://www.youtube.com/watch?v=abc",
+            "https://youtu.be/abc",
+            "https://www.youtube.com/",
+            "https://studio.youtube.com/video/aBc-12_xYz9",
+        ] {
+            assert_eq!(route(raw), Some(Route::Web), "{raw}");
+        }
+        assert_eq!(
+            route("https://music.youtube.com/playlist?list=PL0000"),
+            None
+        );
     }
 
     #[test]

@@ -27,6 +27,7 @@ use crate::out;
 use crate::platform;
 use crate::tools::{Probe, System};
 use crate::xpost;
+use crate::ytdlp;
 
 /// The one tier content capture cannot do without.
 const REQUIRED: &str = "generic";
@@ -300,32 +301,41 @@ fn x_check(x: Option<Result<u16, String>>) -> Check {
 }
 
 fn youtube(probe: &impl Probe) -> Check {
-    let later = "the YouTube route is not built yet, so videos are read as web pages";
-    let Some(ytdlp) = probe.find("yt-dlp") else {
-        return Check::new(
-            "youtube",
-            State::Missing,
-            format!("yt-dlp not found; {later}"),
-        )
-        .hint("install yt-dlp and deno (or node)");
+    let waiting = "YouTube videos wait for it, unrecorded";
+    let (path, version) = match ytdlp::Readiness::check(probe) {
+        ytdlp::Readiness::Missing => {
+            return Check::new(
+                "youtube",
+                State::Missing,
+                format!("yt-dlp not found; {waiting}"),
+            )
+            .hint("install yt-dlp and deno (or node)");
+        }
+        ytdlp::Readiness::NoRuntime(path, version) => {
+            return Check::new(
+                "youtube",
+                State::Degraded,
+                format!(
+                    "{}; no deno or node for it; {waiting}",
+                    named(ytdlp::NAME, version, &path)
+                ),
+            )
+            .hint("install deno (or node): yt-dlp needs a JavaScript runtime for YouTube");
+        }
+        ytdlp::Readiness::Ready(tool) => (tool.path, tool.version),
     };
-    let ytdlp = found(probe, "yt-dlp", &ytdlp);
-    let runtimes: Vec<String> = ["deno", "node"]
+    let runtimes: Vec<String> = ytdlp::RUNTIMES
         .into_iter()
         .filter_map(|name| Some(found(probe, name, &probe.find(name)?)))
         .collect();
-    if runtimes.is_empty() {
-        return Check::new(
-            "youtube",
-            State::Degraded,
-            format!("{ytdlp}; no deno or node for it; {later}"),
-        )
-        .hint("install deno (or node): yt-dlp needs a JavaScript runtime for YouTube");
-    }
     Check::new(
         "youtube",
         State::Ready,
-        format!("{ytdlp}; {}; {later}", runtimes.join(", ")),
+        format!(
+            "{}; {}; videos are read through yt-dlp",
+            named(ytdlp::NAME, version, &path),
+            runtimes.join(", ")
+        ),
     )
 }
 
@@ -476,8 +486,9 @@ mod tests {
             detail("x"),
             "compiled in; api.fxtwitter.com answered HTTP 200"
         );
-        assert!(
-            detail("youtube").starts_with("yt-dlp 2026.09.01; deno 2.5.0 (stable), node v25.0.0;")
+        assert_eq!(
+            detail("youtube"),
+            "yt-dlp 2026.09.01; deno 2.5.0 (stable), node v25.0.0; videos are read through yt-dlp"
         );
         assert!(detail("headless").starts_with("Google Chrome 141.0.0.0;"));
         assert_eq!(
@@ -543,6 +554,10 @@ mod tests {
         assert_eq!(
             report.checks[1].detail,
             "gh version 2.102.0 (2026-09-30), not signed in (gh auth status: exit 1)"
+        );
+        assert_eq!(
+            report.checks[3].detail,
+            "yt-dlp 2026.09.01; no deno or node for it; YouTube videos wait for it, unrecorded"
         );
         assert_eq!(
             table.runs.borrow().as_slice(),

@@ -3,7 +3,7 @@
 //!
 //! slice: content
 //! why: Some documents are best read by a tool the owner already trusts:
-//!      `gh` for GitHub, later yt-dlp for videos and the installed browser
+//!      `gh` for GitHub, yt-dlp for videos, and later the installed browser
 //!      for pages that need scripts. Every such run is the same promise: an
 //!      argument vector and never a shell, no input, a fixed timeout after
 //!      which the program is killed, a cap on what is kept of its output,
@@ -261,10 +261,16 @@ fn first_line(text: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// A program's standard error as one line of reason: its first line that
-/// says something, cut to [`REASON_CHARS`] characters.
+/// A program's standard error as one line of reason: its first `ERROR:`
+/// line, since a tool such as yt-dlp warns before it fails, else its first
+/// line that says something; cut to [`REASON_CHARS`] characters.
 pub fn complaint(stderr: &str) -> String {
-    let Some(line) = first_line(stderr) else {
+    let error = stderr
+        .lines()
+        .map(str::trim)
+        .find(|line| line.starts_with("ERROR:"))
+        .map(str::to_owned);
+    let Some(line) = error.or_else(|| first_line(stderr)) else {
         return String::new();
     };
     let mut cut: String = line.chars().take(REASON_CHARS).collect();
@@ -450,6 +456,11 @@ mod tests {
             complaint("\n  gh: Not Found (HTTP 404)  \nmore detail\n"),
             "gh: Not Found (HTTP 404)"
         );
+        assert_eq!(
+            complaint("WARNING: a hint\nERROR: the failure\nERROR: a second\n"),
+            "ERROR: the failure"
+        );
+        assert_eq!(complaint("WARNING: only a hint\n"), "WARNING: only a hint");
         let long = "é".repeat(REASON_CHARS + 5);
         let cut = complaint(&long);
         assert_eq!(cut.chars().count(), REASON_CHARS + 1);

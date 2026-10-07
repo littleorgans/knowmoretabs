@@ -209,6 +209,7 @@ fn read(raw: &str, mut response: Response) -> Result<Capture, Passing> {
                 Completeness::Thin
             },
             chars: found.chars,
+            captions: None,
             markdown: found.markdown,
         }
     });

@@ -19,6 +19,8 @@ mod content_fetch;
 mod content_plan;
 mod content_route;
 mod content_store;
+#[cfg(test)]
+mod content_test;
 mod doctor;
 mod enrich;
 mod error;
@@ -53,6 +55,9 @@ mod targets;
 mod tools;
 mod triage;
 mod xpost;
+mod youtube;
+mod youtube_page;
+mod ytdlp;
 
 use std::fmt::Write as _;
 use std::process::ExitCode;
