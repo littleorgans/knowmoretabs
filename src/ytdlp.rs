@@ -532,51 +532,69 @@ mod tests {
 
     #[test]
     fn the_first_call_describes_the_rebuilt_address_without_cookies() {
-        let args = describe_args(&tool(), Path::new("/scratch"), "-Bc-12_xYz9");
+        let dir = Path::new("/scratch with spaces");
+        let output = dir.join("video.%(ext)s");
+        let args = describe_args(&tool(), dir, "-Bc-12_xYz9");
         assert_eq!(
-            args.join(" "),
-            "--ignore-config --no-playlist --skip-download --sleep-requests 1 \
-             -o /scratch/video.%(ext)s --write-info-json --js-runtimes node:/opt/bin/node \
-             -- https://www.youtube.com/watch?v=-Bc-12_xYz9"
+            args,
+            [
+                "--ignore-config",
+                "--no-playlist",
+                "--skip-download",
+                "--sleep-requests",
+                "1",
+                "-o",
+                output.to_str().unwrap(),
+                "--write-info-json",
+                "--js-runtimes",
+                "node:/opt/bin/node",
+                "--",
+                "https://www.youtube.com/watch?v=-Bc-12_xYz9",
+            ]
+            .map(str::to_owned)
         );
         assert!(args.iter().all(|arg| !arg.contains("cookies")));
     }
 
     #[test]
     fn the_second_call_downloads_only_the_chosen_track() {
-        let manual = Choice {
-            key: "en-CA-captiontrack".to_owned(),
-            kind: Captions::Manual,
-        };
-        let args = caption_args(
-            Path::new("/scratch"),
-            Path::new("/scratch/video.info.json"),
-            &manual,
-        );
-        assert_eq!(
-            args.join(" "),
-            "--ignore-config --no-playlist --skip-download --sleep-requests 1 \
-             -o /scratch/captions.%(ext)s --load-info-json /scratch/video.info.json \
-             --write-subs --sub-langs en-CA-captiontrack --sub-format vtt"
-        );
-        let automatic = Choice {
-            key: "de-orig".to_owned(),
-            kind: Captions::Automatic,
-        };
-        let args = caption_args(
-            Path::new("/scratch"),
-            Path::new("/scratch/video.info.json"),
-            &automatic,
-        );
-        assert!(
-            args.join(" ")
-                .contains("--write-auto-subs --sub-langs de-orig ")
-        );
-        assert!(!args.contains(&"--write-subs".to_owned()));
-        assert!(
-            args.iter()
-                .all(|arg| !arg.contains("cookies") && arg != "all")
-        );
+        let dir = Path::new("/scratch with spaces");
+        let output = dir.join("captions.%(ext)s");
+        let info = dir.join("video.info.json");
+        for (key, kind, flag) in [
+            ("en-CA-captiontrack", Captions::Manual, "--write-subs"),
+            ("de-orig", Captions::Automatic, "--write-auto-subs"),
+        ] {
+            let choice = Choice {
+                key: key.to_owned(),
+                kind,
+            };
+            let args = caption_args(dir, &info, &choice);
+            assert_eq!(
+                args,
+                [
+                    "--ignore-config",
+                    "--no-playlist",
+                    "--skip-download",
+                    "--sleep-requests",
+                    "1",
+                    "-o",
+                    output.to_str().unwrap(),
+                    "--load-info-json",
+                    info.to_str().unwrap(),
+                    flag,
+                    "--sub-langs",
+                    key,
+                    "--sub-format",
+                    "vtt",
+                ]
+                .map(str::to_owned)
+            );
+            assert!(
+                args.iter()
+                    .all(|arg| !arg.contains("cookies") && arg != "all")
+            );
+        }
     }
 
     #[test]
