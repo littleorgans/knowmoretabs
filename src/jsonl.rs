@@ -69,7 +69,6 @@ impl<T: Serialize> Appender<T> {
     pub fn open_locked(root: &Path, path: PathBuf, _held: &Lock) -> Result<Self, Error> {
         if let Some(dir) = path.parent() {
             archive::create_private_dir(dir).map_err(Error::io("create", dir))?;
-            archive::make_private(dir).map_err(Error::io("make private", dir))?;
         }
         let mut options = File::options();
         options.read(true).append(true).create(true);

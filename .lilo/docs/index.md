@@ -49,7 +49,7 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 - State files such as `library.json` are replaced whole: staged beside the target, then renamed (`code:src/archive.rs#replace_file`).
 - `pages/metadata.jsonl`, `pages/content.jsonl` and `pages/images.jsonl` are append only: one whole line per write, under the lock, synced before the next (`code:src/jsonl.rs#Appender`).
 - A content file or a page image is replaced whole, then its log line appended, under one hold of the lock, never across a request or a decode; an unchanged body or image leaves the file untouched (`code:src/jsonl.rs#Store`, `code:src/content_store.rs#Store`, `code:src/image_store.rs#Store`).
-- Opening a log or file store repairs its Unix directory and file permissions under the archive lock, including existing images, without rewriting their bytes (`code:src/archive.rs#make_private`, `code:src/jsonl.rs#Appender`, `code:src/jsonl.rs#Store`).
+- Opening a log repairs its file's Unix permissions, and opening a file store repairs its own directory and files, under the archive lock, including existing images, without rewriting their bytes (`code:src/archive.rs#make_private`, `code:src/jsonl.rs#Appender`, `code:src/jsonl.rs#Store`).
 - On Unix the archive root and its private directories are created mode 0700; on Windows they inherit the parent's ACL (`code:src/archive.rs#create_private_dir`).
 - An unknown session command is skipped and counted, never fatal; a torn tail is reported as truncated bytes (`code:src/session.rs`, `code:src/snss.rs`).
 - The encrypted-sessions preflight refuses a stale save with exit 3; `--force` cannot bypass it (`code:src/staleness.rs#check`, `code:src/error.rs#exit_code`).

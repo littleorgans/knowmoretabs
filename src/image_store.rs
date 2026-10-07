@@ -443,12 +443,19 @@ mod tests {
         );
         drop(held);
         opening.join().unwrap().unwrap();
-        for path in [root.join(metadata::DIR), super::dir(root)] {
-            assert_eq!(
-                fs::metadata(path).unwrap().permissions().mode() & 0o777,
-                0o700
-            );
-        }
+        assert_eq!(
+            fs::metadata(root.join(metadata::DIR))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o755,
+            "a directory the store does not own is left alone"
+        );
+        assert_eq!(
+            fs::metadata(super::dir(root)).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
         for path in [&image, &log_path(root)] {
             assert_eq!(
                 fs::metadata(path).unwrap().permissions().mode() & 0o777,
