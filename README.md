@@ -9,7 +9,8 @@ search everything you have ever had open, see what you keep reopening, and
 forget what you do not want. It reads your browser's own session file from
 disk to do it, so there is nothing to install in the browser. Nothing leaves
 your machine unless you run `enrich` or `content`, which fetch pages you
-already visited: `enrich` reads their `<head>`, `content` their main text.
+already visited: `enrich` reads their `<head>`, `content` their main text and
+one preview image.
 
 It works with Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and
 Vivaldi, on macOS, Linux and Windows.
@@ -165,7 +166,7 @@ knowmoretabs export [DIR]        # the same library as a static site that opens 
 knowmoretabs history             # how many library pages have History signals, and how current they are
 knowmoretabs history --refresh   # read History now and update every library page's signals
 knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
-knowmoretabs content             # keep the main text of library pages as markdown; --dry-run, --limit N, --refetch, --url URL
+knowmoretabs content             # keep the main text and one preview image of library pages; --dry-run, --limit N, --refetch, --url URL, --no-images
 knowmoretabs doctor              # which ways of reading pages this machine can use; --live checks GitHub sign in and asks the X post API once
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
@@ -254,6 +255,7 @@ knowmoretabs content --dry-run   # what would be fetched, what would not and why
 knowmoretabs content --limit 30  # capture at most 30 pages this run
 knowmoretabs content             # capture every page not captured before, and retry the failed ones
 knowmoretabs content --url URL   # capture only this library page; repeatable
+knowmoretabs content --no-images # capture text only this run, no preview images
 knowmoretabs doctor              # which ways of reading pages are ready, and what the archive holds
 ```
 
@@ -304,7 +306,8 @@ body with its code and a link to each post it embeds, who wrote it and
 when, and the descriptions of its images; one post, not the thread around
 it. Where an article shows an image, its body has `[Image: <description>]`,
 or `[Image]` when the image has no description; a video or GIF is
-`[Video]` the same way. The media itself is not kept. A post the API does
+`[Video]` the same way. The media is not kept beyond the post's one preview
+image, described below. A post the API does
 not find, or one deleted or suspended, is `not_found`; a private post or a
 protected account is `behind_login`; a post the API reports as blocked is
 `blocked`; a post with no text at all is `thin`. The API's 429 and 5xx
@@ -361,6 +364,45 @@ runtime, videos are not fetched and nothing is recorded for them; the
 report says, for example, `3 YouTube pages waiting for yt-dlp (see
 knowmoretabs doctor)`. A dry run checks only that they are on your `PATH`.
 
+Each captured page also keeps one preview image, the one that best shows
+what the page is about, so the library and a later tagger can see its
+subject. `content` also downloads one preview image per page from the
+address the page names, which may be on another host; images stay in the
+private archive. Pages that are images themselves are downloaded too. The
+image is chosen before anything is fetched: for an X post its first photo,
+else its video's thumbnail, else its article's cover, else the media of the
+post it quotes (a post of text alone has none); for a YouTube video its
+thumbnail; for a GitHub repository the social preview its owner chose, else
+the first picture its README shows, else GitHub's generated card (an issue,
+pull request or discussion uses its repository's preview, which costs no
+extra call; a repository costs one more gh call). For other pages it is the
+page's `og:image`, then `twitter:image`, then a JSON-LD or `itemprop` image,
+then the largest image in the main text. An image a site uses for three or
+more of your pages is tried after the page's own. Logos, icons, avatars,
+badges, ads, tracking pixels, SVGs and the images in menus, banners, footers
+and sidebars outside `<main>` are not candidates, and a page whose text
+could not be read uses the image `enrich` recorded from its head. At most
+three candidates are fetched per page, each the way a page is: without
+cookies, one request a second per site, every redirect checked, and no more
+than 8 MB. Its bytes must be a JPEG, PNG, WebP or GIF whatever its headers
+say, and an image claiming more than 8,192 pixels on a side is refused
+before it is decoded. One at least 200 pixels on each side, whose long side
+is at most three times its short side, is kept as a JPEG at quality 80, at
+most 768 pixels on its long side and never enlarged, upright, in sRGB, laid
+on white, with none of the original's metadata, so a photo's location is
+never kept. It is stored in `pages/images/`, named by the SHA-256 of the
+page's address like its text, with one line per attempt in
+`pages/images.jsonl`, and is rewritten only when its bytes change. An image
+line is `ok`; `none`, with why (no candidate, a post of text alone, or every
+candidate refused); `error`, when the best candidate timed out, could not be
+reached, was rate limited or answered 5xx, so a worse image is never kept in
+its place; or `unavailable` after three runs ending in `error`. A plain run
+retries `error` images from the candidates their line kept, without fetching
+the page again, at most `--limit` of them, and `--refetch` captures text and
+image anew. A page whose text failed gets its image once its text succeeds;
+a page the rules keep home gets none. `--no-images` skips images for a run,
+and `--dry-run` counts the image work it would do.
+
 `knowmoretabs doctor` says, for each way `content` reads pages, whether it
 is ready, missing or degraded, and how to fix it: the web tier, which is
 compiled in; GitHub through gh, found with its version; the X post API; yt-dlp
@@ -390,6 +432,8 @@ tier is ready; a missing tool is a warning.
 │   ├── metadata.jsonl         # what `enrich` fetched, one line per attempt; append-only
 │   ├── content.jsonl          # what `content` captured, one line per attempt; append-only
 │   ├── content/               # one markdown file per captured page, named by the SHA-256 of its address
+│   ├── images.jsonl           # what `content` did about each page's image, one line per attempt; append-only
+│   ├── images/                # one preview JPEG per captured page, named as its text file is
 │   └── history.json           # what History last said about each page; refreshed, never drops a page
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
 ├── tags/
@@ -406,7 +450,9 @@ Nothing leaves the machine unless you run `enrich` or `content`. `save`,
 `serve`, `export` and the tag commands make no network requests of any kind;
 `enrich` and `content` are the only code that sends your pages' addresses,
 or a video's id to YouTube through yt-dlp, and what each sends is described
-above. `doctor` is offline by default.
+above; `content` also downloads one preview image per page from the address
+the page names, which may be on another host, and images stay in the
+private archive. `doctor` is offline by default.
 `doctor --live` lets gh check its own sign in with GitHub and asks the X
 post API for one fixed public post, sending nothing of yours. A
 `tag --prompt` folder is the one thing made to be handed on: it holds the
@@ -433,8 +479,8 @@ Every snapshot is written to a temporary directory and renamed into place in
 one step, under a lock, so an interrupted run leaves the archive exactly as
 it was and two runs at once both succeed. A snapshot id that is already taken
 gets a `-2` suffix rather than being overwritten. `library.json`,
-`pages/history.json` and the files under `pages/content/` are written the
-same way.
+`pages/history.json` and the files under `pages/content/` and
+`pages/images/` are written the same way.
 
 ## What it reads, and what it tolerates
 

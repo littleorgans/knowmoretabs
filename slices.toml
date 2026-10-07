@@ -284,16 +284,23 @@ video's own language; without them videos wait. Plain HTTP reads every
 other page, and
 GitHub pages without gh: readability finds the main
 text, and a page is recorded as ok, thin, an app shell, behind a login,
-blocked, paywalled, not found or not HTML. Passing failures are retried in
-the run and on the next one. `--dry-run`, `--limit` and `--refetch` keep
-`enrich`'s meaning, and `--url` captures one page. `doctor` says which ways
-of reading pages are ready and what the archive holds. Next, a local
-headless Chrome for pages that need a browser to show their text.
+blocked, paywalled, not found or not HTML. Each page also keeps one preview
+image, the best its route or its markup names (a post's photo, a video's
+thumbnail, a repository's social preview, the head's image, else the main
+text's largest), as a JPEG of at most 768 pixels under `pages/images/`, with
+one line per attempt in `pages/images.jsonl`; `--no-images` skips them.
+Passing failures are retried in the run and on the next one. `--dry-run`,
+`--limit` and `--refetch` keep `enrich`'s meaning, and `--url` captures one
+page. `doctor` says which ways of reading pages are ready and what the
+archive holds. Next, a local headless Chrome for pages that need a browser
+to show their text.
 """
 intent = """
 Opt in, because it sends the URLs you visited to their own sites, X post
-numbers to the X post API and video ids to YouTube, and stores page text
-privately; routes use optional local tools when they are there (gh and
+numbers to the X post API and video ids to YouTube, also downloads one
+preview image per page from the address the page names, which may be on
+another host, and stores page text and images privately; routes use
+optional local tools when they are there (gh and
 yt-dlp now, later Chrome). It follows `enrich`'s rules for what never leaves
 the machine, through the same guard, fetcher, planner and log writer, rather
 than a second copy of them. Capture only: the markdown files are the store,
