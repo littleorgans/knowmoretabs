@@ -365,8 +365,8 @@ report says, for example, `3 YouTube pages waiting for yt-dlp (see
 knowmoretabs doctor)`. A dry run checks only that they are on your `PATH`.
 
 Each captured page also keeps one preview image, the one that best shows
-what the page is about, so the library and a later tagger can see its
-subject. `content` also downloads one preview image per page from the
+what the page is about, for a future library view and tagger.
+`content` also downloads one preview image per page from the
 address the page names, which may be on another host; images stay in the
 private archive. Pages that are images themselves are downloaded too. The
 image is chosen before anything is fetched: for an X post its first photo,
@@ -378,13 +378,14 @@ pull request or discussion uses its repository's preview, which costs no
 extra call; a repository costs one more gh call). For other pages it is the
 page's `og:image`, then `twitter:image`, then a JSON-LD or `itemprop` image,
 then the largest image in the main text. An image a site uses for three or
-more of your pages is tried after the page's own. Logos, icons, avatars,
-badges, ads, tracking pixels, SVGs and the images in menus, banners, footers
-and sidebars outside `<main>` are not candidates, and a page whose text
+more of your pages is tried after the page's own. In main text and READMEs,
+logos, icons, avatars, badges, ads, tracking pixels and SVGs are excluded.
+Images in menus, banners, footers and sidebars outside `<main>` are excluded
+from main text candidates, and a page whose text
 could not be read uses the image `enrich` recorded from its head. At most
 three candidates are fetched per page, each the way a page is: without
 cookies, one request a second per site, every redirect checked, and no more
-than 8 MB. Its bytes must be a JPEG, PNG, WebP or GIF whatever its headers
+than 8 MiB. Its bytes must be a JPEG, PNG, WebP or GIF whatever its headers
 say, and an image claiming more than 8,192 pixels on a side is refused
 before it is decoded. One at least 200 pixels on each side, whose long side
 is at most three times its short side, is kept as a JPEG at quality 80, at
@@ -401,7 +402,8 @@ retries `error` images from the candidates their line kept, without fetching
 the page again, at most `--limit` of them, and `--refetch` captures text and
 image anew. A page whose text failed gets its image once its text succeeds;
 a page the rules keep home gets none. `--no-images` skips images for a run,
-and `--dry-run` counts the image work it would do.
+and `--dry-run` counts the image work it would do. Pages captured with
+`--no-images` get their images only when captured again with `--refetch`.
 
 `knowmoretabs doctor` says, for each way `content` reads pages, whether it
 is ready, missing or degraded, and how to fix it: the web tier, which is
