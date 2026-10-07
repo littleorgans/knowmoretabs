@@ -200,6 +200,7 @@ impl Socket {
 
     /// Sends `command` and waits for its reply until `deadline`.
     pub fn call(&mut self, command: &Command, deadline: Instant) -> Result<Value, String> {
+        remaining(deadline).map_err(|err| reason(&err))?;
         let id = self.next;
         self.next += 1;
         self.ws.get_mut().deadline = deadline;
@@ -245,6 +246,7 @@ impl Socket {
     }
 
     fn read(&mut self, deadline: Instant) -> Result<Incoming, String> {
+        remaining(deadline).map_err(|err| reason(&err))?;
         self.ws.get_mut().deadline = deadline;
         match self.ws.read().map_err(|err| failure(&err))? {
             Message::Text(text) => Ok(decode(text.as_str())),
@@ -313,6 +315,10 @@ fn reason(err: &io::Error) -> String {
 #[cfg(test)]
 mod tests {
     use std::net::TcpListener;
+
+    use tungstenite::protocol::Role;
+    use tungstenite::protocol::frame::Frame;
+    use tungstenite::protocol::frame::coding::{Data, OpCode};
 
     use super::*;
 
@@ -448,5 +454,57 @@ mod tests {
         let reply = socket.call(&Command::GetVersion, start + Duration::from_millis(200));
         assert_eq!(reply, Err("timeout".to_owned()));
         assert!(start.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn a_buffered_event_is_not_read_after_the_deadline() {
+        let event = r#"{"method":"Page.lifecycleEvent","params":{"frameId":"F","loaderId":"L","name":"load"}}"#;
+        let mut frame = Vec::new();
+        Frame::message(event.as_bytes().to_vec(), OpCode::Data(Data::Text), true)
+            .format(&mut frame)
+            .unwrap();
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let _peer = listener.accept().unwrap();
+        let deadline = Instant::now();
+        // The whole frame is already in the WebSocket's buffer.
+        let ws =
+            WebSocket::from_partially_read(Bounded { stream, deadline }, frame, Role::Client, None);
+        let mut socket = Socket {
+            ws,
+            next: 1,
+            events: VecDeque::new(),
+        };
+        assert_eq!(socket.read(deadline), Err("timeout".to_owned()));
+    }
+
+    #[test]
+    fn a_call_past_its_deadline_is_never_sent() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let Message::Text(text) = ws.read().unwrap() else {
+                panic!("expected a command");
+            };
+            let command: Value = serde_json::from_str(text.as_str()).unwrap();
+            ws.send(Message::text(
+                json!({"id": command["id"], "result": {}}).to_string(),
+            ))
+            .unwrap();
+            command["method"].as_str().unwrap().to_owned()
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut socket = Socket::connect(port, "/devtools/browser/B", deadline).unwrap();
+        let navigate = Command::Navigate {
+            url: "https://a.test/".to_owned(),
+        };
+        assert_eq!(
+            socket.call(&navigate, Instant::now()),
+            Err("timeout".to_owned())
+        );
+        assert_eq!(socket.call(&Command::GetVersion, deadline), Ok(json!({})));
+        assert_eq!(server.join().unwrap(), "Browser.getVersion");
     }
 }
