@@ -24,6 +24,7 @@ use crate::browser::{self, Broken, Browser, Outcome, Readiness};
 use crate::capture::Log;
 use crate::content::{seconds, spread};
 use crate::content_image::Images;
+use crate::content_pdf;
 use crate::content_store::{self, Line, Page, Status, Tier};
 use crate::error::Error;
 use crate::fetch::Fetcher;
@@ -39,10 +40,12 @@ const PROGRESS_EVERY: usize = 5;
 
 /// Whether a page's line is one a browser may improve on: read over HTTP
 /// as thin, or as an empty shell drawn by scripts or asking for them. An
-/// app shell has no scripts to run, and every other status, and every
-/// line a route or a browser read, stands.
+/// app shell has no scripts to run, a browser shows a PDF without its
+/// text, and every other status, and every line a route or a browser
+/// read, stands.
 pub fn escalates(line: &Line) -> bool {
     line.tier == Some(Tier::Web)
+        && line.extractor.as_deref() != Some(content_pdf::EXTRACTOR)
         && match line.status {
             Status::Thin => true,
             Status::EmptyShell => matches!(
@@ -434,6 +437,10 @@ mod tests {
         let mut untiered = web(url, Status::Thin, "short text");
         untiered.tier = None;
         assert!(!escalates(&untiered));
+        let mut pdf = web(url, Status::Thin, "short text");
+        pdf.extractor = Some("lopdf".to_owned());
+        pdf.extractor_version = Some("0.45.0".to_owned());
+        assert!(!escalates(&pdf), "a browser shows a PDF without its text");
     }
 
     #[test]

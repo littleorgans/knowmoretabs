@@ -684,3 +684,72 @@ fn without_a_browser_they_wait_and_refetch_reads_them_over_http_again() {
     );
     assert_eq!(work.browser, None);
 }
+
+#[test]
+fn files_an_earlier_build_left_as_not_html_are_read_again_without_refetch() {
+    let urls = [
+        (
+            "https://a.test/photo",
+            Status::NotHtml,
+            "not HTML (image/jpeg)",
+        ),
+        (
+            "https://a.test/paper",
+            Status::NotHtml,
+            "not HTML (application/pdf)",
+        ),
+        (
+            "https://a.test/script",
+            Status::NotHtml,
+            "not HTML (application/x-sh)",
+        ),
+        ("https://a.test/scan", Status::NotHtml, "unreadable PDF"),
+        ("https://a.test/picture", Status::Media, "image (image/png)"),
+        ("https://a.test/short", Status::Thin, "short text"),
+    ];
+    let snapshots = [snapshot(&urls.map(|(url, _, _)| url))];
+    let mut known = content_store::Log::default();
+    for (url, status, reason) in urls {
+        let mut line = content_fetch::public_line(url, Tier::Web, status).with_reason(reason);
+        if status == Status::Thin {
+            line.extractor = Some("lopdf".to_owned());
+        }
+        known.pages.insert(url.to_owned(), line);
+    }
+    let ready = || browser::Readiness::Ready("/opt/Google Chrome".into());
+    let whys = |options| {
+        let (plan, work) = plan(
+            &snapshots,
+            &state(&[]),
+            &known,
+            options,
+            no_gh,
+            no_ytdlp,
+            ready,
+        );
+        assert!(work.renders.is_empty(), "a PDF is never rendered");
+        let todo: Vec<(String, Why)> = plan
+            .todo
+            .into_iter()
+            .map(|item| (item.url, item.why))
+            .collect();
+        (todo, plan.already_fetched)
+    };
+    let (todo, already) = whys(Options::default());
+    assert_eq!(
+        todo,
+        [
+            ("https://a.test/photo".to_owned(), Why::Refetch),
+            ("https://a.test/paper".to_owned(), Why::Refetch),
+        ]
+    );
+    assert_eq!(already, 4);
+    let refetch = Options {
+        refetch: true,
+        ..Options::default()
+    };
+    let (todo, already) = whys(refetch);
+    assert_eq!(todo.len(), 6);
+    assert!(todo.iter().all(|(_, why)| *why == Why::Refetch));
+    assert_eq!(already, 0);
+}

@@ -147,9 +147,10 @@ as what you can do that you could not before.
   library page not captured before, without cookies, and keeps its main text
   as markdown, private to you, in `pages/content/`, one file per page, with
   one line per attempt in `pages/content.jsonl`. Each page is recorded as
-  `ok`, `thin` (under 1,500 characters, text kept), `empty_shell`,
-  `behind_login`, `blocked`, `paywalled`, `not_found`, `not_html`,
-  `skipped`, `error` or `unavailable`. It never fetches what `enrich` never
+  `ok`, `thin` (under 1,500 characters, text kept), `media` (an image,
+  kept as the page's image), `empty_shell`, `behind_login`, `blocked`,
+  `paywalled`, `not_found`, `not_html`, `skipped`, `error` or
+  `unavailable`. A PDF's text is read on this machine. It never fetches what `enrich` never
   fetches, and records X profiles and YouTube channels and playlists as not
   a document, without a request. A timeout, a 429 or an HTTP 502, 503 or 504
   is retried twice in the run, honouring `Retry-After` up to a minute; a

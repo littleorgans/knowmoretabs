@@ -24,6 +24,7 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::archive;
+use crate::content_fetch;
 use crate::error::Error;
 use crate::jsonl::{self, Keyed};
 use crate::metadata;
@@ -57,12 +58,15 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
         })
 }
 
-/// What became of a page. Only `error` is tried again on a plain run.
+/// What became of a page. Only `error`, and `not_html` for a type a later
+/// build reads, is tried again on a plain run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Ok,
     Thin,
+    /// The page is an image file: no text, its copy is the page's image.
+    Media,
     EmptyShell,
     BehindLogin,
     Paywalled,
@@ -82,6 +86,7 @@ impl Outcome for Status {
         match self {
             Self::Ok => "ok",
             Self::Thin => "thin",
+            Self::Media => "media",
             Self::EmptyShell => "empty_shell",
             Self::BehindLogin => "behind_login",
             Self::Paywalled => "paywalled",
@@ -204,9 +209,10 @@ pub fn read(root: &Path) -> Result<Log, Error> {
 
 /// How the planner sees a page's latest line.
 pub fn recorded(log: &Log, url: &str) -> Recorded {
-    match log.pages.get(url).map(|line| line.status) {
+    match log.pages.get(url) {
         None => Recorded::Nothing,
-        Some(Status::Error) => Recorded::Failed,
+        Some(line) if line.status == Status::Error => Recorded::Failed,
+        Some(line) if content_fetch::outdated(line) => Recorded::Outdated,
         Some(_) => Recorded::Final,
     }
 }
@@ -500,12 +506,23 @@ mod tests {
             ("e", Status::Error),
             ("u", Status::Unavailable),
             ("t", Status::Thin),
+            ("m", Status::Media),
         ] {
             log.pages.insert(url.to_owned(), Line::new(url, status));
         }
         assert_eq!(recorded(&log, "e"), Recorded::Failed);
         assert_eq!(recorded(&log, "u"), Recorded::Final);
         assert_eq!(recorded(&log, "t"), Recorded::Final);
+        assert_eq!(recorded(&log, "m"), Recorded::Final);
+    }
+
+    #[test]
+    fn an_image_page_is_media_in_the_log() {
+        let line = Line::new("https://a.test/photo.jpg", Status::Media);
+        let text = serde_json::to_string(&line).unwrap();
+        assert!(text.contains(r#""status":"media""#), "{text}");
+        assert_eq!(serde_json::from_str::<Line>(&text).unwrap(), line);
+        assert_eq!(Status::Media.word(), "media");
     }
 
     #[test]

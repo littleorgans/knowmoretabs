@@ -305,9 +305,13 @@ What `enrich` never fetches, `content` never fetches either. Forgotten pages,
 private network addresses, search results, URLs carrying tokens and pages that
 are not web pages are counted in the report without being written to the
 content store. It records X profiles and YouTube channels and playlists as not
-a document, without a request, and anything that is not HTML as `not_html`
-with its type. A page that has text is `ok`, or `thin` when it has less than
-1,500 characters; either way the text is kept. A page drawn entirely by
+a document, without a request. A page that is an image is `media`: it has no
+text, and its copy is the page's preview image. A PDF's text is read on this
+machine; a PDF that cannot be read, has no text (a scan) or is over 10 MB is
+`not_html` with that reason, and anything else that is not HTML is `not_html`
+with its type. An image or PDF an earlier version recorded as `not_html` is
+read again on the next plain run. A page that has text is `ok`, or `thin`
+when it has less than 1,500 characters; either way the text is kept. A page drawn entirely by
 scripts is `empty_shell`, a sign-in form or a 401 is `behind_login`, a 403 is
 `blocked`, a 404 or 410 is `not_found`, and a short page whose publisher marks
 it as not free is `paywalled`, keeping what it showed. A timeout, a 429 or an

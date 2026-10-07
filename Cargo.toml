@@ -59,6 +59,11 @@ dom_smoothie = "0.18"
 # encode only) and the rest are left out. MIT OR Apache-2.0, MSRV 1.88.
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 jiff = { version = "0.2", default-features = false, features = ["std", "serde"] }
+# Reads the text of a page served as a PDF (src/content_pdf.rs), in process:
+# no tool to install, no C, no thread pool (`rayon` and `chrono` are default
+# features, left out). MIT, MSRV 1.88; chosen over `pdf-extract`, which
+# panicked on PDFs this one reads, and `pdf_oxide`, three times the crates.
+lopdf = { version = "0.45", default-features = false }
 # Reads a copy of the browser's own `History` database; the archive itself
 # stays JSON. `bundled` compiles one pinned SQLite into the binary, because
 # Windows has no SQLite a program can rely on linking and the system library

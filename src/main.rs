@@ -20,6 +20,7 @@ mod content;
 mod content_fetch;
 mod content_headless;
 mod content_image;
+mod content_pdf;
 mod content_plan;
 mod content_route;
 mod content_store;
