@@ -225,6 +225,7 @@ impl Images {
     /// in order on the shared workers.
     pub fn retry(&self, fetcher: &Fetcher) -> Result<(), Error> {
         targets::by_host(
+            targets::WORKERS,
             self.plan
                 .retries
                 .iter()

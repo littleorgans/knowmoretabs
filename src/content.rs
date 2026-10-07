@@ -195,6 +195,7 @@ fn run(
         ytdlp: work.youtube.as_ref().and_then(ytdlp::Readiness::tool),
     };
     targets::by_host(
+        targets::WORKERS,
         work.fetches
             .iter()
             .map(|fetch| (fetch.host.as_str(), fetch)),

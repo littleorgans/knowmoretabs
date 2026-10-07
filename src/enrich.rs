@@ -129,6 +129,7 @@ fn run(root: &Path, plan: &Plan, state: &State, log: Log) -> Result<Tally, Error
     }
     let fetcher = Fetcher::new(&state.forgotten);
     targets::by_host(
+        targets::WORKERS,
         pages,
         |item| record(&metadata_fetch::fetch(&fetcher, &item.url)),
         |n, total| {
