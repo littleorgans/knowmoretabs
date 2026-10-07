@@ -21,6 +21,7 @@ def main() -> None:
     steps.add_parser("zeroshot", help="tags as queries, zero labels; then the label efficiency curve")
     steps.add_parser("suggest", help="out of fold suggestions as tag --import JSONL, then a dry run")
     steps.add_parser("cluster", help="unsupervised clusters of the best config against the owner's tags")
+    steps.add_parser("gate", help="guided discovery gate: description query plus 5 to 20 answers per tag")
     steps.add_parser("cost", help="load time, RSS, throughput and single page latency per model")
     steps.add_parser("report", help="write out/results.md")
     compare = steps.add_parser("compare", help="compare metric outputs with another data directory")
@@ -51,6 +52,10 @@ def main() -> None:
         from . import cluster
 
         cluster.run(paths)
+    elif args.step == "gate":
+        from .guided import gate
+
+        gate.run(paths)
     elif args.step == "cost":
         from . import cost
 

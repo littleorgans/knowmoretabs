@@ -33,6 +33,10 @@ class Paths:
         return self.data / "out"
 
     @property
+    def guided(self) -> Path:
+        return self.data / "guided"
+
+    @property
     def import_check(self) -> Path:
         return self.data / "import-check"
 

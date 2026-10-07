@@ -27,6 +27,10 @@ export KMT_TAGGER_DATA=<thread home>/data   # holds snapshot-2026-10-07/ and zer
 | 7 | `uv run --locked tagger cost` | `out/cost.json` |
 | 8 | `uv run --locked tagger report` | `out/results.md` |
 
+Guided discovery gate (design D1, cheapest test): `uv run --locked tagger gate` writes `guided/gate.json`
+(description query plus 5, 10 or 20 answers per tag, at random or by doubt; eg2-B, CV pool folds). Query
+vectors are cached under `emb/<model>/queries/`; set `HF_HUB_OFFLINE=1` when the cache may need the model.
+
 Steps skip work whose output exists; use a fresh data directory to recompute.
 `eval --final` reuses its saved test result and refuses a different CV pick.
 `KMT_TAGGER_SNAPSHOT` points at a snapshot elsewhere. `suggest` builds the binary
