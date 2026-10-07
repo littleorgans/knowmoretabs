@@ -62,7 +62,7 @@ def precision_at(hits: np.ndarray) -> dict:
 
 
 def fit_metrics(trace: Trace, positives: int) -> dict:
-    """Cost to each recall target, counted in whole grids; the first grid's precision; the state at stop."""
+    """Whole-grid costs. A library with no positives still costs views at stop; recall is undefined."""
     pages = np.cumsum([len(s) for s in trace.shown])
     ticks = np.cumsum([int(t.sum()) for t in trace.ticks])
     at = trace.stop - 1
@@ -70,9 +70,11 @@ def fit_metrics(trace: Trace, positives: int) -> dict:
         "stop_grids": trace.stop,
         "stop_pages": int(pages[at]),
         "stop_ticks": int(ticks[at]),
-        "stop_recall": ticks[at] / positives,
         **precision_at(trace.ticks[0]),
     }
+    if not positives:
+        return out
+    out["stop_recall"] = ticks[at] / positives
     for r in RECALLS:
         g = int(np.argmax(ticks >= need(r, positives)))
         pct = round(100 * r)
@@ -109,19 +111,22 @@ def held_out(trace: Trace, X: np.ndarray, q: np.ndarray, docs: np.ndarray, feedb
 
 
 def tag_means(folds: list[dict]) -> dict | None:
-    """Fold mean of each metric over the folds whose library holds a positive."""
-    scored = [f for f in folds if f["positives"]]
-    if not scored:
+    """Mean over folds where each metric is defined. Stop costs include zero-positive libraries;
+    recall targets exclude them. `folds` counts libraries with positives."""
+    if not folds:
         return None
-    return {m: float(np.mean([f[m] for f in scored])) for m in scored[0] if m != "fold"} | {"folds": len(scored)}
+    metrics = dict.fromkeys(m for f in folds for m in f if m != "fold")
+    return {m: float(np.mean([f[m] for f in folds if m in f])) for m in metrics} | {
+        "folds": sum(bool(f["positives"]) for f in folds)
+    }
 
 
 def summarise(per_tag: dict, pooled: dict, group: list[str]) -> dict:
     """Median, mean and total over the group's tags of each fold mean metric; pooled held out macro scores."""
     means = [per_tag[t] for t in group if per_tag[t]]
-    out = {"tags": len(group), "tags_scored": len(means)}
-    for m in means[0] if means else []:
-        values = [x[m] for x in means]
+    out = {"tags": len(group), "tags_scored": sum(bool(x["folds"]) for x in means)}
+    for m in dict.fromkeys(m for x in means for m in x):
+        values = [x[m] for x in means if m in x]
         out[m] = {"median": float(np.median(values)), "mean": float(np.mean(values)), "total": float(np.sum(values))}
     for m in [m for m in ("ap", "precision", "recall", "f1") if m in pooled[group[0]]]:
         out[f"held_out_macro_{m}"] = float(np.nanmean([pooled[t][m] for t in group]))
@@ -142,10 +147,13 @@ def run_arm(Y, tags, docs, q, folds, pool, feedback, traces, label) -> tuple[dic
             trace = replay(X, q[j], oracle.answers(Y, a, j), positives, feedback)
             s, p = held_out(trace, X, q[j], docs[b], feedback)
             scores[at, j], pred[at, j] = s, p
-            row = {"fold": f, "positives": positives, "held_out_positives": int(Y[b, j].sum())}
-            if positives:
-                row |= fit_metrics(trace, positives)
-                row |= {f"held_out_{k}": v for k, v in precision_at(Y[b[np.argsort(-s, kind="stable")], j]).items()}
+            row = {
+                "fold": f,
+                "positives": positives,
+                "held_out_positives": int(Y[b, j].sum()),
+                **fit_metrics(trace, positives),
+                **{f"held_out_{k}": v for k, v in precision_at(Y[b[np.argsort(-s, kind="stable")], j]).items()},
+            }
             per_tag[tag].append(row)
             traces.append(
                 {
@@ -163,6 +171,9 @@ def run_arm(Y, tags, docs, q, folds, pool, feedback, traces, label) -> tuple[dic
 
 
 def random_arm(Y, tags, folds, pool) -> tuple[dict, dict]:
+    """Exact random-order costs and pooled AP expectation, with no score ties.
+    E[AP] = H_n/n + (m-1)(n-H_n)/(n(n-1)), for n pages and m positives, m > 0.
+    Prevalence is AP for constant scores, rather than the random-ranking expectation."""
     per_tag = {
         t: [
             {"fold": f, "positives": int(Y[a, j].sum()), **random_metrics(len(a), int(Y[a, j].sum()))}
@@ -172,7 +183,12 @@ def random_arm(Y, tags, folds, pool) -> tuple[dict, dict]:
         ]
         for j, t in enumerate(tags)
     }
-    return per_tag, {t: {"ap": float(Y[pool, j].mean()) if Y[pool, j].any() else np.nan} for j, t in enumerate(tags)}
+    n = len(pool)
+    harmonic = float(np.sum(1.0 / np.arange(1, n + 1)))
+    return per_tag, {
+        t: {"ap": float(1 if n == 1 else harmonic / n + (m - 1) * (n - harmonic) / (n * (n - 1))) if m else np.nan}
+        for t, m in zip(tags, Y[pool].sum(axis=0), strict=True)
+    }
 
 
 def run(paths: Paths) -> None:
