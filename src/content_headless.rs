@@ -11,9 +11,11 @@
 //!      as rendered and saying why, so a render never loses text and never
 //!      leaves a page as an error. A render is final until `--refetch`.
 //!      Without a browser, or when it fails, those pages wait, unrecorded by
-//!      this tier, and the report says how many and why, every run.
+//!      this tier, and the report says how many and why, every run. A signed
+//!      in run renders through the same pass in the owner's browser, one
+//!      page at a time: every line it writes says `signed_in`, and a page
+//!      gets an image only with text read signed in.
 
-use std::path::Path;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -27,7 +29,7 @@ use crate::content_image::Images;
 use crate::content_pdf;
 use crate::content_store::{self, Line, Page, Status, Tier};
 use crate::error::Error;
-use crate::fetch::Fetcher;
+use crate::fetch::{Fetcher, Refusal};
 use crate::guard;
 use crate::image_pick::Found;
 use crate::targets;
@@ -71,10 +73,10 @@ pub struct Render {
 
 impl Render {
     /// The render of the pages whose recorded lines are `pages`, all one
-    /// document; `None` when there is none, or nowhere valid to load it.
-    pub fn of(pages: Vec<Line>, found: Found) -> Option<Self> {
-        let first = pages.first()?;
-        let url = guard::page_url(first.final_url.as_deref().unwrap_or(&first.url))?;
+    /// document, loaded from the address `load` names for the first;
+    /// `None` when there is none, or nowhere valid to load it.
+    pub fn of(pages: Vec<Line>, found: Found, load: fn(&Line) -> &str) -> Option<Self> {
+        let url = guard::page_url(load(pages.first()?))?;
         Some(Self {
             host: guard::host_key(&url),
             url,
@@ -82,6 +84,12 @@ impl Render {
             found,
         })
     }
+}
+
+/// Where a headless render loads a page: where its HTTP read ended, else
+/// its address.
+pub fn ended(line: &Line) -> &str {
+    line.final_url.as_deref().unwrap_or(&line.url)
 }
 
 /// The pages this run read over HTTP that a browser may improve on: kept
@@ -111,7 +119,7 @@ impl Escalated {
             return false;
         }
         if self.rendering
-            && let Some(render) = Render::of(lines.to_vec(), found.clone())
+            && let Some(render) = Render::of(lines.to_vec(), found.clone(), ended)
         {
             self.renders
                 .lock()
@@ -135,12 +143,18 @@ impl Escalated {
 }
 
 /// The line a page whose recorded line is `baseline` gets after a render
-/// came to `outcome`, and the text to keep with it. Rendered text replaces
-/// the kept text only when it has more characters; otherwise the baseline
-/// is kept whole, its text and its provenance, marked as rendered. Never
-/// an error.
-pub fn settle<'a>(baseline: &Line, outcome: &'a Outcome) -> (Line, Option<&'a Page>) {
+/// by `tier` came to `outcome`, and the text to keep with it. Rendered text
+/// replaces the kept text only when it has more characters; otherwise the
+/// baseline's text is kept whole, marked as attempted by `tier`. Never an
+/// error.
+pub fn settle<'a>(baseline: &Line, outcome: &'a Outcome, tier: Tier) -> (Line, Option<&'a Page>) {
     let kept = baseline.chars.unwrap_or(0);
+    let not_rendered = |why: &str| {
+        (
+            copied(baseline, &format!("not rendered: {why}"), tier),
+            None,
+        )
+    };
     match outcome {
         Outcome::Read(capture)
             if capture.page.as_ref().is_some_and(|page| page.chars > kept)
@@ -154,7 +168,7 @@ pub fn settle<'a>(baseline: &Line, outcome: &'a Outcome) -> (Line, Option<&'a Pa
             line.attempt = baseline.attempt;
             (line, capture.page.as_ref())
         }
-        Outcome::Read(_) => (copied(baseline, "rendering added no text"), None),
+        Outcome::Read(_) => (copied(baseline, "rendering added no text", tier), None),
         Outcome::SignIn(signed) => {
             let mut line = (**signed).clone();
             baseline.url.clone_into(&mut line.url);
@@ -167,15 +181,17 @@ pub fn settle<'a>(baseline: &Line, outcome: &'a Outcome) -> (Line, Option<&'a Pa
             line.lang.clone_from(&baseline.lang);
             (line, None)
         }
-        Outcome::NotRendered(why) => (copied(baseline, &format!("not rendered: {why}")), None),
+        Outcome::Refused(refusal) => not_rendered(&refusal.reason()),
+        Outcome::NotRendered(why) => not_rendered(why),
     }
 }
 
-/// `baseline` as it stands, attempted now by the headless tier, its
+/// `baseline` as it stands, attempted now by `tier` with its access, its
 /// reason saying what the render came to.
-fn copied(baseline: &Line, note: &str) -> Line {
+fn copied(baseline: &Line, note: &str, tier: Tier) -> Line {
     let mut line = baseline.clone();
-    line.tier = Some(Tier::Headless);
+    line.tier = Some(tier);
+    line.access = Some(tier.access());
     line.attempted_at = content_store::now();
     line.reason = Some(match &baseline.reason {
         Some(reason) => format!("{reason}; {note}"),
@@ -198,9 +214,48 @@ pub struct Headless {
     /// Connections the relay refused for this machine or the private
     /// network.
     pub refused: usize,
+    /// What a signed in run counts beyond a render's; `None` for a
+    /// headless run.
+    pub signed_in: Option<SignedIn>,
+}
+
+/// What a signed in run counts beyond a render's.
+#[derive(Debug, Default)]
+pub struct SignedIn {
+    /// Personal app pages the plan left unopened.
+    pub not_opened: usize,
+    /// Pages that ended on a personal app, nothing of them kept.
+    pub not_kept: usize,
+    /// Pages refused to this machine or the private network.
+    pub private: usize,
 }
 
 impl Headless {
+    /// What a signed in run in browser `name` starts from: the personal
+    /// app pages its plan left unopened.
+    pub fn signed_in(name: String, not_opened: usize) -> Self {
+        Self {
+            browser: Some(name),
+            signed_in: Some(SignedIn {
+                not_opened,
+                ..SignedIn::default()
+            }),
+            ..Self::default()
+        }
+    }
+
+    /// A page the fetcher's rules refused, which a signed in run counts.
+    fn refused_page(&mut self, refusal: &Refusal) {
+        let Some(signed_in) = &mut self.signed_in else {
+            return;
+        };
+        match refusal {
+            Refusal::PersonalApp => signed_in.not_kept += 1,
+            Refusal::PrivateNetwork { .. } | Refusal::PrivateAddress => signed_in.private += 1,
+            _ => {}
+        }
+    }
+
     /// What a run starts from: the pages the plan left waiting, and why.
     pub fn new(readiness: Option<&Readiness>, waiting: usize) -> Self {
         Self {
@@ -224,32 +279,59 @@ impl Headless {
     pub fn lines(&self) -> Vec<String> {
         let mut lines = Vec::new();
         if let (Some(browser), Some((median, longest))) = (&self.browser, spread(&self.renders)) {
+            let (did, how) = match self.signed_in {
+                Some(_) => ("opened", " signed in"),
+                None => ("rendered", ""),
+            };
             lines.push(format!(
-                "rendered {} in {browser}; a render took {} s at the median, {} s at the longest",
+                "{did} {} in {browser}{how}; a render took {} s at the median, {} s at the longest",
                 plural(self.renders.len(), "page"),
                 seconds(median),
                 seconds(longest),
             ));
         }
-        if self.refused > 0 {
-            lines.push(format!(
+        match &self.signed_in {
+            Some(signed_in) => {
+                if signed_in.not_opened + signed_in.not_kept > 0 {
+                    lines.push(format!(
+                        "personal apps: {} not opened, {} not kept",
+                        signed_in.not_opened, signed_in.not_kept
+                    ));
+                }
+                if signed_in.private > 0 {
+                    lines.push(format!(
+                        "refused {} to the private network",
+                        plural(signed_in.private, "page")
+                    ));
+                }
+            }
+            None if self.refused > 0 => lines.push(format!(
                 "refused {} to the private network",
                 plural(self.refused, "connection")
-            ));
+            )),
+            None => {}
         }
         lines.extend(waiting_note(self.waiting, self.why.as_deref()));
         lines
     }
 
     pub fn json(&self) -> serde_json::Value {
-        serde_json::json!({
+        let mut json = serde_json::json!({
             "rendered": self.renders.len(),
             "waiting": self.waiting,
             "refused_private": self.refused,
             "render_seconds": spread(&self.renders).map(|(median, longest)| serde_json::json!({
                 "median": seconds(median), "longest": seconds(longest),
             })),
-        })
+        });
+        if let Some(signed_in) = &self.signed_in {
+            json["signed_in"] = serde_json::json!({
+                "personal_not_opened": signed_in.not_opened,
+                "personal_not_kept": signed_in.not_kept,
+                "refused_private_pages": signed_in.private,
+            });
+        }
+        json
     }
 }
 
@@ -296,23 +378,21 @@ pub fn dry_run_notes(
     notes
 }
 
-/// The second pass: renders `renders` in the browser at `path`, at most
-/// [`TABS`] at a time and one per host, writing each page's line through
-/// `write`, then settling its image through `images`. A browser that
-/// fails to start, or stops answering, leaves its pages waiting.
+/// The second pass: renders `renders` in `browser`, or says why none
+/// started, at most [`TABS`] at a time and one per host, or one at a time
+/// in the owner's browser, writing each page's line through `write`, then
+/// settling its image through `images`. A browser that did not start, or
+/// stops answering, leaves its pages waiting.
 pub fn run(
     renders: &[Render],
-    path: &Path,
+    browser: Result<Browser, String>,
     fetcher: &Fetcher,
     images: Option<&Images>,
     write: impl Fn(Line, Option<&Page>) -> Result<Line, Error> + Sync,
     headless: &mut Headless,
     log: Log,
 ) -> Result<(), Error> {
-    if renders.is_empty() {
-        return Ok(());
-    }
-    let browser = match Browser::launch(path, log) {
+    let browser = match browser {
         Ok(browser) => Some(browser),
         Err(why) => {
             log.warn(&format!("the browser did not start: {why}"));
@@ -320,10 +400,15 @@ pub fn run(
             None
         }
     };
+    let tier = browser.as_ref().map_or(Tier::Headless, Browser::tier);
+    // The owner's browser is reached on one socket: one page at a time.
+    let tabs = if tier == Tier::SignedIn { 1 } else { TABS };
+    // Signed in, a page gets an image only with text read signed in.
+    let pictured = |kept: bool| kept || tier == Tier::Headless;
     let broken: Mutex<Option<String>> = Mutex::new(headless.why.clone());
-    let tally = Mutex::new((Vec::new(), 0usize));
+    let tally = Mutex::new(&mut *headless);
     let result = targets::by_host(
-        TABS,
+        tabs,
         renders.iter().map(|render| (render.host.as_str(), render)),
         |render| {
             let started = Instant::now();
@@ -344,21 +429,28 @@ pub fn run(
                         .lock()
                         .unwrap_or_else(PoisonError::into_inner)
                         .get_or_insert(why);
-                    tally.lock().unwrap_or_else(PoisonError::into_inner).1 += render.pages.len();
-                    return images.map_or(Ok(()), |images| {
-                        images.after(fetcher, &render.pages, &render.found)
-                    });
+                    tally.lock().unwrap_or_else(PoisonError::into_inner).waiting +=
+                        render.pages.len();
+                    let pages: &[Line] = if pictured(false) { &render.pages } else { &[] };
+                    return images
+                        .map_or(Ok(()), |images| images.after(fetcher, pages, &render.found));
                 }
             };
-            tally
-                .lock()
-                .unwrap_or_else(PoisonError::into_inner)
-                .0
-                .push(started.elapsed());
+            {
+                let mut tally = tally.lock().unwrap_or_else(PoisonError::into_inner);
+                tally.renders.push(started.elapsed());
+                if let Outcome::Refused(refusal) = &outcome {
+                    tally.refused_page(refusal);
+                }
+            }
             let mut written = Vec::with_capacity(render.pages.len());
             for baseline in &render.pages {
-                let (line, page) = settle(baseline, &outcome);
-                written.push(write(line, page)?);
+                let (line, page) = settle(baseline, &outcome, tier);
+                let kept = page.is_some();
+                let line = write(line, page)?;
+                if pictured(kept) {
+                    written.push(line);
+                }
             }
             // A sign-in screen's head is not the page's, nor is nothing.
             let found = match &outcome {
@@ -373,12 +465,10 @@ pub fn run(
             }
         },
     );
+    let headless = tally.into_inner().unwrap_or_else(PoisonError::into_inner);
     if let Some(browser) = browser {
         headless.refused = browser.refused();
     }
-    let (durations, waiting) = tally.into_inner().unwrap_or_else(PoisonError::into_inner);
-    headless.renders = durations;
-    headless.waiting += waiting;
     if let Some(why) = broken.into_inner().unwrap_or_else(PoisonError::into_inner) {
         headless.why = Some(why);
     }
@@ -389,27 +479,17 @@ pub fn run(
 mod tests {
     use super::*;
     use crate::content_fetch::{self, Capture};
-    use crate::content_store::{Access, Completeness, Store};
+    use crate::content_store::{Access, Store};
+    use crate::content_test::page;
 
     fn web(url: &str, status: Status, reason: &str) -> Line {
-        let mut line = content_fetch::public_line(url, Tier::Web, status).with_reason(reason);
+        let mut line = content_fetch::line(url, Tier::Web, status).with_reason(reason);
         line.final_url = Some(format!("{url}?after=redirect"));
         line.http_status = Some(200);
         line.lang = Some("en".to_owned());
         line.extractor = Some("dom_smoothie".to_owned());
         line.extractor_version = Some("0.18.2".to_owned());
         line
-    }
-
-    fn page(markdown: &str, chars: usize) -> Page {
-        Page {
-            title: None,
-            extractor: "dom_smoothie 0.18.2".to_owned(),
-            completeness: Completeness::Thin,
-            chars,
-            captions: None,
-            markdown: markdown.to_owned(),
-        }
     }
 
     #[test]
@@ -448,11 +528,11 @@ mod tests {
         let first = web("https://a.test/p", Status::Thin, "short text");
         let mut alias = first.clone();
         alias.url = "https://a.test/p#part".to_owned();
-        let render = Render::of(vec![first, alias], Found::Unread).unwrap();
+        let render = Render::of(vec![first, alias], Found::Unread, ended).unwrap();
         assert_eq!(render.url.as_str(), "https://a.test/p?after=redirect");
         assert_eq!(render.host, "a.test");
         assert_eq!(render.pages.len(), 2);
-        assert!(Render::of(Vec::new(), Found::Unread).is_none());
+        assert!(Render::of(Vec::new(), Found::Unread, ended).is_none());
     }
 
     #[test]
@@ -468,7 +548,7 @@ mod tests {
         let before = std::fs::read(&file).unwrap();
 
         let rendered = |chars: usize| {
-            let mut line = content_fetch::public_line(url, Tier::Headless, Status::Ok);
+            let mut line = content_fetch::line(url, Tier::Headless, Status::Ok);
             line.final_url = Some(url.to_owned());
             line.http_status = Some(200);
             Outcome::Read(Box::new(Capture {
@@ -480,14 +560,14 @@ mod tests {
         let outcomes = [
             rendered(6),
             Outcome::NotRendered("HTTP 404".to_owned()),
-            Outcome::Read(Box::new(Capture::ended(content_fetch::public_line(
+            Outcome::Read(Box::new(Capture::ended(content_fetch::line(
                 url,
                 Tier::Headless,
                 Status::BehindLogin,
             )))),
         ];
         for outcome in &outcomes {
-            let (line, page) = settle(&baseline, outcome);
+            let (line, page) = settle(&baseline, outcome, Tier::Headless);
             assert!(page.is_none());
             let written = store.record(line, page).unwrap();
             assert_eq!(written.status, Status::Thin);
@@ -498,19 +578,19 @@ mod tests {
             assert_eq!(written.attempt, baseline.attempt);
             assert_eq!(std::fs::read(&file).unwrap(), before, "file untouched");
         }
-        let (copy, _) = settle(&baseline, &outcomes[1]);
+        let (copy, _) = settle(&baseline, &outcomes[1], Tier::Headless);
         assert_eq!(
             copy.reason.as_deref(),
             Some("short text; not rendered: HTTP 404")
         );
-        let (copy, _) = settle(&baseline, &outcomes[0]);
+        let (copy, _) = settle(&baseline, &outcomes[0], Tier::Headless);
         assert_eq!(
             copy.reason.as_deref(),
             Some("short text; rendering added no text")
         );
 
         let more = rendered(40);
-        let (line, page) = settle(&baseline, &more);
+        let (line, page) = settle(&baseline, &more, Tier::Headless);
         let written = store.record(line, page).unwrap();
         assert_eq!(
             (written.status, written.tier, written.chars),
@@ -528,11 +608,11 @@ mod tests {
         baseline.content_sha256 = Some("ab".repeat(32));
         baseline.attempt = 2;
         let mut login =
-            content_fetch::public_line("https://a.test/p", Tier::Headless, Status::BehindLogin)
+            content_fetch::line("https://a.test/p", Tier::Headless, Status::BehindLogin)
                 .with_reason("redirected to a login page");
         login.final_url = Some("https://a.test/login".to_owned());
         let signed_in = Outcome::SignIn(Box::new(login));
-        let (line, kept) = settle(&baseline, &signed_in);
+        let (line, kept) = settle(&baseline, &signed_in, Tier::Headless);
         assert!(kept.is_none());
         assert_eq!(line.status, Status::BehindLogin);
         assert_eq!(line.final_url.as_deref(), Some("https://a.test/login"));
@@ -544,13 +624,37 @@ mod tests {
         for outcome in [
             Outcome::NotRendered("timeout".to_owned()),
             Outcome::Read(Box::new(Capture {
-                line: content_fetch::public_line("https://a.test/p", Tier::Headless, Status::Error),
+                line: content_fetch::line("https://a.test/p", Tier::Headless, Status::Error),
                 page: Some(page("much longer text", 99)),
                 images: Found::Unread,
             })),
         ] {
-            assert_eq!(settle(&baseline, &outcome).0.status, Status::EmptyShell);
+            assert_eq!(
+                settle(&baseline, &outcome, Tier::Headless).0.status,
+                Status::EmptyShell
+            );
         }
+    }
+
+    #[test]
+    fn a_signed_in_report_says_what_it_opened_and_what_it_left() {
+        let mut signed_in = Headless::signed_in("Google Chrome".to_owned(), 18);
+        signed_in.renders = vec![Duration::from_millis(2500)];
+        signed_in.refused_page(&Refusal::PersonalApp);
+        signed_in.refused_page(&Refusal::PrivateAddress);
+        signed_in.refused_page(&Refusal::Failed("timeout".to_owned()));
+        assert_eq!(
+            signed_in.lines(),
+            [
+                "opened 1 page in Google Chrome signed in; a render took 2.5 s at the median, 2.5 s at the longest",
+                "personal apps: 18 not opened, 1 not kept",
+                "refused 1 page to the private network",
+            ]
+        );
+        assert_eq!(signed_in.json()["signed_in"]["personal_not_kept"], 1);
+        let mut headless = Headless::default();
+        headless.refused_page(&Refusal::PersonalApp);
+        assert!(headless.signed_in.is_none() && headless.json().get("signed_in").is_none());
     }
 
     #[test]

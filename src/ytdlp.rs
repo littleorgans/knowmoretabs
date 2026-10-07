@@ -235,7 +235,7 @@ struct Attempt<'a> {
 
 impl Attempt<'_> {
     fn line(&self, status: Status) -> Line {
-        content_fetch::public_line(self.raw, Tier::Youtube, status)
+        content_fetch::line(self.raw, Tier::Youtube, status)
     }
 
     /// How an attempt ends early: a capture with no text.

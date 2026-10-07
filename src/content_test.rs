@@ -77,3 +77,121 @@ pub(crate) fn unsent(work: &Work) -> Vec<(&str, Status, &str)> {
         })
         .collect()
 }
+
+/// A browser's user-data directory holding only what a signed in run
+/// reads: `Local State` with its remote debugging switch `flag` (no
+/// switch when `None`), and the port file `port` when given.
+pub(crate) fn chrome(flag: Option<bool>, port: Option<&str>) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    let devtools = flag.map_or(
+        serde_json::json!({}),
+        |on| serde_json::json!({"remote_debugging": {"user-enabled": on}}),
+    );
+    let state = serde_json::json!({"profile": {}, "devtools": devtools});
+    std::fs::write(dir.path().join("Local State"), state.to_string()).unwrap();
+    if let Some(port) = port {
+        std::fs::write(dir.path().join(crate::browser::PORT_FILE), port).unwrap();
+    }
+    dir
+}
+
+/// Where [`Peer`] says its `DevTools` socket is.
+pub(crate) const PEER_ROUTE: &str = "/devtools/browser/peer";
+
+/// A loopback stand-in for the owner's browser, for tests that attach. It
+/// answers what a signed in run sends: each tab it creates is `T<n>`,
+/// attached as `S<n>`, and loads at once with enough text to keep, after
+/// an event of another session; a page whose address says `fails` fails
+/// to load. It records every message it is sent, and answers `closing` by
+/// closing the connection, as a browser that quits does.
+pub(crate) struct Peer {
+    pub(crate) port: u16,
+    received: std::thread::JoinHandle<Vec<serde_json::Value>>,
+}
+
+impl Peer {
+    pub(crate) fn start(closing: Option<&'static str>) -> Self {
+        use serde_json::json;
+        use tungstenite::Message;
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let received = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            let mut received = Vec::new();
+            let (mut tabs, mut navigated) = (0, String::new());
+            while let Ok(Message::Text(text)) = ws.read() {
+                let message: serde_json::Value = serde_json::from_str(text.as_str()).unwrap();
+                received.push(message.clone());
+                let method = message["method"].as_str().unwrap_or_default();
+                if Some(method) == closing {
+                    break;
+                }
+                let session = message["sessionId"].as_str().unwrap_or_default().to_owned();
+                let result = match method {
+                    "Browser.getVersion" => json!({"product": "Chrome/155.0.8059.39"}),
+                    "Target.createTarget" => {
+                        tabs += 1;
+                        json!({"targetId": format!("T{tabs}")})
+                    }
+                    "Target.attachToTarget" => {
+                        let target = message["params"]["targetId"].as_str().unwrap();
+                        json!({"sessionId": target.replacen('T', "S", 1)})
+                    }
+                    "Page.navigate" => {
+                        message["params"]["url"]
+                            .as_str()
+                            .unwrap()
+                            .clone_into(&mut navigated);
+                        let error = if navigated.contains("fails") {
+                            "net::ERR_ABORTED"
+                        } else {
+                            ""
+                        };
+                        json!({"frameId": "F", "loaderId": "L", "errorText": error})
+                    }
+                    "Runtime.evaluate" => json!({"result": {"value": {
+                        "url": navigated, "mime": "text/html", "status": 200,
+                        "html": format!("<main><p>{}</p></main>", "Signed in text. ".repeat(120)),
+                    }}}),
+                    _ => json!({}),
+                };
+                let mut out = vec![json!({"id": message["id"], "result": result})];
+                if method == "Page.navigate" && !navigated.contains("fails") {
+                    for (from, name) in [
+                        ("OTHER", "init"),
+                        (session.as_str(), "load"),
+                        (session.as_str(), "networkIdle"),
+                    ] {
+                        out.push(json!({"method": "Page.lifecycleEvent", "sessionId": from,
+                            "params": {"frameId": "F", "loaderId": "L", "name": name}}));
+                    }
+                }
+                for message in out {
+                    if ws.send(Message::text(message.to_string())).is_err() {
+                        return received;
+                    }
+                }
+            }
+            received
+        });
+        Self { port, received }
+    }
+
+    /// Every message the peer was sent, once the connection has closed.
+    pub(crate) fn received(self) -> Vec<serde_json::Value> {
+        self.received.join().unwrap()
+    }
+}
+
+/// A page's text as a capture keeps it, thin.
+pub(crate) fn page(markdown: &str, chars: usize) -> content_store::Page {
+    content_store::Page {
+        title: None,
+        extractor: "dom_smoothie 0.18.2".to_owned(),
+        completeness: content_store::Completeness::Thin,
+        chars,
+        captions: None,
+        markdown: markdown.to_owned(),
+    }
+}

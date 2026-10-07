@@ -97,6 +97,13 @@ impl Plan {
         })
     }
 
+    /// The same plan without the retries of earlier failures: a signed in
+    /// run gets images only for the pages it opens.
+    pub fn without_retries(mut self) -> Self {
+        self.retries.clear();
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.after_text.is_empty() && self.retries.is_empty()
     }
@@ -382,7 +389,7 @@ mod tests {
 
     #[test]
     fn a_page_gets_its_image_after_its_text_once_and_is_not_retried_too() {
-        use crate::content_headless::Render;
+        use crate::content_headless::{self, Render};
         use crate::content_plan::Fetch;
         use crate::content_route::Route;
 
@@ -408,7 +415,7 @@ mod tests {
                 .iter()
                 .map(|url| TextLine::new(url, Text::Thin))
                 .collect();
-            Render::of(pages, Found::Unread).unwrap()
+            Render::of(pages, Found::Unread, content_headless::ended).unwrap()
         };
         let mut work = Work::default();
         work.fetches = vec![Fetch {

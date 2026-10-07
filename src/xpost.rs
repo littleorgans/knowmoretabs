@@ -79,7 +79,7 @@ fn once(fetcher: &Fetcher, raw: &str, id: &str) -> Result<Capture, Passing> {
     }
     let status = response.status;
     let line = |state: Status, reason: Option<String>| {
-        let mut line = content_fetch::public_line(raw, Tier::X, state);
+        let mut line = content_fetch::line(raw, Tier::X, state);
         line.reason = reason;
         line.http_status = Some(status);
         line

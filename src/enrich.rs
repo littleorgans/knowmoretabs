@@ -76,7 +76,15 @@ pub fn command(root: &Path, options: Options, json: bool, log: Log) -> Result<()
         options,
     );
     if options.dry_run {
-        targets::report_dry_run(&plan, options, json, log, plan.seconds_at_least(), &[]);
+        targets::report_dry_run(
+            &plan,
+            options,
+            json,
+            log,
+            plan.seconds_at_least(),
+            &[],
+            false,
+        );
         return Ok(());
     }
     let started = Instant::now();
@@ -191,7 +199,7 @@ fn report_run(plan: &Plan, tally: &Tally, seconds: f64, path: &Path, json: bool,
             }
         }
     }
-    let _ = writeln!(text, "{}", targets::not_fetched_line(plan));
+    let _ = writeln!(text, "{}", targets::not_fetched_line(plan, false));
     if plan.more > 0 {
         let _ = writeln!(text, "{} left for another run", plural(plan.more, "page"));
     }

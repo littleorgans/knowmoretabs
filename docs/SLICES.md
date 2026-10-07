@@ -197,17 +197,23 @@ page. A page that reads thin, or as an empty shell drawn by scripts, is then
 rendered once in the local Chrome, headless on a scratch profile, every
 connection it makes through a relay that keeps the private network out of
 reach; the longer text wins, the line says `headless`, and without a browser
-(or with `--no-browser`) those pages wait. `doctor` says which ways of
-reading pages are ready and what the archive holds.
+(or with `--no-browser`) those pages wait. `--signed-in` opens the pages a
+public read found behind a login, paywalled or blocked in the owner's own
+running Chrome, signed in, in hidden tabs of its own on the one connection
+the owner allows, never a personal app, every line saying `signed_in`.
+`doctor` says which ways of reading pages are ready and what the archive
+holds.
 
 **Intent.** Opt in, because it sends the URLs you visited to their own sites, X post
 numbers to the X post API and video ids to YouTube, also downloads one
 preview image per page from the address the page names, which may be on
 another host, and stores page text and images privately; routes use
 optional local tools when they are there (gh,
-yt-dlp and the installed Chrome). It follows `enrich`'s rules for what never leaves
-the machine, through the same guard, fetcher, planner and log writer, rather
-than a second copy of them. Capture only: the markdown files are the store,
+yt-dlp and the installed Chrome). `--signed-in` has the owner's own Chrome
+open pages signed in, only when asked and only once the owner allows it. It
+follows `enrich`'s rules for what never leaves the machine, through the
+same guard, fetcher, planner and log writer, rather than a second copy of
+them. Capture only: the markdown files are the store,
 and keyword retrieval over them is the `fulltext` entry, not this slice.
 
 ## Prepared for, deliberately not built

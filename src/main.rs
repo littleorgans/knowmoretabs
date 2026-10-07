@@ -23,6 +23,7 @@ mod content_image;
 mod content_pdf;
 mod content_plan;
 mod content_route;
+mod content_signed_in;
 mod content_store;
 #[cfg(test)]
 mod content_test;
@@ -144,6 +145,7 @@ fn main() -> ExitCode {
             urls,
             no_images,
             no_browser,
+            signed_in,
         }) => content::command(
             &root,
             content::Args {
@@ -152,6 +154,7 @@ fn main() -> ExitCode {
                 no_images: *no_images,
                 browser: cli.browser.as_deref().unwrap_or(platform::CHROME),
                 no_browser: *no_browser,
+                signed_in: *signed_in,
             },
             cli.json,
             log,

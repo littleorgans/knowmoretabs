@@ -24,7 +24,7 @@ use jiff::Timestamp;
 use url::Url;
 
 use crate::content_pdf;
-use crate::content_store::{Access, Completeness, Line, Page, Status, Tier};
+use crate::content_store::{Completeness, Line, Page, Status, Tier};
 use crate::extract::{self, Class};
 use crate::fetch::{self, Fetcher, Refusal, Response};
 use crate::head;
@@ -126,18 +126,18 @@ fn once(fetcher: &Fetcher, raw: &str, images: bool) -> Result<Capture, Passing> 
     read(raw, response, images)
 }
 
-/// A line for page `raw`, read by `tier` without signing in.
-pub fn public_line(raw: &str, tier: Tier, status: Status) -> Line {
+/// A line for page `raw`, read by `tier` with that tier's access.
+pub fn line(raw: &str, tier: Tier, status: Status) -> Line {
     let mut line = Line::new(raw, status);
     line.tier = Some(tier);
-    line.access = Some(Access::Public);
+    line.access = Some(tier.access());
     line
 }
 
 /// What a GET that ended without a response says about page `raw`.
 pub fn refused(raw: &str, tier: Tier, refusal: Refusal) -> Result<Capture, Passing> {
     let reason = refusal.reason();
-    let ended = |status: Status| public_line(raw, tier, status).with_reason(reason.clone());
+    let ended = |status: Status| line(raw, tier, status).with_reason(reason.clone());
     let line = match refusal {
         Refusal::Login(url) => {
             let mut line = ended(Status::BehindLogin);
@@ -179,7 +179,7 @@ fn read(raw: &str, mut response: Response, images: bool) -> Result<Capture, Pass
     let final_url = response.url.to_string();
     let status = response.status;
     let line = |state: Status, reason: Option<String>| {
-        let mut line = public_line(raw, Tier::Web, state);
+        let mut line = self::line(raw, Tier::Web, state);
         line.reason = reason;
         line.final_url = Some(final_url.clone());
         line.http_status = Some(status);
@@ -289,14 +289,13 @@ pub fn from_html(
     let images = if !images || found.class == Class::BehindLogin {
         Found::Unread
     } else {
-        let body = if tier == Tier::Headless {
-            Source::RenderedImg
-        } else {
-            Source::BodyImg
+        let body = match tier {
+            Tier::Headless | Tier::SignedIn => Source::RenderedImg,
+            _ => Source::BodyImg,
         };
         image_page::page(html, found.article.as_deref(), final_url, body)
     };
-    let mut captured = public_line(raw, tier, class_status(found.class));
+    let mut captured = line(raw, tier, class_status(found.class));
     captured.reason = found.reason.map(str::to_owned);
     captured.final_url = Some(final_url.to_string());
     captured.http_status = Some(status);
@@ -469,6 +468,7 @@ fn random() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content_store::Access;
 
     const JITTER: Duration = Duration::from_millis(300);
 
@@ -629,9 +629,8 @@ mod tests {
 
     #[test]
     fn not_html_lines_of_types_this_build_reads_are_outdated() {
-        let line = |status, reason: &str| {
-            public_line("https://a.test/", Tier::Web, status).with_reason(reason)
-        };
+        let line =
+            |status, reason: &str| line("https://a.test/", Tier::Web, status).with_reason(reason);
         for mime in ["image/jpeg", "image/png", "application/pdf"] {
             let earlier = line(Status::NotHtml, &format!("not HTML ({mime})"));
             assert!(outdated(&earlier), "{mime}");
@@ -648,6 +647,37 @@ mod tests {
         ] {
             assert!(!outdated(&line(status, &reason)), "{status:?} {reason}");
         }
+    }
+
+    #[test]
+    fn a_line_says_its_tiers_access_and_only_a_signed_in_one_says_signed_in() {
+        for tier in [
+            Tier::Web,
+            Tier::X,
+            Tier::Github,
+            Tier::Youtube,
+            Tier::Headless,
+        ] {
+            let public = line("https://a.test/", tier, Status::Ok);
+            assert_eq!(
+                (public.tier, public.access),
+                (Some(tier), Some(Access::Public))
+            );
+        }
+        let signed_in = line("https://a.test/", Tier::SignedIn, Status::BehindLogin);
+        assert_eq!(
+            (signed_in.tier, signed_in.access),
+            (Some(Tier::SignedIn), Some(Access::SignedIn))
+        );
+        let text = serde_json::to_string(&signed_in).unwrap();
+        assert!(text.contains(r#""access":"signed_in""#) && text.contains(r#""tier":"signed_in""#));
+        let html = format!("<main><p>{}</p></main>", "Signed in text. ".repeat(120));
+        let url = Url::parse("https://a.test/").unwrap();
+        let read = from_html("https://a.test/", Tier::SignedIn, &url, 200, &html, false);
+        assert_eq!(
+            (read.line.tier, read.line.access),
+            (Some(Tier::SignedIn), Some(Access::SignedIn))
+        );
     }
 
     #[test]

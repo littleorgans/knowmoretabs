@@ -540,7 +540,7 @@ fn read_before() -> ([Snapshot; 1], content_store::Log) {
             "short text; rendering added no text",
         ),
     ] {
-        let line = content_fetch::public_line(url, tier, status).with_reason(reason);
+        let line = content_fetch::line(url, tier, status).with_reason(reason);
         known.pages.insert(url.to_owned(), line);
     }
     (snapshots, known)
@@ -612,7 +612,7 @@ fn forgotten_fragment_variants_never_wait_for_or_ask_about_a_browser() {
     let mut known = content_store::Log::default();
     known.pages.insert(
         url.to_owned(),
-        content_fetch::public_line(url, Tier::Web, Status::Thin).with_reason("short text"),
+        content_fetch::line(url, Tier::Web, Status::Thin).with_reason("short text"),
     );
     let never = || -> browser::Readiness { panic!("a forgotten document needs no browser") };
     let (_, work) = plan(
@@ -710,7 +710,7 @@ fn files_an_earlier_build_left_as_not_html_are_read_again_without_refetch() {
     let snapshots = [snapshot(&urls.map(|(url, _, _)| url))];
     let mut known = content_store::Log::default();
     for (url, status, reason) in urls {
-        let mut line = content_fetch::public_line(url, Tier::Web, status).with_reason(reason);
+        let mut line = content_fetch::line(url, Tier::Web, status).with_reason(reason);
         if status == Status::Thin {
             line.extractor = Some("lopdf".to_owned());
         }

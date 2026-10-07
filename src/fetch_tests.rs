@@ -329,3 +329,51 @@ fn a_connection_is_refused_where_a_request_would_be() {
         "one inward address among public ones"
     );
 }
+
+/// A signed in fetcher whose every name resolves to `address`.
+fn signed_in(address: Option<&str>) -> Fetcher {
+    let mut fetcher = Fetcher::with(
+        Duration::from_secs(5),
+        address.map(|a| a.parse().unwrap()),
+        SIGNED_IN_PACE,
+    );
+    fetcher.signed_in = true;
+    fetcher
+}
+
+#[test]
+fn a_signed_in_check_refuses_personal_apps_and_names_that_resolve_inward() {
+    let url = |raw: &str| Url::parse(raw).unwrap();
+    let public = signed_in(None);
+    for hop in [0, 1] {
+        assert_eq!(
+            public.check(&url("https://mail.google.com/mail/u/0/"), hop),
+            Err(Refusal::PersonalApp),
+            "hop {hop}"
+        );
+    }
+    assert_eq!(
+        Fetcher::new(&BTreeSet::new()).check(&url("https://mail.google.com/"), 0),
+        Ok(()),
+        "a public read is not told about personal apps"
+    );
+    assert_eq!(
+        public.check(&url("http://10.0.0.8/admin"), 0),
+        Err(Refusal::PrivateNetwork { redirected: false })
+    );
+    assert_eq!(public.check(&url("https://93.184.215.14/page"), 0), Ok(()));
+    // The name rule passes `public.test`; where it resolves does not.
+    assert_eq!(
+        signed_in(Some("127.0.0.1:443")).check(&url("https://public.test/page"), 0),
+        Err(Refusal::PrivateAddress)
+    );
+    assert_eq!(
+        signed_in(Some("93.184.215.14:443")).check(&url("https://public.test/page"), 1),
+        Ok(())
+    );
+    assert!(Refusal::PersonalApp.is_rule());
+    assert_eq!(
+        Fetcher::signed_in(&BTreeSet::new()).pacer.interval,
+        SIGNED_IN_PACE
+    );
+}

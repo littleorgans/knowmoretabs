@@ -132,7 +132,15 @@ preview image; a PDF's text is read on this machine. A page that failed is tried
 failed runs it is recorded as unavailable. Each captured page also gets one preview image, fetched from \
 the address the page or its route names, which may be on another host: kept as a JPEG of at most 768 \
 pixels in <root>/pages/images/, with one line per attempt in <root>/pages/images.jsonl. One request a \
-second per site. Never part of save."
+second per site. Never part of save.\n\n\
+With --signed-in, it does only this: opens the pages a public read found behind a login, paywalled or \
+blocked, at most 25 a run unless --limit says, in your own running Chrome, signed in as you, one page at a \
+time and five seconds apart per site, each in a hidden tab of its own that Chrome closes when the run \
+ends. Your personal apps (mail, chat, documents, account consoles) are never opened. It needs remote \
+debugging turned on at chrome://inspect/#remote-debugging, and Chrome asks you to Allow the connection \
+once per run. The names a page goes to are checked before and after it loads, but Chrome connects and \
+follows redirects itself, as when you open the page. Every line it writes says signed_in; text is kept \
+only when it is longer, and an image only with text read signed in."
     )]
     Content {
         #[command(flatten)]
@@ -146,13 +154,18 @@ second per site. Never part of save."
         /// Render nothing in a browser this run: pages that need one wait
         #[arg(long)]
         no_browser: bool,
+        /// Open pages a public read found behind a login, paywalled or blocked in your running Chrome, signed in
+        #[arg(long, conflicts_with_all = ["refetch", "no_browser"])]
+        signed_in: bool,
     },
     /// Say which ways of reading pages this machine can use, and what the archive holds of page text
     #[command(
         long_about = "Reports, for each way content reads pages, whether it is ready, missing or degraded, \
 and how to fix it: the generic web tier (compiled in), GitHub through gh (found and its version, plus \
 with --live whether gh auth status exits 0; never its output), the X post API, YouTube through yt-dlp with deno or node, and \
-headless reading with the --browser binary (chrome by default). Then the archive: whether it is private, \
+headless reading with the --browser binary (chrome by default), and whether content --signed-in can reach \
+that browser running, read from its remote debugging switch and DevToolsActivePort file, never by \
+connecting. Then the archive: whether it is private, \
 whether pages/content exists, and its pages by their latest status. Offline by default. With --live, gh \
 checks its own sign in with GitHub, the X post API is asked once for a fixed public post, and the browser \
 is started headless once, asked its version and closed, with no page. Sends nothing of yours. Exits 0 when \
@@ -593,11 +606,12 @@ mod tests {
             urls,
             no_images,
             no_browser,
+            signed_in,
         }) = cli.command
         else {
             panic!("content parsed as {:?}", cli.command);
         };
-        assert!(fetch.dry_run && !fetch.refetch && !no_images && !no_browser);
+        assert!(fetch.dry_run && !fetch.refetch && !no_images && !no_browser && !signed_in);
         assert_eq!(fetch.limit, Some(5));
         assert_eq!(urls, ["https://a.test/", "https://b.test/"]);
         let cli = Cli::try_parse_from(["knowmoretabs", "content", "--no-images"]).unwrap();
@@ -618,6 +632,55 @@ mod tests {
             })
         ));
         assert!(Cli::try_parse_from(["knowmoretabs", "enrich", "--no-browser"]).is_err());
+    }
+
+    #[test]
+    fn signed_in_takes_urls_and_the_limit_and_refuses_refetch_and_no_browser() {
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "content",
+            "--signed-in",
+            "--url",
+            "https://a.test/",
+            "--dry-run",
+            "--no-images",
+        ])
+        .unwrap();
+        let Some(Command::Content {
+            fetch,
+            urls,
+            no_images,
+            signed_in,
+            ..
+        }) = cli.command
+        else {
+            panic!("content parsed as {:?}", cli.command);
+        };
+        assert!(signed_in && fetch.dry_run && no_images);
+        assert_eq!(
+            (urls.as_slice(), fetch.limit),
+            (["https://a.test/".to_owned()].as_slice(), None)
+        );
+        let cli = Cli::try_parse_from(["knowmoretabs", "content", "--signed-in", "--limit", "3"])
+            .unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Content {
+                signed_in: true,
+                fetch: FetchArgs { limit: Some(3), .. },
+                ..
+            })
+        ));
+        for conflict in ["--refetch", "--no-browser"] {
+            let err = Cli::try_parse_from(["knowmoretabs", "content", "--signed-in", conflict])
+                .unwrap_err();
+            assert_eq!(
+                err.kind(),
+                clap::error::ErrorKind::ArgumentConflict,
+                "{conflict}"
+            );
+        }
+        assert!(Cli::try_parse_from(["knowmoretabs", "enrich", "--signed-in"]).is_err());
     }
 
     #[test]

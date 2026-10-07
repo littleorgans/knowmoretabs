@@ -132,7 +132,7 @@ impl Route {
             (Self::Github(target), Some(gh), _) => github_api::capture(gh, raw, target, images),
             (Self::Youtube(id), _, Some(tool)) => ytdlp::capture(tool, raw, id),
             (Self::Youtube(_), _, None) => Capture::ended(
-                content_fetch::public_line(raw, Tier::Youtube, Status::Error)
+                content_fetch::line(raw, Tier::Youtube, Status::Error)
                     .with_reason("yt-dlp not ready"),
             ),
             (Self::Web | Self::Github(_), ..) => content_fetch::capture(fetcher, raw, images),

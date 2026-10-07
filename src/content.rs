@@ -13,23 +13,27 @@
 //!      Unless `--no-images`, each page's image follows its text. Pages
 //!      that read thin or empty are rendered in a browser after the HTTP
 //!      reads (`content_headless`), and the report counts each page once,
-//!      by the run's last line for it.
+//!      by the run's last line for it. `--signed-in` runs the same render
+//!      pass in the owner's own browser over the pages `content_signed_in`
+//!      plans, after attaching to it and before writing anything, so a
+//!      browser that cannot be reached leaves the archive as it was.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::archive::Archive;
-use crate::browser;
+use crate::browser::{self, Browser};
 use crate::capture::Log;
 use crate::content_fetch::{self, Capture};
 use crate::content_headless::{self, Escalated, Headless};
 use crate::content_image::{self, Images};
 use crate::content_plan::{self, Work};
 use crate::content_route::Tools;
+use crate::content_signed_in;
 use crate::content_store::{self, Line, Status, Store};
 use crate::error::Error;
 use crate::fetch::Fetcher;
@@ -87,6 +91,18 @@ pub struct Args<'a> {
     pub browser: &'a str,
     /// No browser this run: pages that need one wait.
     pub no_browser: bool,
+    /// Open the pages a public read could not get in the owner's own
+    /// browser, signed in, and nothing else.
+    pub signed_in: bool,
+}
+
+/// How a run's renders get their browser.
+pub enum Start {
+    /// The binary at this path, launched headless when there is a page to
+    /// render.
+    Launch(PathBuf),
+    /// The owner's browser, attached to before the run.
+    Attached(Box<Browser>),
 }
 
 pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), Error> {
@@ -96,6 +112,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
         no_images,
         browser,
         no_browser,
+        signed_in,
     } = args;
     let archive = Archive::at(root);
     let loaded = library::load(&archive)?;
@@ -105,6 +122,9 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
         log.warn(&note);
     }
     let snapshots = only(&loaded.snapshots, urls)?;
+    if signed_in {
+        return self::signed_in(root, &snapshots, &state, &known, args, json, log);
+    }
     // A dry run sends nothing, so it does not let `gh` ask GitHub whether
     // it is signed in, and runs no tool at all: it looks on `PATH`.
     let github = || {
@@ -142,7 +162,15 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
             work.reads_the_web(),
         ));
         notes.extend(images.as_ref().and_then(content_image::Plan::note));
-        targets::report_dry_run(&plan, options, json, log, work.seconds_at_least(), &notes);
+        targets::report_dry_run(
+            &plan,
+            options,
+            json,
+            log,
+            work.seconds_at_least(),
+            &notes,
+            false,
+        );
         return Ok(());
     }
     let started = Instant::now();
@@ -156,9 +184,78 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
             ..Tally::default()
         }
     } else {
-        run(root, work, &state, images, headless, log)?
+        let start = work
+            .browser
+            .as_ref()
+            .and_then(browser::Readiness::path)
+            .map(|path| Start::Launch(path.to_owned()));
+        let fetcher = Fetcher::new(&state.forgotten);
+        run(root, work, images, headless, &fetcher, start, log)?
     };
     tally.waiting = waiting;
+    report(&plan, &tally, &notes, started.elapsed(), root, json, log);
+    Ok(())
+}
+
+/// `content --signed-in`: the pages `content_signed_in` plans, opened one
+/// at a time in the owner's browser, which is attached to only when there
+/// is a page to open, after the dry run and before anything is written.
+/// Images follow only text read signed in, and earlier images are not
+/// retried.
+fn signed_in(
+    root: &Path,
+    snapshots: &[Snapshot],
+    state: &State,
+    known: &content_store::Log,
+    args: Args<'_>,
+    json: bool,
+    log: Log,
+) -> Result<(), Error> {
+    let options = args.options;
+    let (plan, work, personal) = content_signed_in::plan(snapshots, state, known, options);
+    let images = if args.no_images {
+        None
+    } else {
+        Some(
+            content_image::Plan::new(root, snapshots, state, &work, options, log)?
+                .without_retries(),
+        )
+    };
+    let name = content_signed_in::name(args.browser);
+    let mut notes = content_signed_in::ineligible(args.urls, known);
+    if options.dry_run {
+        notes.extend(content_signed_in::dry_run_notes(
+            work.renders.len(),
+            personal,
+            &name,
+        ));
+        notes.extend(images.as_ref().and_then(content_image::Plan::note));
+        let limit = Some(content_signed_in::limit(options));
+        targets::report_dry_run(
+            &plan,
+            Options { limit, ..options },
+            json,
+            log,
+            0,
+            &notes,
+            true,
+        );
+        return Ok(());
+    }
+    let started = Instant::now();
+    let headless = Headless::signed_in(name.clone(), personal);
+    let tally = if work.renders.is_empty() {
+        Tally {
+            headless,
+            ..Tally::default()
+        }
+    } else {
+        let browser = content_signed_in::attach(args.browser, name)?;
+        let images = images.filter(|images| !images.is_empty());
+        let fetcher = Fetcher::signed_in(&state.forgotten);
+        let start = Some(Start::Attached(Box::new(browser)));
+        run(root, work, images, headless, &fetcher, start, log)?
+    };
     report(&plan, &tally, &notes, started.elapsed(), root, json, log);
     Ok(())
 }
@@ -193,17 +290,18 @@ fn only<'a>(snapshots: &'a [Snapshot], urls: &[String]) -> Result<Cow<'a, [Snaps
     ))
 }
 
-/// Records the pages that need no request, then fetches the rest, each
-/// host's pages in order on one of the shared workers, each page's image
-/// after its text; then renders in a browser the pages that read thin or
-/// empty, each page's image after its render; then retries the images
-/// that failed before.
+/// Records the pages that need no request, then fetches the rest through
+/// `fetcher`, each host's pages in order on one of the shared workers,
+/// each page's image after its text; then renders the pages that read thin
+/// or empty in the browser `start` gives, each page's image after its
+/// render; then retries the images that failed before.
 fn run(
     root: &Path,
     work: Work,
-    state: &State,
     images: Option<content_image::Plan>,
     mut headless: Headless,
+    fetcher: &Fetcher,
+    start: Option<Start>,
     log: Log,
 ) -> Result<Tally, Error> {
     let store = Mutex::new(Store::open(root)?);
@@ -235,9 +333,7 @@ fn run(
     for line in work.unsent {
         write(line, None)?;
     }
-    let rendering = work.browser.as_ref().and_then(browser::Readiness::path);
-    let escalated = Escalated::new(rendering.is_some());
-    let fetcher = Fetcher::new(&state.forgotten);
+    let escalated = Escalated::new(start.is_some());
     let tools = Tools {
         gh: work.github.as_ref().and_then(Readiness::gh),
         ytdlp: work.youtube.as_ref().and_then(ytdlp::Readiness::tool),
@@ -255,7 +351,7 @@ fn run(
                 images: found,
             } = fetch
                 .route
-                .capture(&fetcher, tools, &fetch.url, images.is_some());
+                .capture(fetcher, tools, &fetch.url, images.is_some());
             {
                 let mut tally = tally.lock().unwrap_or_else(PoisonError::into_inner);
                 tally.fetches += 1;
@@ -273,7 +369,7 @@ fn run(
             }
             images
                 .as_ref()
-                .map_or(Ok(()), |images| images.after(&fetcher, &lines, &found))
+                .map_or(Ok(()), |images| images.after(fetcher, &lines, &found))
         },
         |n, total| {
             if targets::progress_due(n, total, PROGRESS_EVERY) {
@@ -285,11 +381,17 @@ fn run(
     headless.wait(unrendered);
     let mut renders = work.renders;
     renders.extend(escalated);
-    if let Some(path) = rendering {
+    if let Some(start) = start
+        && !renders.is_empty()
+    {
+        let browser = match start {
+            Start::Launch(path) => Browser::launch(&path, log),
+            Start::Attached(browser) => Ok(*browser),
+        };
         content_headless::run(
             &renders,
-            path,
-            &fetcher,
+            browser,
+            fetcher,
             images.as_ref(),
             write,
             &mut headless,
@@ -297,7 +399,7 @@ fn run(
         )?;
     }
     if let Some(images) = &images {
-        images.retry(&fetcher)?;
+        images.retry(fetcher)?;
     }
     let mut tally = tally.into_inner().unwrap_or_else(PoisonError::into_inner);
     tally.headless = headless;
@@ -399,7 +501,11 @@ fn report(
     for note in notes {
         let _ = writeln!(text, "{note}");
     }
-    let _ = writeln!(text, "{}", targets::not_fetched_line(plan));
+    let _ = writeln!(
+        text,
+        "{}",
+        targets::not_fetched_line(plan, tally.headless.signed_in.is_some())
+    );
     if plan.more > 0 {
         let _ = writeln!(text, "{} left for another run", plural(plan.more, "page"));
     }
@@ -440,9 +546,10 @@ mod tests {
         run(
             root.path(),
             work,
-            &state,
             None,
             Headless::default(),
+            &Fetcher::new(&state.forgotten),
+            None,
             Log::default(),
         )
         .unwrap();

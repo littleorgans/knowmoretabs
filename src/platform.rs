@@ -1,7 +1,8 @@
 //! Where Chrome keeps its files: the user-data directory, profile discovery
-//! through `Local State`, and picking the newest `Session_*` log.
+//! through `Local State`, whether its remote debugging is on, and picking
+//! the newest `Session_*` log.
 //!
-//! slice: browsers, platforms
+//! slice: browsers, platforms, content
 //! why: The reference implementation hardcoded one macOS path and trusted a
 //!      profile name straight onto the filesystem. This module is the one
 //!      place that knowledge lives, shaped as a table whose rows are browsers
@@ -613,6 +614,10 @@ pub struct BrowserCandidate {
 struct LocalState {
     #[serde(default)]
     profile: ProfilePrefs,
+    /// Read loosely, by [`remote_debugging`] alone, so that no shape of it
+    /// can stop profile discovery.
+    #[serde(default)]
+    devtools: serde_json::Value,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -660,6 +665,14 @@ pub fn resolve_profile(user_data: &Path, requested: Option<&str>) -> Result<Prof
         path,
         dir_name,
     })
+}
+
+/// Whether the owner turned on remote debugging at
+/// `chrome://inspect/#remote-debugging`, as `Local State` in `user_data`
+/// records it: `devtools.remote_debugging.user-enabled`.
+pub(crate) fn remote_debugging(user_data: &Path) -> Result<bool, ProfileError> {
+    let state = read_local_state(user_data)?;
+    Ok(state.devtools["remote_debugging"]["user-enabled"].as_bool() == Some(true))
 }
 
 fn read_local_state(user_data: &Path) -> Result<LocalState, ProfileError> {
@@ -1093,6 +1106,30 @@ mod tests {
         }
         assert!(guard_dir_name("Default", &cache).is_ok());
         assert!(guard_dir_name("Profile 1", &cache).is_ok());
+    }
+
+    #[test]
+    fn the_remote_debugging_switch_is_read_loosely_and_never_stops_discovery() {
+        let on = setup(
+            r#"{"profile":{"last_used":"Default"},"devtools":{"remote_debugging":{"user-enabled":true}}}"#,
+        );
+        std::fs::create_dir(on.path().join("Default")).unwrap();
+        assert!(remote_debugging(on.path()).unwrap());
+        for state in [
+            r#"{"devtools":{"remote_debugging":{"user-enabled":false}}}"#,
+            r#"{"devtools":{"remote_debugging":{"user-enabled":"yes"}}}"#,
+            r#"{"devtools":"odd"}"#,
+            "{}",
+        ] {
+            assert!(!remote_debugging(setup(state).path()).unwrap(), "{state}");
+        }
+        let odd = setup(r#"{"profile":{"last_used":"Default"},"devtools":[1,2]}"#);
+        std::fs::create_dir(odd.path().join("Default")).unwrap();
+        assert_eq!(
+            resolve_profile(odd.path(), None).unwrap().dir_name,
+            "Default"
+        );
+        assert!(!remote_debugging(tempfile::tempdir().unwrap().path()).unwrap());
     }
 
     #[test]

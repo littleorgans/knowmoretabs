@@ -102,8 +102,10 @@ impl Outcome for Status {
 }
 
 /// The route that made an attempt: the generic web route, the X post API,
-/// the GitHub API through `gh`, `YouTube` through yt-dlp, or a headless
-/// browser rendering a page the web route read as thin or empty.
+/// the GitHub API through `gh`, `YouTube` through yt-dlp, a headless
+/// browser rendering a page the web route read as thin or empty, or the
+/// owner's own browser opening, signed in, a page a public tier could not
+/// read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
@@ -112,8 +114,21 @@ pub enum Tier {
     Github,
     Youtube,
     Headless,
+    SignedIn,
     #[serde(other)]
     Other,
+}
+
+impl Tier {
+    /// Whose access an attempt by this tier is made with.
+    pub fn access(self) -> Access {
+        match self {
+            Self::SignedIn => Access::SignedIn,
+            Self::Web | Self::X | Self::Github | Self::Youtube | Self::Headless | Self::Other => {
+                Access::Public
+            }
+        }
+    }
 }
 
 /// Whose access a page was read with.
@@ -121,6 +136,7 @@ pub enum Tier {
 #[serde(rename_all = "snake_case")]
 pub enum Access {
     Public,
+    SignedIn,
     #[serde(other)]
     Other,
 }
