@@ -97,7 +97,8 @@ impl Outcome for Status {
 }
 
 /// The route that made an attempt: the generic web route, the X post API,
-/// the GitHub API through `gh`, or `YouTube` through yt-dlp.
+/// the GitHub API through `gh`, `YouTube` through yt-dlp, or a headless
+/// browser rendering a page the web route read as thin or empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Tier {
@@ -105,6 +106,7 @@ pub enum Tier {
     X,
     Github,
     Youtube,
+    Headless,
     #[serde(other)]
     Other,
 }
@@ -525,6 +527,19 @@ mod tests {
         assert_eq!(again, text, "a second round trip changes nothing");
         assert!(parse("no front matter").is_none());
         assert_eq!(parse("---\n---\nbody").unwrap().1, "body");
+    }
+
+    #[test]
+    fn a_rendered_page_says_headless_in_its_line_and_front_matter() {
+        let mut line = ok_line("https://a.test/");
+        line.tier = Some(Tier::Headless);
+        let text = serde_json::to_string(&line).unwrap();
+        assert!(text.contains(r#""tier":"headless""#));
+        assert_eq!(serde_json::from_str::<Line>(&text).unwrap(), line);
+        let (front, _) = parse(&render(&line, &page("Body\n"), &BTreeMap::new()))
+            .map(|(f, b)| (f, b.to_owned()))
+            .unwrap();
+        assert_eq!(front["tier"], "headless");
     }
 
     #[test]

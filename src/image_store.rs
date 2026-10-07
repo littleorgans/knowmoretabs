@@ -400,7 +400,7 @@ mod tests {
         let text = concat!(
             r#"{"schema_version":1,"url":"https://a.test/","attempted_at":"2026-10-07T09:00:00Z","status":"error","reason":"timeout","candidates":[{"url":"https://c.test/x.jpg","source":"og_image"}]}"#,
             "\n",
-            r#"{"schema_version":1,"url":"https://b.test/","attempted_at":"2026-10-07T09:00:00Z","status":"blurred","source":"rendered_img","attempt":2}"#,
+            r#"{"schema_version":1,"url":"https://b.test/","attempted_at":"2026-10-07T09:00:00Z","status":"blurred","source":"screenshot","attempt":2}"#,
             "\n",
             r#"{"schema_version":2,"url":"https://c.test/","attempted_at":"2026-10-07T09:00:00Z","status":"ok"}"#,
             "\n",

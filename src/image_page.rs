@@ -30,15 +30,16 @@ const NOT_THE_SUBJECT: [&str; 14] = [
     "advert", "tracking", "tracker", "shields",
 ];
 
-/// What a page read over HTTP names: its head, then its images, from
-/// readability's `article` when its text came from there, else the whole
-/// page less its chrome. `base` is where the page was fetched from.
-pub fn page(html: &str, article: Option<&str>, base: &Url) -> Found {
+/// What a page names: its head, then its images, from readability's
+/// `article` when its text came from there, else the whole page less its
+/// chrome, each with source `body`: as served, or as a browser rendered
+/// it. `base` is where the page was read from.
+pub fn page(html: &str, article: Option<&str>, base: &Url, body: Source) -> Found {
     let mut found = head_images(&head::scan(html), base);
-    let from_article = article.map(|article| body_images(&Document::from(article), base));
+    let from_article = article.map(|article| body_images(&Document::from(article), base, body));
     match from_article {
         Some(images) if !images.is_empty() => found.extend(images),
-        _ => found.extend(body_images(&extract::without_chrome(html), base)),
+        _ => found.extend(body_images(&extract::without_chrome(html), base, body)),
     }
     Found::Candidates(found)
 }
@@ -108,7 +109,7 @@ struct Img {
 
 /// The document's own images, largest declared first, then in page order;
 /// those with no declared size after every sized one.
-fn body_images(document: &Document, base: &Url) -> Vec<Candidate> {
+fn body_images(document: &Document, base: &Url, source: Source) -> Vec<Candidate> {
     let mut images: Vec<Img> = document
         .select("img")
         .iter()
@@ -161,7 +162,7 @@ fn body_images(document: &Document, base: &Url) -> Vec<Candidate> {
     images.sort_by_key(|img| (std::cmp::Reverse(img.area), img.position));
     images
         .into_iter()
-        .map(|img| Candidate::new(img.url, Source::BodyImg))
+        .map(|img| Candidate::new(img.url, source))
         .collect()
 }
 
@@ -325,7 +326,7 @@ mod tests {
               "author":{"@type":"Person","image":"https://a.test/face.jpg"}}]}</script>
             <meta property="og:image" content="data:image/png;base64,AAAA">
             </head><body></body></html>"#;
-        let found = candidates(page(html, None, &base()));
+        let found = candidates(page(html, None, &base(), Source::BodyImg));
         let named: Vec<(&str, Source)> = found.iter().map(|c| (c.url.as_str(), c.source)).collect();
         assert_eq!(
             named,
@@ -355,7 +356,7 @@ mod tests {
             <img src="/wide.jpg" srcset="/wide-480.jpg 480w, /wide-1024.jpg 1024w, /wide-800.jpg 800w">
             <img src="/later.jpg" width="1200" height="800">
             </body></html>"#;
-        let found = candidates(page(html, None, &base()));
+        let found = candidates(page(html, None, &base(), Source::BodyImg));
         assert_eq!(
             urls(&found),
             [
@@ -378,7 +379,7 @@ mod tests {
             <img src="/placeholder.jpg" srcset="/avatar.jpg 1200w">
             </main>"#;
         assert_eq!(
-            urls(&candidates(page(html, None, &base()))),
+            urls(&candidates(page(html, None, &base(), Source::BodyImg))),
             ["https://a.test/lazy.jpg", "https://a.test/subject.jpg"]
         );
     }
@@ -391,7 +392,7 @@ mod tests {
                  data-srcset="/lazy-400.jpg 400w, /lazy-800.jpg 800w">
             </main>"#;
         assert_eq!(
-            urls(&candidates(page(html, None, &base()))),
+            urls(&candidates(page(html, None, &base(), Source::BodyImg))),
             ["https://a.test/real.jpg", "https://a.test/lazy-800.jpg"]
         );
     }
@@ -404,17 +405,27 @@ mod tests {
             <footer><img src="/footer.jpg" width="2000" height="1000"></footer>
             </body></html>"#;
         assert_eq!(
-            urls(&candidates(page(html, None, &base()))),
+            urls(&candidates(page(html, None, &base(), Source::BodyImg))),
             ["https://a.test/in-main.jpg"]
         );
         let article = r#"<div><img src="https://a.test/lead.jpg"></div>"#;
         assert_eq!(
-            urls(&candidates(page(html, Some(article), &base()))),
+            urls(&candidates(page(
+                html,
+                Some(article),
+                &base(),
+                Source::BodyImg
+            ))),
             ["https://a.test/lead.jpg"]
         );
         let empty = r"<div><p>no images</p></div>";
         assert_eq!(
-            urls(&candidates(page(html, Some(empty), &base()))),
+            urls(&candidates(page(
+                html,
+                Some(empty),
+                &base(),
+                Source::BodyImg
+            ))),
             ["https://a.test/in-main.jpg"],
             "an article without images falls back to the page"
         );
