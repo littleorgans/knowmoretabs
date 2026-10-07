@@ -42,6 +42,10 @@ pub const SECONDS_AT_LEAST: usize = 2;
 const TIMEOUT: Duration = Duration::from_secs(60);
 /// yt-dlp's own progress lines: read and dropped past this.
 const STDOUT_CAP: usize = 64 * 1024;
+/// Info JSON includes translation tracks and their long addresses. This
+/// private tool output gets roughly six times the observed 10.9 MB size,
+/// while keeping memory bounded independently of page and caption bodies.
+const INFO_JSON_CAP: usize = 64 * 1024 * 1024;
 /// A second between yt-dlp's requests for one video.
 const SLEEP: &str = "1";
 /// The scratch file names, before yt-dlp's own suffixes.
@@ -253,8 +257,9 @@ impl Attempt<'_> {
         let dir = scratch.path();
         self.call(&describe_args(self.tool, dir, id))?;
         let info_path = dir.join(format!("{VIDEO}.info.json"));
-        let info: Info = serde_json::from_slice(&self.file(&info_path, "video information")?)
-            .map_err(|_| self.ended(Status::Error, "yt-dlp's video information is not JSON"))?;
+        let info: Info =
+            serde_json::from_slice(&self.file(&info_path, "video information", INFO_JSON_CAP)?)
+                .map_err(|_| self.ended(Status::Error, "yt-dlp's video information is not JSON"))?;
         let mut line = self.line(Status::Ok);
         line.final_url.clone_from(&info.webpage_url);
         let Some(choice) = youtube_page::choose(&info) else {
@@ -271,6 +276,7 @@ impl Attempt<'_> {
                 youtube_page::FORMAT
             )),
             "captions",
+            BODY_CAP,
         )?;
         let said = youtube_page::transcript(&String::from_utf8_lossy(&vtt), choice.kind);
         if said.is_empty() {
@@ -297,15 +303,15 @@ impl Attempt<'_> {
         Err(self.ended(status, reason))
     }
 
-    /// Up to [`BODY_CAP`] of a file yt-dlp wrote, or the attempt ends.
-    fn file(&self, path: &Path, what: &str) -> Result<Vec<u8>, Box<Capture>> {
+    /// Up to `cap` bytes of a file yt-dlp wrote, or the attempt ends.
+    fn file(&self, path: &Path, what: &str, cap: usize) -> Result<Vec<u8>, Box<Capture>> {
         let mut bytes = Vec::new();
         match fs::File::open(path)
-            .and_then(|file| file.take(BODY_CAP as u64 + 1).read_to_end(&mut bytes))
+            .and_then(|file| file.take(cap as u64 + 1).read_to_end(&mut bytes))
         {
-            Ok(_) if bytes.len() > BODY_CAP => Err(self.ended(
+            Ok(_) if bytes.len() > cap => Err(self.ended(
                 Status::Error,
-                format!("yt-dlp's {what} over {} MiB", BODY_CAP >> 20),
+                format!("yt-dlp's {what} over {} MiB", cap >> 20),
             )),
             Ok(_) => Ok(bytes),
             Err(err) if err.kind() == ErrorKind::NotFound => {
@@ -633,6 +639,46 @@ mod tests {
     }
 
     #[test]
+    fn info_json_above_the_body_cap_is_read_and_parsed() {
+        let tool = tool();
+        let attempt = Attempt {
+            tool: &tool,
+            raw: "synthetic",
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("video.info.json");
+        let description = "x".repeat(BODY_CAP + 1);
+        let json = serde_json::to_vec(&serde_json::json!({"description": description})).unwrap();
+        fs::write(&path, &json).unwrap();
+        let bytes = attempt
+            .file(&path, "video information", INFO_JSON_CAP)
+            .unwrap();
+        assert_eq!(bytes.len(), json.len());
+        let info: Info = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(info.description.unwrap().len(), BODY_CAP + 1);
+
+        let ended = attempt.file(&path, "captions", BODY_CAP).unwrap_err();
+        assert_eq!(ended.line.status, Status::Error);
+        assert_eq!(
+            ended.line.reason.as_deref(),
+            Some("yt-dlp's captions over 10 MiB")
+        );
+
+        fs::File::create(&path)
+            .unwrap()
+            .set_len(INFO_JSON_CAP as u64 + 1)
+            .unwrap();
+        let ended = attempt
+            .file(&path, "video information", INFO_JSON_CAP)
+            .unwrap_err();
+        assert_eq!(ended.line.status, Status::Error);
+        assert_eq!(
+            ended.line.reason.as_deref(),
+            Some("yt-dlp's video information over 64 MiB")
+        );
+    }
+
+    #[test]
     fn a_file_yt_dlp_did_not_write_ends_the_attempt_as_an_error() {
         let tool = tool();
         let attempt = Attempt {
@@ -641,7 +687,7 @@ mod tests {
         };
         let dir = tempfile::tempdir().unwrap();
         let ended = attempt
-            .file(&dir.path().join("absent"), "captions")
+            .file(&dir.path().join("absent"), "captions", BODY_CAP)
             .unwrap_err();
         assert_eq!(
             (ended.line.status, ended.line.reason.as_deref()),
