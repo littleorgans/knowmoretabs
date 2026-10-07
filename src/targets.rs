@@ -260,11 +260,12 @@ fn skip_reason(url: &Url) -> Option<Skip> {
     }
 }
 
-/// Works through `items`, each host's in order on one of [`WORKERS`]
-/// threads and hosts side by side, busiest host first so the longest queue
+/// Works through `items`, each host's in order on one of `workers` threads
+/// and hosts side by side, busiest host first so the longest queue
 /// starts earliest. The first error `work` returns stops every worker and is
 /// returned; `progress` hears how many items of how many are done.
 pub fn by_host<'a, T: Send>(
+    workers: usize,
     items: impl IntoIterator<Item = (&'a str, T)>,
     work: impl Fn(&T) -> Result<(), Error> + Sync,
     progress: impl Fn(usize, usize) + Sync,
@@ -285,7 +286,7 @@ pub fn by_host<'a, T: Send>(
     let stop = AtomicBool::new(false);
     let failed: Mutex<Option<Error>> = Mutex::new(None);
     std::thread::scope(|scope| {
-        for _ in 0..WORKERS {
+        for _ in 0..workers {
             scope.spawn(|| {
                 while !stop.load(Ordering::Relaxed) {
                     let next = queue

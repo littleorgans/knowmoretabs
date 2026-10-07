@@ -6,8 +6,9 @@
 //!      `gh` for GitHub, yt-dlp for videos, and later the installed browser
 //!      for pages that need scripts. Every such run is the same promise: an
 //!      argument vector and never a shell, no input, a fixed timeout after
-//!      which the program is killed, a cap on what is kept of its output,
-//!      and its complaints cut to one line of reason. A missing tool is not
+//!      which the program and everything it started are ended (through
+//!      [`process_tree`]), a cap on what is kept of its output, and its
+//!      complaints cut to one line of reason. A missing tool is not
 //!      an error: the tier that needs it steps aside. What a command learns
 //!      about the machine goes through [`Probe`], so `doctor`'s report can
 //!      be tested from a table instead of the machine it runs on.
@@ -15,11 +16,12 @@
 use std::ffi::OsStr;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, ExitStatus, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::platform::{self, Os};
+use crate::process_tree::{self, Tree};
 
 /// How long a `--version` may take.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
@@ -135,12 +137,13 @@ impl Probe for System {
     }
 
     fn exit_code(&self, program: &Path, args: &[&str], env: &[(&str, &str)]) -> Option<i32> {
-        let child = command(program, args, env)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-        wait(child, CHECK_TIMEOUT).ok()?.code()
+        let mut tree = process_tree::spawn(
+            command(program, args, env)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null()),
+        )
+        .ok()?;
+        wait(&mut tree, CHECK_TIMEOUT).ok()?.code()
     }
 }
 
@@ -173,31 +176,33 @@ fn is_executable(path: &Path) -> bool {
 }
 
 /// Runs `program` with `args` and `env` added to this process's
-/// environment: no shell, no input, killed at `limits.timeout`.
+/// environment: no shell, no input, ended with what it started at
+/// `limits.timeout`.
 pub fn run(
     program: &Path,
     args: &[&str],
     env: &[(&str, &str)],
     limits: Limits,
 ) -> Result<Output, Failure> {
-    let mut child = command(program, args, env)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|err| Failure::Spawn(err.kind().to_string()))?;
+    let mut tree = process_tree::spawn(
+        command(program, args, env)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|err| Failure::Spawn(err.kind().to_string()))?;
     let (out_tx, out_rx) = mpsc::channel();
     let (err_tx, err_rx) = mpsc::channel();
-    if let Some(stdout) = child.stdout.take() {
+    if let Some(stdout) = tree.stdout() {
         std::thread::spawn(move || {
             let _ = out_tx.send(read_capped(stdout, limits.stdout_cap));
         });
     }
-    if let Some(stderr) = child.stderr.take() {
+    if let Some(stderr) = tree.stderr() {
         std::thread::spawn(move || {
             let _ = err_tx.send(read_capped(stderr, STDERR_CAP));
         });
     }
-    let status = wait(child, limits.timeout)?;
+    let status = wait(&mut tree, limits.timeout)?;
     let (stdout, overflowed) = out_rx.recv_timeout(DRAIN_GRACE).unwrap_or_default();
     let (stderr, _) = err_rx.recv_timeout(DRAIN_GRACE).unwrap_or_default();
     Ok(Output {
@@ -219,16 +224,15 @@ fn command(program: &Path, args: &[&str], env: &[(&str, &str)]) -> Command {
     command
 }
 
-/// How `child` exited, or killed at `timeout`.
-fn wait(mut child: Child, timeout: Duration) -> Result<ExitStatus, Failure> {
+/// How `tree`'s program exited, or its whole tree ended at `timeout`.
+fn wait(tree: &mut Tree, timeout: Duration) -> Result<ExitStatus, Failure> {
     let deadline = Instant::now() + timeout;
     loop {
-        match child.try_wait() {
+        match tree.try_wait() {
             Ok(Some(status)) => return Ok(status),
             Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
             Ok(None) | Err(_) => {
-                let _ = child.kill();
-                let _ = child.wait();
+                tree.retire();
                 return Err(Failure::TimedOut(timeout));
             }
         }

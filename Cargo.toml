@@ -34,6 +34,13 @@ resolver = "3"
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
+# Ctrl-C, and with `termination` SIGTERM and SIGHUP, for the commands that
+# run other programs: those programs run in their own process group, so the
+# terminal's signal no longer reaches them, and the handler ends them and
+# removes their scratch before exiting (src/process_tree.rs). Installed
+# through `try_set_handler`, so a signal inherited as ignored stays ignored.
+# MIT OR Apache-2.0; on Unix it is built on the same `nix` as below.
+ctrlc = { version = "3.5", features = ["termination"] }
 directories = "6"
 # The DOM `dom_smoothie` builds on, used directly for what readability does
 # not do: the whole-page markdown when readability picks the wrong part of a
@@ -77,6 +84,12 @@ thiserror = "2"
 # release.
 ureq = { version = "~3.4", default-features = false, features = ["rustls"] }
 url = "2.5"
+
+# Ends a program's whole process group, not only the program, so what it
+# started goes with it (src/process_tree.rs). Only the signal module; the
+# version `ctrlc` already brings, so the tree gains no crate. MIT.
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 
 [dev-dependencies]
 proptest = "1"
