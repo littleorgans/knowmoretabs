@@ -7,9 +7,12 @@ cross modal path). Metrics on the CV pool only, over the same outer folds; no la
 
 Label efficiency: a prototype, unit(query + mean of k sampled positives), on the best config's model
 and text input, k positives per tag drawn from each outer fit fold, seeded, a few repeats.
+Query vectors are cached per text under emb/<model>/queries/, so later arms need no model load.
 """
 
+import hashlib
 import json
+import os
 import time
 
 import numpy as np
@@ -26,10 +29,45 @@ REPEATS = 3
 QUERY_PROMPT = "query"  # both cards ship it: EG2 `task: search result | query: `, Qwen3 `Instruct: ...\nQuery:`
 ZERO_K_SD = 2.0  # k = 0 has no labels to tune a threshold: predict scores above mean + 2 SD on fit rows
 SEARCH_REPEATS = 200
+NEG_WEIGHT = 0.25  # Rocchio weight of the negatives' mean
 
 
-def embed_queries(st, queries: list[str]) -> tuple[np.ndarray, dict]:
+def encode_queries(st, queries: list[str]) -> np.ndarray:
     emb = st.encode(queries, prompt_name=QUERY_PROMPT, normalize_embeddings=True, convert_to_numpy=True)
+    return np.asarray(emb, np.float32)
+
+
+def query_vectors(paths: Paths, key: str, queries: list[str], st=None) -> np.ndarray:
+    """Query embeddings of model `key`, cached per text; the model (or `st`) is used only for misses."""
+    root = paths.emb / key / "queries"
+    files = [root / f"{hashlib.sha256(f'{QUERY_PROMPT}:{q}'.encode()).hexdigest()[:24]}.npy" for q in queries]
+    missing = [(q, f) for q, f in zip(queries, files, strict=True) if not f.exists()]
+    if missing:
+        loaded = st is None
+        st = load(MODELS[key])[0] if loaded else st
+        root.mkdir(parents=True, exist_ok=True)
+        for (_, f), v in zip(missing, encode_queries(st, [q for q, _ in missing]), strict=True):
+            np.save(f.with_suffix(".part.npy"), v)
+            os.replace(f.with_suffix(".part.npy"), f)
+        if loaded:
+            release(st)
+    return np.stack([np.load(f) for f in files])
+
+
+def query_variants(tags: list[str], descriptions: dict) -> dict[str, list[str]]:
+    return {
+        "name": list(tags),
+        "description": [f"{t}: {descriptions[t]}" if descriptions.get(t) else t for t in tags],
+    }
+
+
+def prototype(q: np.ndarray, pos: np.ndarray, neg: np.ndarray) -> np.ndarray:
+    """Rocchio: unit(q + mean(pos) - 0.25 mean(neg)); an empty set drops its term."""
+    v = q + (pos.mean(axis=0) if len(pos) else 0) - (NEG_WEIGHT * neg.mean(axis=0) if len(neg) else 0)
+    return unit(v[None])[0]
+
+
+def query_latency(st, queries: list[str]) -> dict:
     timings = []
     for q in queries:
         sync()
@@ -37,7 +75,7 @@ def embed_queries(st, queries: list[str]) -> tuple[np.ndarray, dict]:
         st.encode([q], prompt_name=QUERY_PROMPT, normalize_embeddings=True, convert_to_numpy=True)
         sync()
         timings.append(time.perf_counter() - t)
-    return np.asarray(emb, np.float32), {
+    return {
         "prompt": st.prompts[QUERY_PROMPT],
         "query_ms_median": round(1000 * float(np.median(timings)), 1),
         "query_ms_p90": round(1000 * float(np.percentile(timings, 90)), 1),
@@ -98,7 +136,7 @@ def curve(lab, docs: np.ndarray, q: np.ndarray, pool: np.ndarray) -> dict:
                 labelled = np.unique(np.concatenate(list(sampled.values()))) if k else np.array([], int)
                 at = [position[row] for row in b]
                 for j in range(len(lab.tags)):
-                    v = q[j] if k == 0 else unit((q[j] + docs[sampled[j]].mean(axis=0))[None])[0]
+                    v = prototype(q[j], docs[sampled[j]], docs[:0])
                     s = docs[b] @ v
                     if k == 0:
                         fit = docs[a] @ v
@@ -127,21 +165,18 @@ def run(paths: Paths) -> None:
     lab = labels(paths)
     pool = np.asarray(split(paths, lab)["train"])  # the CV pool; the test rows are not read here
     descriptions = read_json(paths.data / "zeroshot" / "descriptions.json")
-    variants = {
-        "name": list(lab.tags),
-        "description": [f"{t}: {descriptions[t]}" if descriptions.get(t) else t for t in lab.tags],
-    }
+    variants = query_variants(lab.tags, descriptions)
     folds = outer_folds(lab, pool)
     image_st, _ = load(IMAGE_MODEL)
-    q_image = {v: embed_queries(image_st, qs)[0] for v, qs in variants.items()}
+    q_image = {v: encode_queries(image_st, qs) for v, qs in variants.items()}
     release(image_st)
     results, queries, latency = {}, {}, {}
     for key, model in MODELS.items():
         st, _ = load(model)
         for variant, qs in variants.items():
-            q, stats = embed_queries(st, qs)
+            q = query_vectors(paths, key, qs, st)
             queries[(key, variant)] = q
-            latency[key] = stats
+            latency[key] = query_latency(st, qs)
             for name, S in score_sets(paths, key, q, q_image[variant]).items():
                 if name == "image" and key != "eg2":
                     continue

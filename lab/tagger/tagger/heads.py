@@ -71,7 +71,7 @@ def _lr_tag(folds, y_by_fold, Cs):
     return C, best_threshold(np.concatenate(oof[C]), y)
 
 
-def _lr_refit(X, y, C):
+def lr_refit(X, y, C):
     warnings.simplefilter("ignore", ConvergenceWarning)
     return _lr(C).fit(X, y)
 
@@ -95,7 +95,7 @@ def fit_lr(feat, Y: np.ndarray, rows: np.ndarray) -> Fitted:
     chosen = Parallel(n_jobs=-1)(delayed(_lr_tag)(folds, [(ya[:, j], yb[:, j]) for ya, yb in labels], Cs) for j in tags)
     # Refit on all training rows; `post` applies the same scaling to any later rows.
     Xfit, _, scaler = _scaled(feat, rows, rows[:1])
-    models = Parallel(n_jobs=-1)(delayed(_lr_refit)(Xfit, Y[rows, j], chosen[j][0]) for j in tags)
+    models = Parallel(n_jobs=-1)(delayed(lr_refit)(Xfit, Y[rows, j], chosen[j][0]) for j in tags)
 
     def score(X):
         return np.column_stack([m.decision_function(X) for m in models])
