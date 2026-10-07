@@ -212,10 +212,12 @@ mod tests {
     use crate::capture::Log;
     use crate::content_fetch::{self, Capture};
     use crate::content_headless::{Headless, Render, ended, run, settle};
+    use crate::content_image::{Images, Plan as ImagePlan};
     use crate::content_store::{Access, Store};
     use crate::content_test::{PEER_ROUTE, Peer, chrome, page, snapshot, state};
     use crate::fetch::{Fetcher, Refusal};
     use crate::image_pick::Found;
+    use crate::image_store;
 
     fn known(lines: &[(&str, Option<Tier>, Status, &str)]) -> content_store::Log {
         let mut log = content_store::Log::default();
@@ -541,6 +543,92 @@ mod tests {
             (&"signed_in".into(), &"signed_in".into())
         );
         assert!(body.ends_with("The page, signed in.\n"));
+    }
+
+    #[test]
+    fn a_signed_in_image_attempt_requires_newly_kept_text() {
+        let urls = [
+            "https://a.test/p",
+            "https://a.test/p#part",
+            "https://b.test/fails",
+            "https://c.test/forgotten",
+        ];
+        let snapshots = [snapshot(&urls)];
+        let state = state(&[urls[3]]);
+        let baseline = |url: &str| content_fetch::line(url, Tier::Web, Status::BehindLogin);
+        let mut unchanged = baseline(urls[1]);
+        unchanged.chars = Some(10_000);
+        let mut work = Work::default();
+        work.renders = vec![
+            Render::of(vec![baseline(urls[0]), unchanged], Found::TextOnly, library).unwrap(),
+            Render::of(vec![baseline(urls[2])], Found::TextOnly, library).unwrap(),
+            Render::of(vec![baseline(urls[3])], Found::TextOnly, library).unwrap(),
+        ];
+        for closing in [None, Some("Target.createTarget")] {
+            let root = tempfile::tempdir().unwrap();
+            let plan = ImagePlan::new(
+                root.path(),
+                &snapshots,
+                &state,
+                &work,
+                Options::default(),
+                Log::default(),
+            )
+            .unwrap()
+            .without_retries();
+            let images = Images::open(root.path(), plan, Log::default()).unwrap();
+            let peer = Peer::start(closing);
+            let name = "Google Chrome".to_owned();
+            let browser = Browser::attach(peer.port, PEER_ROUTE, name.clone()).unwrap();
+            let store = Mutex::new(Store::open(root.path()).unwrap());
+            let mut headless = Headless::signed_in(name, 0);
+            run(
+                &work.renders,
+                Ok(browser),
+                &Fetcher::new(&state.forgotten),
+                Some(&images),
+                |line, page| store.lock().unwrap().record(line, page),
+                &mut headless,
+                Log::default(),
+            )
+            .unwrap();
+            let text = content_store::read(root.path()).unwrap();
+            let pictured = image_store::read(root.path()).unwrap();
+            if closing.is_none() {
+                assert_eq!(text.pages.len(), urls.len());
+                assert_eq!(
+                    pictured.pages.len(),
+                    1,
+                    "only newly kept text gets an image attempt"
+                );
+                assert_eq!(
+                    pictured.pages[urls[0]].reason.as_deref(),
+                    Some("no_candidate")
+                );
+                assert!(text.pages[urls[0]].chars.unwrap() > 0);
+                assert_eq!(text.pages[urls[1]].chars, Some(10_000));
+                let file = content_store::dir(root.path()).join(content_store::file_name(urls[0]));
+                let saved = std::fs::read_to_string(file).unwrap();
+                let (front, _) = content_store::parse(&saved).unwrap();
+                assert_eq!(
+                    (&front["tier"], &front["access"]),
+                    (&"signed_in".into(), &"signed_in".into())
+                );
+            } else {
+                assert!(text.pages.is_empty());
+                assert!(
+                    pictured.pages.is_empty(),
+                    "a broken browser keeps no image attempts"
+                );
+                assert_eq!(headless.waiting, urls.len());
+            }
+            drop(images);
+            assert!(
+                peer.received()
+                    .iter()
+                    .all(|message| { message["method"] != "Browser.close" })
+            );
+        }
     }
 
     #[test]
