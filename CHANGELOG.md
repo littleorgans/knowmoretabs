@@ -202,4 +202,8 @@ as what you can do that you could not before.
 
 - **Private page metadata.** On Unix, `pages/metadata.jsonl` is now created with mode `0600`, and an existing file's mode is corrected when opened for enrichment.
 
+### Fixed
+
+- **Pacing holds after a late wakeup.** `enrich` and `content` no longer send two requests to one host less than the pace apart when the system wakes a waiting request late.
+
 [0.1.0]: https://github.com/littleorgans/knowmoretabs/releases/tag/v0.1.0

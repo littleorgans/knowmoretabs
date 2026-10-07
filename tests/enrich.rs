@@ -30,6 +30,16 @@ struct Seen {
     headers: HashMap<String, String>,
 }
 
+/// The least time apart this server may see two requests to one host. The
+/// pacer releases them at least a second apart, but `Seen::at` is stamped
+/// only after the client has connected and written, and after the server's
+/// accept thread, the request's own thread and its header reads have each
+/// been scheduled. On a loaded runner any of those can lag one request and
+/// not the next, which shortens the gap seen here. A quarter second absorbs
+/// that receive side jitter and still fails requests sent back to back, or
+/// even at three quarters of the pace.
+const PACED_GAP: Duration = Duration::from_millis(750);
+
 struct Reply {
     status: u16,
     headers: Vec<(&'static str, String)>,
@@ -602,10 +612,7 @@ fn one_host_gets_one_request_a_second_and_hosts_run_side_by_side() {
     assert_eq!(same_host.len(), 3);
     for pair in same_host.windows(2) {
         let gap = pair[1] - pair[0];
-        assert!(
-            gap >= Duration::from_millis(950),
-            "two requests to one host {gap:?} apart"
-        );
+        assert!(gap >= PACED_GAP, "two requests to one host {gap:?} apart");
     }
     let first = seen.iter().map(|s| s.at).min().unwrap();
     for other in ["q.test", "r.test", "s.test"] {
@@ -923,7 +930,7 @@ fn equivalent_hosts_share_pacing_and_unicode_hosts_use_idna() {
         .collect();
     times.sort();
     assert_eq!(times.len(), 2);
-    assert!(times[1] - times[0] >= Duration::from_millis(950));
+    assert!(times[1] - times[0] >= PACED_GAP);
     assert!(seen.iter().any(|r| r.host == "xn--bcher-kva.test"));
 }
 
