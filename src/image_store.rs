@@ -226,14 +226,22 @@ pub fn kept(root: &Path, log: capture::Log) -> HashMap<String, String> {
 
 fn read_kept(root: &Path) -> Result<HashMap<String, String>, Error> {
     let dir = dir(root);
-    let files = match fs::read_dir(&dir) {
-        Ok(entries) => entries
-            .map(|entry| entry.map(|entry| entry.file_name()))
-            .collect::<Result<HashSet<OsString>, _>>()
-            .map_err(Error::io("read", &dir))?,
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(HashMap::new()),
         Err(err) => return Err(Error::io("read", &dir)(err)),
     };
+    let mut files: HashSet<OsString> = HashSet::new();
+    for entry in entries {
+        let entry = entry.map_err(Error::io("read", &dir))?;
+        if entry
+            .file_type()
+            .map_err(Error::io("read", &dir))?
+            .is_file()
+        {
+            files.insert(entry.file_name());
+        }
+    }
     Ok(read(root)?
         .pages
         .into_iter()
@@ -248,13 +256,20 @@ fn read_kept(root: &Path) -> Result<HashMap<String, String>, Error> {
 }
 
 /// A kept image's bytes by its name: exactly 64 lowercase hex characters,
-/// else `None`, as for a name with no file. No lock: an image is replaced
-/// by a rename, so a read sees the old file or the new one whole.
+/// else `None`, as for a name with no regular file. Symlinks are refused.
+/// No lock: an image is replaced by a rename, so a read sees the old file
+/// or the new one whole.
 pub fn served(root: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
     if name.len() != 64 || !name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
         return Ok(None);
     }
     let path = dir(root).join(named(name));
+    match fs::symlink_metadata(&path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Ok(None),
+        Err(err) if err.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(Error::io("read", &path)(err)),
+    }
     match fs::read(&path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),

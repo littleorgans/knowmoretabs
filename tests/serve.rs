@@ -1275,6 +1275,60 @@ fn the_library_names_kept_images_and_the_image_route_serves_only_those_names() {
 
 // --- Adversarial HTTP review -------------------------------------------------
 
+#[cfg(unix)]
+#[test]
+fn the_image_route_does_not_follow_a_symlink_out_of_the_store() {
+    let fx = Fixture::new();
+    archive(&fx);
+    kept_image(&fx, A, "ok", None);
+    let outside = fx.root.join("private.txt");
+    fs::write(&outside, b"private bytes").unwrap();
+    std::os::unix::fs::symlink(
+        outside,
+        fx.root
+            .join("pages/images")
+            .join(format!("{}.jpg", image_name(A))),
+    )
+    .unwrap();
+    let server = Server::start(&fx);
+    let reply = server.get(&format!("/api/image/{}", image_name(A)));
+    assert_eq!(
+        (
+            reply.status,
+            page(&server.library(), A).get("image").is_none()
+        ),
+        (404, true),
+        "symlinks are neither served nor advertised"
+    );
+    assert_eq!(reply.header("cache-control"), Some("no-store"));
+    assert_eq!(reply.header("x-content-type-options"), Some("nosniff"));
+    assert!(
+        !reply
+            .body
+            .windows(13)
+            .any(|bytes| bytes == b"private bytes")
+    );
+}
+
+#[test]
+fn the_library_and_image_route_ignore_directories_named_as_images() {
+    let fx = Fixture::new();
+    archive(&fx);
+    kept_image(&fx, A, "ok", None);
+    fs::create_dir(
+        fx.root
+            .join("pages/images")
+            .join(format!("{}.jpg", image_name(A))),
+    )
+    .unwrap();
+    let server = Server::start(&fx);
+    assert!(page(&server.library(), A).get("image").is_none());
+    assert_eq!(
+        server.get(&format!("/api/image/{}", image_name(A))).status,
+        404
+    );
+}
+
 /// The timeouts are the same ten seconds `Server::raw` uses, and they are
 /// guards rather than measurements: no test here passes by being quick, so
 /// the only thing a tighter one could do is turn a busy runner into a
