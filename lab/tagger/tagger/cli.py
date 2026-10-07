@@ -2,6 +2,7 @@
 
 import argparse
 import os
+from pathlib import Path
 
 from .paths import resolve
 
@@ -27,6 +28,10 @@ def main() -> None:
     steps.add_parser("search-tag", help="test S2: search, pick a few tags, tag the results with only those")
     steps.add_parser("cost", help="load time, RSS, throughput and single page latency per model")
     steps.add_parser("report", help="write out/results.md")
+    app = steps.add_parser("app", help="the search then tag prototype, served on 127.0.0.1")
+    app.add_argument("--root", help="the archive (default: the snapshot under the data directory)")
+    app.add_argument("--port", type=int, default=0, help="port (default: a free one)")
+    app.add_argument("--smoke", action="store_true", help="load, time searches, print numbers only, exit")
     compare = steps.add_parser("compare", help="compare metric outputs with another data directory")
     compare.add_argument("other")
     args = parser.parse_args()
@@ -75,6 +80,11 @@ def main() -> None:
         from . import compare
 
         compare.run(paths, args.other)
+    elif args.step == "app":
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")  # the model is cached; the app never goes online
+        from .app import server
+
+        server.run(paths, Path(args.root) if args.root else None, args.port, args.smoke)
     elif args.step == "report":
         from . import report
 

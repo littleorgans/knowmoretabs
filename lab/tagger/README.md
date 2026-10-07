@@ -41,6 +41,18 @@ assigns them from fit fold rules alone: zero shot, LR heads (zero shot below 10 
 (the top share of the set, that share calibrated on fit fold slices). Baseline: the same heads over every tag.
 The CLI sets umask 077, so every output is private (0600).
 
+## Search then tag app (P1)
+
+`uv run --locked tagger app --root <snapshot>` serves the prototype on 127.0.0.1 (a free port, or `--port`) and
+prints its address. Needs `dataset` and `embed --model eg2` done for that snapshot; runs offline (`HF_HUB_OFFLINE`).
+Search (EG2 cosine over B, else A, fused by reciprocal rank with TF-IDF over title, metadata and text; images on
+request), pick tags (suggested by S2's mean z ranking, or any of yours), review (S2's supervised rules fitted on
+every owner label, zero shot under 10 positives; picked tags the page holds are shown, not asked), export.
+Decisions live in `<data>/app/state.json`; export writes `<data>/app/exports/<UTC time>/answers.jsonl` (a
+`tag --import` file, source `kmt-tagger-app`, the kept tags per page) and `decisions.jsonl` (page, tag, answer,
+the model's precheck). The app never writes an archive. `--smoke` prints load and query timings, then exits.
+Synthetic archive for trying it: `uv run --locked python tests/synthetic_archive.py <archive> <data>`.
+
 Steps skip work whose output exists; use a fresh data directory to recompute.
 `eval --final` reuses its saved test result and refuses a different CV pick.
 `KMT_TAGGER_SNAPSHOT` points at a snapshot elsewhere. `suggest` builds the binary
