@@ -223,6 +223,44 @@ fn export_round_trip_has_contract_counts_order_and_deduplication() {
 }
 
 #[test]
+fn export_omits_preview_images_even_when_the_archive_has_one() {
+    use sha2::{Digest, Sha256};
+
+    let fx = Fixture::new();
+    archive_fixture(&fx);
+    let url = "https://example.test/a";
+    let pages = fx.root.join("pages");
+    fs::create_dir_all(pages.join("images")).unwrap();
+    fs::write(
+        pages.join("images.jsonl"),
+        json!({"schema_version": 1, "url": url,
+               "attempted_at": "2026-10-07T09:00:00Z", "status": "ok"})
+        .to_string()
+            + "\n",
+    )
+    .unwrap();
+    fs::write(
+        pages
+            .join("images")
+            .join(format!("{:x}.jpg", Sha256::digest(url.as_bytes()))),
+        b"synthetic jpeg",
+    )
+    .unwrap();
+    let library = exported_library(&fx);
+    let exported = library["pages"].as_array().unwrap();
+    assert!(exported.iter().any(|page| page["url"] == url));
+    assert!(exported.iter().all(|page| page.get("image").is_none()));
+    let files: std::collections::BTreeSet<_> = fs::read_dir(fx.root.join("export"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name())
+        .collect();
+    assert_eq!(
+        files,
+        ["app.css", "app.js", "index.html"].map(Into::into).into()
+    );
+}
+
+#[test]
 fn contract_matches_the_committed_fixture_shape() {
     let fx = Fixture::new();
     archive_fixture(&fx);

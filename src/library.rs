@@ -338,6 +338,10 @@ struct Page {
     /// snapshot that recorded signals for it; absent when neither does.
     #[serde(skip_serializing_if = "Option::is_none")]
     history: Option<PageHistory>,
+    /// The hex name `serve` answers the page's kept image by; only `serve`
+    /// sets it, so an export never carries images.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image: Option<String>,
 }
 
 /// A tab's `model::TabHistory`, with the referrer named as the library
@@ -426,6 +430,15 @@ pub struct Listed<'a> {
 }
 
 impl Library {
+    /// Names each page's kept image, from `image_store::kept`.
+    #[must_use]
+    pub fn with_images(mut self, mut kept: HashMap<String, String>) -> Self {
+        for page in &mut self.pages {
+            page.image = kept.remove(&page.url);
+        }
+        self
+    }
+
     /// Every page, in library order: what a prompt lists.
     pub fn listed(&self) -> impl Iterator<Item = Listed<'_>> {
         self.pages.iter().map(|page| {
@@ -506,6 +519,7 @@ pub fn build(
                     tags: state.page_tags(&tab.url, &spellings),
                     suggested: suggested.get(&tab.url).cloned().unwrap_or_default(),
                     history: None,
+                    image: None,
                 });
                 index
             });
@@ -668,33 +682,5 @@ fn public_domain(raw: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn domains_use_url_authority_and_keep_nonlocal_urls() {
-        for raw in [
-            "file:///tmp/a",
-            "HTTP://LOCALHOST:8080/a",
-            "http://127.0.0.1/a",
-            "http://localhost./",
-            // The same machine, spelled differently.
-            "http://[::1]:8080/a",
-            "http://127.0.0.2/a",
-            "http://0.0.0.0:3000/a",
-            "http://app.localhost/a",
-        ] {
-            assert_eq!(public_domain(raw), None, "{raw}");
-        }
-        for (raw, domain) in [
-            ("https://user:pass@WWW.Example.test:8443/a", "example.test"),
-            ("http://localhost.example.test/a", "localhost.example.test"),
-            ("https://example.test/localhost", "example.test"),
-            ("http://[2001:db8::1]:80/", "[2001:db8::1]"),
-            ("about:blank", ""),
-            ("not a URL", ""),
-        ] {
-            assert_eq!(public_domain(raw).as_deref(), Some(domain));
-        }
-    }
-}
+#[path = "library_tests.rs"]
+mod tests;

@@ -288,7 +288,8 @@ blocked, paywalled, not found or not HTML. Each page also keeps one preview
 image, the best its route or its markup names (a post's photo, a video's
 thumbnail, a repository's social preview, the head's image, else the main
 text's largest), as a JPEG of at most 768 pixels under `pages/images/`, with
-one line per attempt in `pages/images.jsonl`; `--no-images` skips them.
+one line per attempt in `pages/images.jsonl`; `--no-images` skips them, and
+`serve` shows each as a thumbnail from the archive.
 Passing failures are retried in the run and on the next one. `--dry-run`,
 `--limit` and `--refetch` keep `enrich`'s meaning, and `--url` captures one
 page. `doctor` says which ways of reading pages are ready and what the

@@ -209,6 +209,9 @@ as what you can do that you could not before.
   decoding. A failure that may pass is `error` and retried next run from
   the candidates the line kept; after three runs it is `unavailable`.
   `--no-images` skips images for a run, and `--dry-run` counts them.
+  `serve` shows each kept image as a small thumbnail beside its page,
+  served from the archive on `127.0.0.1`; nothing is loaded from the
+  network, and an export carries no images.
 - **Check what content can use.** `knowmoretabs doctor` reports whether each
   way of reading pages is ready, missing or degraded, with how to fix it:
   the web tier, gh and its version, the X post API, yt-dlp with deno or node

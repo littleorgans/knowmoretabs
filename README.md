@@ -116,7 +116,9 @@ in and, for pages History knew when the library's record was last refreshed
 (or when a snapshot with signals saw them), the search that found it, the
 page you came from, its visits and its time on page. Select rows and forget them; undo from the toast; find them again under
 "Forgotten". `/` focuses search, `j` and `k` move, `f` forgets. `--port N`
-picks another port and `--open` opens your browser.
+picks another port and `--open` opens your browser. A page `content` kept a
+preview image of shows it as a small thumbnail, served from your archive by
+`serve` itself; an export has no thumbnails.
 
 Forgetting hides a page from the library. It never touches a snapshot: every
 page you forget is still in every snapshot it was ever in, and `restore`

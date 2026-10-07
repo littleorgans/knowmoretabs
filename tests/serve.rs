@@ -1183,7 +1183,10 @@ fn assets_have_correct_types_and_no_network_implying_headers() {
         !html.contains("\"snapshots\":["),
         "no fixture data leaks into the served page"
     );
-    assert!(html.contains("Content-Security-Policy"));
+    assert!(html.contains(
+        "content=\"default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; \
+         img-src 'self'; base-uri 'none'; form-action 'none'\""
+    ));
     assert_eq!(
         server.get("/app.css?v=1").status,
         200,
@@ -1191,7 +1194,140 @@ fn assets_have_correct_types_and_no_network_implying_headers() {
     );
 }
 
+// --- Preview images -----------------------------------------------------------
+
+/// The name a page's image is kept and served under: the hex SHA-256 of its URL.
+fn image_name(url: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(url.as_bytes()))
+}
+
+/// Appends an image line for `url` and, given bytes, writes its file.
+fn kept_image(fx: &Fixture, url: &str, status: &str, jpeg: Option<&[u8]>) {
+    let pages = fx.root.join("pages");
+    fs::create_dir_all(pages.join("images")).unwrap();
+    let line = json!({"schema_version": 1, "url": url, "attempted_at": "2026-10-07T09:00:00Z", "status": status});
+    let mut log = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(pages.join("images.jsonl"))
+        .unwrap();
+    writeln!(log, "{line}").unwrap();
+    if let Some(jpeg) = jpeg {
+        fs::write(
+            pages
+                .join("images")
+                .join(format!("{}.jpg", image_name(url))),
+            jpeg,
+        )
+        .unwrap();
+    }
+}
+
+#[test]
+fn the_library_names_kept_images_and_the_image_route_serves_only_those_names() {
+    let fx = Fixture::new();
+    archive(&fx);
+    kept_image(&fx, A, "ok", Some(b"jpeg a"));
+    kept_image(&fx, B, "ok", None);
+    kept_image(&fx, HIDDEN, "ok", Some(b"jpeg hidden"));
+    kept_image(&fx, HIDDEN, "none", None);
+    let server = Server::start(&fx);
+    let library = server.library();
+    let a = image_name(A);
+    assert_eq!(page(&library, A)["image"], a.as_str());
+    assert!(page(&library, B).get("image").is_none(), "ok, but no file");
+    assert!(
+        page(&library, HIDDEN).get("image").is_none(),
+        "the latest line is not ok"
+    );
+
+    for path in [format!("/api/image/{a}"), format!("/api/image/{a}?v=1")] {
+        let reply = server.get(&path);
+        assert_eq!(reply.status, 200, "{path}");
+        assert_eq!(reply.header("content-type"), Some("image/jpeg"));
+        assert_eq!(reply.header("content-length"), Some("6"));
+        assert_eq!(reply.header("cache-control"), Some("no-store"));
+        assert_eq!(reply.header("x-content-type-options"), Some("nosniff"));
+        assert!(reply.header("access-control-allow-origin").is_none());
+        assert_eq!(reply.body, b"jpeg a");
+    }
+    let encoded = format!("{}%2F{}", &a[..30], &a[33..]);
+    for name in [
+        a.to_uppercase(),
+        a[..63].to_owned(),
+        format!("{a}0"),
+        format!("{a}.jpg"),
+        format!("{a}/"),
+        format!("../images/{a}"),
+        "..%2F..%2Flibrary.json".to_owned(),
+        format!("%2e%2e%2f{}", &a[9..]),
+        encoded,
+        format!("{}%5C{}", &a[..30], &a[33..]),
+        image_name(B),
+        String::new(),
+    ] {
+        let reply = server.get(&format!("/api/image/{name}"));
+        assert_eq!(reply.status, 404, "{name}");
+        assert_eq!(reply.header("content-type"), Some("application/json"));
+    }
+}
+
 // --- Adversarial HTTP review -------------------------------------------------
+
+#[cfg(unix)]
+#[test]
+fn the_image_route_does_not_follow_a_symlink_out_of_the_store() {
+    let fx = Fixture::new();
+    archive(&fx);
+    kept_image(&fx, A, "ok", None);
+    let outside = fx.root.join("private.txt");
+    fs::write(&outside, b"private bytes").unwrap();
+    std::os::unix::fs::symlink(
+        outside,
+        fx.root
+            .join("pages/images")
+            .join(format!("{}.jpg", image_name(A))),
+    )
+    .unwrap();
+    let server = Server::start(&fx);
+    let reply = server.get(&format!("/api/image/{}", image_name(A)));
+    assert_eq!(
+        (
+            reply.status,
+            page(&server.library(), A).get("image").is_none()
+        ),
+        (404, true),
+        "symlinks are neither served nor advertised"
+    );
+    assert_eq!(reply.header("cache-control"), Some("no-store"));
+    assert_eq!(reply.header("x-content-type-options"), Some("nosniff"));
+    assert!(
+        !reply
+            .body
+            .windows(13)
+            .any(|bytes| bytes == b"private bytes")
+    );
+}
+
+#[test]
+fn the_library_and_image_route_ignore_directories_named_as_images() {
+    let fx = Fixture::new();
+    archive(&fx);
+    kept_image(&fx, A, "ok", None);
+    fs::create_dir(
+        fx.root
+            .join("pages/images")
+            .join(format!("{}.jpg", image_name(A))),
+    )
+    .unwrap();
+    let server = Server::start(&fx);
+    assert!(page(&server.library(), A).get("image").is_none());
+    assert_eq!(
+        server.get(&format!("/api/image/{}", image_name(A))).status,
+        404
+    );
+}
 
 /// The timeouts are the same ten seconds `Server::raw` uses, and they are
 /// guards rather than measurements: no test here passes by being quick, so
@@ -1472,6 +1608,7 @@ fn review_authorities_on_every_route_before_body_read() {
         "/api/restore",
         "/api/tags",
         "/api/vocabulary",
+        "/api/image/0000000000000000000000000000000000000000000000000000000000000000",
         "/missing",
     ] {
         for method in ["GET", "POST", "OPTIONS"] {
