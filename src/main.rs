@@ -55,6 +55,7 @@ mod prompt;
 mod server;
 mod session;
 mod snss;
+mod socks;
 mod staleness;
 mod suggestions;
 mod tags;
