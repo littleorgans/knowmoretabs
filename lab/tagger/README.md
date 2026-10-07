@@ -34,6 +34,11 @@ vectors are cached under `emb/<model>/queries/`; set `HF_HUB_OFFLINE=1` when the
 Tags as saved searches (test R1): `uv run --locked tagger retrieval` writes `retrieval/retrieval.json` and the
 session grids to `retrieval/sessions.jsonl` (eg2 A and B, tag name and description queries, CV pool folds).
 A session (`guided/session.py`) sees only the answers for the pages it shows; `guided/oracle.py` alone reads labels.
+Search then tag (test S2): `uv run --locked tagger search-tag` writes `search-tag/search_tag.json` and one record
+per result set to `search-tag/sets.jsonl`. Each owner tag's query searches a held out fold (top 20 or 50); the
+oracle picks the tags held by 3 or more results (plus 2 wrong ones as a variant); `guided/search_tag.decide`
+assigns them from fit fold rules alone: zero shot, LR heads (zero shot below 10 fit positives), or in set
+(the top share of the set, that share calibrated on fit fold slices). Baseline: the same heads over every tag.
 The CLI sets umask 077, so every output is private (0600).
 
 Steps skip work whose output exists; use a fresh data directory to recompute.

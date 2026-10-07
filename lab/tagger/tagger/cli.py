@@ -24,6 +24,7 @@ def main() -> None:
     steps.add_parser("cluster", help="unsupervised clusters of the best config against the owner's tags")
     steps.add_parser("gate", help="guided discovery gate: description query plus 5 to 20 answers per tag")
     steps.add_parser("retrieval", help="test R1: tags as saved searches, a ticked grid re-ranks the library")
+    steps.add_parser("search-tag", help="test S2: search, pick a few tags, tag the results with only those")
     steps.add_parser("cost", help="load time, RSS, throughput and single page latency per model")
     steps.add_parser("report", help="write out/results.md")
     compare = steps.add_parser("compare", help="compare metric outputs with another data directory")
@@ -62,6 +63,10 @@ def main() -> None:
         from .guided import retrieval
 
         retrieval.run(paths)
+    elif args.step == "search-tag":
+        from .guided import search_tag
+
+        search_tag.run(paths)
     elif args.step == "cost":
         from . import cost
 

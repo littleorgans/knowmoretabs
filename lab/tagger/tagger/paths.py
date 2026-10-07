@@ -41,6 +41,10 @@ class Paths:
         return self.data / "retrieval"
 
     @property
+    def search_tag(self) -> Path:
+        return self.data / "search-tag"
+
+    @property
     def import_check(self) -> Path:
         return self.data / "import-check"
 
