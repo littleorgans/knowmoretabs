@@ -16,18 +16,13 @@ from ..heads import SEED
 from ..metrics import evaluate
 from ..paths import Paths, read_json, write_json
 from ..zeroshot import query_variants, query_vectors
-from . import model
+from . import model, oracle
 
 MODEL, INPUT, QUERY = "eg2", "B", "description"
 BUDGETS = (0, 5, 10, 20)
 BATCH = 5
 SEEDS = 3
 PASS_MACRO_AP = 0.51
-
-
-def oracle(Y: np.ndarray, library: np.ndarray, j: int):
-    """The owner's answer on tag `j` for chosen library positions; the scorer sees nothing else of Y."""
-    return lambda rows: Y[library[rows], j].astype(bool)
 
 
 def doubt_order(lib: model.Library, q: np.ndarray, ask, budget: int) -> tuple[np.ndarray, np.ndarray]:
@@ -59,7 +54,7 @@ def replay(Y: np.ndarray, tags: list[str], docs: np.ndarray, q: np.ndarray, fold
         lib = model.Library.of(docs[a])
         at = [position[row] for row in b]
         for j in range(len(tags)):
-            ask = oracle(Y, a, j)
+            ask = oracle.answers(Y, a, j)
             for arm, seed in runs:
                 if arm == "doubt":
                     rows, y = doubt_order(lib, q[j], ask, max(BUDGETS))

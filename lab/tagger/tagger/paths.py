@@ -37,6 +37,10 @@ class Paths:
         return self.data / "guided"
 
     @property
+    def retrieval(self) -> Path:
+        return self.data / "retrieval"
+
+    @property
     def import_check(self) -> Path:
         return self.data / "import-check"
 

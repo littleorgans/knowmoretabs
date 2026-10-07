@@ -31,6 +31,11 @@ Guided discovery gate (design D1, cheapest test): `uv run --locked tagger gate` 
 (description query plus 5, 10 or 20 answers per tag, at random or by doubt; eg2-B, CV pool folds). Query
 vectors are cached under `emb/<model>/queries/`; set `HF_HUB_OFFLINE=1` when the cache may need the model.
 
+Tags as saved searches (test R1): `uv run --locked tagger retrieval` writes `retrieval/retrieval.json` and the
+session grids to `retrieval/sessions.jsonl` (eg2 A and B, tag name and description queries, CV pool folds).
+A session (`guided/session.py`) sees only the answers for the pages it shows; `guided/oracle.py` alone reads labels.
+The CLI sets umask 077, so every output is private (0600).
+
 Steps skip work whose output exists; use a fresh data directory to recompute.
 `eval --final` reuses its saved test result and refuses a different CV pick.
 `KMT_TAGGER_SNAPSHOT` points at a snapshot elsewhere. `suggest` builds the binary

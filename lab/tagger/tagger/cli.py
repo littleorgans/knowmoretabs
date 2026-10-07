@@ -7,6 +7,7 @@ from .paths import resolve
 
 
 def main() -> None:
+    os.umask(0o077)  # per page outputs are private to the owner (0600)
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
     parser = argparse.ArgumentParser(prog="tagger")
@@ -22,6 +23,7 @@ def main() -> None:
     steps.add_parser("suggest", help="out of fold suggestions as tag --import JSONL, then a dry run")
     steps.add_parser("cluster", help="unsupervised clusters of the best config against the owner's tags")
     steps.add_parser("gate", help="guided discovery gate: description query plus 5 to 20 answers per tag")
+    steps.add_parser("retrieval", help="test R1: tags as saved searches, a ticked grid re-ranks the library")
     steps.add_parser("cost", help="load time, RSS, throughput and single page latency per model")
     steps.add_parser("report", help="write out/results.md")
     compare = steps.add_parser("compare", help="compare metric outputs with another data directory")
@@ -56,6 +58,10 @@ def main() -> None:
         from .guided import gate
 
         gate.run(paths)
+    elif args.step == "retrieval":
+        from .guided import retrieval
+
+        retrieval.run(paths)
     elif args.step == "cost":
         from . import cost
 

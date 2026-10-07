@@ -9,7 +9,7 @@ import numpy as np
 from sklearn.metrics import average_precision_score
 
 from tagger import zeroshot
-from tagger.guided import gate, model
+from tagger.guided import gate, model, oracle
 from tagger.heads import unit
 from tagger.paths import Paths
 
@@ -62,13 +62,13 @@ class GateTests(unittest.TestCase):
         Q = np.stack([q, unit(-q[None])[0]])
         folds = [(np.arange(150), np.arange(150, 200))]
         asked = []
-        real = gate.oracle
+        real = oracle.answers
 
         def counting(Y_, library, j):
             ask = real(Y_, library, j)
             return lambda rows: asked.append(len(rows)) or ask(rows)
 
-        with patch.object(gate, "oracle", side_effect=counting):
+        with patch.object(oracle, "answers", side_effect=counting):
             first = gate.replay(Y, ["Alpha", "Beta"], X, Q, folds)
         runs = 1 + gate.SEEDS
         self.assertEqual(2 * runs * max(gate.BUDGETS), sum(asked))
