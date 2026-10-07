@@ -67,18 +67,34 @@ pub struct Choice {
 }
 
 impl Choice {
-    /// The primary language and optional region, without a track suffix.
+    /// The language, with the script and region the key has, without a
+    /// track's name: yt-dlp keys a named track `<code>-<name>`, and
+    /// `YouTube` writes a script `Hans` and a region `BR` or `419` in that
+    /// case, so a segment in any other case is part of the name.
     pub fn lang(&self) -> String {
         let language = primary(&self.key);
-        let region = self.key.split(['-', '_']).nth(1).filter(|subtag| {
-            (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic()))
-                || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
-        });
-        match region {
-            Some(region) => format!("{language}-{}", region.to_ascii_uppercase()),
-            None => language,
-        }
+        let mut subtags = self.key.split('-').skip(1).peekable();
+        let script = subtags.next_if(|s| is_script(s));
+        let region = subtags.next_if(|s| is_region(s));
+        [Some(language.as_str()), script, region]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("-")
     }
+}
+
+/// `Hans` in `zh-Hans`.
+fn is_script(subtag: &str) -> bool {
+    let b = subtag.as_bytes();
+    b.len() == 4 && b[0].is_ascii_uppercase() && b[1..].iter().all(u8::is_ascii_lowercase)
+}
+
+/// `BR` in `pt-BR`, `419` in `es-419`.
+fn is_region(subtag: &str) -> bool {
+    let b = subtag.as_bytes();
+    (b.len() == 2 && b.iter().all(u8::is_ascii_uppercase))
+        || (b.len() == 3 && b.iter().all(u8::is_ascii_digit))
 }
 
 const ORIGINAL: &str = "-orig";
@@ -465,8 +481,12 @@ mod tests {
             ("en-captiontrack", "en"),
             ("en-CA-captiontrack", "en-CA"),
             ("en-CA", "en-CA"),
-            ("en-ca-captiontrack", "en-CA"),
+            ("en-ca-captiontrack", "en"),
             ("en-419-captiontrack", "en-419"),
+            ("es-419", "es-419"),
+            ("zh-Hans", "zh-Hans"),
+            ("zh-Hant-captiontrack", "zh-Hant"),
+            ("zh-Hant-TW", "zh-Hant-TW"),
             ("pt-BR-captiontrack", "pt-BR"),
             ("en-orig", "en"),
             ("en", "en"),
