@@ -118,11 +118,19 @@ fn body_images(document: &Document, base: &Url) -> Vec<Candidate> {
             let src = ["src", "data-src"]
                 .into_iter()
                 .filter_map(&attr)
-                .find(|raw| resolve(base, raw).is_some())?;
+                .find(|raw| resolve(base, raw).is_some());
+            let srcset = ["srcset", "data-srcset"]
+                .into_iter()
+                .find_map(|name| attr(name).and_then(|v| choose_srcset(&v)));
+            let url = srcset
+                .as_ref()
+                .and_then(|(chosen, _)| resolve(base, chosen))
+                .or_else(|| resolve(base, src.as_deref()?))?;
             let named: String = ["class", "id", "alt"]
                 .into_iter()
                 .filter_map(&attr)
-                .chain([src.clone()])
+                .chain(src)
+                .chain([url.clone()])
                 .collect::<Vec<_>>()
                 .join(" ");
             if names_something_else(&named) {
@@ -133,13 +141,6 @@ fn body_images(document: &Document, base: &Url) -> Vec<Candidate> {
             if width.is_some_and(|w| w <= 1) || height.is_some_and(|h| h <= 1) {
                 return None;
             }
-            let srcset = ["srcset", "data-srcset"]
-                .into_iter()
-                .find_map(|name| attr(name).and_then(|v| choose_srcset(&v)));
-            let url = srcset
-                .as_ref()
-                .and_then(|(chosen, _)| resolve(base, chosen))
-                .or_else(|| resolve(base, &src))?;
             if is_vector(&url) {
                 return None;
             }
@@ -361,6 +362,19 @@ mod tests {
             "a srcset of up to 1024 wide counts as 1024 square"
         );
         assert!(found.iter().all(|c| c.source == Source::BodyImg));
+    }
+
+    #[test]
+    fn responsive_images_need_no_fetchable_src_and_filter_the_chosen_address() {
+        let html = r#"<main>
+            <img srcset="/small.jpg 320w, /subject.jpg 800w">
+            <img src="data:image/gif;base64,AAAA" data-srcset="/lazy.jpg 900w">
+            <img src="/placeholder.jpg" srcset="/avatar.jpg 1200w">
+            </main>"#;
+        assert_eq!(
+            urls(&candidates(page(html, None, &base()))),
+            ["https://a.test/lazy.jpg", "https://a.test/subject.jpg"]
+        );
     }
 
     #[test]
