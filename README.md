@@ -649,7 +649,7 @@ band of `slices.toml`. Beyond that:
 - No build step for the frontend: hand-written HTML, CSS and JS, the same
   assets for `file://` and `serve`.
 - One binary, no runtime. Optional local tools may widen what an opt-in
-  command can reach (gh and yt-dlp for content capture; planned: Chrome), never
+  command can reach (gh, yt-dlp and Chrome for content capture), never
   what the binary needs to run.
 - Comments explain why, never what. Library code returns typed errors; no
   `unwrap()` outside tests and no `panic!` on user input. A clippy `allow` is

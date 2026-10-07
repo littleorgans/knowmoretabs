@@ -76,8 +76,8 @@ sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
 # The WebSocket client for the DevTools protocol a headless browser speaks
-# (src/cdp.rs): blocking, over a plain loopback `TcpStream`, with no TLS and
-# no async runtime; only the client handshake. MIT OR Apache-2.0.
+# (src/cdp.rs): synchronous, over a loopback `TcpStream` polled to a deadline,
+# with no TLS or async runtime; only the client handshake. MIT OR Apache-2.0.
 tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
 # The HTTP client for `enrich` and `content`, the only commands that send
 # anything. `rustls` with its bundled Mozilla roots, so TLS is compiled in on
