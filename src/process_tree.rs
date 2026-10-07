@@ -224,6 +224,8 @@ impl Tree {
             let mut held = lock(self.registry);
             if !held.warned.contains(&self.program) {
                 held.warned.push(self.program.clone());
+                // Output may block; the signal handler still needs the registry.
+                drop(held);
                 warn(&format!(
                     "{} left processes running after it was ended",
                     self.program
@@ -438,6 +440,40 @@ mod tests {
         lock(registry).trees.push(tree.id());
         assert!(!tree.retire());
         assert_eq!(lock(registry).trees, [tree.id()]);
+    }
+
+    #[test]
+    fn a_survivor_warning_does_not_hold_the_registry() {
+        let registry = fresh();
+        let mut tree = spawn_in(registry, Command::new("sleep").arg("30")).unwrap();
+        let stderr = io::stderr();
+        let held_stderr = stderr.lock();
+        // Probe the live group to reach the warning without needing a
+        // process that survives SIGKILL. Drop still retires this tree.
+        let probing = std::thread::spawn(move || {
+            let left = tree.survivors();
+            tree.retire();
+            left
+        });
+        let deadline = Instant::now() + SURVIVOR_WAIT + Duration::from_secs(5);
+        let available = loop {
+            if let Ok(held) = registry.try_lock()
+                && !held.warned.is_empty()
+            {
+                break true;
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(POLL);
+        };
+        // Always unblock the warning and retire the tree before asserting.
+        drop(held_stderr);
+        assert!(probing.join().unwrap(), "the live group was not present");
+        assert!(
+            available,
+            "a warning blocked the registry and signal cleanup"
+        );
     }
 
     #[test]
