@@ -6,7 +6,6 @@ const vm = require('node:vm');
 
 function setup(...files) {
   const nodes = new Map();
-  const events = new Map();
   const node = (id) => {
     if (!nodes.has(id)) nodes.set(id, {
       value: '', checked: false, disabled: false, innerHTML: '', textContent: '',
@@ -24,15 +23,15 @@ function setup(...files) {
     fail(err) { this.failure = err; }, toast(msg) { this.toasted = msg; }, flyIn() {}, flyOut(c, d, done) { done(); }, refreshSets() {},
     state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
     lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
-    search: { render() {}, restore: async () => {}, pending: Promise.resolve() }, pick: { render() {} }, review: { render() {}, left: () => 0 },
+    search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
   };
   const context = vm.createContext({
     window: { KMT: K }, document: { activeElement: null, documentElement: node('root'), querySelector() { return null; }, addEventListener() {} },
-    location: { hash: '' }, addEventListener(event, fn) { events.set(event, fn); }, matchMedia: () => ({ matches: false }),
+    location: { hash: '' }, addEventListener() {}, matchMedia: () => ({ matches: false }),
     setTimeout, clearTimeout, console,
   });
   for (const file of files) vm.runInContext(fs.readFileSync(path.join(__dirname, '../tagger/app/static', file), 'utf8'), context);
-  return { K, node, events, context };
+  return { K, node };
 }
 const turn = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made inside the scripts' realm
@@ -120,21 +119,6 @@ async function pickAfterCut() {
   await turn(); await turn();
   assert.equal(requests[1].route, '/api/sessions');
   assert.deepEqual(plain(requests[1].body.rows), [1]);
-}
-
-async function tagAfterCut() {
-  const { K, events, context } = setup('app.js');
-  await turn();
-  let settle, rendered = false;
-  K.search.pending = new Promise((resolve) => { settle = resolve; });
-  K.pick.render = () => { rendered = true; };
-  context.location.hash = '#tag';
-  const routing = events.get('hashchange')();
-  await turn();
-  assert.equal(rendered, false, 'tag suggestions must wait for pending exclusions');
-  settle();
-  await routing;
-  assert.equal(rendered, true);
 }
 
 async function exclude() {
@@ -271,5 +255,5 @@ async function exportCommand() {
   assert.ok(html.includes("--import '/tmp/owner'\\''s data/answers.jsonl'"), 'answer path must be shell quoted');
 }
 
-const cases = { search, restore, exactQuery, searchAfterCut, pickAfterCut, tagAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+const cases = { search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

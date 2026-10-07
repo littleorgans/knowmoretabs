@@ -15,7 +15,6 @@ import pytest
         "exactQuery",
         "searchAfterCut",
         "pickAfterCut",
-        "tagAfterCut",
         "exclude",
         "cut",
         "pickIncluded",

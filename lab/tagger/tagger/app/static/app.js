@@ -16,10 +16,6 @@
 
   async function route() {
     const [name, id] = location.hash.slice(1).split("/");
-    if (name === "tag") {
-      await K.search.pending;
-      if (location.hash !== "#tag") return;
-    }
     view = views[name] ? name : "search";
     if (view === "review") {
       const sid = Number(id) || K.state.session;
