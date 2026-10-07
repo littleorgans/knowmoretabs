@@ -94,10 +94,12 @@ def decide(scores: dict[str, np.ndarray], rules: Rules, picked: np.ndarray, rate
     return out
 
 
-def counts(pred: np.ndarray, truth: np.ndarray, tags: np.ndarray) -> dict:
-    """Decision counts of one set: flips are the decisions the user changes (false and missed tags)."""
+def counts(pred: np.ndarray, truth: np.ndarray, tags: np.ndarray, missed_owner_tags: np.ndarray | None = None) -> dict:
+    """Flips on chosen tags, plus full vocabulary flips including owner tags outside the chosen columns.
+    The blind baseline already covers every column, so it has no additional missed owner tags."""
     truth = truth.astype(bool)
     flips = (pred != truth).sum(axis=1)
+    full_flips = flips + (missed_owner_tags if missed_owner_tags is not None else 0)
     return {
         "tp": int((pred & truth).sum()),
         "fp": int((pred & ~truth).sum()),
@@ -105,6 +107,8 @@ def counts(pred: np.ndarray, truth: np.ndarray, tags: np.ndarray) -> dict:
         "pages": len(pred),
         "flips": int(flips.sum()),
         "zero_flip_pages": int((flips == 0).sum()),
+        "full_vocabulary_flips": int(full_flips.sum()),
+        "full_vocabulary_zero_flip_pages": int((full_flips == 0).sum()),
         "per_tag": {
             int(t): [int((p & y).sum()), int((p & ~y).sum()), int((~p & y).sum())]
             for t, p, y in zip(tags, pred.T, truth.T, strict=True)
@@ -148,7 +152,7 @@ def simulate_fold(Y, docs, q_tags, q_search, a, b, f) -> list[dict]:
                 "n": n,
                 "rows": rows.tolist(),
                 "picked": len(picked),
-                "distractors": wrong.tolist(),
+                "distractor_tags": wrong.tolist(),
                 "unpicked_owner_tags": int(Y[rows].sum() - Y[np.ix_(rows, picked)].sum()),
                 "suggest": suggest_recall(z[top], picked),
                 "blind": counts(blind[top], Y[rows], every),
@@ -157,7 +161,8 @@ def simulate_fold(Y, docs, q_tags, q_search, a, b, f) -> list[dict]:
                 chosen = np.concatenate([picked, wrong[:extra]]).astype(int)
                 decisions = decide({k: v[top] for k, v in held.items()}, rules, chosen, rate)
                 truth = Y[np.ix_(rows, chosen)]
-                record[pick] = {name: counts(decisions[name], truth, chosen) for name in SCORERS}
+                missed = Y[rows].sum(axis=1) - truth.sum(axis=1)
+                record[pick] = {name: counts(decisions[name], truth, chosen, missed) for name in SCORERS}
             sets.append(record)
     return sets
 
@@ -166,6 +171,9 @@ def aggregate(cs: list[dict]) -> dict:
     """Pooled over sets (macro F1 pools each tag's counts first) and the median over sets."""
     tp, fp, fn, pages, flips, zero = (
         sum(c[k] for c in cs) for k in ("tp", "fp", "fn", "pages", "flips", "zero_flip_pages")
+    )
+    full_flips, full_zero = (
+        sum(c[k] for c in cs) for k in ("full_vocabulary_flips", "full_vocabulary_zero_flip_pages")
     )
     per_tag = {}
     for c in cs:
@@ -180,11 +188,17 @@ def aggregate(cs: list[dict]) -> dict:
         "macro_f1": float(np.mean([f1(*v) for v in per_tag.values()])),
         "flips_per_page": flips / pages,
         "zero_flip_share": zero / pages,
+        "full_vocabulary_flips_per_page": full_flips / pages,
+        "full_vocabulary_zero_flip_share": full_zero / pages,
         "median": {
             "micro_f1": float(np.median([f1(c["tp"], c["fp"], c["fn"]) for c in cs])),
             "macro_f1": float(np.median([macro(c) for c in cs])),
             "flips_per_page": float(np.median([c["flips"] / c["pages"] for c in cs])),
             "zero_flip_share": float(np.median([c["zero_flip_pages"] / c["pages"] for c in cs])),
+            "full_vocabulary_flips_per_page": float(np.median([c["full_vocabulary_flips"] / c["pages"] for c in cs])),
+            "full_vocabulary_zero_flip_share": float(
+                np.median([c["full_vocabulary_zero_flip_pages"] / c["pages"] for c in cs])
+            ),
         },
     }
 
@@ -251,5 +265,8 @@ def run(paths: Paths) -> None:
     for label, c in configs.items():
         line = {"config": label, "picked": round(c["picked_per_scored_set"]["mean"], 2), "sets": c["sets_with_picks"]}
         line |= {f"{s}_flips": round(c["oracle"][s]["flips_per_page"], 3) for s in SCORERS}
+        line |= {
+            f"{s}_full_vocabulary_flips": round(c["oracle"][s]["full_vocabulary_flips_per_page"], 3) for s in SCORERS
+        }
         line["blind_flips"] = round(c["blind"]["flips_per_page"], 3)
         print(json.dumps(line))
