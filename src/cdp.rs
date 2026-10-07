@@ -17,7 +17,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tungstenite::protocol::WebSocketConfig;
@@ -45,6 +45,7 @@ pub const EXTRACT: &str = "(() => {
 /// unit, so every reply the expression lets through fits, with room for
 /// the rest of the reply.
 const MAX_MESSAGE: usize = 6 * BODY_CAP + 1024 * 1024;
+const POLL: Duration = Duration::from_millis(20);
 
 /// Everything ever sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -178,21 +179,25 @@ impl Socket {
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
         let stream = TcpStream::connect_timeout(&address, remaining(deadline)?)
             .map_err(|err| reason(&err))?;
-        stream
-            .set_read_timeout(Some(remaining(deadline)?))
-            .map_err(|err| reason(&err))?;
+        stream.set_nonblocking(true).map_err(|err| reason(&err))?;
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_MESSAGE))
             .max_frame_size(Some(MAX_MESSAGE));
-        let (ws, _) = tungstenite::client::client_with_config(
+        let mut handshake = tungstenite::client::client_with_config(
             format!("ws://{address}{path}"),
             stream,
             Some(config),
-        )
-        .map_err(|err| match err {
-            tungstenite::HandshakeError::Failure(err) => failure(&err),
-            tungstenite::HandshakeError::Interrupted(_) => "timeout".to_owned(),
-        })?;
+        );
+        let (ws, _) = loop {
+            match handshake {
+                Ok(connected) => break connected,
+                Err(tungstenite::HandshakeError::Failure(err)) => return Err(failure(&err)),
+                Err(tungstenite::HandshakeError::Interrupted(pending)) => {
+                    pause(deadline)?;
+                    handshake = pending.handshake();
+                }
+            }
+        };
         Ok(Self {
             ws,
             next: 1,
@@ -204,9 +209,14 @@ impl Socket {
     pub fn call(&mut self, command: &Command, deadline: Instant) -> Result<Value, String> {
         let id = self.next;
         self.next += 1;
-        self.ws
-            .send(Message::text(command.encode(id)))
-            .map_err(|err| failure(&err))?;
+        remaining(deadline)?;
+        match self.ws.send(Message::text(command.encode(id))) {
+            Ok(()) => {}
+            // `send` keeps an incompletely written frame buffered. Flush
+            // that frame without sending the command a second time.
+            Err(err) if blocked(&err) => wait(deadline, || self.ws.flush())?,
+            Err(err) => return Err(failure(&err)),
+        }
         loop {
             match self.read(deadline)? {
                 Incoming::Reply {
@@ -223,6 +233,9 @@ impl Socket {
 
     /// The next lifecycle event, or `None` once `deadline` has passed.
     pub fn event(&mut self, deadline: Instant) -> Result<Option<Lifecycle>, String> {
+        if Instant::now() >= deadline {
+            return Ok(None);
+        }
         if let Some(event) = self.events.pop_front() {
             return Ok(Some(event));
         }
@@ -243,16 +256,37 @@ impl Socket {
     }
 
     fn read(&mut self, deadline: Instant) -> Result<Incoming, String> {
-        let wait = remaining(deadline)?;
-        self.ws
-            .get_ref()
-            .set_read_timeout(Some(wait))
-            .map_err(|err| reason(&err))?;
-        match self.ws.read().map_err(|err| failure(&err))? {
+        match wait(deadline, || self.ws.read())? {
             Message::Text(text) => Ok(decode(text.as_str())),
             _ => Ok(Incoming::Other),
         }
     }
+}
+
+/// A nonblocking protocol operation retains partial frames between tries.
+/// Polling keeps one absolute deadline across reads and writes, including
+/// a frame that arrives a byte at a time.
+fn wait<T>(
+    deadline: Instant,
+    mut operation: impl FnMut() -> Result<T, tungstenite::Error>,
+) -> Result<T, String> {
+    loop {
+        remaining(deadline)?;
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(err) if blocked(&err) => pause(deadline)?,
+            Err(err) => return Err(failure(&err)),
+        }
+    }
+}
+
+fn blocked(err: &tungstenite::Error) -> bool {
+    matches!(err, tungstenite::Error::Io(err) if err.kind() == io::ErrorKind::WouldBlock)
+}
+
+fn pause(deadline: Instant) -> Result<(), String> {
+    std::thread::sleep(remaining(deadline)?.min(POLL));
+    Ok(())
 }
 
 /// What is left until `deadline`, or a timeout when nothing is.
