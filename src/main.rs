@@ -12,7 +12,9 @@
 
 mod archive;
 mod assets;
+mod browser;
 mod capture;
+mod cdp;
 mod cli;
 mod content;
 mod content_fetch;
