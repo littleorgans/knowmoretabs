@@ -12,6 +12,10 @@ import pytest
     [
         "search",
         "restore",
+        "exactQuery",
+        "searchAfterCut",
+        "pickAfterCut",
+        "tagAfterCut",
         "exclude",
         "cut",
         "pickIncluded",

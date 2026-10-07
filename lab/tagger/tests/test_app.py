@@ -433,6 +433,41 @@ class ServerTests(Fixture):
         self.assertEqual(sorted(set(rows[:5]) & set(new)), sorted(refined["excluded"]))
         self.assertTrue(set(new) - set(rows))
 
+    def test_search_uses_the_exact_query_for_exclusions(self):
+        query = "night train"
+        rows = [h["row"] for h in self.call("POST", "/api/search", {"query": query})[1]["hits"]]
+        self.call("POST", "/api/exclusions", {"query": query, "rows": rows, "action": "exclude", "row": rows[0]})
+        for other in (" night train", "night train ", "Night train", "night  train"):
+            found = self.call("POST", "/api/search", {"query": other})[1]
+            self.assertEqual([], found["excluded"])
+        padded = " night train "
+        self.call("POST", "/api/exclusions", {"query": padded, "rows": rows, "action": "exclude", "row": rows[1]})
+        self.assertEqual([rows[1]], self.call("POST", "/api/search", {"query": padded})[1]["excluded"])
+
+    def test_refine_applies_the_cut_before_using_new_results_as_positives(self):
+        app = server.App(self.lib, Store(self.data), fake_encode)
+        query = "night train"
+        q = fake_encode([query])[0]
+        hits = engine.search(self.lib, q, query, 50)
+        keys = [self.lib.records[h["row"]]["key"] for h in hits]
+        app.exclusions.apply(query, keys[:20], "cut", keys[9])
+        with patch("tagger.app.server.prototype", wraps=server.prototype) as prototype:
+            app.refined(query, q, hits)
+        self.assertEqual(10, len(prototype.call_args.args[1]))
+        self.assertEqual(40, len(prototype.call_args.args[2]))
+
+    def test_refined_cut_ranking_is_stable_after_reload_and_restart(self):
+        body = {"query": "night train ", "n": 50}
+        rows = [h["row"] for h in self.call("POST", "/api/search", body)[1]["hits"]]
+        judge = {"query": body["query"], "rows": rows}
+        self.call("POST", "/api/exclusions", judge | {"action": "exclude", "row": rows[1]})
+        self.call("POST", "/api/exclusions", judge | {"action": "cut", "row": rows[9]})
+        first = self.call("POST", "/api/search", body | {"refine": True})[1]
+        again = server.App(self.lib, Store(self.data), fake_encode).search(body | {"refine": True})
+        self.assertEqual([h["row"] for h in first["hits"]], [h["row"] for h in again["hits"]])
+        self.assertEqual(first["excluded"], again["excluded"])
+        self.assertEqual(first["suggested"], again["suggested"])
+
 
 if __name__ == "__main__":
     unittest.main()

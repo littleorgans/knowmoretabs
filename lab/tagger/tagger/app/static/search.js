@@ -59,8 +59,8 @@
   }
 
   async function run(n) {
-    const q = K.$("s-q").value.trim();
-    if (!q) { K.$("s-q").focus(); return; }
+    const q = K.$("s-q").value;
+    if (!q.trim()) { K.$("s-q").focus(); return; }
     const changed = q !== S.query || K.$("s-img").checked !== S.images;
     Object.assign(S, { query: q, images: K.$("s-img").checked, n: n || 20 });
     if (changed) Object.assign(S, { picked: [], refine: false });
@@ -70,6 +70,8 @@
     K.results = null;
     K.changed();
     try {
+      await judging;
+      if (current !== request) return;
       const results = await K.api("/api/search", { query: S.query, images: S.images, n: S.n, refine: !!S.refine });
       if (current !== request) return;
       K.results = results;
@@ -97,6 +99,7 @@
       K.$("s-refine").disabled = !r || !r.excluded.length;
     },
     run,
+    get pending() { return judging; },
     included,
     more: () => run(K.lib.sizes[1]),
     restore() {   // the form is empty after a reload: fill it from the saved search, so run sees no change

@@ -59,18 +59,25 @@ class App:
         }
 
     def search(self, body: dict) -> dict:
-        query = str(body.get("query", "")).strip()
-        if not query:
+        query = str(body.get("query", ""))
+        if not query.strip():
             raise ValueError("type a search")
         n = min(max(int(body.get("n", 20)), 1), MAX_RESULTS)
         start = time.perf_counter()
         q = self.encode([query])[0]
         encoded = time.perf_counter()
         images = bool(body.get("images"))
-        hits = engine.search(self.lib, q, query, n, images)
-        if body.get("refine"):
-            hits = engine.search(self.lib, self.refined(query, q, hits), query, n, images)
-        judged = self.judged(query, [h["row"] for h in hits])
+        plain = engine.search(self.lib, q, query, n, images)
+        while True:
+            hits = plain
+            if body.get("refine"):
+                hits = engine.search(self.lib, self.refined(query, q, plain), query, n, images)
+            before = self.exclusions.keys(query)
+            judged = self.judged(query, [h["row"] for h in hits])
+            # A cut can discover new exclusions in the refined ranking. Settle against those too,
+            # so reload uses the same inputs. Exclusions only grow here, bounded by the library.
+            if not body.get("refine") or self.exclusions.keys(query) == before:
+                break
         done = time.perf_counter()
         return {
             "hits": [{**self.page(h["row"]), "fused": h["fused"], "sources": h["sources"]} for h in hits],
@@ -80,6 +87,7 @@ class App:
 
     def refined(self, query: str, q: np.ndarray, hits: list[dict]) -> np.ndarray:
         """The query moved toward the plain ranking's included results and away from every excluded page."""
+        self.exclusions.view(query, [self.lib.records[h["row"]]["key"] for h in hits])
         out = self.exclusions.keys(query)
         included = [h["row"] for h in hits if self.lib.records[h["row"]]["key"] not in out]
         excluded = [self.lib.rows[k] for k in out if k in self.lib.rows]
