@@ -44,7 +44,14 @@
                    : `<div class="${cls} none" aria-label="No image captured"><b aria-hidden="true">${initial}</b></div>`;
   };
   K.own = (p) => (p.own.length ? p.own.map((t) => `<li class="tag">${K.esc(t)}</li>`).join("") : `<li class="none">None yet</li>`);
-  K.link = (p) => `<a class="open" href="${K.esc(p.url)}" target="_blank" rel="noopener noreferrer" title="Open the page in a new tab">${K.esc(p.host)} ↗</a>`;
+
+  /* ---- open the page: a control for http and https pages only. Its click
+     stays its own: no exclusion, drag or decision (the views call K.opens) ---- */
+  const web = (url) => { try { return ["http:", "https:"].includes(new URL(url).protocol); } catch { return false; } };
+  K.open = (p) => (web(p.url) ? `<a class="open" data-open href="${K.esc(p.url)}" target="_blank" rel="noopener noreferrer" draggable="false" ` +
+    `title="Open the page in a new tab (o)" aria-label="Open the page in a new tab">Open ↗</a>` : "");
+  K.opens = (e) => { if (!e.target.closest("[data-open]")) return false; e.stopPropagation(); return true; };
+  K.openIn = (el) => { const a = el && el.querySelector("[data-open]"); if (a) a.click(); return !!a; };
 
   /* ---- toast ---- */
   let toastTimer = 0;

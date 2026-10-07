@@ -2,7 +2,8 @@
    A horizontal drag moves and tilts the card
    and reports which way it leans; letting go past the threshold (or flicking)
    commits, short of it the card settles back. A press that never travelled
-   stays a click, so the rows inside the card still toggle. Vertical drags are
+   stays a click, so the rows inside the card still toggle; a press on the
+   open control never drags. Vertical drags are
    left to the page, which keeps scrolling on touch. */
 (function () {
   const K = window.KMT;
@@ -23,7 +24,7 @@
   K.swipe = (card, opts) => {
     let x0 = 0, y0 = 0, dx = 0, drag = false, id = null, trail = [];
     card.addEventListener("pointerdown", (e) => {
-      if (e.button !== 0 || !opts.enabled() || e.target.closest("input")) return;
+      if (e.button !== 0 || !opts.enabled() || e.target.closest("input, [data-open]")) return;
       x0 = e.clientX; y0 = e.clientY; dx = 0; drag = false; id = e.pointerId; trail = [];
     });
     card.addEventListener("pointermove", (e) => {

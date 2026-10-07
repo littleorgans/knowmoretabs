@@ -3,7 +3,8 @@
    the tag's head (or its zero shot query, under 10 labels) says yes. Flip the
    wrong ones. Grid: every page at once, confirm one or all. Swipe: one page
    per screen as in the mockup; right keeps the checked tags and rejects the
-   rest, left rejects all, up skips, u undoes. Every change is saved at once. */
+   rest, left rejects all, up skips, u undoes. Open (o) shows the page in a
+   new tab and decides nothing. Every change is saved at once. */
 (function () {
   const K = window.KMT;
   let busy = false;
@@ -51,9 +52,9 @@
     const body = p.sugg.length
       ? `<ol class="sugg">${rows(p, false)}</ol><p class="row-btns"><button type="button" data-act="confirm"${open(p) ? "" : " disabled"}>${open(p) ? "Confirm" : "Confirmed"}</button></p>`
       : `<p class="ex"><i>You already have every picked tag here.</i></p>`;
-    return `<li class="hit rcard st-${p.sugg.length ? p.status : "none"}" data-i="${p.index}">${K.thumb(p, "th")}<div class="hb">` +
+    return `<li class="hit rcard st-${p.sugg.length ? p.status : "none"}" data-i="${p.index}">${K.open(p)}${K.thumb(p, "th")}<div class="hb">` +
       `<p class="kick">${p.sugg.length ? STATUS[p.status] : "Nothing to decide"}</p>` +
-      `<h3 class="ht">${p.title ? K.esc(p.title) : "<i>Untitled page</i>"}</h3><p class="host">${K.link(p)}</p>` +
+      `<h3 class="ht">${p.title ? K.esc(p.title) : "<i>Untitled page</i>"}</h3><p class="host">${K.esc(p.host)}</p>` +
       `<ul class="tags">${K.own(p)}</ul>${body}</div></li>`;
   }
 
@@ -80,8 +81,8 @@
     const kick = p.status === "skipped" ? "Skipped before · back for a decision" : near ? `<b>${near} of ${p.sugg.length}</b> near a coin toss` : "The model leans one way";
     const shot = p.image ? `<div class="shot"><img src="/img/${p.row}" alt=""></div>`
                          : `<div class="shot none" aria-label="No image captured"><b aria-hidden="true">${K.esc((p.host[0] || "?").toUpperCase())}</b><span>No image captured</span></div>`;
-    return `<div class="page">${shot}<div class="cbody"><p class="kick">${kick}</p>` +
-      `<h2 class="ptitle">${p.title ? K.esc(p.title) : "<i>Untitled page</i>"}</h2><p class="host">${K.link(p)}</p>` +
+    return `<div class="page">${K.open(p)}${shot}<div class="cbody"><p class="kick">${kick}</p>` +
+      `<h2 class="ptitle">${p.title ? K.esc(p.title) : "<i>Untitled page</i>"}</h2><p class="host">${K.esc(p.host)}</p>` +
       `<p class="lbl">Your tags</p><ul class="tags">${K.own(p)}</ul>` +
       `<p class="lbl">Picked tags</p><ol class="sugg">${rows(p, true)}</ol></div></div>`;
   }
@@ -195,6 +196,7 @@
     key(e) {
       const k = e.key;
       if (k === "g") return K.review.mode(K.state.mode === "grid" ? "swipe" : "grid"), true;
+      if (k === "o") return K.openIn(K.state.mode === "swipe" ? card() : e.target.closest(".rcard"));
       if (K.state.mode !== "swipe" || !set()) return false;
       if (k === "ArrowRight" || k === "l" || (k === "Enter" && !e.target.closest("button, a"))) return accept(), true;
       if (k === "ArrowLeft" || k === "h") return reject(), true;
@@ -213,6 +215,7 @@
   };
 
   K.$("view-review").addEventListener("click", (e) => {
+    if (K.opens(e)) return;
     const m = e.target.closest("[data-mode]");
     if (m) { K.review.mode(m.dataset.mode); return; }
     const a = e.target.closest("[data-act]");

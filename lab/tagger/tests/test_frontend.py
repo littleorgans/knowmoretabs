@@ -24,6 +24,10 @@ import pytest
         "confirmAllPending",
         "exportWait",
         "exportCommand",
+        "openControl",
+        "openSearch",
+        "openReview",
+        "openNoDrag",
     ],
 )
 def test_frontend_round_trips(case):

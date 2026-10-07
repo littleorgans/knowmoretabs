@@ -54,7 +54,8 @@ the model's precheck). A click on a search result (x on the focused one) marks i
 Cut here (c) excludes every result below one, and new results that later show below it; Refine ranks again toward
 the kept results and away from the excluded ones. Excluded results never reach pick, suggestions or review for that
 query, and touch no other query. They live in `<data>/app/not-relevant.json` (query, page, rank when excluded, by
-click or cut), apart from the decisions, and are never exported. The app never writes an archive. `--smoke` prints load and query timings, then exits.
+click or cut), apart from the decisions, and are never exported. Open (o on the focused result or the swipe card) shows an http or https page in a new
+tab and changes no exclusion or decision. The app never writes an archive. `--smoke` prints load and query timings, then exits.
 Synthetic archive for trying it: `uv run --locked python tests/synthetic_archive.py <archive> <data>`.
 
 Steps skip work whose output exists; use a fresh data directory to recompute.

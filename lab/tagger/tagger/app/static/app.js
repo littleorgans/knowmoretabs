@@ -97,9 +97,8 @@
     if (e.key === "?") K.$("help").showModal();
     else if (e.key === "t") flipTheme();
     else if (e.key === "/") { location.hash = "search"; K.$("s-q").focus(); }
-    else if (e.key === "o") openSets().catch(K.fail);
     else if (e.key === "e") K.exportNow();
-    else done = views[view].key(e);
+    else if (!(done = views[view].key(e)) && e.key === "o") { done = true; openSets().catch(K.fail); }   // o opens a focused page first
     if (done) e.preventDefault();
   });
 

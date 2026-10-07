@@ -5,7 +5,8 @@
    A click or tap on a result (x on the focused one) marks it not relevant,
    so it stays out of tagging; again brings it back. Cut here (c) excludes
    every result below one, as ranked lists go bad past a point. Refine ranks
-   again toward the results kept and away from those excluded. */
+   again toward the results kept and away from those excluded. Open (o)
+   shows the page in a new tab and leaves the result as it was. */
 (function () {
   const K = window.KMT;
   const S = K.state.search;
@@ -25,10 +26,10 @@
   function hit(h, i) {
     const x = out(h), cut = K.results.cut === h.row;
     return `<li class="hit${x ? " out" : ""}${cut ? " cut" : ""}" data-row="${h.row}" tabindex="0" ` +
-      `title="${x ? "Not relevant: click (x) to bring it back" : "Click (x) if this is not relevant"}">${K.thumb(h, "th")}<div class="hb">` +
+      `title="${x ? "Not relevant: click (x) to bring it back" : "Click (x) if this is not relevant"}">${K.open(h)}${K.thumb(h, "th")}<div class="hb">` +
       `<p class="kick">#${i + 1} · fused ${h.fused.toFixed(4)}${x ? ` · <b class="mark">Not relevant</b>` : ""}</p>` +
       `<h3 class="ht">${h.title ? K.esc(h.title) : "<i>Untitled page</i>"}</h3>` +
-      `<p class="host">${K.link(h)}</p>` +
+      `<p class="host">${K.esc(h.host)}</p>` +
       `<ul class="tags">${K.own(h)}</ul><p class="src">${source(h)}</p>` +
       `<p class="hit-btns">${cut ? `<b class="mark">Everything below is cut</b><button type="button" data-act="uncut">Undo cut</button>`
                                 : `<button type="button" data-act="cut" title="Exclude every result below this one (c)">Cut here</button>`}</p></div></li>`;
@@ -113,6 +114,7 @@
       const tile = K.results && e.target.closest(".hit[data-row]");
       if (tile && e.key === "x") { toggle(Number(tile.dataset.row)); return true; }
       if (tile && e.key === "c") { cut(Number(tile.dataset.row)); return true; }
+      if (tile && e.key === "o") { K.openIn(tile); return true; }
       return false;
     }
   };
@@ -120,6 +122,7 @@
   K.$("s-form").addEventListener("submit", (e) => { e.preventDefault(); run(); K.$("s-q").blur(); });
   K.$("s-img").addEventListener("change", () => { if (K.$("s-q").value.trim()) run(S.n); });
   K.$("view-search").addEventListener("click", (e) => {
+    if (K.opens(e)) return;
     const a = e.target.closest("[data-act]");
     if (a && !a.disabled) {
       const tile = a.closest(".hit[data-row]");
