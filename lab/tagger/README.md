@@ -50,7 +50,11 @@ request), pick tags (suggested by S2's mean z ranking, or any of yours), review 
 every owner label, zero shot under 10 positives; picked tags the page holds are shown, not asked), export.
 Decisions live in `<data>/app/state.json`; export writes `<data>/app/exports/<UTC time>/answers.jsonl` (a
 `tag --import` file, source `kmt-tagger-app`, the kept tags per page) and `decisions.jsonl` (page, tag, answer,
-the model's precheck). The app never writes an archive. `--smoke` prints load and query timings, then exits.
+the model's precheck). A click on a search result (x on the focused one) marks it not relevant to that query;
+Cut here (c) excludes every result below one, and new results that later show below it; Refine ranks again toward
+the kept results and away from the excluded ones. Excluded results never reach pick, suggestions or review for that
+query, and touch no other query. They live in `<data>/app/not-relevant.json` (query, page, rank when excluded, by
+click or cut), apart from the decisions, and are never exported. The app never writes an archive. `--smoke` prints load and query timings, then exits.
 Synthetic archive for trying it: `uv run --locked python tests/synthetic_archive.py <archive> <data>`.
 
 Steps skip work whose output exists; use a fresh data directory to recompute.

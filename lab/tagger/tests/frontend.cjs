@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function setup(file) {
+function setup(...files) {
   const nodes = new Map();
   const node = (id) => {
     if (!nodes.has(id)) nodes.set(id, {
@@ -20,7 +20,7 @@ function setup(file) {
   const K = {
     $: node, esc: String, short: String, title: () => '', pct: String,
     own: () => '', thumb: () => '', link: () => '', save() {}, changed() {},
-    fail(err) { this.failure = err; }, toast() {}, flyIn() {}, flyOut(c, d, done) { done(); },
+    fail(err) { this.failure = err; }, toast(msg) { this.toasted = msg; }, flyIn() {}, flyOut(c, d, done) { done(); }, refreshSets() {},
     state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
     lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
     search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
@@ -30,10 +30,11 @@ function setup(file) {
     location: { hash: '' }, addEventListener() {}, matchMedia: () => ({ matches: false }),
     setTimeout, clearTimeout, console,
   });
-  vm.runInContext(fs.readFileSync(path.join(__dirname, '../tagger/app/static', file), 'utf8'), context);
+  for (const file of files) vm.runInContext(fs.readFileSync(path.join(__dirname, '../tagger/app/static', file), 'utf8'), context);
   return { K, node };
 }
 const turn = () => new Promise((resolve) => setImmediate(resolve));
+const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made inside the scripts' realm
 
 async function search() {
   const { K, node } = setup('search.js');
@@ -51,6 +52,77 @@ async function search() {
   requests[0]({ hits: [{ row: 1 }] });
   await first;
   assert.equal(K.results.hits[0].row, 2, 'stale search reply must not replace current results');
+}
+
+function resultsFixture(...files) {
+  const { K, node } = setup(...files);
+  K.state.search.query = 'q';
+  K.results = { hits: [1, 2, 3].map((row) => ({ row, fused: 0.1, sources: {}, own: [] })), excluded: [], cut: null, suggested: [], ms: {} };
+  const requests = [];
+  K.api = (route, body) => new Promise((resolve) => requests.push({ route, body, resolve }));
+  const tile = (row) => ({ dataset: { row: String(row) } });
+  const click = (row, act) => node('view-search').click({ target: { closest(selector) {
+    if (selector === '[data-act]') return act ? { dataset: { act }, disabled: false, closest: () => tile(row) } : null;
+    if (selector === '.hit[data-row]') return tile(row);
+    return null;
+  } } });
+  const key = (row, k) => K.search.key({ key: k, target: { closest(selector) { return selector === '.hit[data-row]' ? tile(row) : null; } } });
+  return { K, node, requests, click, key };
+}
+
+async function restore() {
+  const { K, node } = setup('search.js');
+  Object.assign(K.state.search, { query: 'q', images: true, n: 50, refine: true, picked: ['A'] });
+  const sent = [];
+  K.api = async (route, body) => { sent.push(body); return { hits: [], excluded: [], cut: null, suggested: [], ms: {} }; };
+  await K.search.restore();
+  assert.deepEqual(plain(sent), [{ query: 'q', images: true, n: 50, refine: true }], 'a reload must search again as it was left');
+  assert.deepEqual(plain(K.state.search.picked), ['A'], 'a reload must keep the picked tags');
+}
+
+async function exclude() {
+  const { K, node, requests, click, key } = resultsFixture('search.js');
+  K.search.render();
+  assert.match(node('s-pos').innerHTML, /<b>3<\/b> of 3 going to tagging/);
+  click(2);
+  assert.deepEqual(K.results.excluded, [2], 'a click must exclude the tile at once');
+  K.search.render();
+  assert.match(node('s-pos').innerHTML, /<b>2<\/b> of 3 going to tagging/);
+  assert.match(node('s-grid').innerHTML, /class="hit out" data-row="2"/);
+  assert.equal(key(2, 'x'), true, 'x on the focused tile must be handled');
+  assert.deepEqual(K.results.excluded, [], 'x must bring the excluded tile back');
+  await turn();
+  assert.equal(requests.length, 1, 'exclusion requests must go one at a time');
+  assert.deepEqual(plain(requests[0].body), { query: 'q', rows: [1, 2, 3], action: 'exclude', row: 2 });
+  requests[0].resolve({ excluded: [2], cut: null, suggested: [] }); await turn(); await turn();
+  assert.deepEqual(K.results.excluded, [], 'an earlier reply must not undo a later click');
+  assert.equal(requests[1].body.action, 'include');
+  requests[1].resolve({ excluded: [], cut: null, suggested: [{ tag: 'Kept only', z: 1 }] }); await turn(); await turn();
+  assert.equal(K.results.suggested[0].tag, 'Kept only', 'suggestions must follow the kept results');
+  for (const row of [1, 2, 3]) click(row);
+  K.search.render();
+  assert.equal(node('s-tag').disabled, true, 'nothing kept, nothing to tag');
+}
+
+async function cut() {
+  const { K, requests, click } = resultsFixture('search.js');
+  click(1, 'cut');
+  await turn();
+  assert.deepEqual(plain(requests[0].body), { query: 'q', rows: [1, 2, 3], action: 'cut', row: 1 });
+  requests[0].resolve({ excluded: [2, 3], cut: 1, suggested: [] }); await turn(); await turn();
+  assert.match(K.toasted, /Cut below #1: 1 of 3 going to tagging/);
+  click(1, 'uncut');
+  await turn(); await turn();
+  assert.equal(requests[1].body.action, 'uncut');
+}
+
+async function pickIncluded() {
+  const { K, node, requests } = resultsFixture('search.js', 'pick.js');
+  K.results.excluded = [2];
+  node('view-tag').click({ target: { closest(selector) { return selector === '[data-act]' ? { dataset: { act: 'review' }, disabled: false } : null; } } });
+  await turn();
+  assert.equal(requests[0].route, '/api/sessions');
+  assert.deepEqual(plain(requests[0].body.rows), [1, 3], 'excluded results must never reach review');
 }
 
 function reviewFixture() {
@@ -142,5 +214,5 @@ async function exportCommand() {
   assert.ok(html.includes("--import '/tmp/owner'\\''s data/answers.jsonl'"), 'answer path must be shell quoted');
 }
 
-const cases = { search, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+const cases = { search, restore, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

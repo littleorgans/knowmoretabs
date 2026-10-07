@@ -8,7 +8,20 @@ import pytest
 
 
 @pytest.mark.parametrize(
-    "case", ["search", "flips", "switchedSet", "acceptAfterFlip", "confirmAllPending", "exportWait", "exportCommand"]
+    "case",
+    [
+        "search",
+        "restore",
+        "exclude",
+        "cut",
+        "pickIncluded",
+        "flips",
+        "switchedSet",
+        "acceptAfterFlip",
+        "confirmAllPending",
+        "exportWait",
+        "exportCommand",
+    ],
 )
 def test_frontend_round_trips(case):
     node = shutil.which("node")

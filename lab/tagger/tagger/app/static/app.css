@@ -170,6 +170,14 @@ main { flex: 1; }
 .hb .host { margin: 0; }
 .open { color: var(--ink-3); }
 .open:hover { color: var(--ink); text-decoration: underline; }
+.hit[data-row] { cursor: pointer; }
+.hit.out .th, .hit.out .ht, .hit.out .host, .hit.out .tags, .hit.out .src { opacity: 0.35; }
+.hit.out .ht { text-decoration: line-through; text-decoration-thickness: 1px; }
+.hit .mark { color: var(--ink); font-weight: 600; }
+.hit.cut { box-shadow: inset 0 -3px 0 var(--ink); }
+.hit-btns { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin: auto 0 0; font-size: 0.75rem; }
+.hit-btns button { height: 1.75rem; padding: 0 0.75rem; background: none; border: 1px solid var(--line-2); color: var(--ink-2); font-size: 0.75rem; }
+.hit-btns button:hover { border-color: var(--ink); color: var(--ink); }
 .src { display: flex; flex-wrap: wrap; gap: 0.15rem 0.75rem; margin: 0; font: 0.6875rem/1.4 var(--mono); color: var(--ink-3); }
 
 /* ---- pick: chips you press ---- */

@@ -18,9 +18,9 @@ from pathlib import Path
 import numpy as np
 
 from ..paths import Paths, read_json
-from ..zeroshot import query_variants
+from ..zeroshot import prototype, query_variants
 from . import engine
-from .store import Store
+from .store import Exclusions, Store
 
 STATIC = Path(__file__).with_name("static")
 MAX_RESULTS = 50
@@ -33,6 +33,7 @@ CSP = (
 class App:
     def __init__(self, lib: engine.Library, store: Store, encode: engine.Encode):
         self.lib, self.store, self.encode = lib, store, encode
+        self.exclusions = Exclusions(store.root)
 
     def own(self, row: int) -> list[str]:
         return [t for j, t in enumerate(self.lib.tags) if self.lib.Y[row, j]]
@@ -65,27 +66,66 @@ class App:
         start = time.perf_counter()
         q = self.encode([query])[0]
         encoded = time.perf_counter()
-        hits = engine.search(self.lib, q, query, n, bool(body.get("images")))
-        suggested = engine.suggest(self.lib, [h["row"] for h in hits])
+        images = bool(body.get("images"))
+        hits = engine.search(self.lib, q, query, n, images)
+        if body.get("refine"):
+            hits = engine.search(self.lib, self.refined(query, q, hits), query, n, images)
+        judged = self.judged(query, [h["row"] for h in hits])
         done = time.perf_counter()
         return {
             "hits": [{**self.page(h["row"]), "fused": h["fused"], "sources": h["sources"]} for h in hits],
-            "suggested": suggested,
+            **judged,
             "ms": {"encode": round(1000 * (encoded - start), 1), "rank": round(1000 * (done - encoded), 1)},
         }
 
-    def create(self, body: dict) -> dict:
+    def refined(self, query: str, q: np.ndarray, hits: list[dict]) -> np.ndarray:
+        """The query moved toward the plain ranking's included results and away from every excluded page."""
+        out = self.exclusions.keys(query)
+        included = [h["row"] for h in hits if self.lib.records[h["row"]]["key"] not in out]
+        excluded = [self.lib.rows[k] for k in out if k in self.lib.rows]
+        return prototype(q, self.lib.X[included], self.lib.X[excluded])
+
+    def judged(self, query: str, rows: list[int]) -> dict:
+        """The shown results excluded for this query, the cut's row, and tags suggested from the rest."""
+        keys = [self.lib.records[r]["key"] for r in rows]
+        out, cut = self.exclusions.view(query, keys)
+        included = [r for r, k in zip(rows, keys, strict=True) if k not in out]
+        return {
+            "excluded": [r for r, k in zip(rows, keys, strict=True) if k in out],
+            "cut": rows[keys.index(cut)] if cut in keys else None,
+            "suggested": engine.suggest(self.lib, included) if included else [],
+        }
+
+    def rows(self, body: dict) -> list[int]:
         rows = [int(r) for r in body.get("rows", [])]
-        picked = [str(t) for t in body.get("picked", [])]
-        if not rows or not picked:
-            raise ValueError("pick at least one tag for at least one page")
         if any(r < 0 or r >= len(self.lib.records) or not self.lib.live[r] for r in rows):
             raise ValueError("a row is not a page of this library")
+        return rows
+
+    def exclude(self, body: dict) -> dict:
+        """Apply one exclusion action to the shown results (`rows`, in rank order) of a search."""
+        query, rows = str(body.get("query", "")), self.rows(body)
+        if not query or not rows:
+            raise ValueError("name a search and its results")
+        keys = [self.lib.records[r]["key"] for r in rows]
+        row = body.get("row")
+        key = keys[rows.index(int(row))] if row is not None and int(row) in rows else None
+        self.exclusions.apply(query, keys, str(body.get("action")), key)
+        return self.judged(query, rows)
+
+    def create(self, body: dict) -> dict:
+        """A result set of the given rows less any excluded for the query, so excluded pages never reach review."""
+        query = str(body.get("query", ""))
+        out = self.exclusions.keys(query)
+        rows = [r for r in self.rows(body) if self.lib.records[r]["key"] not in out]
+        picked = [str(t) for t in body.get("picked", [])]
+        if not rows or not picked:
+            raise ValueError("pick at least one tag for at least one included page")
         if unknown := set(picked) - set(self.lib.tags):
             raise ValueError(f"{len(unknown)} picked tag(s) are not in the vocabulary")
         keys = [self.lib.records[r]["key"] for r in rows]
         session = self.store.create(
-            str(body.get("query", "")), bool(body.get("images")), keys, picked, engine.prechecks(self.lib, rows, picked)
+            query, bool(body.get("images")), keys, picked, engine.prechecks(self.lib, rows, picked)
         )
         return self.session_view(session)
 
@@ -139,6 +179,7 @@ ROUTES = [
         lambda app, m, b: _found(app.store.session(int(m[1])), app.session_view),
     ),
     ("POST", re.compile(r"/api/search"), lambda app, m, b: app.search(b)),
+    ("POST", re.compile(r"/api/exclusions"), lambda app, m, b: app.exclude(b)),
     ("POST", re.compile(r"/api/sessions"), lambda app, m, b: app.create(b)),
     ("POST", re.compile(r"/api/sessions/(\d+)/pages/(\d+)"), lambda app, m, b: app.update(int(m[1]), int(m[2]), b)),
     ("POST", re.compile(r"/api/export"), lambda app, m, b: app.store.export()),

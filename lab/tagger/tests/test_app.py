@@ -17,7 +17,7 @@ import synthetic_archive
 
 from tagger import cli, dataset
 from tagger.app import engine, server
-from tagger.app.store import SOURCE, Store
+from tagger.app.store import SOURCE, Exclusions, Store
 from tagger.heads import unit
 from tagger.paths import Paths
 
@@ -244,6 +244,70 @@ class StoreTests(unittest.TestCase):
         self.assertNotEqual(folder, Path(store.export()["folder"]))
 
 
+class ExclusionTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.old = os.umask(0o077)
+        self.addCleanup(os.umask, self.old)
+        self.keys = [f"u{i}" for i in range(6)]
+
+    def test_a_click_excludes_one_result_and_logs_its_rank_privately_apart_from_decisions(self):
+        ex = Exclusions(self.tmp)
+        ex.apply("q", self.keys, "exclude", "u2")
+        ex.apply("other", self.keys, "exclude", "u0")
+        again = Exclusions(self.tmp)
+        self.assertEqual(({"u2"}, None), again.view("q", self.keys))
+        entry = again.state["queries"]["q"]["excluded"]["u2"]
+        self.assertEqual((3, "click"), (entry["rank"], entry["by"]))
+        self.assertEqual({"u0"}, again.keys("other"))
+        self.assertEqual(0o600, stat.S_IMODE(again.path.stat().st_mode))
+        self.assertFalse((self.tmp / "state.json").exists())
+        again.apply("q", self.keys, "include", "u2")
+        self.assertEqual(set(), Exclusions(self.tmp).keys("q"))
+        self.assertNotIn("q", Exclusions(self.tmp).state["queries"])
+
+    def test_a_cut_excludes_everything_below_and_undoing_it_keeps_clicks(self):
+        ex = Exclusions(self.tmp)
+        ex.apply("q", self.keys, "exclude", "u5")
+        ex.apply("q", self.keys, "exclude", "u0")
+        ex.apply("q", self.keys, "cut", "u2")
+        self.assertEqual(({"u0", "u3", "u4", "u5"}, "u2"), Exclusions(self.tmp).view("q", self.keys))
+        self.assertEqual("click", ex.state["queries"]["q"]["excluded"]["u5"]["by"])
+        ex.apply("q", self.keys, "cut", "u3")  # a new cut replaces the old one
+        self.assertEqual(({"u0", "u4", "u5"}, "u3"), ex.view("q", self.keys))
+        ex.apply("q", self.keys, "uncut", None)
+        self.assertEqual(({"u0", "u5"}, None), Exclusions(self.tmp).view("q", self.keys))
+
+    def test_a_cut_covers_results_shown_later_but_not_ones_brought_back(self):
+        ex = Exclusions(self.tmp)
+        ex.apply("q", self.keys[:4], "cut", "u1")
+        ex.apply("q", self.keys[:4], "include", "u3")
+        self.assertEqual(({"u2", "u4", "u5"}, "u1"), ex.view("q", self.keys))
+        self.assertEqual(5, Exclusions(self.tmp).state["queries"]["q"]["excluded"]["u4"]["rank"])
+
+    def test_a_cut_covers_new_results_a_reordered_list_puts_below_it(self):
+        ex = Exclusions(self.tmp)
+        ex.apply("q", self.keys[:4], "cut", "u1")
+        ex.apply("q", self.keys[:4], "include", "u3")
+        reordered = ["u0", "u1", "u5", "u3", "u2"]  # refine or images: a new result below the cut, u3 brought back
+        self.assertEqual(({"u2", "u5"}, "u1"), ex.view("q", reordered))
+
+    def test_queries_match_only_as_typed(self):
+        ex = Exclusions(self.tmp)
+        ex.apply("classifier", self.keys, "cut", "u0")
+        for other in ("classifiers", "Classifier", "classifier ", "a classifier"):
+            self.assertEqual((set(), None), ex.view(other, self.keys))
+            self.assertEqual(set(), ex.keys(other))
+
+    def test_actions_name_a_shown_result(self):
+        ex = Exclusions(self.tmp)
+        with self.assertRaises(ValueError):
+            ex.apply("q", self.keys, "exclude", "elsewhere")
+        with self.assertRaises(ValueError):
+            ex.apply("q", self.keys, "forget", "u1")
+
+
 class ServerTests(Fixture):
     def setUp(self):
         self.data = Path(tempfile.mkdtemp())
@@ -303,6 +367,71 @@ class ServerTests(Fixture):
         self.assertEqual(1, listed[0]["decided"])
         status, out, _ = self.call("POST", "/api/export", {})
         self.assertEqual((200, 1, 1), (status, out["decided"], out["flipped"]))
+
+    def test_excluded_results_stay_out_of_suggestions_review_and_export(self):
+        found = self.call("POST", "/api/search", {"query": "night train", "n": 20})[1]
+        rows = [h["row"] for h in found["hits"]]
+        self.assertEqual(([], None), (found["excluded"], found["cut"]))
+        judge = {"query": "night train", "rows": rows}
+        status, after, _ = self.call("POST", "/api/exclusions", judge | {"action": "exclude", "row": rows[0]})
+        self.assertEqual((200, [rows[0]]), (status, after["excluded"]))
+        after = self.call("POST", "/api/exclusions", judge | {"action": "cut", "row": rows[9]})[1]
+        self.assertEqual([rows[0], *rows[10:]], after["excluded"])
+        self.assertEqual(rows[9], after["cut"])
+        kept = rows[1:10]
+        self.assertEqual(engine.suggest(self.lib, kept), after["suggested"])
+        self.assertNotEqual(engine.suggest(self.lib, rows), after["suggested"])
+        again = self.call("POST", "/api/search", {"query": "night train", "n": 20})[1]  # a reload or restart
+        self.assertEqual((after["excluded"], rows[9]), (again["excluded"], again["cut"]))
+        self.assertEqual(400, self.call("POST", "/api/exclusions", judge | {"action": "exclude", "row": -1})[0])
+        s = self.call("POST", "/api/sessions", {"query": "night train", "rows": rows, "picked": ["Trains"]})[1]
+        keys = {self.lib.records[r]["key"] for r in kept}
+        self.assertEqual(keys, {p["url"] for p in s["pages"]})
+        for p in s["pages"]:
+            if p["sugg"]:
+                self.call("POST", f"/api/sessions/{s['id']}/pages/{p['index']}", {"status": "decided"})
+        out = self.call("POST", "/api/export", {})[1]
+        exported = Path(out["answers"]).read_text() + Path(out["decisions"]).read_text()
+        self.assertTrue(all(json.loads(line)["url"] in keys for line in exported.splitlines()))
+        self.assertTrue((self.data / "not-relevant.json").exists())
+        self.assertEqual(
+            400,
+            self.call("POST", "/api/sessions", {"query": "night train", "rows": rows[10:], "picked": ["Trains"]})[0],
+        )
+
+    def test_a_page_excluded_in_one_search_is_untouched_in_another(self):
+        other = {"query": "sleeper trains", "n": 20}
+        before = self.call("POST", "/api/search", other)[1]
+        refined = self.call("POST", "/api/search", other | {"refine": True})[1]
+        rows = [h["row"] for h in self.call("POST", "/api/search", {"query": "night train", "n": 20})[1]["hits"]]
+        shared = next(h["row"] for h in before["hits"] if h["row"] in rows)
+        self.call("POST", "/api/exclusions", {"query": "night train", "rows": rows, "action": "cut", "row": rows[0]})
+        self.call(
+            "POST", "/api/exclusions", {"query": "night train", "rows": rows, "action": "exclude", "row": rows[0]}
+        )
+        after = self.call("POST", "/api/search", other)[1]
+        self.assertEqual(before, after | {"ms": before["ms"]})  # same hits, ranks, suggestions; nothing excluded
+        self.assertEqual([], after["excluded"])
+        again = self.call("POST", "/api/search", other | {"refine": True})[1]
+        self.assertEqual(refined["hits"], again["hits"])
+        s = self.call(
+            "POST", "/api/sessions", {"query": "sleeper trains", "rows": [shared], "picked": ["Trains", "Coffee"]}
+        )
+        self.assertEqual(200, s[0])
+        self.assertEqual([self.lib.records[shared]["key"]], [p["url"] for p in s[1]["pages"]])
+        self.assertEqual({}, Store(self.data).decisions())  # an exclusion is not a tag rejection
+
+    def test_refine_ranks_away_from_excluded_pages_and_keeps_them_excluded(self):
+        plain = self.call("POST", "/api/search", {"query": "night train", "n": 20})[1]
+        rows = [h["row"] for h in plain["hits"]]
+        judge = {"query": "night train", "rows": rows}
+        for r in rows[:5]:
+            self.call("POST", "/api/exclusions", judge | {"action": "exclude", "row": r})
+        refined = self.call("POST", "/api/search", {"query": "night train", "n": 20, "refine": True})[1]
+        new = [h["row"] for h in refined["hits"]]
+        self.assertNotEqual(rows, new)
+        self.assertEqual(sorted(set(rows[:5]) & set(new)), sorted(refined["excluded"]))
+        self.assertTrue(set(new) - set(rows))
 
 
 if __name__ == "__main__":

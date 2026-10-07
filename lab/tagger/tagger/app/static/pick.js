@@ -1,7 +1,7 @@
 /* knowmoretabs · tagger app · step 2, pick tags
    The model's suggestions for this result set come first (tags ranked by
-   their mean z score over the results), then every tag you have. Pick a few;
-   the review offers only those, on pages that do not hold them yet. */
+   their mean z score over the results kept), then every tag you have. Pick a
+   few; the review offers only those, on kept pages that do not hold them yet. */
 (function () {
   const K = window.KMT;
   const S = K.state.search;
@@ -25,7 +25,7 @@
     const b = K.$("t-go");
     b.disabled = true;
     try {
-      const set = await K.api("/api/sessions", { query: S.query, images: S.images, rows: K.results.hits.map((h) => h.row), picked: S.picked });
+      const set = await K.api("/api/sessions", { query: S.query, images: S.images, rows: K.search.included().map((h) => h.row), picked: S.picked });
       K.set = set;
       K.state.session = set.id;
       K.save();
@@ -36,7 +36,7 @@
 
   K.pick = {
     render() {
-      const r = K.results;
+      const r = K.results, kept = K.search.included().length;
       if (!r || !K.lib) {
         K.$("t-pos").textContent = "Search first";
         K.$("t-sugg").innerHTML = `<li class="none">Search for something, then pick tags for what it finds.</li>`;
@@ -44,15 +44,15 @@
         K.$("t-go").disabled = true;
         return;
       }
-      K.$("t-pos").innerHTML = `<b>${r.hits.length}</b> results for “${K.esc(K.short(S.query))}”`;
+      K.$("t-pos").innerHTML = `<b>${kept}</b> results for “${K.esc(K.short(S.query))}”${kept < r.hits.length ? ` (${r.hits.length - kept} excluded)` : ""}`;
       K.$("t-picked").textContent = S.picked.length ? `${S.picked.length} picked` : "none picked";
       K.$("t-sugg").innerHTML = r.suggested.map((s) => chip(s.tag, `z ${s.z.toFixed(2)}`)).join("");
       const f = K.$("t-filter").value.trim().toLowerCase();
       const all = K.lib.tags.filter((t) => !f || t.name.toLowerCase().includes(f));
       K.$("t-all").innerHTML = all.length ? all.map((t) => chip(t.name)).join("") : `<li class="none">No tag matches.</li>`;
       const go = K.$("t-go");
-      go.disabled = !S.picked.length;
-      go.innerHTML = S.picked.length ? `<span>Review ${r.hits.length} pages with ${S.picked.length} tag${S.picked.length === 1 ? "" : "s"}</span><kbd>↵</kbd>`
+      go.disabled = !S.picked.length || !kept;
+      go.innerHTML = S.picked.length ? `<span>Review ${kept} pages with ${S.picked.length} tag${S.picked.length === 1 ? "" : "s"}</span><kbd>↵</kbd>`
                                       : "<span>Pick at least one tag</span>";
     },
     key(e) {
