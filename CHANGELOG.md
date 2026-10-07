@@ -212,13 +212,27 @@ as what you can do that you could not before.
   `serve` shows each kept image as a small thumbnail beside its page,
   served from the archive on `127.0.0.1`; nothing is loaded from the
   network, and an export carries no images.
+- **Pages that need a browser.** A page `content` reads as `thin`, or as an
+  `empty_shell` drawn by scripts, is then rendered once in Chrome (or the
+  `--browser` you name), headless, on a scratch profile, two pages at a time
+  and one per site, without a second plain request. Every connection the
+  page makes goes through a relay inside knowmoretabs that refuses this
+  machine and the private network, and WebRTC is kept off UDP. The rendered
+  text replaces the kept text only when it is longer; either way the line
+  says `headless`, and it stands until `--refetch`. Chrome may contact
+  Google services itself while it runs. Without a browser, or with
+  `--no-browser`, those pages wait, and the report says how many; it also
+  says how many pages were rendered, how long a render took and how many
+  connections the relay refused. Each page is counted once in the report,
+  by its last line in the run.
 - **Check what content can use.** `knowmoretabs doctor` reports whether each
   way of reading pages is ready, missing or degraded, with how to fix it:
   the web tier, gh and its version, the X post API, yt-dlp with deno or node
   for YouTube, and the `--browser` binary; then whether the archive is private and its
   pages by status. Offline by default; `--live` checks gh sign in (exit code
-  only, output never read) and asks the X post API once for a fixed public
-  post. `--json` for scripts. Exits 0 when the web tier is ready.
+  only, output never read), asks the X post API once for a fixed public
+  post, and starts the browser headless once, with no page. `--json` for
+  scripts. Exits 0 when the web tier is ready.
 
 ### Changed
 

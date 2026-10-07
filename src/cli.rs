@@ -120,8 +120,13 @@ GitHub repositories, issues, pull requests and discussions are read through gh a
 signed in, at most four at a time; gh keeps the token. Without it they are read as web pages. \
 YouTube videos are read through yt-dlp, with deno or node, given only the video's id and no cookies, one \
 video at a time: the description, chapters and one caption track, English first, else the video's own \
-language. Without yt-dlp they wait for a later run. What enrich never fetches, content never fetches \
-either; X profiles and YouTube channels and playlists are recorded as not a document, and login screens \
+language. Without yt-dlp they wait for a later run. A page that reads as thin, or as an empty shell \
+drawn by scripts, is then rendered once in the --browser binary (chrome by default), headless, on a \
+scratch profile, two at a time and one per site, with no second plain request; every connection the \
+page makes goes through a loopback relay that refuses this machine and the private network, and \
+WebRTC is kept off UDP. The rendered text is kept when it is longer, and the render stands until \
+--refetch. Chrome may contact Google services itself. Without a browser, or with --no-browser, those \
+pages wait for a later run. What enrich never fetches, content never fetches either; X profiles and YouTube channels and playlists are recorded as not a document, and login screens \
 as behind a login, without a request. A page that failed is tried again on the next run, and after three \
 failed runs it is recorded as unavailable. Each captured page also gets one preview image, fetched from \
 the address the page or its route names, which may be on another host: kept as a JPEG of at most 768 \
@@ -148,11 +153,12 @@ and how to fix it: the generic web tier (compiled in), GitHub through gh (found 
 with --live whether gh auth status exits 0; never its output), the X post API, YouTube through yt-dlp with deno or node, and \
 headless reading with the --browser binary (chrome by default). Then the archive: whether it is private, \
 whether pages/content exists, and its pages by their latest status. Offline by default. With --live, gh \
-checks its own sign in with GitHub and the X post API is asked once for a fixed public post. Sends nothing of yours. Exits 0 when \
+checks its own sign in with GitHub, the X post API is asked once for a fixed public post, and the browser \
+is started headless once, asked its version and closed, with no page. Sends nothing of yours. Exits 0 when \
 the generic web tier is ready; missing tools are warnings."
     )]
     Doctor {
-        /// Check GitHub sign in and ask the X post API once for a fixed public post
+        /// Check GitHub sign in, ask the X post API once for a fixed public post, and start the browser once
         #[arg(long)]
         live: bool,
     },

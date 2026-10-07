@@ -27,9 +27,10 @@ cargo install --git https://github.com/littleorgans/knowmoretabs knowmoretabs
 Or clone the repository and run `cargo build --release`; the binary is
 `target/release/knowmoretabs`, and it depends on nothing else. `content`
 works without any other tool; it reads GitHub through `gh` when gh is
-installed and signed in, and YouTube videos through yt-dlp when yt-dlp and
-deno (or node) are installed; a planned route will let it use Chrome.
-`knowmoretabs doctor` says which of them it can use.
+installed and signed in, YouTube videos through yt-dlp when yt-dlp and
+deno (or node) are installed, and pages that need a browser through Chrome,
+run headless, when it is installed. `knowmoretabs doctor` says which of
+them it can use.
 
 Nothing is tagged yet: the prebuilt binaries and the crates.io package
 described next arrive with v0.1.0, and until then the repository is the only
@@ -168,8 +169,8 @@ knowmoretabs export [DIR]        # the same library as a static site that opens 
 knowmoretabs history             # how many library pages have History signals, and how current they are
 knowmoretabs history --refresh   # read History now and update every library page's signals
 knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
-knowmoretabs content             # keep the main text and one preview image of library pages; --dry-run, --limit N, --refetch, --url URL, --no-images
-knowmoretabs doctor              # which ways of reading pages this machine can use; --live checks GitHub sign in and asks the X post API once
+knowmoretabs content             # keep the main text and one preview image of library pages; --dry-run, --limit N, --refetch, --url URL, --no-images, --no-browser
+knowmoretabs doctor              # which ways of reading pages this machine can use; --live checks GitHub sign in, asks the X post API once and starts the browser once
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
 knowmoretabs tag <URL>... --add NAME --remove NAME --clear NAME   # tag pages, untag them, or take back a decision; all repeatable
@@ -258,6 +259,7 @@ knowmoretabs content --limit 30  # capture at most 30 pages this run
 knowmoretabs content             # capture every page not captured before, and retry the failed ones
 knowmoretabs content --url URL   # capture only this library page; repeatable
 knowmoretabs content --no-images # capture text only this run, no preview images
+knowmoretabs content --no-browser # render nothing in a browser this run; those pages wait
 knowmoretabs doctor              # which ways of reading pages are ready, and what the archive holds
 ```
 
@@ -275,10 +277,24 @@ the post's number, not the page's address, without cookies, one request a
 second. A GitHub repository, issue, pull request or discussion is read
 through gh, GitHub's own command line tool, when it is installed and signed
 in. A YouTube video is read through yt-dlp, which sends the video's id to
-YouTube. A planned route will use Chrome for pages that need a browser to
-show their text. Without these tools it does what it can over plain HTTP,
-and YouTube videos wait for yt-dlp. robots.txt is not consulted, as with
+YouTube. Without these tools it does what it can over plain HTTP, and
+YouTube videos wait for yt-dlp. robots.txt is not consulted, as with
 `enrich`: every address is one you opened yourself.
+
+A page that reads as `thin`, or as an `empty_shell` its scripts would fill,
+is then rendered once in Chrome (or the browser `--browser` names), headless,
+on a fresh scratch profile that is never yours, with no cookies shared
+between pages, two pages at a time and one per site. It is loaded from
+where its plain read ended, with no second plain request, and given ten
+seconds to load. Every connection the rendered page makes goes through a
+small relay inside knowmoretabs that applies the same rule as plain
+fetching, so the page cannot reach this machine or your private network,
+and WebRTC is kept off UDP. The rendered text replaces what was kept only
+when it is longer; either way the page's line says `headless`, says why when
+the render added nothing, and stands until `--refetch`. Chrome may contact
+Google services itself while it runs. Without a browser, or with
+`--no-browser`, those pages wait for a run with one, and the report says how
+many.
 
 When article extraction misses a page's text, the fallback tries the whole
 body, removing menus, banners, footers and sidebars outside `<main>`. It
@@ -411,12 +427,13 @@ and `--dry-run` counts the image work it would do. Pages captured with
 is ready, missing or degraded, and how to fix it: the web tier, which is
 compiled in; GitHub through gh, found with its version; the X post API; yt-dlp
 with deno or node for YouTube; and the `--browser` binary (Chrome by
-default) for headless reading, ahead of its route. Then the archive:
+default) for headless reading. Then the archive:
 whether it is private, whether `pages/content` exists, and its pages by
 latest status. It is offline by default, with GitHub sign in marked as not
 checked. With `--live`, gh checks its own sign in (the `gh auth status` exit
-code only; its output is never read), and the X post API is asked once for
-a fixed public post. It sends nothing of yours. It exits 0 whenever the web
+code only; its output is never read), the X post API is asked once for a
+fixed public post, and the browser is started headless once, asked its
+version and closed, with no page. It sends nothing of yours. It exits 0 whenever the web
 tier is ready; a missing tool is a warning.
 
 ## Where the data lives
@@ -457,8 +474,9 @@ or a video's id to YouTube through yt-dlp, and what each sends is described
 above; `content` also downloads one preview image per page from the address
 the page names, which may be on another host, and images stay in the
 private archive. `doctor` is offline by default.
-`doctor --live` lets gh check its own sign in with GitHub and asks the X
-post API for one fixed public post, sending nothing of yours. A
+`doctor --live` lets gh check its own sign in with GitHub, asks the X
+post API for one fixed public post and starts the browser once with no
+page, sending nothing of yours. A
 `tag --prompt` folder is the one thing made to be handed on: it holds the
 addresses and titles of pages in your library, what `enrich` recorded about
 them if you ran it, and their searches and referrers if you ask for them. It
