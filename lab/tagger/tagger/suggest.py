@@ -118,7 +118,8 @@ def run(paths: Paths) -> None:
         "oof_micro_precision_proxy": oof["micro"]["precision"],
         "suggestion_tag_weighted_precision_proxy": (
             float(sum(counts[j] * oof["per_tag"][t]["precision"] for j, t in enumerate(lab.tags)) / associations)
-            if associations else None
+            if associations
+            else None
         ),
     }
     write_json(paths.out / "suggest-summary.json", summary)

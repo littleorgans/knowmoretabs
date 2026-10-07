@@ -40,10 +40,5 @@ Reproduce: run everything into a fresh data directory, then
 `evaluate.cross_validate` receives only the CV pool rows; `evaluate.score_test_once` is the only scoring path for held out rows.
 Every head (`heads.fit_lr`, `fit_knn`, `fit_prior`) sees only its fit rows and tunes C, k and thresholds on inner folds of them.
 `zeroshot.run` takes its input choice from `cv_summary.json` and can run before test scoring.
-Its learning curve keeps the supervised pick's text input, so k = 0 matches that input's zero shot AP.
-k counts selected positives per tag; sampled pages supply all their labels, including additional positives and implicit negatives.
 
-Synthetic regression checks: `uv run --offline --locked python -m unittest discover -s tests -v`.
-The suggestion report includes OOF precision and a proxy weighted by exported tag counts.
-Missing tags need owner review to measure their actual precision.
-Clustering uses ordinary k-means on unit rows; its centroids are unconstrained.
+Synthetic regression checks: `uv run --locked pytest`.

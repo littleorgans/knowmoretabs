@@ -88,8 +88,9 @@ class ProtocolTests(unittest.TestCase):
         changed = self.Y.copy()
         changed[75:] = 1 - changed[75:]
         for fit in (heads.fit_lr, heads.fit_knn):
-            with self.subTest(head=fit.__name__), patch.object(
-                heads, "Parallel", side_effect=lambda **kw: Parallel(n_jobs=1)
+            with (
+                self.subTest(head=fit.__name__),
+                patch.object(heads, "Parallel", side_effect=lambda **kw: Parallel(n_jobs=1)),
             ):
                 first = fit(self.feat, self.Y, rows)
                 second = fit(self.feat, changed, rows)
