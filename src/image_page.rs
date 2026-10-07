@@ -115,11 +115,13 @@ fn body_images(document: &Document, base: &Url) -> Vec<Candidate> {
         .enumerate()
         .filter_map(|(position, img)| {
             let attr = |name: &str| img.attr(name).map(|v| v.to_string());
-            let src = ["src", "data-src"]
+            // A lazy loader's `data-` address is the image; its plain one is
+            // a placeholder until a script swaps them.
+            let src = ["data-src", "src"]
                 .into_iter()
                 .filter_map(&attr)
                 .find(|raw| resolve(base, raw).is_some());
-            let srcset = ["srcset", "data-srcset"]
+            let srcset = ["data-srcset", "srcset"]
                 .into_iter()
                 .find_map(|name| attr(name).and_then(|v| choose_srcset(&v)));
             let url = srcset
@@ -374,6 +376,19 @@ mod tests {
         assert_eq!(
             urls(&candidates(page(html, None, &base()))),
             ["https://a.test/lazy.jpg", "https://a.test/subject.jpg"]
+        );
+    }
+
+    #[test]
+    fn a_lazy_loaders_address_wins_over_its_placeholder() {
+        let html = r#"<main>
+            <img src="/img/spacer.gif" data-src="/real.jpg" width="1200" height="800">
+            <img src="data:image/gif;base64,AAAA" srcset="data:image/gif;base64,AAAA 1w"
+                 data-srcset="/lazy-400.jpg 400w, /lazy-800.jpg 800w">
+            </main>"#;
+        assert_eq!(
+            urls(&candidates(page(html, None, &base()))),
+            ["https://a.test/real.jpg", "https://a.test/lazy-800.jpg"]
         );
     }
 
