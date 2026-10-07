@@ -586,8 +586,28 @@ fn limits_and_refetch_require_explicit_permission_for_every_repeat() {
 
 #[test]
 fn one_host_gets_one_request_a_second_and_hosts_run_side_by_side() {
+    use std::sync::Condvar;
+
     let fx = Fixture::new();
-    let site = Site::start(routes);
+    let arrivals = (Mutex::new(0), Condvar::new());
+    let site = Site::start(move |host, path, port| {
+        if (host == "p.test" && path == "/1") || matches!(host, "q.test" | "r.test" | "s.test") {
+            // Keep all four first requests in flight until every host has
+            // arrived. Scheduling can delay each receipt independently on a
+            // busy runner; this proves overlap without comparing receipt times.
+            let (count, wake) = &arrivals;
+            let mut count = count.lock().unwrap();
+            *count += 1;
+            wake.notify_all();
+            let (count, _) = wake
+                .wait_timeout_while(count, Duration::from_secs(10), |count| *count < 4)
+                .unwrap();
+            if *count < 4 {
+                return Reply::status(503);
+            }
+        }
+        routes(host, path, port)
+    });
     library(
         &fx,
         &[
@@ -599,10 +619,13 @@ fn one_host_gets_one_request_a_second_and_hosts_run_side_by_side() {
             "http://s.test/1",
         ],
     );
-    let start = Instant::now();
     assert_success(&enrich(&fx, &site, &[]));
-    let elapsed = start.elapsed();
     let seen = site.seen();
+    assert_eq!(seen.len(), 6);
+    assert!(
+        records(&fx).values().all(|record| record["status"] == "ok"),
+        "the four hosts did not have requests in flight together"
+    );
     let mut same_host: Vec<Instant> = seen
         .iter()
         .filter(|s| s.host == "p.test")
@@ -614,15 +637,6 @@ fn one_host_gets_one_request_a_second_and_hosts_run_side_by_side() {
         let gap = pair[1] - pair[0];
         assert!(gap >= PACED_GAP, "two requests to one host {gap:?} apart");
     }
-    let first = seen.iter().map(|s| s.at).min().unwrap();
-    for other in ["q.test", "r.test", "s.test"] {
-        let at = seen.iter().find(|s| s.host == other).unwrap().at;
-        assert!(
-            at - first < Duration::from_millis(900),
-            "{other} waited for p.test"
-        );
-    }
-    assert!(elapsed < Duration::from_secs(8), "took {elapsed:?}");
 }
 
 #[test]
