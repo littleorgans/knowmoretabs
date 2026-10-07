@@ -457,6 +457,7 @@ mod tests {
         for text in [
             Text::Ok,
             Text::Thin,
+            Text::Media,
             Text::EmptyShell,
             Text::BehindLogin,
             Text::Paywalled,

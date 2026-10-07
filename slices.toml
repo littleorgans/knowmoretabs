@@ -284,7 +284,8 @@ video's own language; without them videos wait. Plain HTTP reads every
 other page, and
 GitHub pages without gh: readability finds the main
 text, and a page is recorded as ok, thin, an app shell, behind a login,
-blocked, paywalled, not found or not HTML. Each page also keeps one preview
+blocked, paywalled, not found or not HTML. A page that is an image is media,
+its copy the page's image, and a PDF's text is read on this machine. Each page also keeps one preview
 image, the best its route or its markup names (a post's photo, a video's
 thumbnail, a repository's social preview, the head's image, else the main
 text's largest), as a JPEG of at most 768 pixels under `pages/images/`, with

@@ -336,7 +336,7 @@ pub fn plain_chars(markdown: &str) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::fs;
     use std::path::PathBuf;
 
@@ -359,17 +359,23 @@ mod tests {
         page(&fixture(name), Some("https://example.test/page"))
     }
 
+    /// The version `Cargo.lock` holds of crate `name`.
+    pub fn locked(name: &str) -> &'static str {
+        include_str!("../Cargo.lock")
+            .split("[[package]]")
+            .find_map(|entry| {
+                entry
+                    .split_once(&format!("name = \"{name}\"\nversion = \""))?
+                    .1
+                    .split_once('"')
+                    .map(|(version, _)| version)
+            })
+            .unwrap_or_else(|| panic!("{name} is locked"))
+    }
+
     #[test]
     fn the_extractor_version_is_the_locked_one() {
-        let lock = include_str!("../Cargo.lock");
-        let entry = lock
-            .split("[[package]]")
-            .find(|entry| entry.contains("name = \"dom_smoothie\"\n"))
-            .expect("dom_smoothie is locked");
-        assert!(
-            entry.contains(&format!("version = \"{EXTRACTOR_VERSION}\"")),
-            "{entry}"
-        );
+        assert_eq!(locked(EXTRACTOR), EXTRACTOR_VERSION);
     }
 
     #[test]

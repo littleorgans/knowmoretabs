@@ -127,7 +127,8 @@ page makes goes through a loopback relay that refuses this machine and the priva
 WebRTC is kept off UDP. The rendered text is kept when it is longer, and the render stands until \
 --refetch. Chrome may contact Google services itself. Without a browser, or with --no-browser, those \
 pages wait for a later run. What enrich never fetches, content never fetches either; X profiles and YouTube channels and playlists are recorded as not a document, and login screens \
-as behind a login, without a request. A page that failed is tried again on the next run, and after three \
+as behind a login, without a request. A page that is an image is recorded as media, its copy the page's \
+preview image; a PDF's text is read on this machine. A page that failed is tried again on the next run, and after three \
 failed runs it is recorded as unavailable. Each captured page also gets one preview image, fetched from \
 the address the page or its route names, which may be on another host: kept as a JPEG of at most 768 \
 pixels in <root>/pages/images/, with one line per attempt in <root>/pages/images.jsonl. One request a \

@@ -174,6 +174,9 @@ pub enum Recorded {
     Failed,
     /// An outcome a browser may improve on: rendered in one.
     Render,
+    /// An outcome an older build stopped short of what this build keeps:
+    /// fetched again without `--refetch`.
+    Outdated,
 }
 
 /// Library pages newest sighting first, excluding prior attempts unless
@@ -215,7 +218,7 @@ pub fn plan(
         } else {
             match recorded {
                 Recorded::Nothing => Why::New,
-                Recorded::Final => Why::Refetch,
+                Recorded::Final | Recorded::Outdated => Why::Refetch,
                 Recorded::Failed => Why::Retry,
                 Recorded::Render => Why::Render,
             }
