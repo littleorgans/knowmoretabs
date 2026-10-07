@@ -137,7 +137,16 @@ fn main() -> ExitCode {
             fetch,
             urls,
             no_images,
-        }) => content::command(&root, (*fetch).into(), urls, *no_images, cli.json, log),
+        }) => content::command(
+            &root,
+            content::Args {
+                options: (*fetch).into(),
+                urls,
+                no_images: *no_images,
+            },
+            cli.json,
+            log,
+        ),
         Some(Command::Doctor { live }) => {
             doctor::command(&root, cli.browser.as_deref(), *live, cli.json, log)
         }

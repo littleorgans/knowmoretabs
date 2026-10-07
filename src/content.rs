@@ -62,14 +62,22 @@ impl Tally {
     }
 }
 
-pub fn command(
-    root: &Path,
-    options: Options,
-    urls: &[String],
-    no_images: bool,
-    json: bool,
-    log: Log,
-) -> Result<(), Error> {
+/// What a `content` run was asked for.
+#[derive(Debug, Clone, Copy)]
+pub struct Args<'a> {
+    pub options: Options,
+    /// Only these library pages; every page when empty.
+    pub urls: &'a [String],
+    /// Text only: no preview images this run.
+    pub no_images: bool,
+}
+
+pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), Error> {
+    let Args {
+        options,
+        urls,
+        no_images,
+    } = args;
     let archive = Archive::at(root);
     let loaded = library::load(&archive)?;
     let state = State::read(root)?;
