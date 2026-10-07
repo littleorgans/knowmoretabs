@@ -24,7 +24,7 @@ use url::Url;
 
 use crate::browser;
 use crate::content_fetch;
-use crate::content_headless::{Render, escalates};
+use crate::content_headless::{Render, ended, escalates};
 use crate::content_route::Route;
 use crate::content_store::{self, Line, Status};
 use crate::github_api::Readiness;
@@ -209,7 +209,7 @@ pub fn plan(
         routes.truncate(limit);
         on_the_web.truncate(limit);
     }
-    let (fetches, renders) = group(&plan.todo, routes, known, &mut unsent);
+    let (fetches, renders) = group(&plan.todo, routes, known, &mut unsent, ended);
     let mut work = Work {
         fetches,
         renders,
@@ -229,14 +229,16 @@ pub fn plan(
 }
 
 /// One fetch per document, recorded under each address it was opened at,
-/// and one render per document, with the line each address has; login
-/// screens go to `unsent`, recorded without a request. A host whose route
-/// allows several requests at once is spread over that many lanes.
-fn group(
+/// and one render per document, with the line each address has, loaded
+/// from the address `load` names for its first; login screens go to
+/// `unsent`, recorded without a request. A host whose route allows several
+/// requests at once is spread over that many lanes.
+pub fn group(
     todo: &[Item],
     routes: Vec<Route>,
     known: &content_store::Log,
     unsent: &mut Vec<Line>,
+    load: fn(&Line) -> &str,
 ) -> (Vec<Fetch>, Vec<Render>) {
     let attempt = |url: &str| content_fetch::next_attempt(known.pages.get(url));
     let mut fetches: Vec<Fetch> = Vec::new();
@@ -287,7 +289,7 @@ fn group(
     }
     let renders = renders
         .into_iter()
-        .filter_map(|pages| Render::of(pages, Found::Unread))
+        .filter_map(|pages| Render::of(pages, Found::Unread, load))
         .collect();
     (fetches, renders)
 }

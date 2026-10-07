@@ -1,6 +1,7 @@
 //! The URL rules that decide what a network command may never request:
 //! anything but the web, this machine and the private network, search
-//! results, URLs that carry a secret, and sign-in or verification screens.
+//! results, URLs that carry a secret, and sign-in or verification screens;
+//! and the personal apps a signed in run never opens.
 //!
 //! slice: enrich, content
 //! why: Every network command must refuse the same pages for the same
@@ -231,6 +232,30 @@ const LOGIN_SEGMENTS: &[&str] = &[
 const REDIRECT_LOGIN_SEGMENTS: &[&str] = &["auth", "account", "accounts", "session", "sessions"];
 const LOGIN_HOST_LABELS: &[&str] = &["login", "signin", "accounts", "auth", "sso", "idp"];
 
+/// The owner's personal apps, each host with every subdomain of it: a
+/// signed in run never opens a page on one, nor keeps one it ends on.
+/// One line per kind; the consoles line is the owner's call.
+#[rustfmt::skip]
+const PERSONAL_APPS: &[&str] = &[
+    // Mail
+    "mail.google.com", "outlook.live.com", "outlook.office.com", "outlook.office365.com", "mail.yahoo.com", "mail.proton.me", "app.fastmail.com", "mail.zoho.com", "icloud.com",
+    // Chat and assistants
+    "claude.ai", "chatgpt.com", "chat.openai.com", "gemini.google.com", "aistudio.google.com", "grok.com", "meta.ai", "slack.com", "discord.com", "discordapp.com", "web.whatsapp.com", "web.telegram.org", "messenger.com", "teams.microsoft.com", "teams.live.com", "chat.google.com", "meet.google.com",
+    // Documents and workspaces
+    "docs.google.com", "drive.google.com", "calendar.google.com", "keep.google.com", "contacts.google.com", "photos.google.com", "notion.so", "notion.site", "onedrive.live.com", "sharepoint.com", "dropbox.com", "linear.app", "figma.com", "airtable.com", "trello.com", "atlassian.net",
+    // Account consoles (owner question 2): delete this line to open them.
+    "console.cloud.google.com", "console.tailscale.com", "console.instacloud.com", "console.aliyun.com", "cloud.databricks.com", "one.google.com", "platform.openai.com",
+];
+
+/// A page on one of the owner's personal apps.
+pub fn is_personal_app(url: &Url) -> bool {
+    let host = host_key(url);
+    PERSONAL_APPS.iter().any(|app| {
+        host.strip_suffix(app)
+            .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'))
+    })
+}
+
 /// A sign-in, sign-up or verification screen in its own right.
 pub fn is_login_page(url: &Url) -> bool {
     login_shaped(url, LOGIN_SEGMENTS)
@@ -344,6 +369,36 @@ mod tests {
         )));
         assert!(is_login_redirect(&url("https://example.com/auth/start")));
         assert!(!is_login_redirect(&url("https://example.com/docs/")));
+    }
+
+    #[test]
+    fn personal_apps_are_known_by_host_and_subdomain_and_never_by_lookalike() {
+        for raw in [
+            "https://mail.google.com/mail/u/0/#inbox",
+            "https://claude.ai/chat/x",
+            "https://www.meta.ai/",
+            "https://NOTION.SO./page",
+            "https://team.notion.so/page",
+            "https://acme.atlassian.net/browse/X-1",
+            "https://smartservice.console.aliyun.com/",
+        ] {
+            assert!(is_personal_app(&url(raw)), "{raw}");
+        }
+        assert!(
+            is_personal_app(&url("https://console.tailscale.com/admin")),
+            "consoles (owner question 2)"
+        );
+        for raw in [
+            "https://xnotion.so/",
+            "https://notion.so.evil.test/",
+            "https://mail.google.com.evil.test/",
+            "https://google.com/",
+            "https://docs.github.com/",
+            "https://page-intl.aliyun.com/",
+            "https://github.com/owner/repo",
+        ] {
+            assert!(!is_personal_app(&url(raw)), "{raw}");
+        }
     }
 
     #[test]

@@ -12,7 +12,10 @@
 //!      refuses private addresses, so a public name pointing inward is caught
 //!      at the one moment it matters, the connect. A browser rendering a
 //!      page connects through the same rule, so the headless tier cannot
-//!      reach what plain fetching may not. What a response means is the
+//!      reach what plain fetching may not. The owner's own browser, signed
+//!      in, connects by itself, so for its pages the rules also refuse the
+//!      owner's personal apps and a name that resolves inward, before it
+//!      opens a page and where the page ends. What a response means is the
 //!      caller's business; how it was fetched is this module's alone.
 
 use std::collections::{BTreeSet, HashMap};
@@ -28,8 +31,8 @@ use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
 use url::{Host, Url};
 
 use crate::guard::{
-    self, carries_token, is_login_page, is_login_redirect, is_private_host, is_public,
-    is_search_results, is_web,
+    self, carries_token, is_login_page, is_login_redirect, is_personal_app, is_private_host,
+    is_public, is_search_results, is_web,
 };
 use crate::head;
 
@@ -54,11 +57,20 @@ const USER_AGENT: &str = concat!(
     "; +https://github.com/littleorgans/knowmoretabs)"
 );
 
+/// One page a second per host is a reader; the owner's own browser, signed
+/// in, opens a page per host every five, as a person might.
+const SIGNED_IN_PACE: Duration = Duration::from_secs(5);
+
 pub struct Fetcher {
     agent: ureq::Agent,
     pacer: Pacer,
     forgotten: BTreeSet<String>,
     timeout: Duration,
+    /// Tests point every name here, as the resolver does.
+    test_address: Option<SocketAddr>,
+    /// For a signed in run: personal apps are refused, and where a name
+    /// resolves is checked before the owner's browser is sent to it.
+    signed_in: bool,
 }
 
 /// Why a GET ended without a response to read: a hop the rules refuse, or
@@ -75,6 +87,8 @@ pub enum Refusal {
     PrivateAddress,
     Forgotten,
     TokenOrSearch,
+    /// One of the owner's personal apps, never opened signed in.
+    PersonalApp,
     /// A sign-in, sign-up or verification screen, where it was met.
     Login(Url),
     InvalidRedirect {
@@ -98,6 +112,7 @@ impl Refusal {
             Self::PrivateAddress => "private network address".to_owned(),
             Self::Forgotten => "forgotten page, not fetched".to_owned(),
             Self::TokenOrSearch => "token or search URL, not fetched".to_owned(),
+            Self::PersonalApp => "personal app".to_owned(),
             Self::Login(_) => "redirected to a login page".to_owned(),
             Self::InvalidRedirect { status } => format!("HTTP {status} to an invalid URL"),
             Self::TooManyRedirects => "too many redirects".to_owned(),
@@ -114,6 +129,7 @@ impl Refusal {
                 | Self::PrivateAddress
                 | Self::Forgotten
                 | Self::TokenOrSearch
+                | Self::PersonalApp
         )
     }
 }
@@ -131,7 +147,20 @@ pub struct Response {
 
 impl Fetcher {
     pub fn new(forgotten: &BTreeSet<String>) -> Self {
-        let mut fetcher = Self::with(test_timeout().unwrap_or(TIMEOUT), test_address(), PACE);
+        Self::paced(forgotten, PACE)
+    }
+
+    /// The fetcher of a signed in run: its pages, opened in the owner's
+    /// browser, and their images, fetched here, are paced five seconds
+    /// apart per host and pass its two further checks.
+    pub fn signed_in(forgotten: &BTreeSet<String>) -> Self {
+        let mut fetcher = Self::paced(forgotten, SIGNED_IN_PACE);
+        fetcher.signed_in = true;
+        fetcher
+    }
+
+    fn paced(forgotten: &BTreeSet<String>, pace: Duration) -> Self {
+        let mut fetcher = Self::with(test_timeout().unwrap_or(TIMEOUT), test_address(), pace);
         fetcher.forgotten = forgotten
             .iter()
             .filter_map(|raw| guard::page_url(raw).map(String::from))
@@ -156,6 +185,8 @@ impl Fetcher {
             pacer: Pacer::new(pace),
             forgotten: BTreeSet::new(),
             timeout,
+            test_address,
+            signed_in: false,
         }
     }
 
@@ -219,7 +250,9 @@ impl Fetcher {
 
     /// What the rules say about `url` as hop `hop` of a request: 0 for the
     /// address asked for, more for a redirect. A browser rendering a page
-    /// asks the same before it navigates and of where the page ended.
+    /// asks the same before it navigates and of where the page ended; a
+    /// signed in run also refuses personal apps, and a name that resolves
+    /// inward now, since the owner's browser resolves it again itself.
     pub fn check(&self, url: &Url, hop: usize) -> Result<(), Refusal> {
         if !is_web(url) {
             return Err(Refusal::NotWeb);
@@ -235,8 +268,20 @@ impl Fetcher {
         if carries_token(url) || is_search_results(url) {
             return Err(Refusal::TokenOrSearch);
         }
+        if self.signed_in && is_personal_app(url) {
+            return Err(Refusal::PersonalApp);
+        }
         if is_login_page(url) || (hop > 0 && is_login_redirect(url)) {
             return Err(Refusal::Login(url.clone()));
+        }
+        if self.signed_in {
+            let addresses = match self.test_address {
+                Some(address) => vec![address],
+                None => resolve_public(url, url.port_or_known_default().unwrap_or(443))?,
+            };
+            if !all_public(&addresses) {
+                return Err(Refusal::PrivateAddress);
+            }
         }
         Ok(())
     }

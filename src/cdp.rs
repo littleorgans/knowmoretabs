@@ -3,16 +3,19 @@
 //! loopback with a deadline on every wait.
 //!
 //! slice: content
-//! why: A headless browser is driven through its `DevTools` socket, which
-//!      can do anything the browser can. knowmoretabs needs ten things of
-//!      it: open and close a private context and a tab, load one address,
-//!      hear when it has loaded, read the page back by one fixed expression,
-//!      ask the version, and close the browser. Each is a variant here with
-//!      a fixed method and shape, so what is ever sent can be read in one
-//!      place and is tested to the byte. Every wait has a deadline, and a
-//!      message is capped at what the largest page knowmoretabs keeps can
-//!      take on the wire, so a browser that hangs or floods cannot stall a
-//!      run or exhaust its memory.
+//! why: A browser is driven through its `DevTools` socket, which can do
+//!      anything the browser can. knowmoretabs needs eleven things of it:
+//!      open and close a private context and a tab, attach to a tab it
+//!      opened, load one address, hear when it has loaded, read the page
+//!      back by one fixed expression, ask the version, and close the
+//!      browser. Each is a variant here with a fixed method and shape, so
+//!      what is ever sent can be read in one place and is tested to the
+//!      byte. A tab and a session are values only the reply that made them
+//!      can produce, so a command names no tab or session but one this run
+//!      created, and a session's events are heard by it alone. Every wait
+//!      has a deadline, and a message is capped at what the largest page
+//!      knowmoretabs keeps can take on the wire, so a browser that hangs or
+//!      floods cannot stall a run or exhaust its memory.
 
 use std::collections::VecDeque;
 use std::io::{self, Read, Write};
@@ -46,16 +49,58 @@ pub const EXTRACT: &str = "(() => {
 /// the rest of the reply.
 const MAX_MESSAGE: usize = 6 * BODY_CAP + 1024 * 1024;
 
+/// A tab this run created: made only from the reply that created it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Target(String);
+
+impl Target {
+    /// The tab a `Target.createTarget` reply names.
+    pub fn of(reply: &Value) -> Option<Self> {
+        named(reply, "targetId").map(Self)
+    }
+
+    /// Where the tab's own socket is.
+    pub fn route(&self) -> String {
+        format!("/devtools/page/{}", self.0)
+    }
+}
+
+/// A session this run attached to a tab it created: made only from the
+/// reply that attached it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Session(String);
+
+impl Session {
+    /// The session a `Target.attachToTarget` reply names.
+    pub fn of(reply: &Value) -> Option<Self> {
+        named(reply, "sessionId").map(Self)
+    }
+}
+
+/// A reply's string field, when it is not empty.
+fn named(reply: &Value, key: &str) -> Option<String> {
+    reply[key]
+        .as_str()
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+}
+
 /// Everything ever sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     CreateBrowserContext,
-    /// A blank tab in `context`.
+    /// A blank tab, in `context` when there is one; `hidden` keeps it out
+    /// of the tab strip and ends it with the connection that made it.
     CreateTarget {
-        context: String,
+        context: Option<String>,
+        hidden: bool,
     },
     CloseTarget {
-        target: String,
+        target: Target,
+    },
+    /// A session for `target` on the socket that sends it.
+    AttachToTarget {
+        target: Target,
     },
     DisposeBrowserContext {
         context: String,
@@ -77,6 +122,7 @@ impl Command {
             Self::CreateBrowserContext => "Target.createBrowserContext",
             Self::CreateTarget { .. } => "Target.createTarget",
             Self::CloseTarget { .. } => "Target.closeTarget",
+            Self::AttachToTarget { .. } => "Target.attachToTarget",
             Self::DisposeBrowserContext { .. } => "Target.disposeBrowserContext",
             Self::GetVersion => "Browser.getVersion",
             Self::Close => "Browser.close",
@@ -92,10 +138,19 @@ impl Command {
             Self::CreateBrowserContext | Self::GetVersion | Self::Close | Self::PageEnable => {
                 json!({})
             }
-            Self::CreateTarget { context } => {
-                json!({"url": "about:blank", "browserContextId": context})
+            Self::CreateTarget { context, hidden } => {
+                let mut params = json!({"url": "about:blank"});
+                if let Some(context) = context {
+                    params["browserContextId"] = json!(context);
+                }
+                if *hidden {
+                    params["hidden"] = json!(true);
+                    params["background"] = json!(true);
+                }
+                params
             }
-            Self::CloseTarget { target } => json!({"targetId": target}),
+            Self::CloseTarget { target } => json!({"targetId": target.0}),
+            Self::AttachToTarget { target } => json!({"targetId": target.0, "flatten": true}),
             Self::DisposeBrowserContext { context } => json!({"browserContextId": context}),
             Self::LifecycleEvents => json!({"enabled": true}),
             Self::Navigate { url } => json!({"url": url}),
@@ -103,9 +158,14 @@ impl Command {
         }
     }
 
-    /// The message that sends it as call number `id`.
-    pub fn encode(&self, id: u64) -> String {
-        json!({"id": id, "method": self.method(), "params": self.params()}).to_string()
+    /// The message that sends it as call number `id`, to `session`'s tab
+    /// when there is one.
+    pub fn encode(&self, id: u64, session: Option<&Session>) -> String {
+        let mut message = json!({"id": id, "method": self.method(), "params": self.params()});
+        if let Some(session) = session {
+            message["sessionId"] = json!(session.0);
+        }
+        message.to_string()
     }
 }
 
@@ -125,7 +185,12 @@ pub enum Incoming {
         id: u64,
         result: Result<Value, String>,
     },
-    Lifecycle(Lifecycle),
+    /// A lifecycle event, and the session it came from when it came over
+    /// a browser's socket.
+    Lifecycle {
+        session: Option<String>,
+        event: Lifecycle,
+    },
     /// Any other event or message, ignored.
     Other,
 }
@@ -154,11 +219,14 @@ pub fn decode(text: &str) -> Incoming {
                 .map(str::to_owned)
                 .unwrap_or_default()
         };
-        return Incoming::Lifecycle(Lifecycle {
-            frame: field("frameId"),
-            loader: field("loaderId"),
-            name: field("name"),
-        });
+        return Incoming::Lifecycle {
+            session: value["sessionId"].as_str().map(str::to_owned),
+            event: Lifecycle {
+                frame: field("frameId"),
+                loader: field("loaderId"),
+                name: field("name"),
+            },
+        };
     }
     Incoming::Other
 }
@@ -168,17 +236,30 @@ pub fn decode(text: &str) -> Incoming {
 pub struct Socket {
     ws: WebSocket<Bounded>,
     next: u64,
-    /// Lifecycle events read while waiting for a reply.
-    events: VecDeque<Lifecycle>,
+    /// Lifecycle events read while waiting for a reply, each with the
+    /// session it came from.
+    events: VecDeque<(Option<String>, Lifecycle)>,
+}
+
+/// Reaches the browser's loopback `port`: the part of connecting that
+/// fails when nothing listens there.
+pub fn reach(port: u16, deadline: Instant) -> Result<TcpStream, String> {
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
+    remaining(deadline)
+        .and_then(|left| TcpStream::connect_timeout(&address, left))
+        .map_err(|err| reason(&err))
 }
 
 impl Socket {
     /// Connects to `path` on the browser's loopback `port`.
     pub fn connect(port: u16, path: &str, deadline: Instant) -> Result<Self, String> {
-        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-        let stream = remaining(deadline)
-            .and_then(|left| TcpStream::connect_timeout(&address, left))
-            .map_err(|err| reason(&err))?;
+        Self::over(reach(port, deadline)?, path, deadline)
+    }
+
+    /// Opens the WebSocket at `path` over `stream`: the part of connecting
+    /// a browser may ask its owner about first.
+    pub fn over(stream: TcpStream, path: &str, deadline: Instant) -> Result<Self, String> {
+        let address = stream.peer_addr().map_err(|err| reason(&err))?;
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_MESSAGE))
             .max_frame_size(Some(MAX_MESSAGE));
@@ -198,14 +279,20 @@ impl Socket {
         })
     }
 
-    /// Sends `command` and waits for its reply until `deadline`.
-    pub fn call(&mut self, command: &Command, deadline: Instant) -> Result<Value, String> {
+    /// Sends `command`, to `session`'s tab when there is one, and waits
+    /// for its reply until `deadline`, keeping that session's events only.
+    pub fn call(
+        &mut self,
+        command: &Command,
+        session: Option<&Session>,
+        deadline: Instant,
+    ) -> Result<Value, String> {
         remaining(deadline).map_err(|err| reason(&err))?;
         let id = self.next;
         self.next += 1;
         self.ws.get_mut().deadline = deadline;
         self.ws
-            .send(Message::text(command.encode(id)))
+            .send(Message::text(command.encode(id, session)))
             .map_err(|err| failure(&err))?;
         loop {
             match self.read(deadline)? {
@@ -215,23 +302,40 @@ impl Socket {
                 } if answered == id => {
                     return result.map_err(|err| format!("{}: {err}", command.method()));
                 }
-                Incoming::Lifecycle(event) => self.events.push_back(event),
-                Incoming::Reply { .. } | Incoming::Other => {}
+                Incoming::Lifecycle {
+                    session: from,
+                    event,
+                } if is(from.as_deref(), session) => {
+                    self.events.push_back((from, event));
+                }
+                Incoming::Reply { .. } | Incoming::Lifecycle { .. } | Incoming::Other => {}
             }
         }
     }
 
-    /// The next lifecycle event, or `None` once `deadline` has passed.
-    pub fn event(&mut self, deadline: Instant) -> Result<Option<Lifecycle>, String> {
+    /// `session`'s next lifecycle event, or `None` once `deadline` has
+    /// passed. Another session's events are ignored.
+    pub fn event(
+        &mut self,
+        session: Option<&Session>,
+        deadline: Instant,
+    ) -> Result<Option<Lifecycle>, String> {
         if Instant::now() >= deadline {
             return Ok(None);
         }
-        if let Some(event) = self.events.pop_front() {
-            return Ok(Some(event));
+        while let Some((from, event)) = self.events.pop_front() {
+            if is(from.as_deref(), session) {
+                return Ok(Some(event));
+            }
         }
         loop {
             match self.read(deadline) {
-                Ok(Incoming::Lifecycle(event)) => return Ok(Some(event)),
+                Ok(Incoming::Lifecycle {
+                    session: from,
+                    event,
+                }) if is(from.as_deref(), session) => {
+                    return Ok(Some(event));
+                }
                 Ok(_) => {}
                 Err(why) if why == "timeout" => return Ok(None),
                 Err(why) => return Err(why),
@@ -253,6 +357,12 @@ impl Socket {
             _ => Ok(Incoming::Other),
         }
     }
+}
+
+/// Whether an event from session `from` is `session`'s: on a tab's own
+/// socket, neither has one.
+fn is(from: Option<&str>, session: Option<&Session>) -> bool {
+    from == session.map(|session| session.0.as_str())
 }
 
 /// The loopback stream, each read and write of which waits only what is
@@ -313,198 +423,5 @@ fn reason(err: &io::Error) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::net::TcpListener;
-
-    use tungstenite::protocol::Role;
-    use tungstenite::protocol::frame::Frame;
-    use tungstenite::protocol::frame::coding::{Data, OpCode};
-
-    use super::*;
-
-    #[test]
-    fn every_command_encodes_to_its_exact_message() {
-        let cases = [
-            (
-                Command::CreateBrowserContext,
-                r#"{"id":1,"method":"Target.createBrowserContext","params":{}}"#,
-            ),
-            (
-                Command::CreateTarget {
-                    context: "C".to_owned(),
-                },
-                r#"{"id":1,"method":"Target.createTarget","params":{"browserContextId":"C","url":"about:blank"}}"#,
-            ),
-            (
-                Command::CloseTarget {
-                    target: "T".to_owned(),
-                },
-                r#"{"id":1,"method":"Target.closeTarget","params":{"targetId":"T"}}"#,
-            ),
-            (
-                Command::DisposeBrowserContext {
-                    context: "C".to_owned(),
-                },
-                r#"{"id":1,"method":"Target.disposeBrowserContext","params":{"browserContextId":"C"}}"#,
-            ),
-            (
-                Command::GetVersion,
-                r#"{"id":1,"method":"Browser.getVersion","params":{}}"#,
-            ),
-            (
-                Command::Close,
-                r#"{"id":1,"method":"Browser.close","params":{}}"#,
-            ),
-            (
-                Command::PageEnable,
-                r#"{"id":1,"method":"Page.enable","params":{}}"#,
-            ),
-            (
-                Command::LifecycleEvents,
-                r#"{"id":1,"method":"Page.setLifecycleEventsEnabled","params":{"enabled":true}}"#,
-            ),
-            (
-                Command::Navigate {
-                    url: "https://a.test/".to_owned(),
-                },
-                r#"{"id":1,"method":"Page.navigate","params":{"url":"https://a.test/"}}"#,
-            ),
-        ];
-        for (command, message) in cases {
-            assert_eq!(command.encode(1), message);
-        }
-        let extract: Value = serde_json::from_str(&Command::Extract.encode(7)).unwrap();
-        assert_eq!(
-            extract,
-            json!({"id": 7, "method": "Runtime.evaluate",
-                "params": {"expression": EXTRACT, "returnByValue": true}})
-        );
-    }
-
-    #[test]
-    fn the_expression_caps_html_at_the_body_cap() {
-        assert!(EXTRACT.contains(&format!("html.length > {BODY_CAP} ? null")));
-        assert!(!EXTRACT.contains("JSON.stringify"));
-    }
-
-    #[test]
-    fn replies_errors_and_lifecycle_events_decode_and_the_rest_is_ignored() {
-        assert_eq!(
-            decode(r#"{"id":3,"result":{"targetId":"T"}}"#),
-            Incoming::Reply {
-                id: 3,
-                result: Ok(json!({"targetId": "T"}))
-            }
-        );
-        assert_eq!(
-            decode(r#"{"id":4,"error":{"code":-32000,"message":"No target"}}"#),
-            Incoming::Reply {
-                id: 4,
-                result: Err("No target".to_owned())
-            }
-        );
-        assert_eq!(
-            decode(
-                r#"{"method":"Page.lifecycleEvent","params":{"frameId":"F","loaderId":"L","name":"load","timestamp":1.5}}"#
-            ),
-            Incoming::Lifecycle(Lifecycle {
-                frame: "F".to_owned(),
-                loader: "L".to_owned(),
-                name: "load".to_owned()
-            })
-        );
-        for other in [
-            r#"{"method":"Page.frameNavigated","params":{}}"#,
-            r#"{"method":"Target.targetCreated"}"#,
-            "not json",
-            "[]",
-        ] {
-            assert_eq!(decode(other), Incoming::Other, "{other}");
-        }
-    }
-
-    #[test]
-    fn a_reply_that_trickles_in_ends_at_the_deadline() {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut ws = tungstenite::accept(stream).unwrap();
-            ws.read().unwrap();
-            ws.send(Message::text(r#"{"id":1,"result":{"product":"P"}}"#))
-                .unwrap();
-            ws.read().unwrap();
-            // The head of a 200 byte text frame, then a byte every 20 ms.
-            let stream = ws.get_mut();
-            stream.write_all(&[0x81, 126, 0, 200]).unwrap();
-            for _ in 0..200 {
-                if stream.write_all(b" ").is_err() {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(20));
-            }
-        });
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut socket = Socket::connect(port, "/devtools/browser/B", deadline).unwrap();
-        assert_eq!(
-            socket.call(&Command::GetVersion, deadline),
-            Ok(json!({"product": "P"}))
-        );
-        let start = Instant::now();
-        let reply = socket.call(&Command::GetVersion, start + Duration::from_millis(200));
-        assert_eq!(reply, Err("timeout".to_owned()));
-        assert!(start.elapsed() < Duration::from_secs(1));
-    }
-
-    #[test]
-    fn a_buffered_event_is_not_read_after_the_deadline() {
-        let event = r#"{"method":"Page.lifecycleEvent","params":{"frameId":"F","loaderId":"L","name":"load"}}"#;
-        let mut frame = Vec::new();
-        Frame::message(event.as_bytes().to_vec(), OpCode::Data(Data::Text), true)
-            .format(&mut frame)
-            .unwrap();
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let stream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-        let _peer = listener.accept().unwrap();
-        let deadline = Instant::now();
-        // The whole frame is already in the WebSocket's buffer.
-        let ws =
-            WebSocket::from_partially_read(Bounded { stream, deadline }, frame, Role::Client, None);
-        let mut socket = Socket {
-            ws,
-            next: 1,
-            events: VecDeque::new(),
-        };
-        assert_eq!(socket.read(deadline), Err("timeout".to_owned()));
-    }
-
-    #[test]
-    fn a_call_past_its_deadline_is_never_sent() {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let port = listener.local_addr().unwrap().port();
-        let server = std::thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut ws = tungstenite::accept(stream).unwrap();
-            let Message::Text(text) = ws.read().unwrap() else {
-                panic!("expected a command");
-            };
-            let command: Value = serde_json::from_str(text.as_str()).unwrap();
-            ws.send(Message::text(
-                json!({"id": command["id"], "result": {}}).to_string(),
-            ))
-            .unwrap();
-            command["method"].as_str().unwrap().to_owned()
-        });
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut socket = Socket::connect(port, "/devtools/browser/B", deadline).unwrap();
-        let navigate = Command::Navigate {
-            url: "https://a.test/".to_owned(),
-        };
-        assert_eq!(
-            socket.call(&navigate, Instant::now()),
-            Err("timeout".to_owned())
-        );
-        assert_eq!(socket.call(&Command::GetVersion, deadline), Ok(json!({})));
-        assert_eq!(server.join().unwrap(), "Browser.getVersion");
-    }
-}
+#[path = "cdp_tests.rs"]
+mod tests;

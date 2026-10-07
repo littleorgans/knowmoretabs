@@ -1,4 +1,5 @@
-//! Synthetic checks of browser readiness, launch, loading and page validation.
+//! Synthetic checks of browser readiness, launch, attach, tab ownership, loading
+//! and page validation.
 //!
 //! slice: content
 //! why: Keeping the browser contracts beside one another leaves its runtime
@@ -6,8 +7,11 @@
 
 use std::collections::BTreeSet;
 
+use serde_json::json;
+
 use super::*;
-use crate::content_store::Status;
+use crate::content_store::{Access, Status};
+use crate::content_test::{PEER_ROUTE, Peer};
 use crate::tools::Table;
 
 #[test]
@@ -148,8 +152,16 @@ fn read(url: &str, mime: &str, status: u16, html: Option<String>) -> Read {
 fn verdict(read: Read) -> String {
     let fetcher = Fetcher::new(&BTreeSet::new());
     let navigated = Url::parse("https://a.test/page").unwrap();
-    match after(&fetcher, "https://a.test/page", &navigated, read, false) {
+    match after(
+        &fetcher,
+        Tier::Headless,
+        "https://a.test/page",
+        &navigated,
+        read,
+        false,
+    ) {
         Ok(Ok(Outcome::NotRendered(why))) => why,
+        Ok(Ok(Outcome::Refused(refusal))) => refusal.reason(),
         Ok(Ok(Outcome::Read(capture))) => format!("read {:?}", capture.line.status),
         Ok(Ok(Outcome::SignIn(line))) => format!("sign-in {:?}", line.status),
         Ok(Err(Broken(why))) => format!("broken {why}"),
@@ -212,9 +224,14 @@ fn a_page_that_ends_on_a_sign_in_screen_says_where() {
     let fetcher = Fetcher::new(&BTreeSet::new());
     let navigated = Url::parse("https://a.test/page").unwrap();
     let landed = read("https://a.test/account?next=/page", "text/html", 200, None);
-    let Ok(Ok(Outcome::SignIn(line))) =
-        after(&fetcher, "https://a.test/page", &navigated, landed, false)
-    else {
+    let Ok(Ok(Outcome::SignIn(line))) = after(
+        &fetcher,
+        Tier::Headless,
+        "https://a.test/page",
+        &navigated,
+        landed,
+        false,
+    ) else {
         panic!("a sign-in screen is read as one");
     };
     assert_eq!(line.status, Status::BehindLogin);
@@ -223,4 +240,112 @@ fn a_page_that_ends_on_a_sign_in_screen_says_where() {
         line.final_url.as_deref(),
         Some("https://a.test/account?next=/page")
     );
+}
+
+#[test]
+fn an_attached_run_speaks_only_to_the_tabs_it_opens_and_closes_each_one() {
+    let peer = Peer::start(None);
+    let browser = Browser::attach(peer.port, PEER_ROUTE, "Google Chrome".to_owned()).unwrap();
+    assert_eq!(browser.tier(), Tier::SignedIn);
+    let fetcher = Fetcher::new(&BTreeSet::new());
+    for raw in ["https://a.test/one", "https://b.test/two"] {
+        let url = Url::parse(raw).unwrap();
+        let Ok(Outcome::Read(capture)) = browser.render(&fetcher, raw, &url, false) else {
+            panic!("{raw} is read");
+        };
+        assert_eq!(
+            (capture.line.status, capture.line.tier, capture.line.access),
+            (Status::Ok, Some(Tier::SignedIn), Some(Access::SignedIn))
+        );
+    }
+    let fails = Url::parse("https://c.test/fails").unwrap();
+    assert!(matches!(
+        browser.render(&fetcher, fails.as_str(), &fails, false),
+        Ok(Outcome::NotRendered(why)) if why == "ERR_ABORTED"
+    ));
+    // A tab an error or a panic leaves behind is closed when dropped.
+    drop(Tab::open(&browser).unwrap());
+    drop(browser);
+
+    let received: Vec<(String, Value, Option<String>)> = peer
+        .received()
+        .into_iter()
+        .map(|message| {
+            (
+                message["method"].as_str().unwrap().to_owned(),
+                message["params"].clone(),
+                message["sessionId"].as_str().map(str::to_owned),
+            )
+        })
+        .collect();
+    let browser_call = |method: &str, params: Value| (method.to_owned(), params, None);
+    let open = |n: u32| {
+        vec![
+            browser_call(
+                "Target.createTarget",
+                json!({"url": "about:blank", "hidden": true, "background": true}),
+            ),
+            browser_call(
+                "Target.attachToTarget",
+                json!({"targetId": format!("T{n}"), "flatten": true}),
+            ),
+        ]
+    };
+    let close = |n: u32| browser_call("Target.closeTarget", json!({"targetId": format!("T{n}")}));
+    let page = |n: u32, url: &str, read: bool| {
+        let session = Some(format!("S{n}"));
+        let on_page = |method: &str, params: Value| (method.to_owned(), params, session.clone());
+        let mut said = open(n);
+        said.push(on_page("Page.enable", json!({})));
+        said.push(on_page(
+            "Page.setLifecycleEventsEnabled",
+            json!({"enabled": true}),
+        ));
+        said.push(on_page("Page.navigate", json!({"url": url})));
+        if read {
+            said.push(on_page(
+                "Runtime.evaluate",
+                json!({"expression": cdp::EXTRACT, "returnByValue": true}),
+            ));
+        }
+        said.push(close(n));
+        said
+    };
+    let mut expected = vec![browser_call("Browser.getVersion", json!({}))];
+    expected.extend(page(1, "https://a.test/one", true));
+    expected.extend(page(2, "https://b.test/two", true));
+    expected.extend(page(3, "https://c.test/fails", false));
+    expected.extend(open(4));
+    expected.push(close(4));
+    assert_eq!(received, expected);
+    for never in [
+        "Browser.close",
+        "Target.createBrowserContext",
+        "Target.disposeBrowserContext",
+        "Target.getTargets",
+        "Target.setAutoAttach",
+    ] {
+        assert!(
+            received.iter().all(|(method, ..)| method != never),
+            "{never}"
+        );
+    }
+}
+
+#[test]
+fn an_owner_who_is_not_running_or_does_not_allow_is_told_which() {
+    let closed = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = closed.local_addr().unwrap().port();
+    drop(closed);
+    let attached = |port| Browser::attach(port, PEER_ROUTE, "Google Chrome".to_owned()).err();
+    assert_eq!(attached(port), Some(Unavailable::NotRunning));
+    // Denied: the browser closes the connection instead of answering.
+    let refusing = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let port = refusing.local_addr().unwrap().port();
+    let denier = std::thread::spawn(move || drop(refusing.accept().unwrap()));
+    assert_eq!(attached(port), Some(Unavailable::NotAllowed));
+    denier.join().unwrap();
+    let peer = Peer::start(Some("Browser.getVersion"));
+    assert_eq!(attached(peer.port), Some(Unavailable::NotAllowed));
+    assert_eq!(peer.received().len(), 1, "nothing after the version");
 }

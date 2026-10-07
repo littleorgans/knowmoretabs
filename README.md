@@ -29,8 +29,9 @@ Or clone the repository and run `cargo build --release`; the binary is
 works without any other tool; it reads GitHub through `gh` when gh is
 installed and signed in, YouTube videos through yt-dlp when yt-dlp and
 deno (or node) are installed, and pages that need a browser through Chrome,
-run headless, when it is installed. `knowmoretabs doctor` says which of
-them it can use.
+run headless, when it is installed. `content --signed-in` reads pages
+behind a login in your own running Chrome, once you turn on its remote
+debugging. `knowmoretabs doctor` says which of them it can use.
 
 Nothing is tagged yet: the prebuilt binaries and the crates.io package
 described next arrive with v0.1.0, and until then the repository is the only
@@ -169,7 +170,7 @@ knowmoretabs export [DIR]        # the same library as a static site that opens 
 knowmoretabs history             # how many library pages have History signals, and how current they are
 knowmoretabs history --refresh   # read History now and update every library page's signals
 knowmoretabs enrich              # fetch the <head> of library pages, without cookies; --dry-run, --limit N, --refetch
-knowmoretabs content             # keep the main text and one preview image of library pages; --dry-run, --limit N, --refetch, --url URL, --no-images, --no-browser
+knowmoretabs content             # keep the main text and one preview image of library pages; --dry-run, --limit N, --refetch, --url URL, --no-images, --no-browser, --signed-in
 knowmoretabs doctor              # which ways of reading pages this machine can use; --live checks GitHub sign in, asks the X post API once and starts the browser once
 knowmoretabs forget <URL>...     # hide pages from the library; the snapshots keep them
 knowmoretabs restore <URL>...    # bring them back
@@ -260,6 +261,7 @@ knowmoretabs content             # capture every page not captured before, and r
 knowmoretabs content --url URL   # capture only this library page; repeatable
 knowmoretabs content --no-images # capture text only this run, no preview images
 knowmoretabs content --no-browser # render nothing in a browser this run; those pages wait
+knowmoretabs content --signed-in # open pages behind a login in your own Chrome, signed in; 25 a run
 knowmoretabs doctor              # which ways of reading pages are ready, and what the archive holds
 ```
 
@@ -295,6 +297,31 @@ the render added nothing, and stands until `--refetch`. Chrome may contact
 Google services itself while it runs. Without a browser, or with
 `--no-browser`, those pages wait for a run with one, and the report says how
 many.
+
+`content --signed-in` opens, in your own running Chrome and signed in as
+you, the pages a public read recorded as `behind_login`, `paywalled` or
+`blocked`, or as `thin` or `empty_shell` after an HTTP 403; it does nothing
+else. A page is opened signed in once; `--url` names pages, `--limit` caps a
+run (25 by default) and `--dry-run` lists them without connecting. Your
+personal apps are never opened, and a page that ends on one keeps nothing:
+mail, chat and AI assistants, documents and workspaces, and account
+consoles. Turn on remote debugging at `chrome://inspect/#remote-debugging`
+first; knowmoretabs finds Chrome from its `DevToolsActivePort` file, and
+Chrome asks you to Allow the connection once per run. Each page opens in a
+hidden tab of its own, never in your tab strip, one at a time and five
+seconds apart per site; your own tabs are never listed or touched, and
+Chrome closes the hidden tabs when the connection closes, however the run
+ends. The rendered text replaces what was kept only when it is longer.
+Every line it writes says `signed_in` as its tier and its access, as does a
+file's front matter when its text was read signed in, and only such a page
+gets an image, fetched without cookies. A page's address, and where it
+ends, pass the rules plain fetching uses, and its name must resolve outside
+your private network before it opens. Chrome resolves names, follows
+redirects and loads each page's resources itself, as when you open the
+page, so knowmoretabs cannot stop a redirect or a resource that reaches
+your private network. Denied, not running or switched off, it says what to
+do and records nothing; if Chrome goes away during a run, the pages left
+wait for the next one. A later `--refetch` reads a page publicly again.
 
 When article extraction misses a page's text, the fallback tries the whole
 body, removing menus, banners, footers and sidebars outside `<main>`. It
@@ -431,7 +458,9 @@ and `--dry-run` counts the image work it would do. Pages captured with
 is ready, missing or degraded, and how to fix it: the web tier, which is
 compiled in; GitHub through gh, found with its version; the X post API; yt-dlp
 with deno or node for YouTube; and the `--browser` binary (Chrome by
-default) for headless reading. Then the archive:
+default) for headless reading; whether `content --signed-in` can reach
+your running Chrome, read from its remote debugging switch and
+`DevToolsActivePort` file, never by connecting. Then the archive:
 whether it is private, whether `pages/content` exists, and its pages by
 latest status. It is offline by default, with GitHub sign in marked as not
 checked. With `--live`, gh checks its own sign in (the `gh auth status` exit
@@ -477,7 +506,8 @@ Nothing leaves the machine unless you run `enrich` or `content`. `save`,
 or a video's id to YouTube through yt-dlp, and what each sends is described
 above; `content` also downloads one preview image per page from the address
 the page names, which may be on another host, and images stay in the
-private archive. `doctor` is offline by default.
+private archive. `content --signed-in` has your own Chrome open pages,
+signed in as you, as described above. `doctor` is offline by default.
 `doctor --live` lets gh check its own sign in with GitHub, asks the X
 post API for one fixed public post and starts the browser once with no
 page, sending nothing of yours. A
@@ -590,8 +620,9 @@ Why decrypting is not the answer is in
 No sync. No accounts. No cloud. No telemetry. No browser extension (for
 now). No page text unless you ask for it: `content` is opt in, and keyword
 search over what it stores comes later. No tag hierarchy. It never touches,
-closes or reorders tabs in the live browser, and never modifies the
-browser's own files: it reads and copies, nothing else.
+closes or reorders your tabs in the live browser (`content --signed-in`
+opens hidden tabs of its own there, which Chrome closes with the run), and
+never modifies the browser's own files: it reads and copies, nothing else.
 
 ## Deliberately not built
 

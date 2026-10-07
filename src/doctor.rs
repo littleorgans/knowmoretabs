@@ -10,7 +10,9 @@
 //!      checks its own sign in with GitHub, the X post API is asked once
 //!      for a fixed public post, and the browser is started headless once,
 //!      asked its version and closed, with no page. It sends nothing of the
-//!      owner's.
+//!      owner's. Whether a signed in run can reach the owner's browser is
+//!      read from its remote debugging switch and port file alone, never by
+//!      connecting, which would ask the owner to allow it.
 //!      Missing tools are warnings: only the generic web tier is required,
 //!      and it is compiled in.
 
@@ -23,6 +25,7 @@ use serde::Serialize;
 
 use crate::browser::{self, Browser};
 use crate::capture::Log;
+use crate::content_signed_in::{self, Unavailable};
 use crate::content_store;
 use crate::error::Error;
 use crate::fetch::Fetcher;
@@ -184,12 +187,14 @@ pub type Started = Result<(Duration, String), String>;
 
 impl Report {
     /// What `probe` finds, for headless reading with browser `browser`;
-    /// `x` is what the X post API answered in live mode, and `started` how
-    /// the browser started; `None` keeps every check offline, including
-    /// GitHub sign in.
+    /// `listening` is the port that browser listens on for a signed in run,
+    /// as its files say; `x` is what the X post API answered in live mode,
+    /// and `started` how the browser started; `None` keeps every check
+    /// offline, including GitHub sign in.
     pub fn gather(
         probe: &impl Probe,
         browser: &str,
+        listening: Listening,
         x: Option<Result<u16, String>>,
         started: Option<Started>,
         archive: Archive,
@@ -200,6 +205,7 @@ impl Report {
             x_check(x),
             youtube(probe),
             headless(probe, browser, started),
+            signed_in(listening),
             archive.check(),
         ];
         let ready = checks
@@ -399,6 +405,34 @@ fn headless(probe: &impl Probe, browser: &str, started: Option<Started>) -> Chec
     }
 }
 
+/// The port the browser listens on for a signed in run, or why it does not.
+pub type Listening = Result<u16, Unavailable>;
+
+/// Whether `content --signed-in` can reach the browser, as its files say;
+/// never by connecting.
+fn signed_in(listening: Listening) -> Check {
+    let tier = "signed in";
+    let turn_on = "turn it on at chrome://inspect/#remote-debugging";
+    match listening {
+        Ok(port) => Check::new(
+            tier,
+            State::Ready,
+            format!(
+                "remote debugging on (port {port}); content --signed-in asks you to Allow once per run"
+            ),
+        ),
+        Err(Unavailable::Off) => {
+            Check::new(tier, State::Missing, "remote debugging off").hint(turn_on)
+        }
+        Err(Unavailable::NotRunning | Unavailable::NotAllowed) => Check::new(
+            tier,
+            State::Missing,
+            "no DevToolsActivePort (Chrome not running?)",
+        )
+        .hint(format!("open Chrome; if it is open, {turn_on}")),
+    }
+}
+
 /// Starts the browser at `path` headless, asks its version and closes it:
 /// no page is loaded.
 fn start(path: &Path, log: Log) -> Started {
@@ -422,7 +456,14 @@ pub fn command(
     let started = live
         .then(|| browser::Readiness::check(&System, browser, false))
         .and_then(|readiness| Some(start(readiness.path()?, log)));
-    let report = Report::gather(&System, browser, x, started, Archive::read(root)?);
+    let report = Report::gather(
+        &System,
+        browser,
+        content_signed_in::find(browser).map(|(port, _)| port),
+        x,
+        started,
+        Archive::read(root)?,
+    );
     if json {
         out::json(&serde_json::to_value(&report).unwrap_or_default());
     } else if !log.quiet {
@@ -438,6 +479,7 @@ pub fn command(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::content_test::chrome;
     use crate::tools::Table;
 
     fn path(name: &str) -> PathBuf {
@@ -475,6 +517,11 @@ mod tests {
         }
     }
 
+    /// A browser with remote debugging off.
+    fn off() -> Listening {
+        Err(Unavailable::Off)
+    }
+
     fn states(report: &Report) -> Vec<(&str, State)> {
         report.checks.iter().map(|c| (c.tier, c.state)).collect()
     }
@@ -483,7 +530,7 @@ mod tests {
     fn offline_checks_never_ask_gh_about_sign_in() {
         let mut table = everything();
         table.codes.insert(path("gh"), 1);
-        let report = Report::gather(&table, platform::CHROME, None, None, archive());
+        let report = Report::gather(&table, platform::CHROME, off(), None, None, archive());
         assert!(
             table.runs.borrow().is_empty(),
             "offline doctor must not ask gh"
@@ -512,6 +559,7 @@ mod tests {
         let report = Report::gather(
             &everything(),
             platform::CHROME,
+            Ok(9222),
             Some(Ok(200)),
             Some(Ok((
                 Duration::from_millis(840),
@@ -563,7 +611,7 @@ mod tests {
         let bare = Table::default();
         let mut no_archive = archive();
         no_archive.exists = false;
-        let report = Report::gather(&bare, platform::CHROME, None, None, no_archive);
+        let report = Report::gather(&bare, platform::CHROME, off(), None, None, no_archive);
         assert!(report.ready, "only the generic tier is required");
         assert_eq!(
             states(&report),
@@ -573,6 +621,7 @@ mod tests {
                 ("x", State::Ready),
                 ("youtube", State::Missing),
                 ("headless", State::Missing),
+                ("signed in", State::Missing),
                 ("archive", State::Missing),
             ]
         );
@@ -585,10 +634,10 @@ mod tests {
         );
         let text = report.text();
         assert!(
-            text.contains("github    missing   gh not found\n"),
+            text.contains("github     missing   gh not found\n"),
             "{text}"
         );
-        assert!(text.contains("x         ready     compiled in; api.fxtwitter.com not asked"));
+        assert!(text.contains("x          ready     compiled in; api.fxtwitter.com not asked"));
     }
 
     #[test]
@@ -599,7 +648,7 @@ mod tests {
         table.found.remove("node");
         let mut open = archive();
         open.private = Some(false);
-        let report = Report::gather(&table, platform::CHROME, Some(Ok(503)), None, open);
+        let report = Report::gather(&table, platform::CHROME, off(), Some(Ok(503)), None, open);
         assert!(report.ready);
         assert_eq!(
             states(&report),
@@ -609,6 +658,7 @@ mod tests {
                 ("x", State::Degraded),
                 ("youtube", State::Degraded),
                 ("headless", State::Ready),
+                ("signed in", State::Missing),
                 ("archive", State::Degraded),
             ]
         );
@@ -631,6 +681,7 @@ mod tests {
         let unreachable = Report::gather(
             &table,
             platform::CHROME,
+            off(),
             Some(Err("timeout".into())),
             Some(Err("Google Chrome was not ready after 10 s".into())),
             archive(),
@@ -648,11 +699,61 @@ mod tests {
     }
 
     #[test]
+    fn the_signed_in_line_reads_the_switch_and_port_file_and_never_fails_the_report() {
+        let line = |flag, port| {
+            let dir = chrome(flag, port);
+            let listening = content_signed_in::discover(dir.path()).map(|(port, _)| port);
+            let report = Report::gather(
+                &Table::default(),
+                platform::CHROME,
+                listening,
+                None,
+                None,
+                archive(),
+            );
+            assert!(report.ready, "a warning only");
+            report
+                .checks
+                .into_iter()
+                .find(|c| c.tier == "signed in")
+                .unwrap()
+        };
+        let ready = line(Some(true), Some("9222\n/devtools/browser/abc\n"));
+        assert_eq!((ready.state, ready.hint), (State::Ready, None));
+        assert_eq!(
+            ready.detail,
+            "remote debugging on (port 9222); content --signed-in asks you to Allow once per run"
+        );
+        let off = line(Some(false), Some("9222\n/devtools/browser/abc\n"));
+        assert_eq!(
+            (off.state, off.detail.as_str()),
+            (State::Missing, "remote debugging off")
+        );
+        assert_eq!(
+            off.hint.as_deref(),
+            Some("turn it on at chrome://inspect/#remote-debugging")
+        );
+        let gone = line(Some(true), None);
+        assert_eq!(
+            (gone.state, gone.detail.as_str()),
+            (
+                State::Missing,
+                "no DevToolsActivePort (Chrome not running?)"
+            )
+        );
+        assert!(
+            gone.hint
+                .unwrap()
+                .contains("chrome://inspect/#remote-debugging")
+        );
+    }
+
+    #[test]
     fn headless_follows_the_chosen_browser() {
-        let report = Report::gather(&everything(), platform::BRAVE, None, None, archive());
+        let report = Report::gather(&everything(), platform::BRAVE, off(), None, None, archive());
         assert_eq!(report.checks[4].state, State::Missing);
         assert!(report.checks[4].detail.starts_with("no brave binary found"));
-        let unknown = Report::gather(&everything(), "arc", None, None, archive());
+        let unknown = Report::gather(&everything(), "arc", off(), None, None, archive());
         assert!(
             unknown.checks[4]
                 .detail
@@ -662,7 +763,14 @@ mod tests {
 
     #[test]
     fn the_json_report_has_a_line_per_tier_and_the_archive() {
-        let report = Report::gather(&Table::default(), platform::CHROME, None, None, archive());
+        let report = Report::gather(
+            &Table::default(),
+            platform::CHROME,
+            off(),
+            None,
+            None,
+            archive(),
+        );
         let value = serde_json::to_value(&report).unwrap();
         assert_eq!(value["ready"], true);
         assert_eq!(value["checks"][1]["tier"], "github");

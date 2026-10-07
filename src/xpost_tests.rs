@@ -54,7 +54,7 @@ fn answer(status: &serde_json::Value) -> Vec<u8> {
 }
 
 fn line(state: Status) -> Line {
-    content_fetch::public_line("https://x.com/example/status/100", Tier::X, state)
+    content_fetch::line("https://x.com/example/status/100", Tier::X, state)
 }
 
 fn read_value(status: &serde_json::Value) -> Capture {

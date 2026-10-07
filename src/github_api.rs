@@ -233,7 +233,7 @@ struct Attempt<'a> {
 
 impl Attempt<'_> {
     fn line(&self, status: Status, reason: Option<String>, http: Option<u16>) -> Line {
-        let mut line = content_fetch::public_line(self.raw, Tier::Github, status);
+        let mut line = content_fetch::line(self.raw, Tier::Github, status);
         line.reason = reason;
         line.http_status = http;
         line

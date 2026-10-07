@@ -226,14 +226,29 @@ as what you can do that you could not before.
   says how many pages were rendered, how long a render took and how many
   connections the relay refused. Each page is counted once in the report,
   by its last line in the run.
+- **Pages behind a login, in your own Chrome.** `content --signed-in`
+  opens, in your running Chrome and signed in as you, the pages a public
+  read recorded as `behind_login`, `paywalled` or `blocked`, or rendered
+  `thin` or `empty_shell` after an HTTP 403: 25 a run unless `--limit`
+  says, one at a time and five seconds apart per site, each in a hidden tab
+  that Chrome closes when the run's connection closes. Turn on remote
+  debugging at `chrome://inspect/#remote-debugging` first; Chrome asks you
+  to Allow the connection once per run, and a denial, or Chrome not
+  running, records nothing. Your personal apps (mail, chat and assistants,
+  documents and workspaces, account consoles) are never opened, and a page
+  that ends on one keeps nothing. Every line it writes says `signed_in`, and
+  the longer text wins. Chrome resolves names, follows redirects and loads
+  resources itself, so those are not guarded.
 - **Check what content can use.** `knowmoretabs doctor` reports whether each
   way of reading pages is ready, missing or degraded, with how to fix it:
   the web tier, gh and its version, the X post API, yt-dlp with deno or node
   for YouTube, and the `--browser` binary; then whether the archive is private and its
   pages by status. Offline by default; `--live` checks gh sign in (exit code
   only, output never read), asks the X post API once for a fixed public
-  post, and starts the browser headless once, with no page. `--json` for
-  scripts. Exits 0 when the web tier is ready.
+  post, and starts the browser headless once, with no page. It also says
+  whether `content --signed-in` can reach your running Chrome, from Chrome's
+  files and never by connecting. `--json` for scripts. Exits 0 when the web
+  tier is ready.
 
 ### Changed
 

@@ -97,6 +97,8 @@ pub enum Error {
     NotInLibrary(Vec<String>),
     #[error("content capture is not ready: the generic web tier is unavailable")]
     NotReady,
+    #[error(transparent)]
+    SignedIn(#[from] crate::content_signed_in::Unavailable),
     #[error("cannot use {name:?} as a tag: {reason}; nothing changed")]
     TagName { name: String, reason: &'static str },
     #[error("no such tag: {}; nothing changed", .0.join(", "))]
@@ -153,6 +155,7 @@ impl Error {
             Self::LibraryState { .. } => "library_state",
             Self::NotInLibrary(_) => "not_in_library",
             Self::NotReady => "not_ready",
+            Self::SignedIn(_) => "signed_in",
             Self::TagName { .. } => "tag_name",
             Self::UnknownTag(_) => "unknown_tag",
             Self::TagDefinition { .. } => "tag_definition",
