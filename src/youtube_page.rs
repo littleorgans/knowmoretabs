@@ -67,9 +67,17 @@ pub struct Choice {
 }
 
 impl Choice {
-    /// The track's language: its key without `-orig`.
-    pub fn lang(&self) -> &str {
-        self.key.strip_suffix(ORIGINAL).unwrap_or(&self.key)
+    /// The primary language and optional region, without a track suffix.
+    pub fn lang(&self) -> String {
+        let language = primary(&self.key);
+        let region = self.key.split(['-', '_']).nth(1).filter(|subtag| {
+            (subtag.len() == 2 && subtag.bytes().all(|b| b.is_ascii_alphabetic()))
+                || (subtag.len() == 3 && subtag.bytes().all(|b| b.is_ascii_digit()))
+        });
+        match region {
+            Some(region) => format!("{language}-{}", region.to_ascii_uppercase()),
+            None => language,
+        }
     }
 }
 
@@ -452,13 +460,35 @@ mod tests {
     }
 
     #[test]
+    fn named_tracks_record_language_without_changing_the_download_key() {
+        for (key, language) in [
+            ("en-captiontrack", "en"),
+            ("en-CA-captiontrack", "en-CA"),
+            ("en-CA", "en-CA"),
+            ("en-ca-captiontrack", "en-CA"),
+            ("en-419-captiontrack", "en-419"),
+            ("pt-BR-captiontrack", "pt-BR"),
+            ("en-orig", "en"),
+            ("en", "en"),
+        ] {
+            let described = info(&json!({
+                "language": primary(key),
+                "subtitles": {key: vtt()},
+            }));
+            let choice = choose(&described).unwrap();
+            assert_eq!(choice.key, key);
+            assert_eq!(choice.lang(), language);
+        }
+    }
+
+    #[test]
     fn then_english_youtube_heard_in_the_video() {
         let original = json!({"language": "en",
             "automatic_captions": {"de": translated(), "en": vtt(), "en-orig": vtt()}});
         let choice = choose(&info(&original)).unwrap();
         assert_eq!(
             (choice.key.as_str(), choice.kind, choice.lang()),
-            ("en-orig", Captions::Automatic, "en")
+            ("en-orig", Captions::Automatic, "en".to_owned())
         );
         let plain = json!({"automatic_captions": {"en": vtt()}});
         assert_eq!(chosen(&plain), Some(("en".to_owned(), Captions::Automatic)));

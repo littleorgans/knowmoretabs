@@ -283,7 +283,7 @@ impl Attempt<'_> {
             line.status = Status::Thin;
             line.reason = Some("captions empty".to_owned());
         }
-        line.lang = Some(choice.lang().to_owned());
+        line.lang = Some(choice.lang());
         Ok(self.kept(line, youtube_page::page(&info, &said, Some(choice.kind))))
     }
 
@@ -545,7 +545,7 @@ mod tests {
     #[test]
     fn the_second_call_downloads_only_the_chosen_track() {
         let manual = Choice {
-            key: "en".to_owned(),
+            key: "en-CA-captiontrack".to_owned(),
             kind: Captions::Manual,
         };
         let args = caption_args(
@@ -557,7 +557,7 @@ mod tests {
             args.join(" "),
             "--ignore-config --no-playlist --skip-download --sleep-requests 1 \
              -o /scratch/captions.%(ext)s --load-info-json /scratch/video.info.json \
-             --write-subs --sub-langs en --sub-format vtt"
+             --write-subs --sub-langs en-CA-captiontrack --sub-format vtt"
         );
         let automatic = Choice {
             key: "de-orig".to_owned(),
