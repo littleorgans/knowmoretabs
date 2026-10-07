@@ -15,7 +15,7 @@
 //!      run or exhaust its memory.
 
 use std::collections::VecDeque;
-use std::io;
+use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::time::{Duration, Instant};
 
@@ -45,7 +45,6 @@ pub const EXTRACT: &str = "(() => {
 /// unit, so every reply the expression lets through fits, with room for
 /// the rest of the reply.
 const MAX_MESSAGE: usize = 6 * BODY_CAP + 1024 * 1024;
-const POLL: Duration = Duration::from_millis(20);
 
 /// Everything ever sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -167,7 +166,7 @@ pub fn decode(text: &str) -> Incoming {
 /// One `DevTools` WebSocket: the browser's, or one tab's.
 #[derive(Debug)]
 pub struct Socket {
-    ws: WebSocket<TcpStream>,
+    ws: WebSocket<Bounded>,
     next: u64,
     /// Lifecycle events read while waiting for a reply.
     events: VecDeque<Lifecycle>,
@@ -177,27 +176,21 @@ impl Socket {
     /// Connects to `path` on the browser's loopback `port`.
     pub fn connect(port: u16, path: &str, deadline: Instant) -> Result<Self, String> {
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-        let stream = TcpStream::connect_timeout(&address, remaining(deadline)?)
+        let stream = remaining(deadline)
+            .and_then(|left| TcpStream::connect_timeout(&address, left))
             .map_err(|err| reason(&err))?;
-        stream.set_nonblocking(true).map_err(|err| reason(&err))?;
         let config = WebSocketConfig::default()
             .max_message_size(Some(MAX_MESSAGE))
             .max_frame_size(Some(MAX_MESSAGE));
-        let mut handshake = tungstenite::client::client_with_config(
+        let (ws, _) = tungstenite::client::client_with_config(
             format!("ws://{address}{path}"),
-            stream,
+            Bounded { stream, deadline },
             Some(config),
-        );
-        let (ws, _) = loop {
-            match handshake {
-                Ok(connected) => break connected,
-                Err(tungstenite::HandshakeError::Failure(err)) => return Err(failure(&err)),
-                Err(tungstenite::HandshakeError::Interrupted(pending)) => {
-                    pause(deadline)?;
-                    handshake = pending.handshake();
-                }
-            }
-        };
+        )
+        .map_err(|err| match err {
+            tungstenite::HandshakeError::Failure(err) => failure(&err),
+            tungstenite::HandshakeError::Interrupted(_) => "timeout".to_owned(),
+        })?;
         Ok(Self {
             ws,
             next: 1,
@@ -209,14 +202,10 @@ impl Socket {
     pub fn call(&mut self, command: &Command, deadline: Instant) -> Result<Value, String> {
         let id = self.next;
         self.next += 1;
-        remaining(deadline)?;
-        match self.ws.send(Message::text(command.encode(id))) {
-            Ok(()) => {}
-            // `send` keeps an incompletely written frame buffered. Flush
-            // that frame without sending the command a second time.
-            Err(err) if blocked(&err) => wait(deadline, || self.ws.flush())?,
-            Err(err) => return Err(failure(&err)),
-        }
+        self.ws.get_mut().deadline = deadline;
+        self.ws
+            .send(Message::text(command.encode(id)))
+            .map_err(|err| failure(&err))?;
         loop {
             match self.read(deadline)? {
                 Incoming::Reply {
@@ -256,44 +245,48 @@ impl Socket {
     }
 
     fn read(&mut self, deadline: Instant) -> Result<Incoming, String> {
-        match wait(deadline, || self.ws.read())? {
+        self.ws.get_mut().deadline = deadline;
+        match self.ws.read().map_err(|err| failure(&err))? {
             Message::Text(text) => Ok(decode(text.as_str())),
             _ => Ok(Incoming::Other),
         }
     }
 }
 
-/// A nonblocking protocol operation retains partial frames between tries.
-/// Polling keeps one absolute deadline across reads and writes, including
-/// a frame that arrives a byte at a time.
-fn wait<T>(
+/// The loopback stream, each read and write of which waits only what is
+/// left until `deadline`: a frame that trickles in a byte at a time cannot
+/// stretch a wait, and the WebSocket keeps a partial frame for the next.
+#[derive(Debug)]
+struct Bounded {
+    stream: TcpStream,
     deadline: Instant,
-    mut operation: impl FnMut() -> Result<T, tungstenite::Error>,
-) -> Result<T, String> {
-    loop {
-        remaining(deadline)?;
-        match operation() {
-            Ok(value) => return Ok(value),
-            Err(err) if blocked(&err) => pause(deadline)?,
-            Err(err) => return Err(failure(&err)),
-        }
+}
+
+impl Read for Bounded {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.stream
+            .set_read_timeout(Some(remaining(self.deadline)?))?;
+        self.stream.read(buf)
     }
 }
 
-fn blocked(err: &tungstenite::Error) -> bool {
-    matches!(err, tungstenite::Error::Io(err) if err.kind() == io::ErrorKind::WouldBlock)
-}
+impl Write for Bounded {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.stream
+            .set_write_timeout(Some(remaining(self.deadline)?))?;
+        self.stream.write(buf)
+    }
 
-fn pause(deadline: Instant) -> Result<(), String> {
-    std::thread::sleep(remaining(deadline)?.min(POLL));
-    Ok(())
+    fn flush(&mut self) -> io::Result<()> {
+        self.stream.flush()
+    }
 }
 
 /// What is left until `deadline`, or a timeout when nothing is.
-fn remaining(deadline: Instant) -> Result<std::time::Duration, String> {
+fn remaining(deadline: Instant) -> io::Result<Duration> {
     let left = deadline.saturating_duration_since(Instant::now());
     if left.is_zero() {
-        Err("timeout".to_owned())
+        Err(io::ErrorKind::TimedOut.into())
     } else {
         Ok(left)
     }
@@ -319,6 +312,8 @@ fn reason(err: &io::Error) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::net::TcpListener;
+
     use super::*;
 
     #[test]
@@ -420,5 +415,38 @@ mod tests {
         ] {
             assert_eq!(decode(other), Incoming::Other, "{other}");
         }
+    }
+
+    #[test]
+    fn a_reply_that_trickles_in_ends_at_the_deadline() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut ws = tungstenite::accept(stream).unwrap();
+            ws.read().unwrap();
+            ws.send(Message::text(r#"{"id":1,"result":{"product":"P"}}"#))
+                .unwrap();
+            ws.read().unwrap();
+            // The head of a 200 byte text frame, then a byte every 20 ms.
+            let stream = ws.get_mut();
+            stream.write_all(&[0x81, 126, 0, 200]).unwrap();
+            for _ in 0..200 {
+                if stream.write_all(b" ").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let mut socket = Socket::connect(port, "/devtools/browser/B", deadline).unwrap();
+        assert_eq!(
+            socket.call(&Command::GetVersion, deadline),
+            Ok(json!({"product": "P"}))
+        );
+        let start = Instant::now();
+        let reply = socket.call(&Command::GetVersion, start + Duration::from_millis(200));
+        assert_eq!(reply, Err("timeout".to_owned()));
+        assert!(start.elapsed() < Duration::from_secs(1));
     }
 }
