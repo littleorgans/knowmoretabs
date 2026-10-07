@@ -264,8 +264,12 @@ pub fn readme_image(markdown: &str, base: &Url) -> Option<String> {
             };
             (get("src"), format!("{} {}", get("alt"), get("class")), end)
         } else {
-            let Some(close) = markdown[start..].find("](").map(|i| start + i) else {
-                break;
+            // An inline image's alt text closes onto its address; a
+            // reference image, `![alt][ref]`, names none here.
+            let close = markdown[start..].find(']').map(|i| start + i);
+            let Some(close) = close.filter(|&close| markdown[close + 1..].starts_with('(')) else {
+                at = start + 2;
+                continue;
             };
             let target = markdown[close + 2..]
                 .trim_start()
@@ -488,6 +492,14 @@ mod tests {
         assert_eq!(
             readme_image(markdown_first, &base).as_deref(),
             Some("https://raw.githubusercontent.com/owner/repo/HEAD/img/one.jpg")
+        );
+        let reference_badges = "[![Build Status][ci-image]][ci-url]\n\n\
+            <img src=\"docs/screenshot.png\" alt=\"The app\">\n\n\
+            See [the site](https://site.test/).\n";
+        assert_eq!(
+            readme_image(reference_badges, &base).as_deref(),
+            Some("https://raw.githubusercontent.com/owner/repo/HEAD/docs/screenshot.png"),
+            "a reference image does not run on to a later link"
         );
         assert_eq!(readme_image("no images ![alt", &base), None);
         assert_eq!(readme_image("", &base), None);
