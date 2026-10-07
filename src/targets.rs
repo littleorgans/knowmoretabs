@@ -325,6 +325,13 @@ pub fn by_host<'a, T: Send>(
     }
 }
 
+/// Whether a progress line is due after `n` of `total` items: every
+/// `every`, and the last so a run ends on "N of N". A run shorter than
+/// `every` stays quiet.
+pub fn progress_due(n: usize, total: usize, every: usize) -> bool {
+    (n.is_multiple_of(every) || n == total) && total >= every
+}
+
 /// What `--dry-run` says: every page that would be fetched and why, every
 /// page that would not and why, the counts, and `notes` when there are any.
 pub fn report_dry_run(
@@ -542,6 +549,14 @@ mod tests {
             ),
             waits
         );
+    }
+
+    #[test]
+    fn progress_ends_on_the_last_item() {
+        assert!(progress_due(185, 186, 5));
+        assert!(progress_due(186, 186, 5));
+        assert!(!progress_due(184, 186, 5));
+        assert!(!progress_due(4, 4, 5));
     }
 
     #[test]

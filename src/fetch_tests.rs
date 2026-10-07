@@ -114,6 +114,12 @@ fn slowing_down_doubles_one_host_interval_up_to_the_cap() {
 }
 
 #[test]
+fn the_queue_bound_covers_every_worker_at_the_slowest_pace() {
+    let workers = u32::try_from(crate::targets::WORKERS).unwrap();
+    assert!(QUEUE >= MAX_PACE * workers);
+}
+
+#[test]
 fn reading_stops_at_the_end_of_the_head_or_the_cap() {
     let head = format!("<head><script>{}</script></HEAD>", "x".repeat(200_000));
     let page = format!("{head}<body>{}</body>", "y".repeat(5_000_000));
@@ -182,6 +188,40 @@ fn silent_server() -> SocketAddr {
         }
     });
     address
+}
+
+/// A server that answers every request with an empty 204.
+fn answering_server() -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                line.clear();
+            }
+            let _ = stream.write_all(
+                b"HTTP/1.1 204 No Content\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            );
+        }
+    });
+    address
+}
+
+#[test]
+fn a_host_queue_longer_than_the_timeout_does_not_spend_it() {
+    let fetcher = Fetcher::with(
+        Duration::from_millis(300),
+        Some(answering_server()),
+        Duration::from_millis(600),
+    );
+    for _ in 0..2 {
+        let status = fetcher
+            .get("http://queue.test/", ACCEPT_HTML)
+            .map(|r| r.status);
+        assert_eq!(status, Ok(204));
+    }
 }
 
 #[test]

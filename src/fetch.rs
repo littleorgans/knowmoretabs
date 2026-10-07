@@ -37,9 +37,13 @@ pub const MAX_REDIRECTS: usize = 10;
 pub const TIMEOUT: Duration = Duration::from_secs(15);
 /// One request per second to any one host.
 pub const PACE: Duration = Duration::from_secs(1);
-/// The slowest a host is paced after telling us to slow down, so that one
-/// paced request still fits inside [`TIMEOUT`].
+/// The slowest a host is paced after telling us to slow down. Several
+/// requests may queue for it, so the wait is bounded by [`QUEUE`], not
+/// [`TIMEOUT`].
 pub const MAX_PACE: Duration = Duration::from_secs(8);
+/// The longest a request waits for its host before its [`TIMEOUT`] starts:
+/// every worker (8, `targets::WORKERS`) queued on one host at [`MAX_PACE`].
+const QUEUE: Duration = Duration::from_secs(64);
 /// What a browser asks for when it wants a page.
 pub const ACCEPT_HTML: &str = "text/html,application/xhtml+xml;q=0.9,*/*;q=0.5";
 
@@ -156,16 +160,21 @@ impl Fetcher {
     }
 
     /// Requests one page, following redirects itself so that every hop is
-    /// checked and paced first. One deadline covers the hops and the body.
+    /// checked and paced first. Waiting for the host is bounded by
+    /// [`QUEUE`]; once the first hop is released, one deadline covers the
+    /// hops and the body.
     pub fn get(&self, raw: &str, accept: &str) -> Result<Response, Refusal> {
-        let deadline = Instant::now() + self.timeout;
         let Some(mut url) = guard::page_url(raw) else {
             return Err(Refusal::InvalidUrl);
         };
+        let mut deadline = Instant::now() + QUEUE;
         for hop in 0..=MAX_REDIRECTS {
             self.check(&url, hop)?;
             if !self.pace(&url, deadline) {
                 return Err(Refusal::Failed("timeout".to_owned()));
+            }
+            if hop == 0 {
+                deadline = Instant::now() + self.timeout;
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
