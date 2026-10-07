@@ -415,6 +415,26 @@ mod tests {
     }
 
     #[test]
+    fn a_signed_in_plan_hints_at_a_separate_public_refetch() {
+        let url = "https://a.test/p";
+        let known = known(&[(url, Some(Tier::SignedIn), Status::BehindLogin, "x")]);
+        let (plan, work, _) = plan(&[snapshot(&[url])], &state(&[]), &known, Options::default());
+        assert!(work.renders.is_empty());
+        assert_eq!(
+            targets::not_fetched_line(&plan, true),
+            "not fetched: 1 already fetched; use --refetch without --signed-in to fetch pages publicly again"
+        );
+        assert_eq!(
+            targets::not_fetched_line(&plan, false),
+            "not fetched: 1 already fetched; --refetch fetches pages again"
+        );
+        assert_eq!(
+            targets::not_fetched_line(&Plan::default(), true),
+            "not fetched: 0 already fetched"
+        );
+    }
+
+    #[test]
     fn a_run_opens_twenty_five_pages_unless_the_limit_says_otherwise() {
         let urls: Vec<String> = (0..30).map(|i| format!("https://site{i}.test/")).collect();
         let refs: Vec<&str> = urls.iter().map(String::as_str).collect();

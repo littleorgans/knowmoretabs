@@ -344,6 +344,7 @@ pub fn report_dry_run(
     log: Log,
     seconds_at_least: usize,
     notes: &[String],
+    signed_in: bool,
 ) {
     if json {
         let mut report = serde_json::json!({
@@ -404,7 +405,7 @@ pub fn report_dry_run(
     for note in notes {
         let _ = writeln!(text, "{note}");
     }
-    let _ = writeln!(text, "{}", not_fetched_line(plan));
+    let _ = writeln!(text, "{}", not_fetched_line(plan, signed_in));
     out::block(&text);
 }
 
@@ -421,8 +422,9 @@ pub fn counts_json(plan: &Plan) -> serde_json::Value {
     })
 }
 
-/// `not fetched: 412 already fetched, 40 forgotten, ...`
-pub fn not_fetched_line(plan: &Plan) -> String {
+/// `not fetched: 412 already fetched, 40 forgotten, ...`, with a refetch
+/// hint that a signed in run can follow in a separate public run.
+pub fn not_fetched_line(plan: &Plan, signed_in: bool) -> String {
     let mut parts = vec![format!("{} already fetched", plan.already_fetched)];
     parts.extend(
         plan.skip_counts()
@@ -431,7 +433,11 @@ pub fn not_fetched_line(plan: &Plan) -> String {
     );
     let mut line = format!("not fetched: {}", parts.join(", "));
     if plan.already_fetched > 0 {
-        line.push_str("; --refetch fetches pages again");
+        line.push_str(if signed_in {
+            "; use --refetch without --signed-in to fetch pages publicly again"
+        } else {
+            "; --refetch fetches pages again"
+        });
     }
     line
 }

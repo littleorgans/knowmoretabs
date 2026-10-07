@@ -162,7 +162,15 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
             work.reads_the_web(),
         ));
         notes.extend(images.as_ref().and_then(content_image::Plan::note));
-        targets::report_dry_run(&plan, options, json, log, work.seconds_at_least(), &notes);
+        targets::report_dry_run(
+            &plan,
+            options,
+            json,
+            log,
+            work.seconds_at_least(),
+            &notes,
+            false,
+        );
         return Ok(());
     }
     let started = Instant::now();
@@ -223,7 +231,15 @@ fn signed_in(
         ));
         notes.extend(images.as_ref().and_then(content_image::Plan::note));
         let limit = Some(content_signed_in::limit(options));
-        targets::report_dry_run(&plan, Options { limit, ..options }, json, log, 0, &notes);
+        targets::report_dry_run(
+            &plan,
+            Options { limit, ..options },
+            json,
+            log,
+            0,
+            &notes,
+            true,
+        );
         return Ok(());
     }
     let started = Instant::now();
@@ -485,7 +501,11 @@ fn report(
     for note in notes {
         let _ = writeln!(text, "{note}");
     }
-    let _ = writeln!(text, "{}", targets::not_fetched_line(plan));
+    let _ = writeln!(
+        text,
+        "{}",
+        targets::not_fetched_line(plan, tally.headless.signed_in.is_some())
+    );
     if plan.more > 0 {
         let _ = writeln!(text, "{} left for another run", plural(plan.more, "page"));
     }
