@@ -7,7 +7,10 @@
 //!      text's route already read: a post's media, a video's thumbnail, a
 //!      repository's preview, a page's head and body. A page whose text
 //!      this run did not read, behind a login or gone, falls back to the
-//!      head `enrich` recorded. A page whose text failed waits for its text,
+//!      head `enrich` recorded. A page rendered in a browser gets its image
+//!      after the render, from the rendered page, once: when this run read
+//!      it over HTTP first, or when it has no image yet. A page whose text
+//!      failed waits for its text,
 //!      and a page a rule kept home gets no image either. An image that
 //!      failed in a way that may pass is retried on the next run from the
 //!      candidates its line kept, without fetching the page again, until
@@ -24,7 +27,7 @@ use url::Url;
 use crate::capture::Log;
 use crate::content_fetch;
 use crate::content_plan::Work;
-use crate::content_store::Status as Text;
+use crate::content_store::{Line as TextLine, Status as Text};
 use crate::error::Error;
 use crate::fetch::Fetcher;
 use crate::guard;
@@ -42,8 +45,9 @@ use crate::triage::plural;
 pub struct Plan {
     known: image_store::Log,
     metadata: Metadata,
-    /// Pages fetched for their text, each of which gets its image after.
-    after_text: usize,
+    /// Pages whose text this run settles, each of which gets its image
+    /// after: those fetched, and those rendered that have no image yet.
+    after_text: HashSet<String>,
     /// Pages whose image failed in an earlier run and whose text is not
     /// fetched in this one.
     retries: Vec<Retry>,
@@ -74,27 +78,32 @@ impl Plan {
         if let Some(note) = known.unreadable_note(&image_store::log_path(root)) {
             log.warn(&note);
         }
-        let fetched: HashSet<&str> = work
+        let fetched = work
             .fetches
             .iter()
-            .flat_map(|fetch| fetch.pages.iter().map(|(url, _)| url.as_str()))
-            .collect();
-        let retries = retries(snapshots, state, &known, &fetched, options.limit);
+            .flat_map(|fetch| fetch.pages.iter().map(|(url, _)| url));
+        let rendered = work
+            .renders
+            .iter()
+            .flat_map(|render| render.pages.iter().map(|line| &line.url))
+            .filter(|url| !known.pages.contains_key(*url));
+        let after_text: HashSet<String> = fetched.chain(rendered).cloned().collect();
+        let retries = retries(snapshots, state, &known, &after_text, options.limit);
         Ok(Self {
             metadata: metadata::read(root)?,
             known,
-            after_text: fetched.len(),
+            after_text,
             retries,
         })
     }
 
     pub fn is_empty(&self) -> bool {
-        self.after_text == 0 && self.retries.is_empty()
+        self.after_text.is_empty() && self.retries.is_empty()
     }
 
     /// What `--dry-run` says about images, when there is image work.
     pub fn note(&self) -> Option<String> {
-        note(self.after_text, self.retries.len())
+        note(self.after_text.len(), self.retries.len())
     }
 }
 
@@ -117,12 +126,12 @@ fn note(after_text: usize, retries: usize) -> Option<String> {
 }
 
 /// The library pages whose latest image line is `error`, by the shared
-/// rules, other than those `fetched` for their text in this run.
+/// rules, other than those whose image follows their text in this run.
 fn retries(
     snapshots: &[Snapshot],
     state: &State,
     known: &image_store::Log,
-    fetched: &HashSet<&str>,
+    after_text: &HashSet<String>,
     limit: Option<usize>,
 ) -> Vec<Retry> {
     let plan = targets::plan(
@@ -137,7 +146,7 @@ fn retries(
         .into_iter()
         .filter(|item| {
             item.why == Why::Retry
-                && !fetched.contains(item.url.as_str())
+                && !after_text.contains(&item.url)
                 && !forgotten.covers(&item.url)
         })
         .filter_map(|item| {
@@ -182,19 +191,15 @@ impl Images {
         })
     }
 
-    /// The image of the pages one fetch stood for, each with the status
-    /// its text was recorded with, and what the fetch `found`. Fetched once
-    /// and recorded for each page whose text is settled.
-    pub fn after(
-        &self,
-        fetcher: &Fetcher,
-        pages: &[(&str, Text)],
-        found: &Found,
-    ) -> Result<(), Error> {
-        let settled: Vec<&str> = pages
+    /// The image of the pages one fetch or render stood for, by the
+    /// `lines` their text was recorded with, and what it `found`. Fetched
+    /// once and recorded for each page whose text is settled and whose
+    /// image this run planned.
+    pub fn after(&self, fetcher: &Fetcher, lines: &[TextLine], found: &Found) -> Result<(), Error> {
+        let settled: Vec<&str> = lines
             .iter()
-            .filter(|(_, text)| wants_image(*text))
-            .map(|(url, _)| *url)
+            .filter(|line| wants_image(line.status) && self.plan.after_text.contains(&line.url))
+            .map(|line| line.url.as_str())
             .collect();
         let Some(first) = settled.first() else {
             return Ok(());
@@ -353,7 +358,7 @@ mod tests {
             error_line("https://192.168.1.1/admin", "https://cdn.test/p.jpg"),
             ok,
         ]);
-        let fetched: HashSet<&str> = ["https://a.test/fetched"].into();
+        let fetched: HashSet<String> = ["https://a.test/fetched".to_owned()].into();
         let planned = retries(&snapshots, &state, &known, &fetched, None);
         let named: Vec<(&str, &str)> = planned
             .iter()
@@ -372,6 +377,78 @@ mod tests {
         assert_eq!(
             retries(&snapshots, &state, &known, &fetched, Some(1)).len(),
             1
+        );
+    }
+
+    #[test]
+    fn a_page_gets_its_image_after_its_text_once_and_is_not_retried_too() {
+        use crate::content_headless::Render;
+        use crate::content_plan::Fetch;
+        use crate::content_route::Route;
+
+        let snapshots = [snapshot(&[
+            "https://a.test/fetched",
+            "https://a.test/rendered",
+            "https://a.test/pictured",
+            "https://a.test/failed",
+        ])];
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path()).unwrap();
+        let mut ok = image_store::Line::new("https://a.test/pictured", Status::Ok);
+        ok.image_url = Some("https://cdn.test/p.jpg".to_owned());
+        for line in [
+            error_line("https://a.test/fetched", "https://cdn.test/f.jpg"),
+            ok,
+            error_line("https://a.test/failed", "https://cdn.test/x.jpg"),
+        ] {
+            store.record(line, None).unwrap();
+        }
+        let render = |urls: &[&str]| {
+            let pages = urls
+                .iter()
+                .map(|url| TextLine::new(url, Text::Thin))
+                .collect();
+            Render::of(pages, Found::Unread).unwrap()
+        };
+        let mut work = Work::default();
+        work.fetches = vec![Fetch {
+            url: "https://a.test/fetched".to_owned(),
+            host: "a.test".to_owned(),
+            route: Route::Web,
+            pages: vec![("https://a.test/fetched".to_owned(), 1)],
+        }];
+        work.renders = vec![
+            render(&["https://a.test/rendered"]),
+            render(&["https://a.test/pictured"]),
+        ];
+        let plan = Plan::new(
+            root.path(),
+            &snapshots,
+            &state(&[]),
+            &work,
+            Options::default(),
+            Log::default(),
+        )
+        .unwrap();
+        let mut after: Vec<&str> = plan.after_text.iter().map(String::as_str).collect();
+        after.sort_unstable();
+        assert_eq!(
+            after,
+            ["https://a.test/fetched", "https://a.test/rendered"],
+            "a rendered page with an image keeps it"
+        );
+        let retried: Vec<&str> = plan.retries.iter().map(|r| r.url.as_str()).collect();
+        assert_eq!(
+            retried,
+            ["https://a.test/failed"],
+            "a page whose image follows its text is not retried as well"
+        );
+        assert_eq!(
+            plan.note().as_deref(),
+            Some(
+                "images: one for each of up to 2 pages once its text is settled, \
+                 and 1 page retried from an earlier run"
+            )
         );
     }
 

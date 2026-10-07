@@ -1,5 +1,6 @@
 //! The only network code in knowmoretabs: one cookieless, guarded GET,
-//! with every redirect hop checked before it is requested.
+//! with every redirect hop checked before it is requested, and the guarded
+//! connect behind every connection a rendered page makes.
 //!
 //! slice: enrich, content
 //! why: A network command is opt-in because it sends the URLs you visited
@@ -9,12 +10,14 @@
 //!      this machine, the private network or a login screen is refused before
 //!      it is requested; and every name is resolved through a resolver that
 //!      refuses private addresses, so a public name pointing inward is caught
-//!      at the one moment it matters, the connect. What a response means is
-//!      the caller's business; how it was fetched is this module's alone.
+//!      at the one moment it matters, the connect. A browser rendering a
+//!      page connects through the same rule, so the headless tier cannot
+//!      reach what plain fetching may not. What a response means is the
+//!      caller's business; how it was fetched is this module's alone.
 
 use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Read};
-use std::net::SocketAddr;
+use std::net::{Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
@@ -22,7 +25,7 @@ use ureq::config::Config;
 use ureq::http::Uri;
 use ureq::unversioned::resolver::{DefaultResolver, ResolvedSocketAddrs, Resolver};
 use ureq::unversioned::transport::{DefaultConnector, NextTimeout};
-use url::Url;
+use url::{Host, Url};
 
 use crate::guard::{
     self, carries_token, is_login_page, is_login_redirect, is_private_host, is_public,
@@ -160,24 +163,8 @@ impl Fetcher {
             return Err(Refusal::InvalidUrl);
         };
         for hop in 0..=MAX_REDIRECTS {
-            if !is_web(&url) {
-                return Err(Refusal::NotWeb);
-            }
-            if is_private_host(&url) {
-                return Err(Refusal::PrivateNetwork {
-                    redirected: hop > 0,
-                });
-            }
-            if self.forgotten.contains(url.as_str()) {
-                return Err(Refusal::Forgotten);
-            }
-            if carries_token(&url) || is_search_results(&url) {
-                return Err(Refusal::TokenOrSearch);
-            }
-            if is_login_page(&url) || (hop > 0 && is_login_redirect(&url)) {
-                return Err(Refusal::Login(url));
-            }
-            if !self.pacer.wait(&guard::host_key(&url), deadline) {
+            self.check(&url, hop)?;
+            if !self.pace(&url, deadline) {
                 return Err(Refusal::Failed("timeout".to_owned()));
             }
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -219,6 +206,36 @@ impl Fetcher {
             });
         }
         Err(Refusal::TooManyRedirects)
+    }
+
+    /// What the rules say about `url` as hop `hop` of a request: 0 for the
+    /// address asked for, more for a redirect. A browser rendering a page
+    /// asks the same before it navigates and of where the page ended.
+    pub fn check(&self, url: &Url, hop: usize) -> Result<(), Refusal> {
+        if !is_web(url) {
+            return Err(Refusal::NotWeb);
+        }
+        if is_private_host(url) {
+            return Err(Refusal::PrivateNetwork {
+                redirected: hop > 0,
+            });
+        }
+        if self.forgotten.contains(url.as_str()) {
+            return Err(Refusal::Forgotten);
+        }
+        if carries_token(url) || is_search_results(url) {
+            return Err(Refusal::TokenOrSearch);
+        }
+        if is_login_page(url) || (hop > 0 && is_login_redirect(url)) {
+            return Err(Refusal::Login(url.clone()));
+        }
+        Ok(())
+    }
+
+    /// Waits for the next free slot of `url`'s host, the one pacer every
+    /// request shares; false when that slot falls past `deadline`.
+    pub fn pace(&self, url: &Url, deadline: Instant) -> bool {
+        self.pacer.wait(&guard::host_key(url), deadline)
     }
 
     /// Halves the request rate to `url`'s host for the rest of the run, down
@@ -441,7 +458,7 @@ impl Resolver for PublicOnly {
             return Ok(addresses);
         }
         let addresses = DefaultResolver::default().resolve(uri, config, timeout)?;
-        if addresses.iter().all(|a| is_public(a.ip())) {
+        if all_public(addresses.iter()) {
             Ok(addresses)
         } else {
             Err(ureq::Error::Io(io::Error::new(
@@ -450,6 +467,74 @@ impl Resolver for PublicOnly {
             )))
         }
     }
+}
+
+/// The one rule for what a name resolved to, whoever connects: every
+/// address public, so one inward address among public ones is refused.
+fn all_public<'a>(addresses: impl IntoIterator<Item = &'a SocketAddr>) -> bool {
+    addresses.into_iter().all(|address| is_public(address.ip()))
+}
+
+/// Opens a connection to `host` on `port` for a caller that speaks its own
+/// protocol over it, the headless tier's relay, under the fetcher's rules
+/// for where a connection may go: the name rule, then one resolution,
+/// refused unless every address is public, then a connect to the first
+/// checked address that answers before `deadline`. The checked address is
+/// the one connected to, so a name is never resolved twice. `test_address`
+/// stands in for every host, as it does for the fetcher.
+pub fn connect_public(
+    host: &str,
+    port: u16,
+    deadline: Instant,
+    test_address: Option<SocketAddr>,
+) -> Result<TcpStream, Refusal> {
+    let bracketed = if host.parse::<Ipv6Addr>().is_ok() {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    let url =
+        Url::parse(&format!("http://{bracketed}:{port}/")).map_err(|_| Refusal::InvalidUrl)?;
+    if is_private_host(&url) {
+        return Err(Refusal::PrivateNetwork { redirected: false });
+    }
+    let addresses = match test_address {
+        Some(address) => vec![address],
+        None => resolve_public(&url, port)?,
+    };
+    let mut failure = io::Error::from(io::ErrorKind::TimedOut);
+    for address in addresses {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match TcpStream::connect_timeout(&address, remaining) {
+            Ok(stream) => return Ok(stream),
+            Err(err) => failure = err,
+        }
+    }
+    Err(Refusal::Failed(io_reason(&failure)))
+}
+
+/// The addresses of `url`'s host, refused unless every one is public.
+fn resolve_public(url: &Url, port: u16) -> Result<Vec<SocketAddr>, Refusal> {
+    let not_found = || Refusal::Failed("host not found".to_owned());
+    let addresses: Vec<SocketAddr> = match url.host() {
+        Some(Host::Domain(name)) => (name, port)
+            .to_socket_addrs()
+            .map_err(|_| not_found())?
+            .collect(),
+        Some(Host::Ipv4(ip)) => vec![SocketAddr::new(ip.into(), port)],
+        Some(Host::Ipv6(ip)) => vec![SocketAddr::new(ip.into(), port)],
+        None => return Err(Refusal::InvalidUrl),
+    };
+    if addresses.is_empty() {
+        return Err(not_found());
+    }
+    if !all_public(&addresses) {
+        return Err(Refusal::PrivateAddress);
+    }
+    Ok(addresses)
 }
 
 #[derive(Debug)]
@@ -466,7 +551,7 @@ impl std::error::Error for PrivateAddress {}
 /// Debug builds only, so no shipped binary can be pointed at loopback: the
 /// integration tests' server, standing in for every host.
 #[cfg(debug_assertions)]
-fn test_address() -> Option<SocketAddr> {
+pub fn test_address() -> Option<SocketAddr> {
     std::env::var("KNOWMORETABS_TEST_RESOLVE")
         .ok()?
         .parse()
@@ -474,7 +559,7 @@ fn test_address() -> Option<SocketAddr> {
 }
 
 #[cfg(not(debug_assertions))]
-fn test_address() -> Option<SocketAddr> {
+pub fn test_address() -> Option<SocketAddr> {
     None
 }
 

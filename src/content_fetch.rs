@@ -12,19 +12,21 @@
 //!      and a site that says slow down gets fewer requests for the rest of
 //!      the run. The decisions are pure functions so they can be tested
 //!      without a network, and the X post route answers by the same rules.
+//!      A page a browser rendered is read from its HTML on, as a response is.
 
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::time::Duration;
 
 use jiff::Timestamp;
+use url::Url;
 
 use crate::content_store::{Access, Completeness, Line, Page, Status, Tier};
 use crate::extract::{self, Class};
 use crate::fetch::{self, Fetcher, Refusal, Response};
 use crate::head;
 use crate::image_page;
-use crate::image_pick::{self, Found};
+use crate::image_pick::{self, Found, Source};
 
 /// The most of a page's body read; enough for any article, not for a file.
 pub const BODY_CAP: usize = 10 * 1024 * 1024;
@@ -210,14 +212,44 @@ fn read(raw: &str, mut response: Response, images: bool) -> Result<Capture, Pass
             ));
         }
     };
-    let found = extract::page(&html, Some(&final_url));
+    Ok(from_html(
+        raw,
+        Tier::Web,
+        &response.url,
+        status,
+        &html,
+        images,
+    ))
+}
+
+/// What a page's decoded `html` says about page `raw`, read by `tier` at
+/// `final_url` with HTTP `status`: its class, its text, and with `images`
+/// the images it names. The web tier reads the HTML from a response, the
+/// headless tier from a page a browser rendered; the rules are the same.
+pub fn from_html(
+    raw: &str,
+    tier: Tier,
+    final_url: &Url,
+    status: u16,
+    html: &str,
+    images: bool,
+) -> Capture {
+    let found = extract::page(html, Some(final_url.as_str()));
     // A sign-in screen's head describes the screen, not the page.
     let images = if !images || found.class == Class::BehindLogin {
         Found::Unread
     } else {
-        image_page::page(&html, found.article.as_deref(), &response.url)
+        let body = if tier == Tier::Headless {
+            Source::RenderedImg
+        } else {
+            Source::BodyImg
+        };
+        image_page::page(html, found.article.as_deref(), final_url, body)
     };
-    let mut captured = line(class_status(found.class), found.reason.map(str::to_owned));
+    let mut captured = public_line(raw, tier, class_status(found.class));
+    captured.reason = found.reason.map(str::to_owned);
+    captured.final_url = Some(final_url.to_string());
+    captured.http_status = Some(status);
     captured.lang.clone_from(&found.lang);
     let page = (!found.markdown.is_empty()).then(|| {
         captured.extractor = Some(found.extractor.to_owned());
@@ -240,11 +272,11 @@ fn read(raw: &str, mut response: Response, images: bool) -> Result<Capture, Pass
             markdown: found.markdown,
         }
     });
-    Ok(Capture {
+    Capture {
         line: captured,
         page,
         images,
-    })
+    }
 }
 
 /// A passing failure `failed`, to be retried no sooner than `response`
@@ -488,6 +520,48 @@ mod tests {
         .line;
         assert_eq!(login.status, Status::BehindLogin);
         assert_eq!(login.final_url.as_deref(), Some("https://a.test/login"));
+    }
+
+    #[test]
+    fn rendered_html_is_read_by_the_same_rules_and_names_its_images_as_rendered() {
+        let html = format!(
+            r#"<html lang="en"><head><title>Rendered</title></head><body><main><p>{}</p>
+            <img src="/lead.jpg" width="1200" height="800"></main></body></html>"#,
+            "Words a script drew. ".repeat(100)
+        );
+        let url = Url::parse("https://a.test/after").unwrap();
+        let rendered = from_html("https://a.test/", Tier::Headless, &url, 200, &html, true);
+        let line = &rendered.line;
+        assert_eq!(
+            (line.status, line.tier, line.access, line.http_status),
+            (
+                Status::Ok,
+                Some(Tier::Headless),
+                Some(Access::Public),
+                Some(200)
+            )
+        );
+        assert_eq!(line.url, "https://a.test/");
+        assert_eq!(line.final_url.as_deref(), Some("https://a.test/after"));
+        assert_eq!(line.lang.as_deref(), Some("en"));
+        assert!(
+            rendered
+                .page
+                .is_some_and(|page| page.chars >= extract::ENOUGH)
+        );
+        let Found::Candidates(found) = rendered.images else {
+            panic!("a rendered page names its images");
+        };
+        assert_eq!(found.len(), 1);
+        assert_eq!(
+            (found[0].url.as_str(), found[0].source),
+            ("https://a.test/lead.jpg", Source::RenderedImg)
+        );
+        let served = from_html("https://a.test/", Tier::Web, &url, 200, &html, true);
+        assert_eq!(served.line.tier, Some(Tier::Web));
+        assert!(
+            matches!(served.images, Found::Candidates(found) if found[0].source == Source::BodyImg)
+        );
     }
 
     #[test]

@@ -262,3 +262,30 @@ fn without_a_test_address_loopback_names_are_refused_at_the_connect() {
         Some(Refusal::PrivateNetwork { redirected: false })
     );
 }
+
+#[test]
+fn a_connection_is_refused_where_a_request_would_be() {
+    let fetcher = Fetcher::with(Duration::from_secs(5), None, PACE);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    for (host, raw) in [
+        ("127.0.0.1", "http://127.0.0.1:9/"),
+        ("localhost", "http://localhost:9/"),
+        ("::1", "http://[::1]:9/"),
+        ("printer.local", "http://printer.local:9/"),
+        ("intranet", "http://intranet:9/"),
+    ] {
+        let refused = connect_public(host, 9, deadline, None).err();
+        assert_eq!(refused, Some(Refusal::PrivateNetwork { redirected: false }));
+        assert_eq!(refused, fetcher.get(raw, ACCEPT_HTML).err(), "{host}");
+    }
+    // The name rule passed over: what `localhost` resolves to is refused.
+    let url = Url::parse("http://localhost:9/").unwrap();
+    assert_eq!(resolve_public(&url, 9).err(), Some(Refusal::PrivateAddress));
+    let public: SocketAddr = "93.184.216.34:80".parse().unwrap();
+    let inward: SocketAddr = "10.0.0.1:80".parse().unwrap();
+    assert!(all_public(&[public]));
+    assert!(
+        !all_public(&[public, inward]),
+        "one inward address among public ones"
+    );
+}

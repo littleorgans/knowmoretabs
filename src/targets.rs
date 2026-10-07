@@ -72,6 +72,9 @@ pub enum Why {
     Retry,
     /// A sign-in, sign-up or verification screen: recorded, never fetched.
     Login,
+    /// Read as thin or empty over HTTP before: rendered in a browser, with
+    /// no new HTTP read.
+    Render,
 }
 
 impl Why {
@@ -81,6 +84,7 @@ impl Why {
             Self::Refetch => "refetch".to_owned(),
             Self::Retry => "retry after an error".to_owned(),
             Self::Login => "login page: recorded as behind_login, not fetched".to_owned(),
+            Self::Render => "render in a browser".to_owned(),
         }
     }
 }
@@ -168,6 +172,8 @@ pub enum Recorded {
     Final,
     /// A failure the command retries on its next run.
     Failed,
+    /// An outcome a browser may improve on: rendered in one.
+    Render,
 }
 
 /// Library pages newest sighting first, excluding prior attempts unless
@@ -211,6 +217,7 @@ pub fn plan(
                 Recorded::Nothing => Why::New,
                 Recorded::Final => Why::Refetch,
                 Recorded::Failed => Why::Retry,
+                Recorded::Render => Why::Render,
             }
         };
         let item = Item {

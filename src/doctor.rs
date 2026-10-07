@@ -7,17 +7,21 @@
 //!      owner needs one place that says what is ready, what is missing and
 //!      how to fix it, before a long run rather than after. It reads the
 //!      machine and the archive offline by default. With `--live`, `gh`
-//!      checks its own sign in with GitHub and the X post API is asked
-//!      once for a fixed public post. It sends nothing of the owner's.
+//!      checks its own sign in with GitHub, the X post API is asked once
+//!      for a fixed public post, and the browser is started headless once,
+//!      asked its version and closed, with no page. It sends nothing of the
+//!      owner's.
 //!      Missing tools are warnings: only the generic web tier is required,
 //!      and it is compiled in.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 
+use crate::browser::{self, Browser};
 use crate::capture::Log;
 use crate::content_store;
 use crate::error::Error;
@@ -174,14 +178,20 @@ pub struct Report {
     pub archive: Archive,
 }
 
+/// How a live start of the browser went: how long it took to answer and
+/// the version it gave, or why it did not.
+pub type Started = Result<(Duration, String), String>;
+
 impl Report {
     /// What `probe` finds, for headless reading with browser `browser`;
-    /// `x` is what the X post API answered in live mode; `None` keeps
-    /// every check offline, including GitHub sign in.
+    /// `x` is what the X post API answered in live mode, and `started` how
+    /// the browser started; `None` keeps every check offline, including
+    /// GitHub sign in.
     pub fn gather(
         probe: &impl Probe,
         browser: &str,
         x: Option<Result<u16, String>>,
+        started: Option<Started>,
         archive: Archive,
     ) -> Self {
         let checks = vec![
@@ -189,7 +199,7 @@ impl Report {
             github(probe, x.is_some()),
             x_check(x),
             youtube(probe),
-            headless(probe, browser),
+            headless(probe, browser, started),
             archive.check(),
         ];
         let ready = checks
@@ -340,31 +350,64 @@ fn youtube(probe: &impl Probe) -> Check {
     )
 }
 
-fn headless(probe: &impl Probe, browser: &str) -> Check {
-    let later = "the headless tier is not built yet";
-    if platform::browser(browser).is_none() {
-        return Check::new(
-            "headless",
-            State::Missing,
-            format!("unknown browser {browser:?}; {later}"),
-        )
-        .hint("pass --browser with chrome, chrome-beta, chrome-canary, chromium, brave, edge or vivaldi");
-    }
-    match probe.browser(browser) {
-        Some(path) => Check::new(
-            "headless",
-            State::Ready,
-            format!("{}; {later}", found(probe, browser, &path)),
+fn headless(probe: &impl Probe, browser: &str, started: Option<Started>) -> Check {
+    let waiting = "pages that need a browser wait for it";
+    let why = match browser::Readiness::check(probe, browser, false) {
+        browser::Readiness::Ready(path) => Ok(path),
+        browser::Readiness::Missing(why) => Err(why),
+        browser::Readiness::Off => Err("turned off".to_owned()),
+    };
+    let path = match why {
+        Ok(path) => path,
+        Err(why) => {
+            let hint = if platform::browser(browser).is_none() {
+                "pass --browser with chrome, chrome-beta, chrome-canary, chromium, brave, edge or vivaldi"
+                    .to_owned()
+            } else {
+                format!("install {browser}, or pass --browser with one you have")
+            };
+            return Check::new("headless", State::Missing, format!("{why}; {waiting}")).hint(hint);
+        }
+    };
+    let mut detail = match probe.version(&path) {
+        Some(version) => format!(
+            "{} at {}",
+            named(browser, Some(version), &path),
+            path.display()
         ),
-        None => Check::new(
-            "headless",
-            State::Missing,
-            format!("no {browser} binary found; {later}"),
-        )
-        .hint(format!(
-            "install {browser}, or pass --browser with one you have"
-        )),
+        None => named(browser, None, &path),
+    };
+    match started {
+        None => {
+            detail.push_str("; not started (doctor --live starts it once)");
+            Check::new("headless", State::Ready, detail)
+        }
+        Some(Ok((took, version))) => {
+            let _ = write!(
+                detail,
+                "; started headless in {:.1} s ({version})",
+                took.as_secs_f64()
+            );
+            Check::new("headless", State::Ready, detail)
+        }
+        Some(Err(why)) => {
+            let _ = write!(detail, "; did not start headless: {why}");
+            Check::new("headless", State::Degraded, detail).hint(format!(
+                "run knowmoretabs doctor --live again, or pass --browser with another; {waiting}"
+            ))
+        }
     }
+}
+
+/// Starts the browser at `path` headless, asks its version and closes it:
+/// no page is loaded.
+fn start(path: &Path, log: Log) -> Started {
+    let began = Instant::now();
+    let browser = Browser::launch(path, log)?;
+    let took = began.elapsed();
+    let version = browser.version()?;
+    drop(browser);
+    Ok((took, version))
 }
 
 pub fn command(
@@ -374,13 +417,12 @@ pub fn command(
     json: bool,
     log: Log,
 ) -> Result<(), Error> {
+    let browser = browser.unwrap_or(platform::CHROME);
     let x = live.then(|| xpost::reachable(&Fetcher::new(&BTreeSet::new())));
-    let report = Report::gather(
-        &System,
-        browser.unwrap_or(platform::CHROME),
-        x,
-        Archive::read(root)?,
-    );
+    let started = live
+        .then(|| browser::Readiness::check(&System, browser, false))
+        .and_then(|readiness| Some(start(readiness.path()?, log)));
+    let report = Report::gather(&System, browser, x, started, Archive::read(root)?);
     if json {
         out::json(&serde_json::to_value(&report).unwrap_or_default());
     } else if !log.quiet {
@@ -441,7 +483,7 @@ mod tests {
     fn offline_checks_never_ask_gh_about_sign_in() {
         let mut table = everything();
         table.codes.insert(path("gh"), 1);
-        let report = Report::gather(&table, platform::CHROME, None, archive());
+        let report = Report::gather(&table, platform::CHROME, None, None, archive());
         assert!(
             table.runs.borrow().is_empty(),
             "offline doctor must not ask gh"
@@ -458,11 +500,25 @@ mod tests {
                 .text()
                 .contains("sign in not checked (run doctor --live)")
         );
+        assert_eq!(
+            report.checks[4].detail,
+            "Google Chrome 141.0.0.0 at /opt/bin/chrome; not started (doctor --live starts it once)"
+        );
+        assert!(!report.text().contains("not built yet"));
     }
 
     #[test]
     fn a_fully_equipped_machine_is_ready_on_every_line() {
-        let report = Report::gather(&everything(), platform::CHROME, Some(Ok(200)), archive());
+        let report = Report::gather(
+            &everything(),
+            platform::CHROME,
+            Some(Ok(200)),
+            Some(Ok((
+                Duration::from_millis(840),
+                "HeadlessChrome/141.0.0.0".to_owned(),
+            ))),
+            archive(),
+        );
         assert!(report.ready);
         assert!(
             report
@@ -491,7 +547,11 @@ mod tests {
             detail("youtube"),
             "yt-dlp 2026.09.01; deno 2.5.0 (stable), node v25.0.0; videos are read through yt-dlp"
         );
-        assert!(detail("headless").starts_with("Google Chrome 141.0.0.0;"));
+        assert_eq!(
+            detail("headless"),
+            "Google Chrome 141.0.0.0 at /opt/bin/chrome; started headless in 0.8 s \
+             (HeadlessChrome/141.0.0.0)"
+        );
         assert_eq!(
             detail("archive"),
             "/home/someone/.knowmoretabs, private; pages/content present; 1 behind_login, 70 ok"
@@ -503,7 +563,7 @@ mod tests {
         let bare = Table::default();
         let mut no_archive = archive();
         no_archive.exists = false;
-        let report = Report::gather(&bare, platform::CHROME, None, no_archive);
+        let report = Report::gather(&bare, platform::CHROME, None, None, no_archive);
         assert!(report.ready, "only the generic tier is required");
         assert_eq!(
             states(&report),
@@ -539,7 +599,7 @@ mod tests {
         table.found.remove("node");
         let mut open = archive();
         open.private = Some(false);
-        let report = Report::gather(&table, platform::CHROME, Some(Ok(503)), open);
+        let report = Report::gather(&table, platform::CHROME, Some(Ok(503)), None, open);
         assert!(report.ready);
         assert_eq!(
             states(&report),
@@ -572,7 +632,14 @@ mod tests {
             &table,
             platform::CHROME,
             Some(Err("timeout".into())),
+            Some(Err("Google Chrome was not ready after 10 s".into())),
             archive(),
+        );
+        assert_eq!(unreachable.checks[4].state, State::Degraded);
+        assert_eq!(
+            unreachable.checks[4].detail,
+            "Google Chrome 141.0.0.0 at /opt/bin/chrome; did not start headless: \
+             Google Chrome was not ready after 10 s"
         );
         assert_eq!(
             unreachable.checks[2].detail,
@@ -582,10 +649,10 @@ mod tests {
 
     #[test]
     fn headless_follows_the_chosen_browser() {
-        let report = Report::gather(&everything(), platform::BRAVE, None, archive());
+        let report = Report::gather(&everything(), platform::BRAVE, None, None, archive());
         assert_eq!(report.checks[4].state, State::Missing);
         assert!(report.checks[4].detail.starts_with("no brave binary found"));
-        let unknown = Report::gather(&everything(), "arc", None, archive());
+        let unknown = Report::gather(&everything(), "arc", None, None, archive());
         assert!(
             unknown.checks[4]
                 .detail
@@ -595,7 +662,7 @@ mod tests {
 
     #[test]
     fn the_json_report_has_a_line_per_tier_and_the_archive() {
-        let report = Report::gather(&Table::default(), platform::CHROME, None, archive());
+        let report = Report::gather(&Table::default(), platform::CHROME, None, None, archive());
         let value = serde_json::to_value(&report).unwrap();
         assert_eq!(value["ready"], true);
         assert_eq!(value["checks"][1]["tier"], "github");

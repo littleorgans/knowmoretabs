@@ -10,18 +10,23 @@
 //!      and the report says how each page ended, how long fetches took,
 //!      when GitHub pages were read from the web because `gh` could not,
 //!      how many videos wait for yt-dlp, and how each page's image ended.
-//!      Unless `--no-images`, each page's image follows its text.
+//!      Unless `--no-images`, each page's image follows its text. Pages
+//!      that read thin or empty are rendered in a browser after the HTTP
+//!      reads (`content_headless`), and the report counts each page once,
+//!      by the run's last line for it.
 
 use std::borrow::Cow;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::path::Path;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::archive::Archive;
+use crate::browser;
 use crate::capture::Log;
 use crate::content_fetch::{self, Capture};
+use crate::content_headless::{self, Escalated, Headless};
 use crate::content_image::{self, Images};
 use crate::content_plan::{self, Work};
 use crate::content_route::Tools;
@@ -44,21 +49,29 @@ const PROGRESS_EVERY: usize = 25;
 /// What a run did.
 #[derive(Debug, Default)]
 struct Tally {
-    counts: Counts<Status>,
+    /// The run's last line for each library page, so a page rendered after
+    /// its HTTP read is counted once, as rendered.
+    lines: BTreeMap<String, Line>,
     fetches: usize,
     /// How long each fetch took, retries and extraction included.
     durations: Vec<Duration>,
     /// Video pages left for a run with yt-dlp, unrecorded.
     waiting: usize,
+    headless: Headless,
     /// How each page's image ended, when images were captured.
     images: Option<Counts<image_store::Status>>,
 }
 
 impl Tally {
-    fn add(&mut self, line: &Line) {
-        let reason =
-            (line.status != Status::Ok).then(|| line.reason.as_deref().unwrap_or_default());
-        self.counts.add(line.status, reason);
+    /// How many pages ended in each status, and why.
+    fn counts(&self) -> Counts<Status> {
+        let mut counts = Counts::default();
+        for line in self.lines.values() {
+            let reason =
+                (line.status != Status::Ok).then(|| line.reason.as_deref().unwrap_or_default());
+            counts.add(line.status, reason);
+        }
+        counts
     }
 }
 
@@ -70,6 +83,10 @@ pub struct Args<'a> {
     pub urls: &'a [String],
     /// Text only: no preview images this run.
     pub no_images: bool,
+    /// The browser pages are rendered in: a browser id.
+    pub browser: &'a str,
+    /// No browser this run: pages that need one wait.
+    pub no_browser: bool,
 }
 
 pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), Error> {
@@ -77,6 +94,8 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
         options,
         urls,
         no_images,
+        browser,
+        no_browser,
     } = args;
     let archive = Archive::at(root);
     let loaded = library::load(&archive)?;
@@ -102,7 +121,11 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
             ytdlp::Readiness::check(&System)
         }
     };
-    let (plan, work) = content_plan::plan(&snapshots, &state, &known, options, github, youtube);
+    // Looked for on disk, never run, so a dry run asks the same.
+    let rendering = || browser::Readiness::check(&System, browser, no_browser);
+    let (plan, work) = content_plan::plan(
+        &snapshots, &state, &known, options, github, youtube, rendering,
+    );
     let images = if no_images {
         None
     } else {
@@ -112,17 +135,28 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
     };
     let mut notes = work.notes();
     if options.dry_run {
+        notes.extend(content_headless::dry_run_notes(
+            work.browser.as_ref(),
+            work.renders.len(),
+            work.browser_waiting,
+            work.reads_the_web(),
+        ));
         notes.extend(images.as_ref().and_then(content_image::Plan::note));
         targets::report_dry_run(&plan, options, json, log, work.seconds_at_least(), &notes);
         return Ok(());
     }
     let started = Instant::now();
     let waiting = work.waiting;
+    let headless = Headless::new(work.browser.as_ref(), work.browser_waiting);
     let images = images.filter(|images| !images.is_empty());
-    let mut tally = if work.fetches.is_empty() && work.unsent.is_empty() && images.is_none() {
-        Tally::default()
+    let idle = work.fetches.is_empty() && work.renders.is_empty() && work.unsent.is_empty();
+    let mut tally = if idle && images.is_none() {
+        Tally {
+            headless,
+            ..Tally::default()
+        }
     } else {
-        run(root, work, &state, images, log)?
+        run(root, work, &state, images, headless, log)?
     };
     tally.waiting = waiting;
     report(&plan, &tally, &notes, started.elapsed(), root, json, log);
@@ -161,12 +195,15 @@ fn only<'a>(snapshots: &'a [Snapshot], urls: &[String]) -> Result<Cow<'a, [Snaps
 
 /// Records the pages that need no request, then fetches the rest, each
 /// host's pages in order on one of the shared workers, each page's image
-/// after its text, then retries the images that failed before.
+/// after its text; then renders in a browser the pages that read thin or
+/// empty, each page's image after its render; then retries the images
+/// that failed before.
 fn run(
     root: &Path,
     work: Work,
     state: &State,
     images: Option<content_image::Plan>,
+    mut headless: Headless,
     log: Log,
 ) -> Result<Tally, Error> {
     let store = Mutex::new(Store::open(root)?);
@@ -174,15 +211,11 @@ fn run(
         .map(|plan| Images::open(root, plan, log))
         .transpose()?;
     let tally = Mutex::new(Tally::default());
-    let record = |line: Line, page: Option<&content_store::Page>| -> Result<Status, Error> {
+    let write = |line: Line, page: Option<&content_store::Page>| -> Result<Line, Error> {
         let line = store
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .record(line, page)?;
-        tally
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .add(&line);
         log.note(&format!(
             "{} {}{}",
             line.status.word(),
@@ -192,11 +225,18 @@ fn run(
                 .map(|r| format!(" ({r})"))
                 .unwrap_or_default()
         ));
-        Ok(line.status)
+        tally
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .lines
+            .insert(line.url.clone(), line.clone());
+        Ok(line)
     };
     for line in work.unsent {
-        record(line, None)?;
+        write(line, None)?;
     }
+    let rendering = work.browser.as_ref().and_then(browser::Readiness::path);
+    let escalated = Escalated::new(rendering.is_some());
     let fetcher = Fetcher::new(&state.forgotten);
     let tools = Tools {
         gh: work.github.as_ref().and_then(Readiness::gh),
@@ -221,17 +261,19 @@ fn run(
                 tally.fetches += 1;
                 tally.durations.push(started.elapsed());
             }
-            let mut settled = Vec::with_capacity(fetch.pages.len());
+            let mut lines = Vec::with_capacity(fetch.pages.len());
             for (url, attempt) in &fetch.pages {
                 let mut line = line.clone();
                 line.url.clone_from(url);
-                let status = record(content_fetch::settle(line, *attempt), page.as_ref())?;
-                settled.push((url.as_str(), status));
+                lines.push(write(content_fetch::settle(line, *attempt), page.as_ref())?);
             }
-            match &images {
-                Some(images) => images.after(&fetcher, &settled, &found),
-                None => Ok(()),
+            // A page rendered after gets its image after the render.
+            if escalated.keep(&lines, &found) {
+                return Ok(());
             }
+            images
+                .as_ref()
+                .map_or(Ok(()), |images| images.after(&fetcher, &lines, &found))
         },
         |n, total| {
             if n.is_multiple_of(PROGRESS_EVERY) && n < total {
@@ -239,20 +281,37 @@ fn run(
             }
         },
     )?;
+    let (escalated, unrendered) = escalated.into_parts();
+    headless.wait(unrendered);
+    let mut renders = work.renders;
+    renders.extend(escalated);
+    if let Some(path) = rendering {
+        content_headless::run(
+            &renders,
+            path,
+            &fetcher,
+            images.as_ref(),
+            write,
+            &mut headless,
+            log,
+        )?;
+    }
     if let Some(images) = &images {
         images.retry(&fetcher)?;
     }
     let mut tally = tally.into_inner().unwrap_or_else(PoisonError::into_inner);
+    tally.headless = headless;
     tally.images = images.map(Images::counts);
     Ok(tally)
 }
 
-fn seconds(duration: Duration) -> f64 {
+/// Seconds to a tenth.
+pub fn seconds(duration: Duration) -> f64 {
     (duration.as_secs_f64() * 10.0).round() / 10.0
 }
 
-/// The median and longest fetch.
-fn spread(durations: &[Duration]) -> Option<(Duration, Duration)> {
+/// The median and the longest of `durations`.
+pub fn spread(durations: &[Duration]) -> Option<(Duration, Duration)> {
     let mut sorted = durations.to_vec();
     sorted.sort_unstable();
     Some((*sorted.get(sorted.len() / 2)?, *sorted.last()?))
@@ -267,10 +326,11 @@ fn report(
     json: bool,
     log: Log,
 ) {
-    let recorded = tally.counts.total();
+    let counts = tally.counts();
+    let recorded = counts.total();
     let spread = spread(&tally.durations);
     if json {
-        let (statuses, reasons) = tally.counts.json();
+        let (statuses, reasons) = counts.json();
         let mut report = serde_json::json!({
             "recorded": recorded,
             "fetched": tally.fetches,
@@ -284,6 +344,7 @@ fn report(
             "fetch_seconds": spread.map(|(median, longest)| serde_json::json!({
                 "median": seconds(median), "longest": seconds(longest),
             })),
+            "headless": tally.headless.json(),
             "log": content_store::log_path(root),
             "dir": content_store::dir(root),
         });
@@ -300,18 +361,18 @@ fn report(
     if recorded == 0 {
         let _ = writeln!(text, "nothing to capture");
     } else {
-        let counts = tally.counts.summary();
         let _ = writeln!(
             text,
-            "recorded {} in {} s, {}: {counts}",
+            "recorded {} in {} s, {}: {}",
             plural(recorded, "page"),
             took.as_secs_f64().round(),
             match tally.fetches {
                 1 => "1 fetch".to_owned(),
                 n => format!("{n} fetches"),
             },
+            counts.summary(),
         );
-        for line in tally.counts.reason_lines() {
+        for line in counts.reason_lines() {
             let _ = writeln!(text, "{line}");
         }
         if let Some((median, longest)) = spread {
@@ -332,6 +393,9 @@ fn report(
     if let Some(images) = &tally.images {
         text.push_str(&content_image::report(images, root));
     }
+    for line in tally.headless.lines() {
+        let _ = writeln!(text, "{line}");
+    }
     for note in notes {
         let _ = writeln!(text, "{note}");
     }
@@ -346,7 +410,7 @@ fn report(
 mod tests {
     use super::*;
     use crate::content_plan::plan;
-    use crate::content_test::{log, no_gh, no_ytdlp, snapshot, state};
+    use crate::content_test::{log, no_browser, no_gh, no_ytdlp, snapshot, state};
     use crate::targets::Skip;
 
     #[test]
@@ -367,12 +431,21 @@ mod tests {
             Options::default(),
             no_gh,
             no_ytdlp,
+            no_browser,
         );
         assert_eq!(plan.not_fetched.len(), 6);
         assert_eq!(plan.skip_counts()[&Skip::NotWeb], 2);
         assert!(work.fetches.is_empty());
         let root = tempfile::tempdir().unwrap();
-        run(root.path(), work, &state, None, Log::default()).unwrap();
+        run(
+            root.path(),
+            work,
+            &state,
+            None,
+            Headless::default(),
+            Log::default(),
+        )
+        .unwrap();
         assert_eq!(
             std::fs::read(content_store::log_path(root.path())).unwrap(),
             [] as [u8; 0]
@@ -382,6 +455,27 @@ mod tests {
                 .unwrap()
                 .count(),
             0
+        );
+    }
+
+    #[test]
+    fn each_page_is_counted_once_by_its_last_line_in_the_run() {
+        let mut tally = Tally::default();
+        for (url, status) in [
+            ("https://a.test/p", Status::Thin),
+            ("https://a.test/p#part", Status::Thin),
+            ("https://b.test/", Status::Ok),
+            ("https://a.test/p", Status::Ok),
+            ("https://a.test/p#part", Status::Ok),
+        ] {
+            tally.lines.insert(url.to_owned(), Line::new(url, status));
+        }
+        let counts = tally.counts();
+        assert_eq!(counts.total(), 3, "one per page, aliases apart");
+        assert_eq!(
+            counts.summary(),
+            "3 ok",
+            "the render replaced the HTTP read"
         );
     }
 

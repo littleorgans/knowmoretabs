@@ -51,6 +51,8 @@ pub enum Source {
     JsonldImage,
     ItempropImage,
     BodyImg,
+    /// An `<img>` of the page as a browser rendered it.
+    RenderedImg,
     /// A source a newer build wrote.
     #[serde(other)]
     Unknown,
@@ -68,7 +70,7 @@ impl Source {
             | Self::GithubReadme
             | Self::GithubCard => 1,
             Self::OgImage | Self::TwitterImage | Self::JsonldImage | Self::ItempropImage => 2,
-            Self::BodyImg | Self::Unknown => 3,
+            Self::BodyImg | Self::RenderedImg | Self::Unknown => 3,
         }
     }
 }
@@ -328,6 +330,23 @@ mod tests {
                 "https://a.test/2.jpg"
             ]
         );
+    }
+
+    #[test]
+    fn a_rendered_image_stands_with_the_body_images() {
+        let rendered = serde_json::to_value(Source::RenderedImg).unwrap();
+        assert_eq!(rendered, "rendered_img");
+        assert_eq!(
+            serde_json::from_value::<Source>(rendered).unwrap(),
+            Source::RenderedImg
+        );
+        assert_eq!(Source::RenderedImg.rung(), Source::BodyImg.rung());
+        assert_eq!(
+            serde_json::from_str::<Source>(r#""from_a_later_build""#).unwrap(),
+            Source::Unknown,
+            "what an older build reads it as, on the same rung"
+        );
+        assert_eq!(Source::Unknown.rung(), 3);
     }
 
     #[test]

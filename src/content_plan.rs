@@ -13,20 +13,25 @@
 //!      goes to. A tool is asked about only when the plan has a page for
 //!      it: without a signed in `gh` a GitHub page is planned for the web
 //!      instead, and without yt-dlp a video waits, unrecorded, for a run
-//!      that has it.
+//!      that has it. A page an earlier run read as thin or empty is
+//!      rendered in a browser when there is one, without a new HTTP read,
+//!      and waits for one when there is not.
 
-use std::cell::OnceCell;
+use std::cell::{Cell, OnceCell};
 use std::collections::HashMap;
 
 use url::Url;
 
+use crate::browser;
 use crate::content_fetch;
+use crate::content_headless::{Render, escalates};
 use crate::content_route::Route;
 use crate::content_store::{self, Line, Status};
 use crate::github_api::Readiness;
+use crate::image_pick::Found;
 use crate::library::State;
 use crate::model::Snapshot;
-use crate::targets::{self, Forgotten, Item, Options, Plan, Skip, Why};
+use crate::targets::{self, Forgotten, Item, Options, Plan, Recorded, Skip, Why};
 use crate::triage::plural;
 use crate::ytdlp;
 
@@ -35,6 +40,8 @@ use crate::ytdlp;
 pub struct Work {
     /// One fetch per page, its fragment variants recorded with it.
     pub fetches: Vec<Fetch>,
+    /// Pages read as thin or empty before, one render per document.
+    pub renders: Vec<Render>,
     /// Pages recorded without a request: login screens, and pages that are
     /// not documents.
     pub unsent: Vec<Line>,
@@ -47,6 +54,11 @@ pub struct Work {
     github_on_the_web: usize,
     /// Video pages left for a run with yt-dlp, unrecorded.
     pub waiting: usize,
+    /// Whether pages can be rendered, asked only when the plan has a page
+    /// a browser may improve on.
+    pub browser: Option<browser::Readiness>,
+    /// Pages read as thin or empty before, left for a run with a browser.
+    pub browser_waiting: usize,
 }
 
 impl Work {
@@ -57,6 +69,12 @@ impl Work {
                 .iter()
                 .map(|fetch| (fetch.host.as_str(), fetch.route.cost())),
         )
+    }
+
+    /// Whether a page is read over HTTP this run, and so may read thin or
+    /// empty and need a browser after.
+    pub fn reads_the_web(&self) -> bool {
+        self.fetches.iter().any(|fetch| fetch.route == Route::Web)
     }
 
     /// What the report says beyond the counts.
@@ -95,9 +113,10 @@ pub struct Fetch {
 /// that are not documents are recorded once. Pages the shared rules keep
 /// home are counted, never recorded, as with `enrich`. `github` says
 /// whether `gh` can read GitHub pages and `youtube` whether yt-dlp can
-/// read videos; each is asked once, and only when there is such a page.
-/// Videos waiting for yt-dlp are counted before `--limit`, which counts
-/// only what is fetched.
+/// read videos, and `browser` whether pages can be rendered; each is
+/// asked once, and only when there is such a page. Videos waiting for
+/// yt-dlp, and pages waiting for a browser, are counted before `--limit`,
+/// which counts only what is fetched or rendered.
 pub fn plan(
     snapshots: &[Snapshot],
     state: &State,
@@ -105,17 +124,36 @@ pub fn plan(
     options: Options,
     github: impl Fn() -> Readiness,
     youtube: impl Fn() -> ytdlp::Readiness,
+    browser: impl Fn() -> browser::Readiness,
 ) -> (Plan, Work) {
+    let rendering = OnceCell::new();
+    let browser_waiting = Cell::new(0);
+    let forgotten = Forgotten::of(state);
     let mut plan = targets::plan(
         snapshots,
         state,
-        |url| content_store::recorded(known, url),
+        |url| match content_store::recorded(known, url) {
+            // `--refetch` reads a page over HTTP again, then renders it if
+            // it still reads thin or empty.
+            Recorded::Final
+                if !options.refetch
+                    && !forgotten.covers(url)
+                    && known.pages.get(url).is_some_and(escalates) =>
+            {
+                if rendering.get_or_init(&browser).path().is_some() {
+                    Recorded::Render
+                } else {
+                    browser_waiting.set(browser_waiting.get() + 1);
+                    Recorded::Final
+                }
+            }
+            recorded => recorded,
+        },
         Options {
             limit: None,
             ..options
         },
     );
-    let forgotten = Forgotten::of(state);
     let (candidates, forgotten_pages): (Vec<Item>, Vec<Item>) = std::mem::take(&mut plan.todo)
         .into_iter()
         .partition(|item| !forgotten.covers(&item.url));
@@ -131,6 +169,12 @@ pub fn plan(
     let mut on_the_web = Vec::new();
     let mut not_documents = Vec::new();
     for mut item in candidates {
+        if item.why == Why::Render {
+            plan.todo.push(item);
+            routes.push(Route::Web);
+            on_the_web.push(false);
+            continue;
+        }
         let Some(route) = Url::parse(&item.url).map_or(Some(Route::Web), |url| Route::of(&url))
         else {
             not_documents.push(item);
@@ -165,31 +209,41 @@ pub fn plan(
         routes.truncate(limit);
         on_the_web.truncate(limit);
     }
-    let fetches = group(&plan.todo, routes, known, &mut unsent);
-    let work = Work {
+    let (fetches, renders) = group(&plan.todo, routes, known, &mut unsent);
+    let mut work = Work {
         fetches,
+        renders,
         unsent,
         github: readiness.into_inner(),
         youtube: videos.into_inner(),
         github_on_the_web: on_the_web.iter().filter(|web| **web).count(),
         waiting,
+        browser: None,
+        browser_waiting: browser_waiting.get(),
     };
+    if work.reads_the_web() {
+        rendering.get_or_init(&browser);
+    }
+    work.browser = rendering.into_inner();
     (plan, work)
 }
 
-/// One fetch per document, recorded under each address it was opened at;
-/// login screens go to `unsent`, recorded without a request. A host whose
-/// route allows several requests at once is spread over that many lanes.
+/// One fetch per document, recorded under each address it was opened at,
+/// and one render per document, with the line each address has; login
+/// screens go to `unsent`, recorded without a request. A host whose route
+/// allows several requests at once is spread over that many lanes.
 fn group(
     todo: &[Item],
     routes: Vec<Route>,
     known: &content_store::Log,
     unsent: &mut Vec<Line>,
-) -> Vec<Fetch> {
+) -> (Vec<Fetch>, Vec<Render>) {
     let attempt = |url: &str| content_fetch::next_attempt(known.pages.get(url));
     let mut fetches: Vec<Fetch> = Vec::new();
     let mut by_page: HashMap<String, usize> = HashMap::new();
     let mut lanes: HashMap<&str, usize> = HashMap::new();
+    let mut renders: Vec<Vec<Line>> = Vec::new();
+    let mut rendered: HashMap<String, usize> = HashMap::new();
     for (item, route) in todo.iter().zip(routes) {
         if item.why == Why::Login {
             let line =
@@ -198,6 +252,18 @@ fn group(
             continue;
         }
         let page = route.key(&item.url);
+        if item.why == Why::Render {
+            let Some(line) = known.pages.get(&item.url).cloned() else {
+                continue;
+            };
+            if let Some(&i) = rendered.get(&page) {
+                renders[i].push(line);
+            } else {
+                rendered.insert(page, renders.len());
+                renders.push(vec![line]);
+            }
+            continue;
+        }
         let pair = (item.url.clone(), attempt(&item.url));
         if let Some(&i) = by_page.get(&page) {
             fetches[i].pages.push(pair);
@@ -219,7 +285,11 @@ fn group(
             });
         }
     }
-    fetches
+    let renders = renders
+        .into_iter()
+        .filter_map(|pages| Render::of(pages, Found::Unread))
+        .collect();
+    (fetches, renders)
 }
 
 #[cfg(test)]

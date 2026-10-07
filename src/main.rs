@@ -12,10 +12,13 @@
 
 mod archive;
 mod assets;
+mod browser;
 mod capture;
+mod cdp;
 mod cli;
 mod content;
 mod content_fetch;
+mod content_headless;
 mod content_image;
 mod content_plan;
 mod content_route;
@@ -55,6 +58,7 @@ mod prompt;
 mod server;
 mod session;
 mod snss;
+mod socks;
 mod staleness;
 mod suggestions;
 mod tags;
@@ -138,12 +142,15 @@ fn main() -> ExitCode {
             fetch,
             urls,
             no_images,
+            no_browser,
         }) => content::command(
             &root,
             content::Args {
                 options: (*fetch).into(),
                 urls,
                 no_images: *no_images,
+                browser: cli.browser.as_deref().unwrap_or(platform::CHROME),
+                no_browser: *no_browser,
             },
             cli.json,
             log,

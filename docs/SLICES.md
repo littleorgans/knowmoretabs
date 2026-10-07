@@ -192,16 +192,19 @@ one line per attempt in `pages/images.jsonl`; `--no-images` skips them, and
 `serve` shows each as a thumbnail from the archive.
 Passing failures are retried in the run and on the next one. `--dry-run`,
 `--limit` and `--refetch` keep `enrich`'s meaning, and `--url` captures one
-page. `doctor` says which ways of reading pages are ready and what the
-archive holds. Next, a local headless Chrome for pages that need a browser
-to show their text.
+page. A page that reads thin, or as an empty shell drawn by scripts, is then
+rendered once in the local Chrome, headless on a scratch profile, every
+connection it makes through a relay that keeps the private network out of
+reach; the longer text wins, the line says `headless`, and without a browser
+(or with `--no-browser`) those pages wait. `doctor` says which ways of
+reading pages are ready and what the archive holds.
 
 **Intent.** Opt in, because it sends the URLs you visited to their own sites, X post
 numbers to the X post API and video ids to YouTube, also downloads one
 preview image per page from the address the page names, which may be on
 another host, and stores page text and images privately; routes use
-optional local tools when they are there (gh and
-yt-dlp now, later Chrome). It follows `enrich`'s rules for what never leaves
+optional local tools when they are there (gh,
+yt-dlp and the installed Chrome). It follows `enrich`'s rules for what never leaves
 the machine, through the same guard, fetcher, planner and log writer, rather
 than a second copy of them. Capture only: the markdown files are the store,
 and keyword retrieval over them is the `fulltext` entry, not this slice.

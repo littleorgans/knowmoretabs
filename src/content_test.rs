@@ -4,6 +4,7 @@
 //! why: Both test the same library and attempt shapes, so their fixtures
 //!      have one owner independent of either module's private tests.
 
+use crate::browser;
 use crate::content_plan::Work;
 use crate::content_store::{self, Line, Status};
 use crate::github_api::Readiness;
@@ -58,6 +59,10 @@ pub(crate) fn no_gh() -> Readiness {
 
 pub(crate) fn no_ytdlp() -> ytdlp::Readiness {
     ytdlp::Readiness::Missing
+}
+
+pub(crate) fn no_browser() -> browser::Readiness {
+    browser::Readiness::Missing("no chrome binary found".to_owned())
 }
 
 pub(crate) fn unsent(work: &Work) -> Vec<(&str, Status, &str)> {
