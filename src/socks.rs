@@ -95,6 +95,9 @@ impl Relay {
 
     /// Stops accepting and closes every open connection; how many were
     /// still open [`STOP_WAIT`] later. A second call only counts again.
+    /// On Windows a shutdown refuses later reads but does not wake one
+    /// already waiting, so a tunnel ends there only once a peer answers the
+    /// close, and until then it is counted.
     pub fn stop(&mut self) -> usize {
         self.shared.stopping.store(true, Ordering::SeqCst);
         if let Some(accept) = self.accept.take() {
@@ -395,10 +398,22 @@ mod tests {
         let mut relay = Relay::with(Some(address)).unwrap();
         let (mut client, code) = ask(&relay, &name("public.test", 80));
         assert_eq!(code, SUCCEEDED);
-        let _site_side = held.join().unwrap();
-        assert_eq!(relay.stop(), 0, "no tunnel survives");
+        let mut site_side = held.join().unwrap();
+        site_side
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let open = relay.stop();
+        if cfg!(not(windows)) {
+            assert_eq!(open, 0, "no tunnel survives");
+        }
         let mut rest = Vec::new();
-        assert_eq!(client.read_to_end(&mut rest).unwrap(), 0);
+        assert_eq!(client.read_to_end(&mut rest).unwrap(), 0, "the browser");
+        assert_eq!(site_side.read_to_end(&mut rest).unwrap(), 0, "the site");
+        drop((client, site_side));
+        assert!(
+            wait_until(|| relay.shared.live().is_empty()),
+            "and once they answer, the tunnel is gone"
+        );
         assert!(TcpStream::connect((Ipv4Addr::LOCALHOST, relay.port())).is_err());
     }
 }
