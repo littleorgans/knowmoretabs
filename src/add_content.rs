@@ -12,7 +12,11 @@
 //!      known page reports how it stands without a request. Without a log
 //!      line the stage completes as unknown, without inventing a capture.
 //!      A browser that cannot be reached is the content stage's outcome,
-//!      not the run's failure: the page is in the library either way.
+//!      not the run's failure: the page is in the library either way. A
+//!      Retry runs only the stages it names, each only where it failed, so
+//!      what succeeded stands untouched: the text first, its image only
+//!      when it has none, then a failed image on the public fetcher, which
+//!      a text that fails again or a browser out of reach cannot skip.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -23,14 +27,15 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use crate::capture::Log;
-use crate::content;
+use crate::content::{self, Stage};
 use crate::content_events::Events;
+use crate::content_report;
 use crate::content_signed_in::Unavailable;
 use crate::content_store::{self, Line, Tier};
 use crate::error::Error;
 use crate::image_store;
 use crate::out;
-use crate::targets::{Options, Outcome as _};
+use crate::targets::{Options, Outcome as _, Recorded};
 
 /// How the content stage was asked to run.
 #[derive(Debug, Clone, Copy)]
@@ -38,6 +43,8 @@ pub struct Ask<'a> {
     /// The browser renders and signed in reads use: a browser id.
     pub browser: &'a str,
     pub signed_in: bool,
+    /// The stages a Retry runs again; empty for a plain add.
+    pub retry: &'a [Stage],
 }
 
 /// How the text and the image ended, by their status names, and the title
@@ -49,9 +56,10 @@ pub struct Ended {
     pub title: Option<String>,
 }
 
-/// Runs content for `url`, a library page, saying each step as it happens.
-/// A run that fails for another reason than the browser is said on stderr,
-/// with what the logs hold after it.
+/// Runs content for `url`, a library page, saying each step as it happens:
+/// the whole run for a plain add, or the stages a Retry names, the text's
+/// then the image's. A run that fails for another reason than the browser
+/// is said on stderr, with what the logs hold after it.
 pub fn capture(root: &Path, url: &str, ask: Ask<'_>, json: bool, log: Log) -> Ended {
     let follow = Arc::new(Follow {
         root: root.to_owned(),
@@ -63,23 +71,49 @@ pub fn capture(root: &Path, url: &str, ask: Ask<'_>, json: bool, log: Log) -> En
     });
     let events: Arc<dyn Events> = follow.clone();
     let urls = [url.to_owned()];
-    let args = content::Args {
-        options: Options::default(),
-        urls: &urls,
-        no_images: false,
-        browser: ask.browser,
-        no_browser: false,
-        signed_in: ask.signed_in,
-        events: Some(&events),
+    let run = |retry: Option<Stage>, signed_in: bool| {
+        let args = content::Args {
+            options: Options::default(),
+            urls: &urls,
+            no_images: false,
+            browser: ask.browser,
+            no_browser: false,
+            signed_in,
+            events: Some(&events),
+            retry,
+        };
+        match content::command(root, args, json, log) {
+            Ok(()) => {}
+            Err(Error::SignedIn(why)) => follow.unreached(why),
+            Err(err) => out::problem(&format!("knowmoretabs: {err}")),
+        }
     };
-    match content::command(root, args, json, log) {
-        Ok(()) => {}
-        Err(Error::SignedIn(why)) => follow.unreached(why),
-        Err(err) => out::problem(&format!("knowmoretabs: {err}")),
+    if ask.retry.is_empty() {
+        run(None, ask.signed_in);
+    } else {
+        // The signed in plan opens only a page eligible for it. A log that
+        // cannot be read lets the run say why.
+        let public = || content_store::read(root).map_or(true, |log| retries_text(&log, url));
+        if ask.retry.contains(&Stage::Content) && (ask.signed_in || public()) {
+            run(Some(Stage::Content), ask.signed_in);
+        }
+        if ask.retry.contains(&Stage::Image) && follow.seen().image.is_none() {
+            run(Some(Stage::Image), false);
+        }
     }
     follow.settle_content();
     follow.settle_image();
     follow.seen().clone()
+}
+
+/// Whether a content Retry on the public tiers reads `url` again: only
+/// when its text failed or was never recorded. Every other line stands,
+/// `unavailable` and what a browser may improve on included.
+fn retries_text(log: &content_store::Log, url: &str) -> bool {
+    matches!(
+        content_store::recorded(log, url),
+        Recorded::Nothing | Recorded::Failed
+    )
 }
 
 /// What `add` hears from its content run, said as it happens.
@@ -188,7 +222,7 @@ impl Events for Follow {
             "content"
         };
         self.say(&json!({"stage": stage, "state": "retrying",
-            "after_s": content::seconds(wait)}));
+            "after_s": content_report::seconds(wait)}));
     }
 
     fn content(&self, line: &Line) {
@@ -247,4 +281,48 @@ fn content_text(line: &Line) -> String {
         let _ = write!(text, " ({reason})");
     }
     text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::content_pdf;
+    use crate::content_store::Status;
+    use crate::content_test::log;
+
+    const URL: &str = "https://a.test/one";
+
+    #[test]
+    fn a_public_text_retry_reads_only_an_error_or_no_line() {
+        assert!(retries_text(&log(&[]), URL), "no line: a first capture");
+        for status in [
+            Status::Ok,
+            Status::Thin,
+            Status::Media,
+            Status::EmptyShell,
+            Status::BehindLogin,
+            Status::Paywalled,
+            Status::Blocked,
+            Status::NotFound,
+            Status::NotHtml,
+            Status::Skipped,
+            Status::Error,
+            Status::Unavailable,
+            Status::Unknown,
+        ] {
+            let ran = retries_text(&log(&[(URL, status, 1)]), URL);
+            assert_eq!(ran, status == Status::Error, "{status:?}");
+        }
+        let mut outdated = content_store::Log::default();
+        let mut line = Line::new(URL, Status::NotHtml)
+            .with_reason(format!("not HTML ({})", content_pdf::MIME));
+        line.tier = Some(Tier::Web);
+        outdated.pages.insert(URL.to_owned(), line);
+        assert_eq!(
+            content_store::recorded(&outdated, URL),
+            Recorded::Outdated,
+            "the fixture is outdated"
+        );
+        assert!(!retries_text(&outdated, URL), "an outdated line stands");
+    }
 }

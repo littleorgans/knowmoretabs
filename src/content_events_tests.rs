@@ -14,10 +14,12 @@ use std::time::Duration;
 
 use super::*;
 use crate::content_plan::plan;
+use crate::content_store::Status;
 use crate::content_test::{
     PEER_ROUTE, Peer, article, html, log as content_log, no_browser, no_gh, no_ytdlp, site,
     snapshot, state,
 };
+use crate::image_store;
 
 const URL: &str = "http://a.test/note";
 

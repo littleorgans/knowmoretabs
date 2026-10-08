@@ -12,7 +12,10 @@
 //!      `restore`. The check and the line are one hold of the archive lock,
 //!      so two adds of one page write it once. A page in the library then
 //!      gets its text and image (`add_content`), unless `--no-content`, and
-//!      a title its text was kept with when its line had none. Under
+//!      a title its text was kept with when its line had none. A Retry
+//!      (`--retry`) is for a page already listed: it writes no line, and a
+//!      page the library does not hold is refused, under the same hold of
+//!      the lock, so a retry can never add a page. Under
 //!      `--json` each stage is one line as it happens, so a caller can show
 //!      progress, and the last line says how it ended.
 
@@ -30,7 +33,7 @@ use crate::jsonl::Appender;
 use crate::library::{self, State};
 use crate::{guard, intake, out};
 
-/// Why a URL was refused before the archive was read: its `reason`.
+/// Why a URL was refused, nothing written: its `reason`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reason {
     /// Not an `http` or `https` URL with a host, or not a URL at all.
@@ -40,6 +43,8 @@ pub enum Reason {
     /// A page the library would not list. Every such URL is refused above
     /// today; this keeps "added" meaning "listed" if the listing rule grows.
     Hidden,
+    /// A Retry of a page the library does not hold.
+    NotInLibrary,
 }
 
 impl Reason {
@@ -48,6 +53,7 @@ impl Reason {
             Self::NotWeb => "not_web",
             Self::Private => "private",
             Self::Hidden => "hidden",
+            Self::NotInLibrary => "not_in_library",
         }
     }
 
@@ -56,6 +62,7 @@ impl Reason {
             Self::NotWeb => "not a web page address (http or https)",
             Self::Private => "on this machine or the private network",
             Self::Hidden => "not a page the library lists",
+            Self::NotInLibrary => "not in your library; add it before a retry",
         }
     }
 }
@@ -88,8 +95,9 @@ impl Outcome {
     }
 }
 
-/// What the URL alone rules out, by the rules the fetcher and the library
-/// already apply; `None` when it may be added.
+/// What the URL alone rules out, before the archive is touched, by the
+/// rules the fetcher and the library already apply; `None` when it may be
+/// added.
 pub fn refusal(url: &str) -> Option<Reason> {
     let Some(parsed) = Url::parse(url).ok().filter(guard::is_web) else {
         return Some(Reason::NotWeb);
@@ -105,15 +113,21 @@ pub fn refusal(url: &str) -> Option<Reason> {
 
 /// Puts `url` in the library unless it is there already. The check and the
 /// write are one hold of the archive lock; `waiting` is called once if
-/// another run holds it.
+/// another run holds it. `known_only`, for a Retry, refuses a page the
+/// library does not hold instead of adding it.
 pub fn apply(
     root: &Path,
     url: &str,
     title: Option<&str>,
+    known_only: bool,
     waiting: impl FnOnce(),
 ) -> Result<Outcome, Error> {
     if let Some(reason) = refusal(url) {
         return Ok(Outcome::Refused(reason));
+    }
+    // No archive holds no page, and opening one would create it.
+    if known_only && !root.exists() {
+        return Ok(Outcome::Refused(Reason::NotInLibrary));
     }
     let archive = Archive::open(root)?;
     let lock = archive.lock(waiting)?;
@@ -123,6 +137,9 @@ pub fn apply(
     let loaded = library::load(&archive)?;
     if library::known_urls(&loaded.snapshots).contains(url) {
         return Ok(Outcome::Known);
+    }
+    if known_only {
+        return Ok(Outcome::Refused(Reason::NotInLibrary));
     }
     let mut log = Appender::open_locked(root, intake::path(root), &lock)?;
     log.append_locked(&intake::Line::new(url, archive::now(), title), &lock)?;
@@ -147,7 +164,8 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
     if json {
         out::json(&library_line("running"));
     }
-    let outcome = apply(root, url, args.title, || {
+    let retry = args.content.is_some_and(|ask| !ask.retry.is_empty());
+    let outcome = apply(root, url, args.title, retry, || {
         if json {
             out::json(&library_line("waiting"));
         } else {
@@ -217,6 +235,10 @@ fn report(url: &str, outcome: Outcome, capturing: bool, log: Log) {
         Outcome::Added | Outcome::Known => {}
         Outcome::Forgotten => out::problem(&format!(
             "knowmoretabs: you forgot {url}; nothing changed; knowmoretabs restore brings it back"
+        )),
+        Outcome::Refused(Reason::NotInLibrary) => out::problem(&format!(
+            "knowmoretabs: not retried: {url} is {}",
+            Reason::NotInLibrary.describe()
         )),
         Outcome::Refused(reason) => out::problem(&format!(
             "knowmoretabs: not added: {url} is {}",

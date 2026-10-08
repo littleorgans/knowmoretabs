@@ -27,7 +27,10 @@ const QUIET: Log = Log {
 };
 
 fn add(root: &Path, url: &str) -> Outcome {
-    apply(root, url, None, || panic!("nothing else holds the lock")).unwrap()
+    apply(root, url, None, false, || {
+        panic!("nothing else holds the lock")
+    })
+    .unwrap()
 }
 
 fn log_bytes(root: &Path) -> Option<Vec<u8>> {
@@ -90,7 +93,7 @@ fn every_url_the_library_hides_is_refused() {
 fn a_new_page_writes_one_line_and_a_second_add_writes_nothing() {
     let (_dir, root) = archive();
     assert_eq!(
-        apply(&root, A, Some("One"), || panic!("not held")).unwrap(),
+        apply(&root, A, Some("One"), false, || panic!("not held")).unwrap(),
         Outcome::Added
     );
     let first = log_bytes(&root).unwrap();
@@ -112,7 +115,7 @@ fn a_new_page_writes_one_line_and_a_second_add_writes_nothing() {
 
     assert_eq!(add(&root, A), Outcome::Known);
     assert_eq!(
-        apply(&root, A, Some("Another"), || panic!("not held")).unwrap(),
+        apply(&root, A, Some("Another"), false, || panic!("not held")).unwrap(),
         Outcome::Known
     );
     assert_eq!(log_bytes(&root).unwrap(), first, "byte for byte");
@@ -157,11 +160,40 @@ fn a_forgotten_page_stays_forgotten() {
 }
 
 #[test]
+fn a_retry_refuses_a_page_the_library_does_not_hold_and_writes_nothing() {
+    let retry = |root: &Path, url: &str| apply(root, url, None, true, || panic!("not held"));
+    let (_dir, root) = archive();
+    assert_eq!(
+        retry(&root, A).unwrap(),
+        Outcome::Refused(Reason::NotInLibrary)
+    );
+    assert!(!root.exists(), "no archive created");
+
+    saved(&root, &[SAVED]);
+    assert_eq!(
+        retry(&root, A).unwrap(),
+        Outcome::Refused(Reason::NotInLibrary)
+    );
+    assert_eq!(log_bytes(&root), None, "no intake line");
+    assert_eq!(retry(&root, SAVED).unwrap(), Outcome::Known);
+    assert_eq!(add(&root, B), Outcome::Added);
+    let before = log_bytes(&root);
+    assert_eq!(retry(&root, B).unwrap(), Outcome::Known);
+    triage::apply(&root, &[B.to_owned()], triage::Action::Forget, true, QUIET).unwrap();
+    assert_eq!(retry(&root, B).unwrap(), Outcome::Forgotten);
+    assert_eq!(log_bytes(&root), before);
+    assert_eq!(
+        retry(&root, "http://localhost/").unwrap(),
+        Outcome::Refused(Reason::Private)
+    );
+}
+
+#[test]
 fn the_library_lists_added_pages_beside_saved_ones() {
     let (_dir, root) = archive();
     saved(&root, &[SAVED]);
     assert_eq!(
-        apply(&root, B, Some("Two"), || panic!("not held")).unwrap(),
+        apply(&root, B, Some("Two"), false, || panic!("not held")).unwrap(),
         Outcome::Added
     );
     assert_eq!(add(&root, A), Outcome::Added);
@@ -186,7 +218,7 @@ fn a_held_lock_is_waited_for_and_said_once() {
     let (said, waited) = mpsc::channel();
     let adding = std::thread::spawn({
         let root = root.clone();
-        move || apply(&root, A, None, move || said.send(()).unwrap())
+        move || apply(&root, A, None, false, move || said.send(()).unwrap())
     });
     waited.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(log_bytes(&root), None, "nothing written while waiting");
@@ -215,6 +247,7 @@ fn tag_content_and_forget_accept_an_added_page() {
                 no_browser: true,
                 signed_in: false,
                 events: None,
+                retry: None,
             },
             false,
             QUIET,
@@ -263,6 +296,7 @@ fn json_lines_are_the_contract_shape() {
         (Reason::NotWeb, "not_web"),
         (Reason::Private, "private"),
         (Reason::Hidden, "hidden"),
+        (Reason::NotInLibrary, "not_in_library"),
     ] {
         assert_eq!(
             library_done(Outcome::Refused(reason)),

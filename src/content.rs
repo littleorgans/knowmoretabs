@@ -19,14 +19,17 @@
 //!      browser that cannot be reached leaves the archive as it was. A
 //!      caller following one page (`add`) is told, as it happens, which tier
 //!      reads it, each wait before a retry, and how its text and image
-//!      settled, and gets no report: the batch run tells no one.
+//!      settled, and gets no report: the batch run tells no one. A Retry
+//!      (`add --retry`) runs one stage: the text, with an image only for a
+//!      page that has none, so a kept image is never fetched again; or only
+//!      the retry of a failed image, on the public fetcher, never signed in.
+//!      The batch report is `content_report`'s.
 
 use std::borrow::Cow;
-use std::collections::{BTreeMap, HashSet};
-use std::fmt::Write as _;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::archive::Archive;
 use crate::browser::{self, Browser};
@@ -36,52 +39,21 @@ use crate::content_fetch::{self, Capture};
 use crate::content_headless::{self, Escalated, Headless, Render};
 use crate::content_image::{self, Images};
 use crate::content_plan::{self, Work};
+use crate::content_report::{Tally, report};
 use crate::content_route::Tools;
 use crate::content_signed_in;
-use crate::content_store::{self, Line, Status, Store, Tier};
+use crate::content_store::{self, Line, Store, Tier};
 use crate::error::Error;
 use crate::fetch::Fetcher;
 use crate::github_api::Readiness;
-use crate::image_store;
 use crate::library::{self, State};
 use crate::model::Snapshot;
-use crate::out;
-use crate::targets::{self, Counts, Options, Outcome as _, Plan};
+use crate::targets::{self, Options, Outcome as _, Plan};
 use crate::tools::System;
-use crate::triage::plural;
 use crate::ytdlp;
 
 /// A progress line every this many fetches, on stderr.
 const PROGRESS_EVERY: usize = 25;
-
-/// What a run did.
-#[derive(Debug, Default)]
-struct Tally {
-    /// The run's last line for each library page, so a page rendered after
-    /// its HTTP read is counted once, as rendered.
-    lines: BTreeMap<String, Line>,
-    fetches: usize,
-    /// How long each fetch took, retries and extraction included.
-    durations: Vec<Duration>,
-    /// Video pages left for a run with yt-dlp, unrecorded.
-    waiting: usize,
-    headless: Headless,
-    /// How each page's image ended, when images were captured.
-    images: Option<Counts<image_store::Status>>,
-}
-
-impl Tally {
-    /// How many pages ended in each status, and why.
-    fn counts(&self) -> Counts<Status> {
-        let mut counts = Counts::default();
-        for line in self.lines.values() {
-            let reason =
-                (line.status != Status::Ok).then(|| line.reason.as_deref().unwrap_or_default());
-            counts.add(line.status, reason);
-        }
-        counts
-    }
-}
 
 /// What a `content` run was asked for.
 #[derive(Clone, Copy)]
@@ -101,11 +73,33 @@ pub struct Args<'a> {
     /// Who follows the run, told as it happens instead of a report; no one
     /// for a batch run.
     pub events: Option<&'a Arc<dyn Events>>,
+    /// Only this stage, as `add --retry` asks; none for every other run.
+    pub retry: Option<Stage>,
+}
+
+/// A stage `add --retry` runs again for its page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stage {
+    /// The text as a plain run plans it, and an image only for a page that
+    /// has no image line: a kept image is never fetched again.
+    Content,
+    /// Only the retry of a failed image, from the candidates its line kept,
+    /// on the public fetcher.
+    Image,
 }
 
 impl Args<'_> {
     fn follower(&self) -> &dyn Events {
         self.events.map_or(&NoOne, |events| &**events)
+    }
+
+    /// The image work this run does of what `plan` holds.
+    fn images(&self, plan: content_image::Plan) -> content_image::Plan {
+        if self.retry == Some(Stage::Content) {
+            plan.only_new()
+        } else {
+            plan
+        }
     }
 }
 
@@ -135,6 +129,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
         no_browser,
         signed_in,
         events,
+        retry,
     } = args;
     let archive = Archive::at(root);
     let loaded = library::load(&archive)?;
@@ -144,7 +139,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
         log.warn(&note);
     }
     let snapshots = only(&loaded.snapshots, urls)?;
-    if signed_in {
+    if signed_in && retry != Some(Stage::Image) {
         return self::signed_in(root, &snapshots, &state, &known, args, json, log);
     }
     // A dry run sends nothing, so it does not let `gh` ask GitHub whether
@@ -165,16 +160,20 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
     };
     // Looked for on disk, never run, so a dry run asks the same.
     let rendering = || browser::Readiness::check(&System, browser, no_browser);
-    let (plan, work) = content_plan::plan(
-        &snapshots, &state, &known, options, github, youtube, rendering,
-    );
+    let (plan, work) = if retry == Some(Stage::Image) {
+        (Plan::default(), Work::default())
+    } else {
+        content_plan::plan(
+            &snapshots, &state, &known, options, github, youtube, rendering,
+        )
+    };
     content_events::kept_home(&plan, args.follower());
     let images = if no_images {
         None
     } else {
-        Some(content_image::Plan::new(
+        Some(args.images(content_image::Plan::new(
             root, &snapshots, &state, &work, options, log,
-        )?)
+        )?))
     };
     let mut notes = work.notes();
     if options.dry_run {
@@ -247,8 +246,10 @@ fn signed_in(
         None
     } else {
         Some(
-            content_image::Plan::new(root, snapshots, state, &work, options, log)?
-                .without_retries(),
+            args.images(
+                content_image::Plan::new(root, snapshots, state, &work, options, log)?
+                    .without_retries(),
+            ),
         )
     };
     let name = content_signed_in::name(args.browser);
@@ -471,111 +472,6 @@ fn render(
     )
 }
 
-/// Seconds to a tenth.
-pub fn seconds(duration: Duration) -> f64 {
-    (duration.as_secs_f64() * 10.0).round() / 10.0
-}
-
-/// The median and the longest of `durations`.
-pub fn spread(durations: &[Duration]) -> Option<(Duration, Duration)> {
-    let mut sorted = durations.to_vec();
-    sorted.sort_unstable();
-    Some((*sorted.get(sorted.len() / 2)?, *sorted.last()?))
-}
-
-fn report(
-    plan: &Plan,
-    tally: &Tally,
-    notes: &[String],
-    took: Duration,
-    root: &Path,
-    json: bool,
-    log: Log,
-) {
-    let counts = tally.counts();
-    let recorded = counts.total();
-    let spread = spread(&tally.durations);
-    if json {
-        let (statuses, reasons) = counts.json();
-        let mut report = serde_json::json!({
-            "recorded": recorded,
-            "fetched": tally.fetches,
-            "statuses": statuses,
-            "reasons": reasons,
-            "deferred": tally.waiting,
-            "not_fetched": targets::counts_json(plan)["not_fetched"],
-            "more": plan.more,
-            "notes": notes,
-            "seconds": seconds(took),
-            "fetch_seconds": spread.map(|(median, longest)| serde_json::json!({
-                "median": seconds(median), "longest": seconds(longest),
-            })),
-            "headless": tally.headless.json(),
-            "log": content_store::log_path(root),
-            "dir": content_store::dir(root),
-        });
-        if let Some(images) = &tally.images {
-            report["images"] = content_image::report_json(images, root);
-        }
-        out::json(&report);
-        return;
-    }
-    if log.quiet {
-        return;
-    }
-    let mut text = String::new();
-    if recorded == 0 {
-        let _ = writeln!(text, "nothing to capture");
-    } else {
-        let _ = writeln!(
-            text,
-            "recorded {} in {} s, {}: {}",
-            plural(recorded, "page"),
-            took.as_secs_f64().round(),
-            match tally.fetches {
-                1 => "1 fetch".to_owned(),
-                n => format!("{n} fetches"),
-            },
-            counts.summary(),
-        );
-        for line in counts.reason_lines() {
-            let _ = writeln!(text, "{line}");
-        }
-        if let Some((median, longest)) = spread {
-            let _ = writeln!(
-                text,
-                "  a fetch took {} s at the median, {} s at the longest",
-                seconds(median),
-                seconds(longest)
-            );
-        }
-        let _ = writeln!(
-            text,
-            "text in {}, one line per attempt in {}",
-            content_store::dir(root).display(),
-            content_store::log_path(root).display()
-        );
-    }
-    if let Some(images) = &tally.images {
-        text.push_str(&content_image::report(images, root));
-    }
-    for line in tally.headless.lines() {
-        let _ = writeln!(text, "{line}");
-    }
-    for note in notes {
-        let _ = writeln!(text, "{note}");
-    }
-    let _ = writeln!(
-        text,
-        "{}",
-        targets::not_fetched_line(plan, tally.headless.signed_in.is_some())
-    );
-    if plan.more > 0 {
-        let _ = writeln!(text, "{} left for another run", plural(plan.more, "page"));
-    }
-    out::block(&text);
-}
-
 #[cfg(test)]
 #[path = "content_events_tests.rs"]
 mod events_tests;
@@ -635,34 +531,6 @@ mod tests {
                 .count(),
             0
         );
-    }
-
-    #[test]
-    fn each_page_is_counted_once_by_its_last_line_in_the_run() {
-        let mut tally = Tally::default();
-        for (url, status) in [
-            ("https://a.test/p", Status::Thin),
-            ("https://a.test/p#part", Status::Thin),
-            ("https://b.test/", Status::Ok),
-            ("https://a.test/p", Status::Ok),
-            ("https://a.test/p#part", Status::Ok),
-        ] {
-            tally.lines.insert(url.to_owned(), Line::new(url, status));
-        }
-        let counts = tally.counts();
-        assert_eq!(counts.total(), 3, "one per page, aliases apart");
-        assert_eq!(
-            counts.summary(),
-            "3 ok",
-            "the render replaced the HTTP read"
-        );
-    }
-
-    #[test]
-    fn spreads_are_the_median_and_the_longest() {
-        let ms = Duration::from_millis;
-        assert_eq!(spread(&[]), None);
-        assert_eq!(spread(&[ms(5), ms(1), ms(3)]), Some((ms(3), ms(5))));
     }
 
     #[test]

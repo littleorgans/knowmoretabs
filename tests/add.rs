@@ -5,11 +5,11 @@
 
 mod common;
 
-use std::process::Output;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
+use common::add::{add, article, intake, lines};
 use common::site::{Reply, Site};
 use common::{Fixture, assert_success, fingerprint, stderr, stdout, write_snapshot};
 use serde_json::{Value, json};
@@ -17,41 +17,6 @@ use serde_json::{Value, json};
 const A: &str = "http://a.test/one";
 const SAVED: &str = "https://saved.test/page";
 const TOKEN: &str = "http://a.test/reset?token=abc123";
-
-/// An article with enough text to keep, and no image.
-fn article(title: &str) -> String {
-    format!(
-        "<html><head><title>{title}</title></head><body><main><h1>{title}</h1><p>{}</p></main></body></html>",
-        "Words the page says about itself. ".repeat(150)
-    )
-}
-
-/// `add` with every name resolved to `site`.
-fn add(fx: &Fixture, site: &Site, args: &[&str]) -> Output {
-    fx.command()
-        .arg("add")
-        .args(args)
-        .env("KNOWMORETABS_TEST_RESOLVE", site.address.to_string())
-        .env("KNOWMORETABS_TEST_TIMEOUT_MS", "400")
-        .output()
-        .unwrap()
-}
-
-/// The intake log's lines.
-fn intake(fx: &Fixture) -> Vec<Value> {
-    std::fs::read_to_string(fx.root.join("pages").join("added.jsonl"))
-        .unwrap_or_default()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
-fn lines(output: &std::process::Output) -> Vec<Value> {
-    stdout(output)
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
 
 #[test]
 fn json_streams_the_library_stage_and_ends_with_done() {

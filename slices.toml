@@ -340,7 +340,11 @@ Chrome. A title the text was kept with joins the page's line when it had none.
 A page already in the library gets no line; its text is read again only after
 an error, and a failed image is retried. An address that is not http or https,
 one on this machine or the private network, and a forgotten page are refused,
-writing nothing. `--no-content` stops after the library. `--title` keeps a
+writing nothing. `--retry content|image`, repeatable, retries a page already
+in the library: no line, and only the stages named, each only where it failed,
+the text after an error and the image after an error from the candidates it
+kept, so a kept text or image is never fetched again and a text that fails
+again cannot skip the image. `--no-content` stops after the library. `--title` keeps a
 title the caller has, and `--json` gives one line per step as it happens
 (the tier reading the page, each wait before a retry, how the text and the
 image ended), the last saying how it all ended.
