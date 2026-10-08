@@ -52,7 +52,24 @@ class Browser:
 
 class BrowserTests(Browser, Fixture):
     def setUp(self):
-        self.start(self.lib)
+        self.app = self.start(self.lib)
+
+    def test_startup_reply_preserves_newer_page_tags(self):
+        saved = [p["row"] for p in self.app.search({"query": "night train", "n": 50})["hits"][:2]]
+        self.app.replace(self.app.selection, {"rows": saved[:1]})
+        self.app.replace(self.app.pins, {"rows": saved[1:]})
+        self.run_case("startupTags")
+        self.assertTrue(self.app.page(saved[0])["tags"])
+
+    def test_startup_forget_undo_preserves_saved_selection_and_pins(self):
+        saved = [p["row"] for p in self.app.search({"query": "night train", "n": 50})["hits"][:3]]
+        for case in ("startupForgetUndoEarly", "startupForgetUndoLoaded"):
+            with self.subTest(case=case):
+                self.app.replace(self.app.selection, {"rows": saved})
+                self.app.replace(self.app.pins, {"rows": saved})
+                self.run_case(case)
+                for keys in (self.app.selection, self.app.pins):
+                    self.assertEqual(saved, [p["row"] for p in self.app.listed(keys)["pages"]])
 
     def test_a_selection_or_tag_update_keeps_the_tile_node(self):
         self.run_case("identity")

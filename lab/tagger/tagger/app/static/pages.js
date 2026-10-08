@@ -16,13 +16,13 @@
   K.writes = Promise.resolve();    // every write, queued; export waits for them
   let tagging = 0;                 // the latest tag change, whose reply wins
 
-  K.know = (pages) => { for (const p of pages) K.pages.set(p.row, p); return pages.map((p) => p.row); };
+  K.know = (pages, replace = true) => { for (const p of pages) if (replace || !K.pages.has(p.row)) K.pages.set(p.row, p); return pages.map((p) => p.row); };
   K.has = (row, tag) => K.pages.get(row).tags.includes(tag);
   const count = (n) => `${n} page${n === 1 ? "" : "s"}`;
 
   /* `body` may be a function, read when the write is sent, so it carries the latest state */
-  function write(path, body) {
-    const next = K.writes.then(() => K.api(path, typeof body === "function" ? body() : body));
+  function write(path, body, ready) {
+    const next = K.writes.then(() => ready).then(() => K.api(path, typeof body === "function" ? body() : body));
     K.writes = next.catch(() => {});
     return next;
   }
@@ -46,16 +46,16 @@
     K.changed();
     keep("selection");
   };
-  K.loadLists = async () => {
+  K.loadLists = () => (K.listsReady = (async () => {
     for (const [name, field] of [["selection", "sel"], ["pins", "pins"]]) {
       const out = await K.api(`/api/${name}`);
-      K[field] = K.know(out.pages);
+      K[field] = K.know(out.pages, false);   // startup data cannot replace a page already shown or changed
       const changes = early[name];
       early[name] = null;
       for (const change of changes) change(K[field]);
       if (changes.length) keep(name);
     }
-  };
+  })());
 
   /* ---- forget: the page leaves every view, the selection, the pins and the counts at once.
      Undo puts it back in its place, selected and pinned as it was ---- */
@@ -64,26 +64,30 @@
     const was = { selection: K.sel.indexOf(row), pins: K.pins.indexOf(row) };
     const out = () => {
       K.gone.add(row);
-      for (const name in was) if (lists[name]().includes(row)) edit(name, put(row, false));
+      for (const name in was) edit(name, (list) => {
+        was[name] = list.indexOf(row);   // replay remembers its place in the loaded list for Undo
+        put(row, false)(list);
+      });
       K.lib.pages--;
       K.changed();
     };
     const back = () => {
       K.gone.delete(row);
       for (const name in was) {
-        if (was[name] >= 0) edit(name, (list) => { if (!list.includes(row)) list.splice(Math.min(was[name], list.length), 0, row); });
+        edit(name, (list) => { if (was[name] >= 0 && !list.includes(row)) list.splice(Math.min(was[name], list.length), 0, row); });
       }
       K.lib.pages++;
       K.changed();
     };
-    const send = (value) => write("/api/forget", { rows: [row], value }).then((reply) => { K.lib.pages = reply.pages; K.changed(); });
+    // Forget prunes the server's lists: first load their membership so replay and Undo can preserve it.
+    const send = (value) => write("/api/forget", { rows: [row], value }, K.listsReady).then((reply) => { K.lib.pages = reply.pages; K.changed(); });
     out();
     send(true).catch((err) => { back(); K.fail(err); });
     K.toast("Forgotten", () => {
       if (!K.gone.has(row)) return;
       back();
       send(false).then(() => K.views.restored(row)).catch((err) => { out(); K.fail(err); });
-      for (const name in was) if (was[name] >= 0) keep(name);
+      for (const name in was) if (was[name] >= 0 || early[name]) keep(name);
     });
   };
 

@@ -63,7 +63,49 @@ function inPage() {
   return { $, tiles, tileOf, pos, until, check, search, page };
 }
 
+async function startupForgetUndo({ $, tiles, until, check, search }) {
+  await until(() => window.releaseSelection, 'selection reply held');
+  await search('night train');
+  const row = Number(tiles()[1].dataset.row);
+  tiles()[1].querySelector('[data-forget]').click();
+  if (window.startupUndoEarly) $('#toast-undo').click();
+  window.releaseSelection();
+  await until(() => window.releasePins, 'pins reply held');
+  window.releasePins();
+  await window.KMT.ready;
+  await window.KMT.writes;
+  if (!window.startupUndoEarly) {
+    check(!window.KMT.sel.includes(row) && !window.KMT.pins.includes(row), 'startup leaves the forgotten row out');
+    $('#toast-undo').click();
+    await window.KMT.writes;
+  }
+  const saved = window.startupSaved;
+  check(window.KMT.sel.join() === saved.join(), 'Undo restores saved selection order');
+  check(window.KMT.pins.join() === saved.join(), 'Undo restores saved pin order');
+  $('#show-pins').click();
+  check(tiles().map((t) => Number(t.dataset.row)).join() === saved.join(), 'Pinned shows the restored saved list');
+  check(!window.KMT.gone.has(row), 'Undo restores the forgotten row');
+}
+
 const cases = {
+  startupTags: async ({ tiles, until, check, search }) => {
+    await until(() => window.releaseSelection, 'selection reply held');
+    await search('night train');
+    const K = window.KMT, row = Number(tiles()[0].dataset.row), tag = K.lib.tags[0].name;
+    tiles()[0].click();
+    tiles()[0].querySelector('[data-pin]').click();
+    await K.tagSelection(tag);
+    check(K.has(row, tag), 'tag applied before the startup reply');
+    window.releaseSelection();
+    await until(() => window.releasePins, 'pins reply held');
+    window.releasePins();
+    await K.ready;
+    await K.writes;
+    check(K.has(row, tag), 'startup reply preserves the newer page tag');
+    check(tiles()[0].textContent.includes(tag), 'the rendered tile retains the newer page tag');
+  },
+  startupForgetUndoEarly: startupForgetUndo,
+  startupForgetUndoLoaded: startupForgetUndo,
   startupDuringPage: async ({ $, pos, until, check, search }) => {
     await until(() => window.pinsWaiting, 'startup waiting for pins');
     await search('night train');
@@ -481,6 +523,23 @@ async function main() {
     const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
     for (const domain of ['Page', 'Runtime', 'Log']) await send(`${domain}.enable`, {}, sessionId);
+    if (name.startsWith('startupForgetUndo') || name === 'startupTags') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+      window.startupUndoEarly = ${name.endsWith('Early')};
+      const fetchNormally = window.fetch;
+      window.fetch = async (...args) => {
+        const response = await fetchNormally(...args);
+        if (!args[1]?.method && ['/api/selection', '/api/pins'].includes(args[0])) {
+          const read = response.json.bind(response);
+          response.json = async () => {
+            const out = await read();
+            if (args[0] === '/api/selection') window.startupSaved = out.pages.map((p) => p.row);
+            await new Promise((resolve) => { window[args[0] === '/api/selection' ? 'releaseSelection' : 'releasePins'] = resolve; });
+            return out;
+          };
+        }
+        return response;
+      };
+    ` }, sessionId);
     if (name === 'startupDuringPage') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
       const fetchNormally = window.fetch;
       window.searchRequests = 0;

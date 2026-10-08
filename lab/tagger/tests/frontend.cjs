@@ -1129,34 +1129,124 @@ async function addSignedInStages() {
     assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier: 'web', http_status: 403, reason } } }).act, null, `${reason}`);
 }
 
+/* Startup GETs snapshot the saved lists, but their replies are held. Writes replace whole lists and forgetting
+   prunes both lists, as server.py does; forgotten rows cannot be selected or pinned. */
+function startupFixture(saved = [1]) {
+  const f = setup('pages.js', 'views.js', 'strip.js');
+  const { K } = f;
+  const server = { selection: [...saved], pins: [...saved] }, loaded = new Set(), late = [], sent = [];
+  const gone = new Set(), tags = new Map();
+  K.lib = { pages: 9, sizes: [20, 50], app_tags: ['A'] };
+  K.state.search.query = '';
+  K.know([page(1), page(2), page(3)]);
+  K.changed = () => { K.views.render(); K.strip.render(); };
+  K.api = (route, body) => {
+    const name = route.replace('/api/', '');
+    if (body === undefined) {
+      const pages = server[name].map((row) => page(row, tags.get(row) || []));
+      return new Promise((resolve) => late.push(() => { loaded.add(name); resolve({ pages }); }));
+    }
+    sent.push([name, plain(body)]);
+    if (name === 'apply') {
+      for (const row of body.rows) tags.set(row, [body.tag]);
+      return Promise.resolve({ pages: body.rows.map((row) => ({ row, tags: tags.get(row) })),
+        app_tags: [body.tag], changed: body.rows.length, batch: 1 });
+    }
+    if (name === 'forget') {
+      for (const row of body.rows) {
+        if (body.value) {
+          gone.add(row);
+          for (const list of Object.keys(server)) server[list] = server[list].filter((r) => r !== row);
+        } else gone.delete(row);
+      }
+      return Promise.resolve({ pages: 9 - gone.size });
+    }
+    if (body.rows.some((row) => gone.has(row))) return Promise.reject(new Error('forgotten row'));
+    server[name] = [...body.rows];
+    return Promise.resolve({ rows: body.rows });
+  };
+  f.finish = async () => {
+    while (late.length) { late.shift()(); await turn(); }
+    await K.writes;
+    await turn();
+  };
+  return Object.assign(f, { server, loaded, late, sent });
+}
+
+async function startupEdits() {
+  for (const [name, actions, expected] of [
+    ['selection', (K) => { K.select(2); K.clearSel(); K.select(3); }, [3]],
+    ['selection', (K) => { K.select(2); K.select(2); }, [1]],
+    ['pins', (K) => { K.pin(2); K.pin(2); }, [1]],
+  ]) {
+    for (const duringPins of name === 'pins' ? [false, true] : [false]) {
+      const { K, server, late, sent, finish } = startupFixture();
+      const loading = K.loadLists();
+      if (duringPins && name === 'pins') { late.shift()(); await turn(); }
+      actions(K);
+      await turn();
+      assert.deepEqual(sent, [], 'early edits send nothing');
+      await finish(); await loading;
+      assert.deepEqual(server[name], expected, 'ordered edits replay on the saved list');
+      assert.deepEqual(plain(name === 'selection' ? K.sel : K.pins), expected, 'late replies keep decisions');
+      assert.deepEqual(sent, [[name, { rows: expected }]], 'one merged write, with the untouched list unsent');
+    }
+  }
+}
+
+async function startupForgetAndUndo() {
+  for (const local of [false, true]) {
+    for (const undoAt of ['never', 'early', 'loaded']) {
+      const { K, server, sent, finish } = startupFixture([1, 2, 3]);
+      const loading = K.loadLists();
+      if (local) { K.select(2); K.pin(2); }
+      K.forget(2);
+      const undo = K.undo;
+      if (undoAt === 'early') undo();
+      await turn();
+      await finish(); await loading;
+      if (undoAt === 'loaded') { undo(); await K.writes; await turn(); }
+      const expected = undoAt === 'never' ? [1, 3] : [1, 2, 3];
+      assert.deepEqual(plain(K.sel), expected, `${local}/${undoAt}: selection, including saved membership and order`);
+      assert.deepEqual(plain(K.pins), expected, `${local}/${undoAt}: pins, including saved membership and order`);
+      assert.deepEqual(server, { selection: expected, pins: expected }, `${local}/${undoAt}: persisted lists`);
+      assert.equal(K.failure, undefined, `${local}/${undoAt}: no rejected writes`);
+      for (const name of ['selection', 'pins']) {
+        const writes = sent.filter(([n]) => n === name);
+        assert.ok(writes.length <= (undoAt === 'loaded' ? 2 : 1), 'each startup list sends once');
+      }
+      K.views.showPinned();
+      assert.deepEqual(plain(K.views.shown(K.views.view())), expected, 'Pinned shows the restored list');
+    }
+  }
+}
+
+async function startupTagsKeepChanges() {
+  const { K, server, finish } = startupFixture();
+  server.pins = [2];   // the later pins reply cannot repair page 1's tags after the stale selection reply
+  const loading = K.loadLists();
+  K.select(1);
+  K.pin(1);
+  await K.tagSelection('A');
+  assert.equal(K.has(1, 'A'), true);
+  await finish(); await loading;
+  assert.equal(K.has(1, 'A'), true, 'startup replies cannot replace newer page tags');
+}
+
 /* The server keeps the selection [1] and the pins [1] and replaces a list whole on a write. The user selects and
    pins page 2 before the startup load of that list is in (pins: before, or while its load is out): the server
    keeps both pages, and no list is sent before its load is in. */
 async function startupListsKeepChanges() {
   for (const pinWhileLoading of [false, true]) {
-    const { K } = setup('pages.js');
-    const server = { selection: [1], pins: [1] }, loaded = new Set(), late = [], early = [];
-    K.api = (route, body) => {
-      const name = route.replace('/api/', '');
-      if (body !== undefined) {
-        if (!loaded.has(name)) early.push([name, body.rows]);
-        server[name] = [...body.rows];
-        return Promise.resolve({ rows: body.rows });
-      }
-      const rows = [...server[name]];
-      return new Promise((resolve) => late.push(() => { loaded.add(name); resolve({ pages: rows.map((row) => page(row)) }); }));
-    };
-    K.know([page(2), page(3)]);
+    const { K, server, loaded, late, sent, finish } = startupFixture();
     const loading = K.loadLists();
-    await turn();
     K.select(2);
-    if (pinWhileLoading) { late.shift()(); await turn(); await turn(); }
+    if (pinWhileLoading) { late.shift()(); await turn(); }
     K.pin(2);
     await turn();
-    while (late.length) { late.shift()(); await turn(); await turn(); }
-    await loading;
-    await K.writes;
-    assert.deepEqual(plain(early), [], 'no list is sent before its startup load');
+    assert.ok(sent.every(([name]) => loaded.has(name)), 'no list is sent before its startup load');
+    await finish(); await loading;
+    assert.deepEqual(sent, [['selection', { rows: [1, 2] }], ['pins', { rows: [1, 2] }]], 'each list sends once');
     assert.deepEqual(server, { selection: [1, 2], pins: [1, 2] }, 'the server keeps both');
     assert.deepEqual({ sel: plain(K.sel), pins: plain(K.pins) }, { sel: [1, 2], pins: [1, 2] }, 'the page keeps both');
     K.select(3);
@@ -1165,5 +1255,6 @@ async function startupListsKeepChanges() {
   }
 }
 
-const cases = { addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
-cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });
+const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+const timeout = setTimeout(() => { console.error('frontend round trip did not settle'); process.exit(1); }, 5000);
+cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; }).finally(() => clearTimeout(timeout));
