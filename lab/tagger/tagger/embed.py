@@ -236,7 +236,7 @@ def persist_text(paths, records, model, name, embed, *, legacy_records=None, ret
         input_rows(records, model, name),
         model_identity(model, dim=dim),
         lambda indices: embed([records[i] for i in indices], name),
-        legacy_rows=input_rows(legacy_records, model, name) if legacy_records is not None else None,
+        legacy_rows=(lambda: input_rows(legacy_records(), model, name)) if legacy_records is not None else None,
         retain=retain,
     )
 
@@ -249,7 +249,7 @@ def persist_images(paths, records, embed, *, legacy_records=None, retain=False, 
         model_identity(IMAGE_MODEL, image=True, dim=dim),
         lambda indices: embed([records[i] for i in indices]),
         mask=[r["image_ok"] for r in records],
-        legacy_rows=image_rows(legacy_records) if legacy_records is not None else None,
+        legacy_rows=(lambda: image_rows(legacy_records())) if legacy_records is not None else None,
         retain=retain,
         allow_missing=allow_missing,
     )
@@ -314,12 +314,12 @@ def embed_images(paths: Paths, records: list[dict], *, legacy_records=None) -> N
             release(st)
 
 
-def run(paths: Paths, models: list[str] | None, chunked: bool, root: Path | None = None) -> None:
+def run(paths: Paths, models: list[str] | None, chunked: bool, root: Path) -> None:
     if chunked:
         records, _ = dataset.load(paths)
         legacy = None
     else:
-        archive = Archive.load((root or paths.snapshot).resolve())
+        archive = Archive.load(root.resolve())
         legacy, records = dataset.app_records(paths, archive)
     for key in models or list(MODELS):
         embed_text(paths, records, MODELS[key], chunked, legacy_records=legacy)

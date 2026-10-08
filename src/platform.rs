@@ -329,6 +329,26 @@ pub fn default_root(roots: &Roots) -> PathBuf {
     }
 }
 
+/// The resolved path and whether the caller explicitly chose it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ArchiveRoot {
+    pub path: PathBuf,
+    pub explicit: bool,
+}
+
+/// Resolve the archive without reading process state, preserving platform defaults.
+pub fn resolve_root(
+    flag: Option<PathBuf>,
+    env: Option<PathBuf>,
+    roots: Option<&Roots>,
+) -> Option<ArchiveRoot> {
+    let env = env.filter(|path| !path.as_os_str().is_empty());
+    let explicit = flag.is_some() || env.is_some();
+    flag.or(env)
+        .or_else(|| roots.map(default_root))
+        .map(|path| ArchiveRoot { path, explicit })
+}
+
 impl BrowserSpec {
     /// Every directory this browser's user data can be in, most likely first.
     /// Linux has more than one because native, Snap and Flatpak installs of
@@ -1459,6 +1479,69 @@ mod tests {
             default_root(&roots(Os::Windows, &[("LOCALAPPDATA", "state/Local")])),
             home("state/Local/knowmoretabs")
         );
+    }
+
+    #[test]
+    fn archive_root_flag_beats_environment() {
+        let roots = roots(Os::Mac, &[]);
+        assert_eq!(
+            resolve_root(Some(home("flag")), Some(home("env")), Some(&roots)),
+            Some(ArchiveRoot {
+                path: home("flag"),
+                explicit: true
+            })
+        );
+    }
+
+    #[test]
+    fn archive_root_environment_beats_default_without_needing_home() {
+        let roots = roots(Os::Mac, &[]);
+        for roots in [Some(&roots), None] {
+            assert_eq!(
+                resolve_root(None, Some(home("env")), roots),
+                Some(ArchiveRoot {
+                    path: home("env"),
+                    explicit: true
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn archive_root_unset_preserves_platform_defaults() {
+        for os in [Os::Mac, Os::Linux, Os::Windows] {
+            let roots = roots(os, &[]);
+            assert_eq!(
+                resolve_root(None, None, Some(&roots)),
+                Some(ArchiveRoot {
+                    path: default_root(&roots),
+                    explicit: false
+                })
+            );
+        }
+        assert_eq!(resolve_root(None, None, None), None);
+    }
+
+    #[test]
+    fn archive_root_empty_environment_uses_default() {
+        let roots = roots(Os::Mac, &[]);
+        assert_eq!(
+            resolve_root(None, Some(PathBuf::new()), Some(&roots)),
+            Some(ArchiveRoot {
+                path: default_root(&roots),
+                explicit: false
+            })
+        );
+    }
+
+    #[test]
+    fn archive_root_environment_is_explicit_for_windows_privacy() {
+        let roots = roots(Os::Windows, &[]);
+        for path in [home("outside"), default_root(&roots)] {
+            let resolved = resolve_root(None, Some(path.clone()), Some(&roots)).unwrap();
+            assert_eq!(resolved.path, path);
+            assert!(resolved.explicit);
+        }
     }
 
     /// The rule behind the Windows privacy warning, checked everywhere the

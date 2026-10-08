@@ -124,7 +124,8 @@ class VectorStore:
         """Return vectors in requested id order; embed only missing/stale eligible rows.
 
         `embed` receives requested row indices. Full startup drops absent ids; a
-        partial sync retains all other ids. Legacy rows describe the dataset order.
+        partial sync retains all other ids. The legacy row provider describes the
+        dataset order and is called under the lock only when migration is needed.
         Optional masked embeddings may fail; those rows stay absent and retry later.
         """
         if allow_missing and mask is None:
@@ -140,7 +141,7 @@ class VectorStore:
             old = self._read()
             migrating = old is None and self.legacy.exists()
             if migrating:
-                old = self._migrate(legacy_rows if legacy_rows is not None else rows, model, mask)
+                old = self._migrate(legacy_rows() if legacy_rows is not None else rows, model, mask)
                 counts["migrated" if old else "cold_migration"] = len(old[0]["rows"]) if old else 1
             previous, arrays = old if old else ({"model": model, "rows": []}, {})
             same_model = previous["model"] == model

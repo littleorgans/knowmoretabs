@@ -93,10 +93,14 @@ fn main() -> ExitCode {
         verbose: cli.verbose,
     };
     let roots = platform::Roots::detect();
-    let Some(root) = cli
-        .root
-        .clone()
-        .or_else(|| roots.as_ref().map(platform::default_root))
+    let Some(platform::ArchiveRoot {
+        path: root,
+        explicit,
+    }) = platform::resolve_root(
+        cli.root.clone(),
+        std::env::var_os("KMT_ROOT").map(std::path::PathBuf::from),
+        roots.as_ref(),
+    )
     else {
         return fail(&error::Error::NoHome, &cli);
     };
@@ -111,7 +115,7 @@ fn main() -> ExitCode {
             &cli,
         );
     }
-    warn_if_root_is_not_private(&cli, &root, roots.as_ref());
+    warn_if_root_is_not_private(&cli, &root, roots.as_ref(), explicit);
     let result = match &cli.command {
         Some(Command::List) => library_commands::list(&root, cli.json, log),
         Some(Command::Export { dir, with_history }) => {
@@ -278,8 +282,13 @@ fn fail(err: &error::Error, cli: &Cli) -> ExitCode {
 /// private on its own: see [`platform::root_outside_home`] for what that
 /// means and why passing `--root` is not by itself worth saying anything
 /// about. A default root is always private, so it is never worth a word.
-fn warn_if_root_is_not_private(cli: &Cli, root: &std::path::Path, roots: Option<&platform::Roots>) {
-    if !cfg!(windows) || cli.quiet || cli.root.is_none() {
+fn warn_if_root_is_not_private(
+    cli: &Cli,
+    root: &std::path::Path,
+    roots: Option<&platform::Roots>,
+    explicit: bool,
+) {
+    if !cfg!(windows) || cli.quiet || !explicit {
         return;
     }
     let (Some(roots), Ok(current_dir)) = (roots, std::env::current_dir()) else {

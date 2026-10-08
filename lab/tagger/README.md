@@ -9,17 +9,30 @@ weights in the default Hugging Face cache.
 
 ## Run
 
+From the repository root, run `just install` after each pull, then `tagger app` from any
+folder. Archive precedence is `--root` > `KMT_ROOT` > `~/.knowmoretabs`;
+data precedence is `--data` > `KMT_TAGGER_DATA` > `<resolved root>/tagger`.
+The app requires prepared text vectors in that data directory and cached
+model weights. Missing or empty data fails before model loading or writes.
+Empty environment variables mean unset. `tagger embed --model eg2` prepares
+the app's stores from the resolved live archive without needing `dataset/`.
+Current keyed manifests never read experiment dataset files or legacy bodies.
+Web assets ship in the installed package; knowmoretabs is found on `PATH`.
+
+The experiment pipeline still runs from `lab/tagger`. Its data directory
+must hold the snapshot and `zeroshot/descriptions.json`:
+
 ```sh
-export KMT_TAGGER_DATA=<thread home>/data   # holds snapshot-2026-10-07/ and zeroshot/descriptions.json
+export KMT_TAGGER_DATA=<experiment data>   # required; run.sh refuses unset or empty
 ./run.sh                                     # every step below, in order
 ```
 
 | Step | Command | Writes |
 | --- | --- | --- |
 | 1 | `uv run --locked tagger dataset` | `dataset/` page records, tag counts |
-| 2 | `uv run --locked tagger embed` | `emb/<model>/{A,B}.npy`, `emb/image/` |
+| 2 | `uv run --locked tagger embed --root <snapshot>` | `emb/<model>/{A,B}/` keyed stores, `emb/image/` |
 | 3 | `uv run --locked tagger eval` | `eval/split.json`, `eval/cv/`, `eval/cv_summary.json` |
-| 3b | `uv run --locked tagger embed --chunked --model <best model>`, then `eval` again | `emb/<model>/B8k.npy` |
+| 3b | `uv run --locked tagger embed --root <snapshot> --chunked --model <best model>`, then `eval` again | `emb/<model>/B8k.npy` |
 | 3c | `uv run --locked tagger eval --final` | `eval/final.json` (test split, once) |
 | 4 | `uv run --locked tagger zeroshot` | `out/zeroshot.json` |
 | 5 | `uv run --locked tagger suggest` | `out/kmt-tagger-<config>.jsonl`, scores CSV, dry run report |
@@ -43,11 +56,10 @@ The CLI sets umask 077, so every output is private (0600).
 
 ## Search, select and tag app (P1, one screen since P5)
 
-`uv run --locked tagger app --root <archive>` serves the prototype on 127.0.0.1:7879 (`--port 0` picks a free one)
-and prints its address. Needs `dataset` and `embed --model eg2` done; runs offline (`HF_HUB_OFFLINE`). The dataset
-must be a subset of the archive's known pages (snapshot tabs plus `pages/added.jsonl`, folded as knowmoretabs folds
-it); known pages it lacks are built from `--root` and embedded at startup (`engine.add_pages`, B vector only, no
-image vector, unlabelled). With no owner vocabulary the app starts with no owner tags; every tag name `state.json`
+`tagger app` serves the prototype on 127.0.0.1:7879 (`--port 0` picks a free one)
+and prints its address. Needs `tagger embed --model eg2` done; runs offline (`HF_HUB_OFFLINE`). No `dataset/`
+directory is needed. Page records come from the resolved archive; matching keyed vectors are reused, and
+changed or missing inputs are embedded at startup. With no owner vocabulary the app starts with no owner tags; every tag name `state.json`
 holds (made in the app, or in any decision) loads as a zero shot tag.
 One screen: search (EG2 cosine over B, else A, fused by reciprocal rank with TF-IDF over title, metadata and text;
 images on request; "Untagged only" keeps pages with no app tag), click results to select them, tag the selection.
@@ -74,7 +86,8 @@ tags per page, latest decision winning, forgotten pages left out), `decisions.js
 precheck and session, both null for a direct decision) and, when pages were forgotten, `forget.urls` (their exact
 addresses, each ended by a NUL). Created tags need `tag --import --accept-new`, which creates them in the archive; the
 forgotten pages go through `xargs -0 knowmoretabs forget -- < forget.urls` (`restore` in place of `forget` brings
-them back). Both dialog commands target your default library, independently of the app's snapshot root.
+them back). Both dialog commands use the CLI root precedence; the app uses its own resolved archive,
+so an explicit app `--root` must also be passed to those commands to target that archive.
 Pins are not exported. The app never writes an archive itself.
 Add link (`#add`; `#add=<encoded link>&title=<encoded title>` fills the box and focuses Add, which waits for Enter):
 Add, Enter, or a paste of a web address into the empty box starts a job that runs
@@ -107,7 +120,10 @@ Steps skip work whose output exists; use a fresh data directory to recompute.
 `KMT_TAGGER_SNAPSHOT` points at a snapshot elsewhere. `suggest` builds the binary
 (`cargo build --release --locked`) and dry runs the import against `import-check/`, a copy of the snapshot.
 
-Reproduce: run everything into a fresh data directory, then
+Reproduce the snapshot experiment from `lab/tagger`: set `KMT_TAGGER_DATA` to a fresh
+data directory containing the snapshot, or set `KMT_TAGGER_SNAPSHOT` to its original
+path. Run `./run.sh`; both embed steps pass that snapshot explicitly as `--root`.
+The pipeline refuses missing or empty `KMT_TAGGER_DATA` and never defaults to library/tagger. Then run
 `uv run --locked tagger --data <fresh> compare <original>` (metrics only; timings and memory excluded; exit 1 on any difference above 1e-3).
 
 ## Leakage boundary

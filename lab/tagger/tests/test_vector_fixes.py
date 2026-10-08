@@ -104,8 +104,9 @@ def test_image_failure_preserves_text_and_cached_images(tmp_path, capsys):
     assert stats["vectors"]["failed"] == 1
     assert lib.live[row] and not lib.has_image[row]
     assert not lib.image[row].any()
-    np.testing.assert_array_equal(lib.image[:-1], baseline.image)
-    np.testing.assert_array_equal(lib.has_image[:-1], baseline.has_image)
+    kept = [lib.rows[key] for key in baseline.rows]
+    np.testing.assert_array_equal(lib.image[kept], baseline.image)
+    np.testing.assert_array_equal(lib.has_image[kept], baseline.has_image)
     assert NEW not in {r["id"] for r in VectorStore(paths.emb / "image", "eg2-full").read()[0]["rows"]}
     encode.reset_mock()
     _, stats = engine.load(paths, root, fake_encode, encode, embed_image=images, dim=DIM)

@@ -31,6 +31,13 @@ TEXT_INPUTS = ("B", "A")  # the first cached one ranks and trains
 RRF_K = 60
 SUGGEST = 8
 
+
+def require_vectors(paths: Paths) -> None:
+    """Refuse an unprepared data directory before startup can rebuild or create it."""
+    if not any(VectorStore(paths.emb / MODEL, name).exists for name in TEXT_INPUTS):
+        raise SystemExit(f"missing tagger vectors at {paths.data}; run tagger embed --model eg2")
+
+
 Encode = Callable[[list[str]], np.ndarray]
 Embed = Callable[[list[dict], str], np.ndarray]  # page records, text input name -> unit document vectors
 
@@ -166,7 +173,6 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
 
     stats = {
         "pages": len(lib.records),
-        "gap_pages": len(records) - len(legacy),
         "live_pages": int(lib.live.sum()),
         "labelled_pages": len(fit),
         "tags": len(tags),

@@ -1,6 +1,6 @@
 """`tagger app`: search, select and tag on one screen, as a local web app on 127.0.0.1.
 
-Static files come from `static/`; page images are served by their hashed name from the archive given with `--root`; the
+Static files come from `static/`; page images are served by their hashed name from the resolved archive; the
 JSON API runs the engine and the store. API work is serialized; static and image transfers run independently.
 Requests must name this server as Host (no DNS rebinding) and POSTs must be same origin JSON. The process
 prints counts and timings only; the request log is off, since nothing about a page belongs in a terminal.
@@ -463,7 +463,8 @@ def smoke(paths: Paths, app: App) -> dict:
     }
 
 
-def run(paths: Paths, root: Path | None, port: int, smoke_only: bool) -> None:
+def run(paths: Paths, root: Path, port: int, smoke_only: bool) -> None:
+    engine.require_vectors(paths)
     from ..embed import IMAGE_MODEL, MODELS, embed_image_rows, embed_input, load, load_text, release
     from ..zeroshot import encode_queries
 
@@ -483,7 +484,7 @@ def run(paths: Paths, root: Path | None, port: int, smoke_only: bool) -> None:
         finally:
             release(image_st)
 
-    lib, stats = engine.load(paths, (root or paths.snapshot).resolve(), encode, embed, embed_image=embed_image)
+    lib, stats = engine.load(paths, root.resolve(), encode, embed, embed_image=embed_image)
     app = App(lib, Store(paths.data / "app"), encode, embed)
     stats |= {"model_load_s": model["load_s"], "startup_s": round(time.perf_counter() - start, 2)}
     print(json.dumps(stats))
