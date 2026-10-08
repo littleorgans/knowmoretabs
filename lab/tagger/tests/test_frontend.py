@@ -53,6 +53,7 @@ import pytest
         "likeBackToPage",
         "likeWaitsForTag",
         "backDuringPage",
+        "addStates",
     ],
 )
 def test_frontend_round_trips(case):

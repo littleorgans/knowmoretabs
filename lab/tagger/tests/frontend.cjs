@@ -36,7 +36,7 @@ function setup(...files) {
     state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
     lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
     search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
-    views: { render() {}, key: () => false, restore: async () => {} }, strip: { render() {} }, lit, ...overrides,
+    views: { render() {}, key: () => false, restore: async () => {} }, strip: { render() {} }, add: { render() {}, enter() {} }, lit, ...overrides,
   };
   const listeners = {}, keys = {};   // the window's and the document's, by event
   const history = {       // one tab's entries; back() delivers popstate a turn later, as browsers do
@@ -982,5 +982,60 @@ async function backDuringPage() {
   assert.equal(K.state.search.offset, 0, 'an abandoned page reply must not change the page saved for reload');
 }
 
-const cases = { forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+/* ---- Add link: every state of design section 9, read off the job the server reports ---- */
+async function addStates() {
+  const { K } = setup({ lit, strip: { render() {}, sayIn: () => () => {} } }, 'add.js');
+  const ev = (stage, state, extra = {}) => ({ stage, state, ...extra });
+  const L = (value, extra) => ev('library', 'done', { value, ...extra }), C = (status, tier, extra) => ev('content', 'done', { status, tier, ...extra });
+  const I = (status) => ev('image', 'done', { status }), S = (value) => ev('search', 'done', { value });
+  const job = (stages, extra = {}) => ({ action: 'add', failed: false, page: null, stages: Object.fromEntries(stages.map((e) => [e.stage, e])), ...extra });
+  const cases = [
+    ['Adding', [ev('library', 'running')], ['Adding', '', '', ''], null],
+    ['Content, web', [L('added'), ev('content', 'running', { tier: 'web' })], ['Added', 'Web', '', ''], null],
+    ['Content, rendering', [L('added'), ev('content', 'running', { tier: 'headless' })], ['Added', 'Rendering', '', ''], null],
+    ['Image', [L('added'), C('ok', 'headless'), ev('image', 'running')], ['Added', 'Ok · Headless', 'Fetching', ''], null],
+    ['Search', [L('added'), C('ok', 'headless'), I('ok'), ev('search', 'running')], ['Added', 'Ok · Headless', 'Ok', 'Indexing'], null],
+    ['Done', [L('added'), C('ok', 'headless'), I('ok'), S('indexed')], ['Added', 'Ok · Headless', 'Ok', 'Indexed'], null],
+    ['Already in library', [L('known'), C('ok', 'web'), I('ok'), S('indexed')], ['Already in library', 'Ok · Web', 'Ok', 'Indexed'], null],
+    ['Forgotten', [L('forgotten')], ['Forgotten', '', '', ''], 'Restore'],
+    ['Not a web page', [L('refused', { reason: 'not_web' })], ['Not a web page', '', '', ''], null],
+    ['Waiting', [ev('library', 'waiting')], ['Waiting', '', '', ''], null],
+    ['Retrying', [L('added'), ev('content', 'retrying', { after_s: 2 })], ['Added', 'Retrying', '', ''], null],
+    ['Blocked', [L('added'), C('blocked', 'web', { http_status: 403 }), I('none'), S('indexed')], ['Added', 'Blocked · 403', 'No image', 'Indexed'], 'Try signed in'],
+    ['Behind login', [L('added'), C('behind_login', 'web', { http_status: 401 }), I('none'), S('indexed')], ['Added', 'Behind login', 'No image', 'Indexed'], 'Try signed in'],
+    ['Paywalled', [L('added'), C('paywalled', 'web'), I('ok'), S('indexed')], ['Added', 'Paywalled', 'Ok', 'Indexed'], 'Try signed in'],
+    ['Signed in, running', [L('known'), ev('content', 'running', { tier: 'signed_in' })], ['Already in library', 'Signed in', '', ''], null],
+    ['Signed in, unavailable', [L('known'), C('chrome_not_running', 'signed_in'), S('indexed')], ['Already in library', 'Chrome not reachable', '', 'Indexed'], 'Retry'],
+    ['Signed in, not allowed', [L('known'), C('not_allowed', 'signed_in'), S('indexed')], ['Already in library', 'Not allowed', '', 'Indexed'], 'Retry'],
+    ['Timed out', [L('added'), C('timeout', 'web'), I('none'), S('indexed')], ['Added', 'Timed out', 'No image', 'Indexed'], 'Retry'],
+    ['HTTP error', [L('added'), C('error', 'web', { http_status: 503 }), I('none'), S('indexed')], ['Added', 'Error · 503', 'No image', 'Indexed'], 'Retry'],
+    ['Not found', [L('added'), C('not_found', 'web', { http_status: 404 }), I('none'), S('indexed')], ['Added', 'Not found · 404', 'No image', 'Indexed'], 'Remove'],
+    ['Thin', [L('added'), C('thin', 'headless'), I('ok'), S('indexed')], ['Added', 'Thin · Headless', 'Ok', 'Indexed'], null],
+    ['Skipped', [L('added'), C('skipped', 'web'), I('none'), S('indexed')], ['Added', 'Skipped', 'No image', 'Indexed'], null],
+    ['No image', [L('added'), C('ok', 'web'), I('none'), S('indexed')], ['Added', 'Ok · Web', 'No image', 'Indexed'], null],
+    ['Not indexed', [L('added'), C('ok', 'web'), I('ok'), S('not_indexed')], ['Added', 'Ok · Web', 'Ok', 'Not indexed'], 'Retry'],
+  ];
+  for (const [name, stages, values, act] of cases) {
+    const s = K.add.say(job(stages));
+    assert.deepEqual(plain(s.segs.map(([v]) => v)), values, name);
+    assert.equal(s.act && s.act[0], act, `${name}: action`);
+  }
+  const looks = (stages) => plain(K.add.say(job(stages)).segs.map(([, k]) => k));
+  assert.deepEqual(looks([ev('library', 'running')]), ['run', '', '', '']);
+  assert.deepEqual(looks([L('added'), C('thin', 'headless'), I('none'), S('not_indexed')]), ['ok', 'soft', 'soft', 'bad']);
+  assert.deepEqual(looks([L('forgotten')]), ['bad', '', '', '']);
+  const retry = (action, stages, extra) => K.add.say(job(stages, { action, ...extra })).act;
+  assert.deepEqual(plain(retry('signed_in', [L('known'), C('not_allowed', 'signed_in'), S('indexed')])), ['Retry', 'signed_in'], 'Retry repeats a signed in add');
+  assert.deepEqual(plain(retry('add', [L('added'), C('blocked', 'web'), S('indexed')])), ['Try signed in', 'signed_in']);
+  assert.deepEqual(plain(retry('add', [L('added'), C('not_found', 'web'), S('indexed')])), ['Remove', 'forget']);
+  assert.deepEqual(plain(retry('add', [L('forgotten')])), ['Restore', 'restore']);
+  const failed = K.add.say(job([ev('library', 'running')], { failed: true }));
+  assert.deepEqual([failed.segs[0][0], plain(failed.act)], ['Not added', ['Retry', 'add']], 'knowmoretabs could not run');
+  const tile = (stages, page) => { const s = K.add.say(job(stages, { page })); return plain([s.framed, s.indexed, s.title, s.picture]); };
+  assert.deepEqual(tile([ev('library', 'running')]), [false, false, '', '']);
+  assert.deepEqual(tile([L('added'), C('ok', 'web', { title: 'One note' }), ev('image', 'running')]), [true, false, 'One note', 'wait'], 'framed after Library, title as it lands');
+  assert.deepEqual(tile([L('known'), C('chrome_not_running', 'signed_in'), S('indexed')], { title: 'Kept' }), [true, true, 'Kept', 'none'], 'settled with no image');
+}
+
+const cases = { addStates, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

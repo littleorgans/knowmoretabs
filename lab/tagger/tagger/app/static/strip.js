@@ -8,16 +8,17 @@
    when they all have it, filled in part when some do, beside how many of
    the selection have it. ≈ shows pages without this tag like the tag's,
    and pressed again goes back. "+ New tag" makes a tag, or finds yours in
-   any case, and puts it on every selected page. */
+   any case, and puts it on every selected page. The Add link screen shares
+   the chip and New tag, acting on its one page. */
 (function () {
   const K = window.KMT;
   const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" });
   let making = false;
 
-  function chip(t, v) {
-    const n = K.sel.length, s = K.sel.filter((r) => K.has(r, t)).length;
+  /* a chip acting on `rows`; `like`: its ≈ is the open view */
+  function chip(t, rows, like) {
+    const n = rows.length, s = rows.filter((r) => K.has(r, t)).length;
     const on = n && s === n ? "all" : s ? "some" : "none";
-    const like = v.kind === "like" && v.tag === t;
     const name = K.esc(t);
     const add = !n ? `Select pages first, then click to add ${name} to them` : on === "all" ? `Every selected page has ${name}`
       : `Add ${name} to the ${n - s} selected without it`;
@@ -31,23 +32,29 @@
       `<button type="button" class="ml" data-act="like" aria-pressed="${like}" title="${find}" aria-label="${find}">≈</button></li>`;
   }
 
-  const say = (msg) => { K.$("new-msg").textContent = msg; K.$("new-msg").hidden = !msg; };
-  async function create() {
-    const box = K.$("new-tag"), name = box.value.trim();
-    if (!name || making) return;
-    if (!K.sel.length) { say("Select pages first: a new tag goes on the selected pages."); return; }
+  const sayIn = (id) => (msg) => { K.$(id).textContent = msg; K.$(id).hidden = !msg; };
+  const say = sayIn("new-msg");
+  /* the name in `box` made a tag (or found as yours in any case) and put on `rows`; true when it was */
+  async function create(box, tell, rows) {
+    const name = box.value.trim();
+    if (!name || making) return false;
+    if (!rows.length) { tell("Select pages first: a new tag goes on the selected pages."); return false; }
     making = true;
     try {
       const made = await K.api("/api/tags", { name });
       K.lib.tags = made.tags;
       box.value = "";
-      say("");
-      await K.tagSelection(made.tag);
-    } catch (err) { say(err.message); }
+      tell("");
+      await K.tagSelection(made.tag, rows);
+      return true;
+    } catch (err) { tell(err.message); return false; }
     finally { making = false; }
   }
 
   K.strip = {
+    chip,
+    create,
+    sayIn,
     render() {
       const v = K.views.view(), n = K.sel.length;
       K.$("n-sel").textContent = n;
@@ -61,7 +68,7 @@
       const names = v.tags;
       for (const r of K.views.shown(v).concat(K.sel)) for (const t of K.pages.get(r).tags) names.add(t);
       if (v.kind === "like") names.add(v.tag);
-      K.$("strip").innerHTML = [...names].sort(byName).map((t) => chip(t, v)).join("");
+      K.$("strip").innerHTML = [...names].sort(byName).map((t) => chip(t, K.sel, v.kind === "like" && v.tag === t)).join("");
       K.$("app-tags").innerHTML = (K.lib ? K.lib.app_tags : []).map((t) => `<option value="${K.esc(t)}"></option>`).join("");
     }
   };
@@ -77,7 +84,7 @@
   K.$("show-sel").addEventListener("click", () => K.views.showSelection());
   K.$("show-pins").addEventListener("click", () => K.views.showPinned());
   K.$("clear").addEventListener("click", () => K.views.clear());
-  K.$("newtag").addEventListener("submit", (e) => { e.preventDefault(); create(); });
+  K.$("newtag").addEventListener("submit", (e) => { e.preventDefault(); create(K.$("new-tag"), say, K.sel); });
   K.$("new-tag").addEventListener("input", () => say(""));
   K.$("new-tag").addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;

@@ -11,6 +11,10 @@
 <body>
 <header class="top">
   <span class="brand">knowmoretabs <small>tagger</small></span>
+  <nav class="views" aria-label="Screens">
+    <a href="#tag" id="nav-tag">Tag</a>
+    <a href="#add" id="nav-add">Add link</a>
+  </nav>
   <button type="button" id="export-btn" class="pill" title="Write the answers file and the decision log (e)">Export</button>
   <button type="button" id="help-btn" class="sq" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
   <button type="button" id="theme" class="sq theme" aria-label="Switch theme" title="Switch theme (t)">
@@ -20,7 +24,7 @@
 </header>
 
 <div class="frame">
-<main>
+<main id="tag-screen">
   <form id="s-form" class="sform" role="search">
     <input id="s-q" type="search" placeholder="Search your library" autocomplete="off" aria-label="Search">
     <label class="tog"><input type="checkbox" id="s-img"> Include images</label>
@@ -53,6 +57,35 @@
       <button type="button" id="prev">← Previous</button>
       <button type="button" id="next">Next →</button>
     </nav>
+  </section>
+</main>
+
+<main id="add-screen" class="add" hidden>
+  <form class="aform" id="a-form" novalidate>
+    <label class="lbl" for="a-link">Link</label>
+    <div class="arow">
+      <input id="a-link" type="url" autocomplete="off" spellcheck="false">
+      <button type="submit" class="go" id="a-go" disabled>Add</button>
+    </div>
+  </form>
+
+  <ol class="stages" id="a-stages" aria-live="polite" hidden>
+    <li class="seg" id="a-library"><i class="fill"></i><span class="lbl">Library</span><span class="val"></span></li>
+    <li class="seg" id="a-content"><i class="fill"></i><span class="lbl">Content</span><span class="val"></span></li>
+    <li class="seg" id="a-image"><i class="fill"></i><span class="lbl">Image</span><span class="val"></span></li>
+    <li class="seg" id="a-search"><i class="fill"></i><span class="lbl">Search</span><span class="val"></span></li>
+    <li class="end"><output class="secs" id="a-secs"></output><button type="button" class="act" id="a-act" hidden></button></li>
+  </ol>
+
+  <section class="result" id="a-result" aria-label="Added page" hidden>
+    <div id="a-tile"></div>
+    <div class="tagrow" id="a-tagrow">
+      <p class="lbl">Tags</p>
+      <ul class="tagstrip" id="a-strip"></ul>
+      <button type="button" class="newtag-btn" id="a-new">+ New tag</button>
+      <form id="a-newtag" class="newtag" hidden><input id="a-new-tag" type="text" list="app-tags" autocomplete="off" aria-label="New tag, put on this page"></form>
+      <p id="a-new-msg" class="msg" role="alert" hidden></p>
+    </div>
   </section>
 </main>
 <footer class="cell"><p>Local prototype on 127.0.0.1. Tags made here stay in the data folder on this machine until you export them; the archive is never written.</p></footer>
@@ -90,6 +123,7 @@
 <script src="pages.js" defer></script>
 <script src="views.js" defer></script>
 <script src="strip.js" defer></script>
+<script src="add.js" defer></script>
 <script src="app.js" defer></script>
 </body>
 </html>

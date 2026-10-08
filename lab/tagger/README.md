@@ -43,8 +43,12 @@ The CLI sets umask 077, so every output is private (0600).
 
 ## Search, select and tag app (P1, one screen since P5)
 
-`uv run --locked tagger app --root <snapshot>` serves the prototype on 127.0.0.1 (a free port, or `--port`) and
-prints its address. Needs `dataset` and `embed --model eg2` done for that snapshot; runs offline (`HF_HUB_OFFLINE`).
+`uv run --locked tagger app --root <archive>` serves the prototype on 127.0.0.1:7879 (`--port 0` picks a free one)
+and prints its address. Needs `dataset` and `embed --model eg2` done; runs offline (`HF_HUB_OFFLINE`). The dataset
+must be a subset of the archive's known pages (snapshot tabs plus `pages/added.jsonl`, folded as knowmoretabs folds
+it); known pages it lacks are built from `--root` and embedded at startup (`engine.add_pages`, B vector only, no
+image vector, unlabelled). With no owner vocabulary the app starts with no owner tags; every tag name `state.json`
+holds (made in the app, or in any decision) loads as a zero shot tag.
 One screen: search (EG2 cosine over B, else A, fused by reciprocal rank with TF-IDF over title, metadata and text;
 images on request; "Untagged only" keeps pages with no app tag), click results to select them, tag the selection.
 Results come 50 at a time ("51 to 100 of 240", of every page the search ranks); Previous and Next replace them.
@@ -71,7 +75,15 @@ precheck and session, both null for a direct decision) and, when pages were forg
 addresses, each ended by a NUL). Created tags need `tag --import --accept-new`, which creates them in the archive; the
 forgotten pages go through `xargs -0 knowmoretabs forget -- < forget.urls` (`restore` in place of `forget` brings
 them back). Both dialog commands target your default library, independently of the app's snapshot root.
-Pins are not exported. The app never writes an archive.
+Pins are not exported. The app never writes an archive itself.
+Add link (`#add`; `#add=<encoded link>` fills the box and focuses Add, which waits for Enter): Add, Enter, or a
+paste of a web address into the empty box starts a job that runs `knowmoretabs --root <archive> add --json -- <link>`
+(the binary from PATH), relays its stage events (`GET /api/add/<id>`, polled every 250 ms) and then indexes the page
+(`engine.sync`). Four segments show Library, Content, Image and Search; a failure shows its value and one action:
+Try signed in (`add --signed-in`), Retry (the same add again), Remove (`forget`) or Restore (`restore`, then `add`).
+The tile is framed once the library lists the page and opens at Indexed with every app tag in the strip, acting on
+that page only. knowmoretabs is the only writer of the archive, so the app must run on the archive `add` should
+change. Page images are addressed by their hashed name (`/img/<sha256>`), so a cached image stays with its page.
 The P1 to P4 review, swipe, tag picker, suggestions and query exclusions (`<data>/app/not-relevant.json`) keep
 their code, API and tests but are not on this screen; their decisions still count as app tags.
 `--smoke` prints load and query timings, then exits.
@@ -98,4 +110,5 @@ Every head (`heads.fit_lr`, `fit_knn`, `fit_prior`) sees only its fit rows and t
 `zeroshot.run` takes its input choice from `cv_summary.json` and can run before test scoring.
 
 Synthetic regression checks: `uv run --locked pytest`. `tests/test_frontend.py` runs the scripts in Node with a
-string DOM; `tests/test_browser.py` runs the screen in headless Chrome (`tests/browser.cjs`), skipped without one.
+string DOM; `tests/test_browser.py` runs the screens in headless Chrome (`tests/browser.cjs`), skipped without one.
+Add link tests drive a fake knowmoretabs (`tests/fake_knowmoretabs.py`) on a copy of the synthetic archive.

@@ -1,13 +1,30 @@
 /* knowmoretabs · tagger app · the shell
-   One screen: search, select and tag. Loads the library, the saved
-   selection and pins, then the last search; owns the global keys (Undo
-   included), theme and motion, help and export. (Review, swipe and the tag
-   picker keep their scripts but are not part of this screen.) */
+   Two screens, by the address's fragment: Tag (search, select and tag)
+   and Add link (`#add`, or `#add=<link>` from the bookmarklet). Loads the
+   library, the saved selection and pins, then the last search; owns the
+   global keys (Undo included), theme and motion, help and export. (Review,
+   swipe and the tag picker keep their scripts but are not on a screen.) */
 (function () {
   const K = window.KMT;
   const root = document.documentElement;
 
-  K.changed = () => { K.views.render(); K.strip.render(); };
+  K.changed = () => { K.views.render(); K.strip.render(); K.add.render(); };
+
+  /* ---- the screen the fragment names; Tag comes back at the scroll it was left ---- */
+  K.screen = null;
+  function route() {
+    const screen = location.hash.startsWith("#add") ? "add" : "tag";
+    const was = K.screen;
+    K.screen = screen;
+    K.$("tag-screen").hidden = screen !== "tag";
+    K.$("add-screen").hidden = screen !== "add";
+    for (const s of ["tag", "add"]) {
+      if (s === screen) K.$(`nav-${s}`).setAttribute("aria-current", "page"); else K.$(`nav-${s}`).removeAttribute("aria-current");
+    }
+    if (screen === "add") K.add.enter();
+    else if (was === "add") scrollTo(0, K.views.view().scroll);
+  }
+  addEventListener("hashchange", route);
 
   /* ---- settings ---- */
   function applyTheme() {
@@ -63,13 +80,15 @@
     let done = true;
     if (e.key === "?") K.$("help").showModal();
     else if (e.key === "t") flipTheme();
-    else if (e.key === "/") { K.$("s-q").focus(); K.$("s-q").select(); }
     else if (e.key === "e") K.exportNow();
+    else if (K.screen === "add") done = false;   // the rest act on the Tag screen
+    else if (e.key === "/") { K.$("s-q").focus(); K.$("s-q").select(); }
     else done = K.views.key(e);
     if (done) e.preventDefault();
   });
 
   applyTheme();
+  route();
   (async () => {
     try {
       K.lib = await K.api("/api/library");

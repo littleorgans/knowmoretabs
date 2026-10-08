@@ -107,16 +107,16 @@
   }
   const nothing = (msg) => { K.toast(msg); return Promise.resolve(); };
 
-  /* the strip's name: add the tag to every selected page that lacks it */
-  K.tagSelection = (tag) => {
-    if (!K.sel.length) return nothing(`Select pages first, then click a tag to add it to them`);
-    const rows = K.sel.filter((r) => !K.has(r, tag));
+  /* the strip's name: add the tag to every selected page (or every page of `on`, the Add link tile's) that lacks it */
+  K.tagSelection = (tag, on = K.sel) => {
+    if (!on.length) return nothing(`Select pages first, then click a tag to add it to them`);
+    const rows = on.filter((r) => !K.has(r, tag));
     if (!rows.length) return nothing(`Every selected page has ${K.short(tag)}`);
     return change(tag, true, rows, `Added ${K.short(tag)} to ${count(rows.length)}`);
   };
-  /* the strip's ×: take the tag off every selected page that has it */
-  K.untagSelection = (tag) => {
-    const rows = K.sel.filter((r) => K.has(r, tag));
+  /* the strip's ×: take the tag off every selected page (or page of `on`) that has it */
+  K.untagSelection = (tag, on = K.sel) => {
+    const rows = on.filter((r) => K.has(r, tag));
     if (!rows.length) return nothing(`No selected page has ${K.short(tag)}`);
     return change(tag, false, rows, `Removed ${K.short(tag)} from ${count(rows.length)}`);
   };

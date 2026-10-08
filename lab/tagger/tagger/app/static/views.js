@@ -40,6 +40,7 @@
   }
   let settling = 0;   // once scrolling settles: browsers drop history calls past a rate (Chrome 200 in 10 s)
   addEventListener("scroll", () => {
+    if (K.screen === "add") return;   // the Add link screen scrolls on its own
     clearTimeout(settling);
     settling = setTimeout(() => { if (!view().loading) remember(); }, 150);
   });
@@ -171,6 +172,7 @@
   }
 
   K.views = {
+    chip,
     view,
     shown,
     run,

@@ -270,6 +270,108 @@ const cases = {
       check(scrollY === 900, `${how} restores the scroll (${scrollY})`);
     }
   },
+
+  /* ---- Add link, against a fake knowmoretabs that paces its stage lines ---- */
+  addFlow: async ({ $, tiles, until, check }) => {
+    const seg = (k) => $(`#a-${k} .val`).textContent, look = (k) => $(`#a-${k}`).dataset.k;
+    check(!$('#add-screen').hidden && $('#tag-screen').hidden, 'the fragment opens Add link');
+    check($('#nav-add').getAttribute('aria-current') === 'page' && !$('#nav-tag').hasAttribute('aria-current'), 'the nav marks it');
+    check(document.activeElement === $('#a-link') && $('#a-go').disabled && $('#a-stages').hidden, 'empty: Add off, no bar');
+    check(!$('#a-link').placeholder, 'no placeholder');
+    const url = 'https://added.example/notes/one';
+    $('#a-link').value = url;
+    $('#a-link').dispatchEvent(new Event('input'));
+    check(!$('#a-go').disabled, 'a link turns Add on');
+    $('#a-form').requestSubmit();
+    const seen = new Set();
+    await until(() => { for (const k of ['library', 'content', 'image', 'search']) seen.add(`${k}:${seg(k)}:${look(k)}`); return seg('search') === 'Indexed'; }, 'Indexed');
+    for (const s of ['library:Adding:run', 'library:Added:ok', 'content:Web:run', 'content:Ok · Web:ok', 'image:Fetching:run', 'image:Ok:ok'])
+      check(seen.has(s), `the bar showed ${s} (${[...seen].join(', ')})`);
+    check(/^\d+\.\d s$/.test($('#a-secs').textContent) && $('#a-act').hidden, 'elapsed, and no action');
+    check($('#a-link').value === '' && document.activeElement === $('#a-link'), 'the box is empty and keeps the focus');
+    const tile = $('#a-tile .tile');
+    check(tile.classList.contains('sel') && !$('#a-tagrow').classList.contains('off'), 'Indexed opens the tile and the strip');
+    check($('#a-tile .ht').textContent === 'An invented page on zeppelin timetables' && $('#a-tile .host').textContent === 'added.example', 'title and host');
+    const img = $('#a-tile .th img');
+    await until(() => img && img.complete && img.naturalWidth > 0, 'the picture');
+    check(/^\/img\/[0-9a-f]{64}$/.test(new URL(img.src).pathname), 'addressed by page');
+    $('#a-new').click();
+    check(document.activeElement === $('#a-new-tag') && !$('#a-new-tag').placeholder, 'New tag opens a box');
+    $('#a-new-tag').value = 'Sleeper cars';
+    $('#a-newtag').requestSubmit();
+    await until(() => $('#a-tile [data-untag="Sleeper cars"]'), 'the new tag on the tile');
+    await until(() => $('#a-strip [data-tag="Sleeper cars"]')?.dataset.on === 'all' && !$('#a-new').hidden, 'and in the strip, held');
+    check($('#a-tile .tile') === tile, 'tagging keeps the tile node');
+    $('#a-strip [data-tag="Sleeper cars"] [data-act=remove]').click();
+    await until(() => $('#a-strip [data-tag="Sleeper cars"]')?.dataset.on === 'none' && !$('#a-tile [data-untag]'), 'the strip takes it off');
+    await until(() => $('#toast-msg').textContent === 'Removed Sleeper cars from 1 page' && !$('#toast-undo').hidden, 'the toast');
+    $('#toast-undo').click();
+    await until(() => $('#a-tile [data-untag="Sleeper cars"]'), 'Undo puts it back');
+    await window.KMT.writes;
+    $('#nav-tag').click();
+    await until(() => !$('#tag-screen').hidden && $('#add-screen').hidden, 'the Tag screen');
+    $('#s-q').value = 'zeppelin timetables';
+    $('#s-form').requestSubmit();
+    await until(() => tiles().length > 0, 'results');
+    check(tiles()[0].querySelector('.ht').textContent === 'An invented page on zeppelin timetables', 'the added page is searchable');
+    check(tiles()[0].querySelector('[data-untag="Sleeper cars"]'), 'with its tag');
+  },
+  /* #add=<link> fills the box and focuses Add, which waits; a later fragment refills it */
+  addDeepLink: async ({ $, until, check }) => {
+    const first = 'https://added.example/a b?x=1&y=é';
+    check($('#a-link').value === first && document.activeElement === $('#a-go') && !$('#a-go').disabled, 'filled, Add focused');
+    await new Promise((r) => setTimeout(r, 600));
+    check($('#a-stages').hidden, 'nothing starts before Enter');
+    const second = 'https://added.example/notes/two';
+    location.hash = '#add=' + encodeURIComponent(second);
+    await until(() => $('#a-link').value === second, 'the new fragment');
+    check(document.activeElement === $('#a-go'), 'Add focused again');
+    $('#a-go').click();
+    await until(() => $('#a-search .val').textContent === 'Indexed', 'Indexed');
+    check(document.activeElement === $('#a-link') && $('#a-link').value === '', 'ready for the next link');
+  },
+  /* each failure shows its value and its one action; the action runs and the bar follows it */
+  addFailures: async ({ $, until, check }) => {
+    const seg = (k) => $(`#a-${k} .val`).textContent;
+    const add = async (url) => {   // its first state shows for a whole poll
+      $('#a-link').value = url;
+      $('#a-link').dispatchEvent(new Event('input'));
+      $('#a-form').requestSubmit();
+      await until(() => seg('library') === 'Adding' && seg('search') === '', 'the new job');
+    };
+    await add('ftp://added.example/one');
+    await until(() => seg('library') === 'Not a web page', 'refused');
+    check($('#a-link').value === 'ftp://added.example/one' && $('#a-result').hidden && $('#a-act').hidden, 'the text stays, no tile, no action');
+    check($('#a-library').dataset.k === 'bad', 'shown as a failure');
+    await add('https://added.example/blocked');
+    await until(() => seg('search') === 'Indexed', 'blocked, indexed');
+    check(seg('content') === 'Blocked · 403' && seg('image') === 'No image' && $('#a-image').dataset.k === 'soft', `blocked reads ${seg('content')}`);
+    check(!$('#a-result').hidden && $('#a-tile .th.none'), 'the tile, with no picture');
+    check($('#a-act').textContent === 'Try signed in', 'Try signed in');
+    $('#a-act').click();
+    await until(() => seg('content') === 'Ok · Signed in' && seg('search') === 'Indexed', 'signed in');
+    check(seg('library') === 'Already in library' && $('#a-act').hidden, 'known now; no action');
+    await add('https://added.example/missing');
+    await until(() => seg('search') === 'Indexed', 'not found, indexed');
+    check(seg('content') === 'Not found · 404' && $('#a-act').textContent === 'Remove', 'Remove');
+    $('#a-act').click();
+    await until(() => seg('library') === 'Forgotten', 'removed');
+    check($('#a-result').hidden && $('#a-act').textContent === 'Restore' && seg('content') === '', 'Forgotten offers Restore');
+    $('#a-act').click();
+    await until(() => seg('library') === 'Already in library' && seg('search') === 'Indexed', 'restored');
+    check(!$('#a-result').hidden && $('#a-act').textContent === 'Remove', 'the tile is back');
+    await add('https://added.example/timeout');
+    await until(() => seg('search') === 'Indexed', 'timed out');
+    check(seg('content') === 'Timed out' && $('#a-act').textContent === 'Retry', 'Retry');
+  },
+  /* a web address pasted into the empty box starts at once */
+  addPaste: async ({ $, until, check }) => {
+    const data = new DataTransfer();
+    data.setData('text/plain', ' https://added.example/pasted ');
+    $('#a-link').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    await until(() => $('#a-search .val').textContent === 'Indexed', 'Indexed');
+    check($('#a-link').value === '', 'the box is ready for the next link');
+  },
 };
 
 /* the checks a case makes once the page has reloaded */

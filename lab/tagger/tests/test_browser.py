@@ -1,13 +1,18 @@
-"""The one screen in headless Chrome (`browser.cjs`) on the app serving the synthetic archive: lit-html under the
-server's CSP, tile nodes kept across updates, result pages, ≈ back to the same page, and Forget, Undo and Pin."""
+"""The screens in headless Chrome (`browser.cjs`) on the app serving the synthetic archive: lit-html under the
+server's CSP, tile nodes kept across updates, result pages, ≈ back to the same page, Forget, Undo and Pin, and
+Add link driven against a fake knowmoretabs on a fresh copy of the archive."""
 
+import os
 import shutil
 import subprocess
 import tempfile
 import threading
 from pathlib import Path
+from unittest.mock import patch
+from urllib.parse import quote
 
 import pytest
+from test_add import Synthetic, fake_binary
 from test_app import Fixture, fake_embed, fake_encode
 
 from tagger.app import server
@@ -21,25 +26,32 @@ def chrome() -> str | None:
     return found or (str(MAC_CHROME) if MAC_CHROME.exists() else None)
 
 
-class BrowserTests(Fixture):
-    def setUp(self):
+class Browser:
+    def start(self, lib) -> server.App:
         if shutil.which("node") is None or chrome() is None:
             pytest.skip("Node and Chrome are needed to run the screen in a browser")
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
-        self.server = server.serve(server.App(self.lib, Store(self.data), fake_encode, fake_embed), 0)
+        app = server.App(lib, Store(self.data), fake_encode, fake_embed)
+        self.server = server.serve(app, 0)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
+        return app
 
-    def run_case(self, case: str) -> None:
-        url = f"http://127.0.0.1:{self.server.server_address[1]}/"
+    def run_case(self, case: str, fragment: str = "") -> None:
+        url = f"http://127.0.0.1:{self.server.server_address[1]}/{fragment}"
         with tempfile.TemporaryDirectory() as profile:
             script = str(Path(__file__).with_name("browser.cjs"))
             result = subprocess.run(
                 ["node", script, chrome(), profile, url, case], capture_output=True, text=True, timeout=60
             )
         self.assertEqual(0, result.returncode, result.stderr)
+
+
+class BrowserTests(Browser, Fixture):
+    def setUp(self):
+        self.start(self.lib)
 
     def test_a_selection_or_tag_update_keeps_the_tile_node(self):
         self.run_case("identity")
@@ -73,3 +85,29 @@ class BrowserTests(Fixture):
 
     def test_back_after_a_long_read_returns_to_the_page_left(self):
         self.run_case("longScroll")
+
+
+class AddBrowserTests(Browser, Synthetic):
+    def setUp(self):
+        super().setUp()
+        app = self.start(self.load()[0])
+        app.adds.binary = fake_binary(self.work)
+
+    def paced(self, seconds: float) -> None:
+        """Each stage line this long after the last; a state shorter than a poll may never show."""
+        env = patch.dict(os.environ, {"FAKE_KMT_DELAY": str(seconds)})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_a_link_is_added_tagged_and_found(self):
+        self.paced(0.3)
+        self.run_case("addFlow", "#add")
+
+    def test_a_deep_link_fills_the_box_and_waits_for_enter(self):
+        self.run_case("addDeepLink", "#add=" + quote("https://added.example/a b?x=1&y=é", safe=""))
+
+    def test_each_failure_shows_its_value_and_its_action(self):
+        self.run_case("addFailures", "#add")
+
+    def test_a_pasted_web_address_starts_at_once(self):
+        self.run_case("addPaste", "#add")
