@@ -138,17 +138,52 @@ const cases = {
     $('#newtag').requestSubmit();
     await until(() => tile.querySelector('[data-untag="Sleeper cars"]'), 'the tag on the tile');
     check(tileOf(row) === tile && tile.querySelector('.th') === picture, 'tagging keeps the tile node and its picture');
-    $('#strip [data-tag="Sleeper cars"] [data-act=filter]').click();
-    await until(() => tiles().length === 1, 'only the tagged tile');
-    check(tiles()[0] === tile, 'filtering keeps the node of a tile still in view (keyed by page, not by place)');
-    $('#v-filter [data-act=unfilter]').click();
-    await until(() => tiles().length === 50, 'every tile back');
+    const before = tiles()[0], gone = before.dataset.row;
+    before.querySelector('[data-forget]').click();
+    await until(() => !tileOf(gone), 'the neighbour forgotten');
+    check(tiles()[0] === tile, 'forgetting a neighbour keeps the node of a tile still in view (keyed by page, not by place)');
+    $('#toast-undo').click();
+    await until(() => tileOf(gone), 'the neighbour back');
+    check(tiles()[1] === tile && tileOf(row) === tile, 'and Undo keeps it too');
     tile.querySelector('[data-untag="Sleeper cars"]').click();
     await until(() => !tile.querySelector('[data-untag]'), 'the tag off the tile');
     check(tileOf(row) === tile && tile.classList.contains('sel'), '× keeps the tile node, still selected');
     $('#clear').click();
     await until(() => !tile.classList.contains('sel'), 'the selection cleared');
     check(tileOf(row) === tile, 'clearing keeps the tile node');
+  },
+
+  /* f forgets the focused page, u brings it back in its place; Pin never selects; Pinned is a view over the results */
+  forgetPin: async ({ $, tiles, tileOf, pos, until, check, search }) => {
+    await search('night train');
+    const total = () => Number(pos().match(/of (\d+)/)[1]), all = total();
+    const victim = tiles()[2], row = victim.dataset.row, next = tiles()[3];
+    victim.focus();
+    victim.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', bubbles: true }));
+    await until(() => !tileOf(row), 'the forgotten tile gone');
+    check(total() === all - 1 && tiles().length === 49, 'the count and the grid drop it');
+    check($('#n-sel').textContent === '0', 'f selects nothing');
+    check(document.activeElement === next, 'the next tile takes the focus');
+    check(!$('#toast').hidden && $('#toast-msg').textContent === 'Forgotten' && !$('#toast-undo').hidden, 'the toast offers Undo');
+    next.dispatchEvent(new KeyboardEvent('keydown', { key: 'u', bubbles: true }));
+    await until(() => tileOf(row), 'Undo brings it back');
+    check(tiles()[2].dataset.row === row && total() === all, 'in its place');
+    const pinned = tiles()[4];
+    pinned.querySelector('[data-pin]').click();
+    await until(() => pinned.classList.contains('pinned'), 'pinned');
+    check(!pinned.classList.contains('sel') && $('#n-sel').textContent === '0' && $('#n-pin').textContent === '1', 'pinning selects nothing');
+    tileOf(row).querySelector('[data-forget]').click();
+    await until(() => !tileOf(row), 'forgotten by its button');
+    check($('#n-sel').textContent === '0', 'Forget selects nothing');
+    scrollTo(0, 600);
+    $('#show-pins').click();
+    await until(() => pos().startsWith('Pinned'), 'the pinned view');
+    check(tiles().length === 1 && tiles()[0].dataset.row === pinned.dataset.row && scrollY === 0, 'only the pinned page, from the top');
+    $('#show-pins').click();
+    await until(() => /^1 to 49 of/.test(pos()), 'back to the results');
+    check(scrollY === 600, `the results at the scroll they were left (${scrollY})`);
+    await window.KMT.writes;
+    sessionStorage.setItem('p9', JSON.stringify({ row, pinned: pinned.dataset.row, all }));
   },
 
   /* Next and Previous replace the hits and show the top; the selection stays */
@@ -202,6 +237,20 @@ const cases = {
   },
 };
 
+/* the checks a case makes once the page has reloaded */
+const afterReload = {
+  reloadScroll: async ({ pos, until, check }) => {
+    await until(() => pos().startsWith('51 to '), 'the saved page after reload');
+    check(scrollY === 900, 'reload restores the saved scroll');
+  },
+  forgetPin: async ({ $, tileOf, pos, until, check }) => {
+    const { row, pinned, all } = JSON.parse(sessionStorage.getItem('p9'));
+    await until(() => /^1 to 50 of/.test(pos()), 'the results after reload, a full page from the server');
+    check(!tileOf(row) && Number(pos().match(/of (\d+)/)[1]) === all - 1, 'still forgotten after a reload');
+    check($('#n-pin').textContent === '1' && tileOf(pinned).classList.contains('pinned'), 'still pinned after a reload');
+  },
+};
+
 async function main() {
   const run = cases[name];
   assert.ok(run, `no case ${name}`);
@@ -216,15 +265,12 @@ async function main() {
     const expression = `(${run})((${inPage})())`;
     const out = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
     if (out.exceptionDetails) throw new Error(`${out.exceptionDetails.exception?.description || out.exceptionDetails.text}\n${errors.join('\n')}`);
-    if (name === 'reloadScroll') {
+    if (afterReload[name]) {
       const reloaded = load();
       await send('Page.reload', {}, sessionId);
       await reloaded;
-      const restored = await send('Runtime.evaluate', { expression: `(async () => {
-        const { pos, until, check } = (${inPage})();
-        await until(() => pos().startsWith('51 to '), 'the saved page after reload');
-        check(scrollY === 900, 'reload restores the saved scroll');
-      })()`, awaitPromise: true, returnByValue: true }, sessionId);
+      const restored = await send('Runtime.evaluate', { expression: `(${afterReload[name]})((${inPage})())`,
+        awaitPromise: true, returnByValue: true }, sessionId);
       if (restored.exceptionDetails) throw new Error(restored.exceptionDetails.exception?.description || restored.exceptionDetails.text);
     }
     assert.deepEqual(errors, [], `no console error, exception or CSP report: ${errors.join(' | ')}`);

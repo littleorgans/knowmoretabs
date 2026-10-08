@@ -31,7 +31,7 @@ function setup(...files) {
   const mocks = {
     $: node, esc: String, short: String, title: () => '', pct: String,
     own: () => '', thumb: () => '', save() {}, changed() {},
-    fail(err) { this.failure = err; }, toast(msg) { this.toasted = msg; }, flyIn() {}, flyOut(c, d, done) { done(); }, refreshSets() {},
+    fail(err) { this.failure = err; }, toast(msg, undo) { this.toasted = msg; this.undo = undo || null; }, flyIn() {}, flyOut(c, d, done) { done(); }, refreshSets() {},
     state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
     lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
     search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
@@ -352,6 +352,19 @@ async function exportCommand() {
   assert.ok(html.includes("--root '/path/to/archive-copy'"), 'import command must select a copy explicitly');
   assert.ok(html.includes("--import '/tmp/owner'\\''s data/answers.jsonl'"), 'answer path must be shell quoted');
   assert.ok(html.includes('--accept-new'), 'created tags must validate without an existing archive tag');
+  assert.ok(!html.includes('xargs'), 'nothing forgotten, no forget command');
+}
+
+async function exportForget() {
+  const { K, node } = setup('app.js');
+  await turn();
+  K.api = async () => ({ decided: 0, answers: '/a', decisions: '/d', forget: "/data/owner's exports/forget.urls", forgotten: 2, source: 'test' });
+  await K.exportNow();
+  const html = node('export-body').innerHTML;
+  assert.ok(html.includes("<pre>xargs -0 knowmoretabs --root '/path/to/archive-copy' forget -- < '/data/owner'\\''s exports/forget.urls'</pre>"),
+    'the manifest goes through xargs -0 to forget in the copy, its path one shell word');
+  assert.ok(html.includes('Forget the 2 forgotten pages'));
+  assert.ok(!html.includes('tag --import'), 'nothing tagged, no import command');
 }
 
 /* ---- open the page: a control on http(s) pages whose click and key change nothing ---- */
@@ -452,9 +465,16 @@ async function screenFixture(...more) {
   f.chip = (tag, act) => node('strip').click({ target: { closest: (s) => (s === 'button[data-act]' ? { dataset: { act }, closest: () => ({ dataset: { tag } }) } : null) } });
   f.settle = async () => { await turn(); while (requests.length) { const r = requests.shift(); r.resolve(reply(r)); await turn(); } };
   /* what the server answers, from what the page sent */
-  const reply = (r) => (r.route === '/api/apply'
-    ? { pages: r.body.rows.map((row) => ({ row, tags: K.pages.get(row).tags })), changed: r.body.rows.length, app_tags: ['A'] }
-    : { rows: r.body.rows });
+  const batches = [];
+  const tags = (rows) => rows.map((row) => ({ row, tags: K.pages.get(row).tags }));
+  const reply = (r) => {
+    if (r.route === '/api/apply') return { pages: tags(r.body.rows), changed: r.body.rows.length, batch: batches.push(r.body.rows), app_tags: ['A'] };
+    if (r.route === '/api/undo') return { pages: tags(batches[r.body.batch - 1]), app_tags: ['A'] };
+    if (r.route === '/api/forget') return { pages: K.lib.pages };
+    return { rows: r.body.rows };
+  };
+  f.shown = () => [...node('grid').innerHTML.matchAll(/data-row="(\d+)"/g)].map((m) => Number(m[1]));
+  f.press = (key, mods = {}) => f.keys.keydown({ key, ...mods, target: { closest: () => null }, preventDefault() {} });
   return f;
 }
 
@@ -479,28 +499,166 @@ async function select() {
   assert.deepEqual(requests[0].body, { rows: [] }, 'each write carries the selection as it is when sent');
 }
 
-async function tagToggle() {
+/* the strip chip [× | name s/n | ≈] acts on the selection only: the name adds, × removes, the count is coverage */
+async function chipActsOnSelection() {
   const { K, node, requests, click, chip, settle } = await screenFixture();
-  chip('A', 'toggle');
+  const strip = () => node('strip').innerHTML;
+  assert.doesNotMatch(strip(), /class="ct"/, 'no selection: no count');
+  assert.doesNotMatch(strip(), /data-act="remove"/, 'no selection: no ×');
+  assert.doesNotMatch(strip(), /data-act="filter"/, 'the count filters nothing');
+  chip('A', 'add');
   await turn();
   assert.equal(requests.length, 0, 'no selection, nothing tagged');
   assert.match(K.toasted, /Select pages first/);
-  click(1); click(2); await settle();
-  assert.match(node('strip').innerHTML, /<li class="tc" data-on="some" data-tag="A"><button type="button" class="nm" data-act="toggle" aria-pressed="mixed"/, 'some selected have it: partial');
-  assert.match(node('strip').innerHTML, />1\/3<\/button>/, 'the count: pages in view with it, of all in view');
-  chip('A', 'toggle');
-  assert.match(node('strip').innerHTML, /data-on="all"/, 'the chip fills at once');
+  click(1); click(2); click(3); await settle();
+  assert.match(strip(), /data-on="some" data-tag="A" style="--cover: 33.3%"><button type="button" class="rm" data-act="remove"/, 'partial fill, and × as one selected page has it');
+  assert.match(strip(), /aria-pressed="mixed"[^>]*>A<span class="ct" title="1 of your 3 selected have A"[^>]*>1\/3<\/span>/, 'the count is selection coverage');
+  chip('A', 'add');
+  assert.match(strip(), /data-on="all"/, 'the chip fills at once');
   await turn();
-  assert.deepEqual(requests[0].body, { rows: [2], tag: 'A', value: true }, 'partial: only the pages lacking it are tagged');
+  assert.deepEqual(requests[0].body, { rows: [2, 3], tag: 'A', value: true }, 'the name adds to the selected pages lacking it');
   await settle();
-  assert.match(K.toasted, /Tagged 1 page “A”/);
-  chip('A', 'toggle');
+  assert.match(K.toasted, /^Added A to 2 pages$/);
+  chip('A', 'add');
   await turn();
-  assert.deepEqual(requests[0].body, { rows: [1, 2], tag: 'A', value: false }, 'all have it: it comes off them all');
+  assert.equal(requests.length, 0, 'the name never takes a tag off, even when every selected page has it');
+  assert.match(K.toasted, /Every selected page has A/);
+  click(3); await settle();
+  chip('A', 'remove');
+  await turn();
+  assert.deepEqual(requests[0].body, { rows: [1, 2], tag: 'A', value: false }, '× takes it off the selected pages only');
   await settle();
-  assert.match(node('strip').innerHTML, /data-on="none"[^]*aria-pressed="false"/);
-  assert.equal((node('grid').innerHTML.match(/Untagged/g) || []).length, 3, 'tiles show it gone');
-  assert.match(node('strip').innerHTML, />0\/3<\/button>/, 'a tag taken off every page stays in the strip to put back');
+  assert.match(K.toasted, /^Removed A from 2 pages$/);
+  assert.equal(K.has(3, 'A'), true, 'a page outside the selection keeps it');
+  assert.doesNotMatch(strip(), /data-act="remove"/, 'no selected page has it: no ×');
+  assert.match(strip(), /data-on="none"[^]*>0\/2<\/span>/, 'a tag on none of the selection stays to put back');
+  K.clearSel(); await settle();
+  assert.doesNotMatch(strip(), /class="ct"/, 'the count hides with no selection');
+}
+
+/* Undo after a strip action: each page exactly as it was */
+async function bulkUndo() {
+  const { K, requests, click, chip, settle, press } = await screenFixture('app.js');
+  const has = () => [1, 2, 3].map((r) => K.has(r, 'A'));
+  click(1); click(2); click(3); await settle();
+  chip('A', 'add'); await settle();
+  assert.deepEqual(has(), [true, true, true]);
+  press('u');
+  assert.deepEqual(has(), [true, false, false], 'Undo takes it off only the pages it was added to');
+  await turn();
+  assert.deepEqual(requests[0].body, { batch: 1 }, 'the server retracts that batch');
+  assert.equal(requests[0].route, '/api/undo');
+  await settle();
+  assert.deepEqual(has(), [true, false, false], 'and its reply agrees');
+  chip('A', 'remove'); await settle();
+  assert.deepEqual(has(), [false, false, false]);
+  assert.equal(typeof K.undo, 'function');
+  press('z', { ctrlKey: true });
+  assert.deepEqual(has(), [true, false, false], 'Ctrl+Z undoes too: only the page that had it gets it back');
+  await turn();
+  assert.deepEqual(requests[0].body, { batch: 2 });
+  await settle();
+}
+
+/* Forget: out of the grid, the selection, the pins and every count at once; Undo puts it back as it was */
+async function forgetAndUndo() {
+  const { K, node, requests, click, key, settle, press, shown } = await screenFixture('app.js');
+  click(1); click(2); key(2, 'p'); await settle();
+  const e = click(2, { '[data-forget]': {} });
+  assert.equal(e.stopped, false);
+  assert.deepEqual(plain(K.sel), [1], 'the page leaves the selection');
+  assert.deepEqual(plain(K.pins), [], 'and the pins');
+  assert.deepEqual(shown(), [1, 3], 'and the grid');
+  assert.equal(node('n-sel').textContent, 1);
+  assert.equal(node('n-pin').textContent, 0);
+  assert.match(node('v-pos').innerHTML, /^<b>1 to 2<\/b> of 2 for “q”$/, 'the counts drop it');
+  assert.equal(K.lib.pages, 8);
+  assert.match(node('strip').innerHTML, />1\/1<\/span>/);
+  assert.equal(K.toasted, 'Forgotten');
+  await turn();
+  assert.deepEqual(requests[0].body, { rows: [2], value: true });
+  assert.equal(requests[0].route, '/api/forget');
+  await settle();
+  press('u');
+  assert.deepEqual(shown(), [1, 2, 3], 'Undo puts it back in its place');
+  assert.deepEqual(plain(K.sel), [1, 2], 'selected as it was');
+  assert.deepEqual(plain(K.pins), [2], 'and pinned');
+  assert.equal(K.lib.pages, 9);
+  await turn();
+  assert.deepEqual([requests[0].route, requests[0].body], ['/api/forget', { rows: [2], value: false }]);
+  await settle();
+  assert.equal(key(3, 'f'), true, 'f forgets the focused page');
+  assert.deepEqual(plain(K.sel), [1, 2], 'and selects nothing');
+  assert.deepEqual(shown(), [1, 2]);
+  await turn();
+  assert.deepEqual(requests[0].body, { rows: [3], value: true });
+}
+
+/* the undo of a forget writes the page back before the lists that hold it */
+async function forgetUndoOrder() {
+  const { K, requests, click, key, settle, press } = await screenFixture('app.js');
+  click(2); key(2, 'p'); await settle();
+  click(2, { '[data-forget]': {} });
+  press('u');
+  const sent = [];
+  for (let i = 0; i < 8; i++) {
+    await turn();
+    const r = requests.shift();
+    if (!r) continue;
+    sent.push([r.route, r.body]);
+    r.resolve(r.route === '/api/forget' ? { pages: K.lib.pages } : { rows: r.body.rows });
+  }
+  assert.deepEqual(sent, [['/api/forget', { rows: [2], value: true }], ['/api/forget', { rows: [2], value: false }],
+    ['/api/selection', { rows: [2] }], ['/api/pins', { rows: [2] }]]);
+}
+
+/* Next after a forget starts at the first hit not shown, so nothing is skipped */
+async function forgetThenNext() {
+  const { K, node, requests, click, settle, shown, turnTo } = await pagedFixture();
+  click(10, { '[data-forget]': {} }); await settle();
+  assert.equal(shown().length, 49);
+  assert.match(node('v-pos').innerHTML, /^<b>1 to 49<\/b> of 119 for “q”$/);
+  await turnTo('next', 49, rows(51, 99));
+  assert.equal(K.views.view().offset, 49);
+  assert.equal(requests.length, 0);
+}
+
+/* Pin parks a page without touching the selection; Pinned shows them, and leaving returns to the results */
+async function pinView() {
+  const { K, node, requests, click, key, settle, context, history, shown } = await screenFixture();
+  const e = click(2, { '[data-pin]': {} });
+  assert.equal(e.stopped, false);
+  assert.deepEqual(plain(K.sel), [], 'a pin click never selects');
+  assert.deepEqual(plain(K.pins), [2]);
+  assert.match(node('grid').innerHTML, /class="hit tile pinned" data-row="2"/);
+  assert.match(node('grid').innerHTML, /data-pin aria-pressed="true"/);
+  assert.equal(node('n-pin').textContent, 1);
+  await turn();
+  assert.deepEqual([requests[0].route, requests[0].body], ['/api/pins', { rows: [2] }], 'the pins are kept by the server');
+  await settle();
+  click(1);
+  assert.equal(key(3, 'p'), true, 'p pins the focused page');
+  assert.deepEqual(plain(K.sel), [1], 'and selects nothing');
+  assert.deepEqual(plain(K.pins), [2, 3]);
+  await settle();
+  context.scrollY = 640;
+  node('show-pins').click();
+  assert.deepEqual(shown(), [2, 3], 'Pinned shows the pinned pages');
+  assert.match(node('v-pos').innerHTML, /^Pinned · <b>2<\/b> pages$/);
+  assert.equal(context.scrollY, 0);
+  assert.equal(node('pager').hidden, true);
+  assert.equal(key(2, 'p'), true);
+  assert.deepEqual(plain(K.pins), [3], 'unpinned in the view');
+  assert.deepEqual(shown(), [2, 3], 'and still shown, to pin again');
+  assert.equal(key(null, 'Escape'), true);
+  await turn(); await turn();
+  assert.deepEqual(shown(), [1, 2, 3], 'Esc returns to the results');
+  assert.equal(context.scrollY, 640, 'at the scroll it left');
+  assert.deepEqual(plain(K.sel), [1], 'with the selection kept');
+  assert.equal(history.entries.length, 1);
+  node('show-pins').click(); node('show-pins').click();
+  await turn(); await turn();
+  assert.deepEqual(shown(), [1, 2, 3], 'Pinned again leaves the view');
 }
 
 async function untagAndOpenDoNotSelect() {
@@ -547,7 +705,7 @@ async function likeToggle() {
   };
   await enter(480);
   assert.equal(history.pushes, 1, '≈ is a history entry, so Back leaves it');
-  click(7); chip('A', 'toggle'); await settle();
+  click(7); chip('A', 'add'); await settle();
   assert.match(node('grid').innerHTML, /data-row="7"/, 'a page tagged in the view stays until you leave it');
   chip('A', 'like');
   await back(480, '≈ again');
@@ -738,7 +896,7 @@ async function likeBackToPage() {
 async function likeWaitsForTag() {
   const { K, requests, click, chip, settle } = await screenFixture();
   click(2); await settle();
-  chip('A', 'toggle');
+  chip('A', 'add');
   chip('A', 'like');
   await turn();
   assert.equal(requests.length, 1, 'the ranking must wait for the pending tag decision');
@@ -765,5 +923,5 @@ async function backDuringPage() {
   assert.equal(K.state.search.offset, 0, 'an abandoned page reply must not change the page saved for reload');
 }
 
-const cases = { backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, tagToggle, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+const cases = { chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

@@ -214,27 +214,22 @@ input.chip { width: 14rem; background: var(--bg-1); border-color: var(--ink); ou
 .lnk:hover:not(:disabled) { border-color: var(--ink); color: var(--ink); }
 .lnk[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .lnk:disabled { color: var(--line-2); border-color: var(--line); cursor: default; }
-.filt { display: inline-flex; align-items: center; gap: 0.75rem; }
 .tagrow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.625rem; padding: 1.25rem 1.5rem; }
 .tagrow .lbl { margin: 0 0.5rem 0 0; }
 .tagstrip { display: contents; }
 .tagstrip > li { list-style: none; }
-/* a strip chip: three targets, ruled apart. The name tags the selection, the count filters, ≈ finds more */
+/* a strip chip: up to three targets, ruled apart, each acting on the selection. × takes the tag off, the name adds
+   it (with how many selected have it, filled as far as they do), ≈ finds more */
 .tc { display: inline-flex; align-items: stretch; border: 1px solid var(--line-2); }
-.tc > button { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.9rem; background: none; border: 0; color: var(--ink); white-space: nowrap; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
+.tc > button { display: inline-flex; align-items: center; gap: 0.6rem; padding: 0.5rem 0.9rem; background: none; border: 0; color: var(--ink); white-space: nowrap; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
 .tc > button + button { border-left: 1px solid var(--line-2); }
 .tc .nm { font-weight: 600; }
-.tc .ct { font-size: 0.75rem; color: var(--ink-2); }
-.tc .ml { padding-inline: 0.8rem; font-size: 1.0625rem; line-height: 1; color: var(--ink-2); }
-.tc > button:hover { background: var(--ink); color: var(--bg); }
+.tc .ct { font-size: 0.75rem; font-weight: 400; color: var(--ink-2); }
+.tc .rm, .tc .ml { padding-inline: 0.8rem; font-size: 1.0625rem; line-height: 1; color: var(--ink-2); }
 .tc[data-on="all"] .nm { background: var(--ink); color: var(--bg); }
-.tc[data-on="some"] .nm { box-shadow: inset 0.3rem 0 0 var(--ink); }
-.tc[data-on="some"] .nm::after { content: "partial"; font-size: 0.625rem; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
-.tc[data-on="some"] .nm:hover::after { color: inherit; }
-.tc .ct[data-f] { background: var(--bg-2); color: var(--ink); }
-.tc .ct[data-f="has"]::before { content: "only"; }
-.tc .ct[data-f="not"]::before { content: "not"; }
-.tc .ct[data-f]::before { font-size: 0.625rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+.tc[data-on="some"] .nm { background: linear-gradient(90deg, color-mix(in srgb, var(--ink) 18%, transparent) var(--cover), transparent var(--cover)); }
+.tc[data-on] > button:hover { background: var(--ink); color: var(--bg); }
+.tc[data-on="all"] .ct, .tc > button:hover .ct { color: inherit; opacity: 0.75; }
 .tc .ml[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
 .tc:has(.ml[aria-pressed="true"]) { border-color: var(--accent); }
 .newtag input { width: 10rem; height: 2.375rem; padding: 0 0.9rem; background: var(--bg-1); border: 1px dashed var(--line-2); border-radius: 0; outline: 0; transition: width 0.15s var(--ease); }
@@ -248,11 +243,20 @@ input.chip { width: 14rem; background: var(--bg-1); border-color: var(--ink); ou
 .tile.sel::before { content: ""; position: absolute; inset: 0; z-index: 2; border: 2px solid var(--accent); pointer-events: none; }
 .tile.sel::after { content: "✓"; position: absolute; top: 0.625rem; right: 0.625rem; z-index: 2; display: grid; place-items: center; width: 1.625rem; height: 1.625rem; background: var(--accent); color: var(--bg); font-size: 0.875rem; font-weight: 700; pointer-events: none; }
 .tile .hb { gap: 0.6rem; padding: 1.1rem 1.25rem 1.35rem; }
-/* Open: hidden until hover or keyboard focus, then a large target over the picture's centre */
-.tile .open { top: 50%; left: 50%; translate: -50% -50%; display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0 1.5rem; background: color-mix(in srgb, var(--bg) 85%, transparent); font-size: 0.875rem; font-weight: 600; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); pointer-events: none; }
-.tile:hover .open, .tile:focus-visible .open, .tile .open:focus-visible { opacity: 1; pointer-events: auto; }
-@media (hover: hover) { .tile:not(:hover):not(:focus-visible) .open:not(:focus-visible) { opacity: 0; } }   /* a click's focus is not keyboard focus */
-.tile .open:hover { background: var(--ink); color: var(--bg); }
+/* Forget, Open and Pin: hidden until hover or keyboard focus, then large targets over the picture's centre */
+.tile .ctl { position: absolute; inset: 0 0 auto; z-index: 1; aspect-ratio: 16 / 9; display: flex; align-items: center; justify-content: center; gap: 0.5rem; opacity: 0; transition: opacity 0.12s var(--ease); pointer-events: none; }
+.tile .ctl > * { display: inline-flex; align-items: center; justify-content: center; min-height: 2.75rem; background: color-mix(in srgb, var(--bg) 85%, transparent); border: 1px solid var(--ink); color: var(--ink); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); pointer-events: none; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
+.tile .open { position: static; padding: 0 1.5rem; font-size: 0.875rem; font-weight: 600; opacity: 1; }
+.tile .fg, .tile .pn { width: 2.75rem; padding: 0; }
+.tile .fg { border-color: var(--forget); color: var(--forget); }
+.tile:hover .ctl, .tile:focus-visible .ctl, .tile .ctl:has(:focus-visible) { opacity: 1; }
+.tile:hover .ctl > *, .tile:focus-visible .ctl > *, .tile .ctl:has(:focus-visible) > * { pointer-events: auto; }
+@media (hover: hover) { .tile:not(:hover):not(:focus-visible) .ctl:not(:has(:focus-visible)) { opacity: 0; } }   /* a click's focus is not keyboard focus */
+.tile .ctl > :hover, .tile .pn[aria-pressed="true"] { background: var(--ink); color: var(--bg); }
+.tile .ctl > .fg:hover { background: var(--forget); color: var(--bg); }
+/* pinned: a square mark on the picture's corner (the check badge has the other) */
+.pinmark { position: absolute; top: 0.625rem; left: 0.625rem; z-index: 2; display: grid; place-items: center; width: 1.625rem; height: 1.625rem; background: var(--ink); color: var(--bg); pointer-events: none; }
+.pinmark svg { width: 0.875rem; height: 0.875rem; }
 .tile .tags { gap: 0.5rem; }
 .tile .tag { align-items: center; padding: 0.3rem 0 0.3rem 0.75rem; font-size: 0.75rem; }
 /* × takes the tag off this page; its room is kept so chips never shift */
@@ -297,7 +301,7 @@ dialog dd code { font-size: 0.6875rem; }
 .acts .flash { animation: flash 0.3s var(--ease); }
 @keyframes flash { 0% { background: var(--ink); color: var(--bg); } }
 .touch-only { display: none; }
-@media (hover: none) { .open, .tile .open { opacity: 1; pointer-events: auto; } .tile .tag .x { visibility: visible; } .acts kbd, .sg kbd { display: none; } .key-only { display: none; } .touch-only { display: inline; } .sg { grid-template-columns: 1rem minmax(0, 1fr) 4.5rem 3ch; } }
+@media (hover: none) { .open, .tile .ctl, .tile .ctl > * { opacity: 1; pointer-events: auto; } .tile .tag .x { visibility: visible; } .acts kbd, .sg kbd { display: none; } .key-only { display: none; } .touch-only { display: inline; } .sg { grid-template-columns: 1rem minmax(0, 1fr) 4.5rem 3ch; } }
 
 /* ---- toast and dialogs, as in the library ---- */
 #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 1.25rem; z-index: 5; display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.5rem 0.5rem 1rem; background: var(--bg); color: var(--ink); border: 1px solid var(--ink); box-shadow: 0 12px 40px light-dark(rgb(0 0 0 / 0.14), rgb(0 0 0 / 0.6)); font-size: 0.8125rem; max-width: calc(100vw - 2rem); opacity: 0; translate: 0 8px; transition: opacity 0.18s var(--ease), translate 0.18s var(--ease); }

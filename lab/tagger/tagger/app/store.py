@@ -2,11 +2,13 @@
 
 A session is one search and its picked tags: the result pages, by key, each with the model's prechecks, the
 user's marks and a status (open, skipped, decided). A direct decision tags or untags one page outside any
-session (the one screen flow). Export folds every decided page over all sessions and every direct decision,
-latest decision per page and tag, into a `tag --import` answers file and a decision log; a page's app tags
-are the tags its latest decisions keep. Results marked not relevant to a query live apart, in `Exclusions`,
-and are never exported; the pages selected for tagging live in `Selection`. Tags the owner makes in the app
-are kept in the same file, by the spelling `tag --import` would store. Nothing here touches an archive.
+session (the one screen flow); the direct decisions of one action share a batch, so undoing it retracts them.
+Export folds every decided page over all sessions and every direct decision, latest decision per page and tag,
+into a `tag --import` answers file and a decision log; a page's app tags are the tags its latest decisions keep.
+Results marked not relevant to a query live apart, in `Exclusions`, and are never exported; the selected, pinned
+and forgotten pages live in their own `Keys` files. Forgotten pages leave the answers and go to a forget
+manifest beside them. Tags the owner makes in the app are kept in the same file, by the spelling `tag --import`
+would store. Nothing here touches an archive.
 """
 
 import json
@@ -18,6 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 SOURCE = "kmt-tagger-app"
+FORGET = "forget.urls"  # beside answers.jsonl: forgotten addresses, NUL ended
 STATUSES = ("open", "skipped", "decided")
 NAME_LIMIT = 40  # knowmoretabs `tags::NAME_LIMIT`
 # Unicode White_Space, what Rust `split_whitespace` splits on (str.split also splits on some control characters)
@@ -121,18 +124,32 @@ class Store:
         self._save()
         return page
 
-    def apply(self, keys: list[str], tag: str, value: bool) -> list[str]:
+    def apply(self, keys: list[str], tag: str, value: bool) -> tuple[list[str], int | None]:
         """Tag (`value` true) or untag pages directly: a decision for each page whose app tags change, so
-        applying twice, or removing a tag a page lacks, writes nothing. The keys changed."""
+        applying twice, or removing a tag a page lacks, writes nothing. The keys changed and their batch."""
         held = self.app_tags()
         changed = [k for k in dict.fromkeys(keys) if (tag in held.get(k, ())) != value]
-        if changed:
-            at = time.time()
-            self.state.setdefault("direct", []).extend(
-                {"key": k, "tag": tag, "value": value, "at": at} for k in changed
-            )
-            self._save()
-        return changed
+        if not changed:
+            return changed, None
+        at, batch = time.time(), self.state.get("batch", 0) + 1
+        self.state["batch"] = batch
+        self.state.setdefault("direct", []).extend(
+            {"key": k, "tag": tag, "value": value, "at": at, "batch": batch} for k in changed
+        )
+        self._save()
+        return changed, batch
+
+    def undo(self, batch: int) -> list[str]:
+        """Retract a batch's direct decisions, so each page is as it was before them (a page whose tag came
+        from an earlier decision keeps it; one with no decision before has none again). The keys it named."""
+        direct = self.state.get("direct", [])
+        kept = [d for d in direct if d.get("batch") != batch]
+        if len(kept) == len(direct):
+            return []
+        keys = [d["key"] for d in direct if d.get("batch") == batch]
+        self.state["direct"] = kept
+        self._save()
+        return keys
 
     def decisions(self) -> dict[tuple[str, str], dict]:
         """The latest decision per (page key, tag) over every session's decided pages and every direct decision
@@ -166,14 +183,16 @@ class Store:
             self._app_tags = tags
         return self._app_tags
 
-    def export(self) -> dict:
-        """answers.jsonl (pages with a kept tag, the kept tags) and decisions.jsonl (every page, tag and
-        answer) in a fresh folder under exports/; nothing else sits beside them, so `tag --import` finds no
-        prompt there to check coverage against."""
+    def export(self, forgotten: list[str] = ()) -> dict:
+        """answers.jsonl (pages with a kept tag, the kept tags; forgotten pages left out) and decisions.jsonl
+        (every page, tag and answer) in a fresh folder under exports/, with forget.urls beside them when pages
+        were forgotten: their exact addresses, each ended by a NUL, for `xargs -0 knowmoretabs forget`. No
+        prompt sits there, so `tag --import` finds none to check coverage against."""
         latest = self.decisions()
+        gone = set(forgotten)
         kept: dict[str, list[str]] = {}
         for (key, tag), d in sorted(latest.items()):
-            if d["value"]:
+            if d["value"] and key not in gone:
                 kept.setdefault(key, []).append(tag)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         folder = self.root / "exports" / stamp
@@ -201,10 +220,14 @@ class Store:
         )
         _write(folder / "answers.jsonl", answers)
         _write(folder / "decisions.jsonl", log)
+        if forgotten:
+            _write(folder / FORGET, "".join(k + "\0" for k in forgotten))
         return {
             "folder": str(folder),
             "answers": str(folder / "answers.jsonl"),
             "decisions": str(folder / "decisions.jsonl"),
+            "forget": str(folder / FORGET) if forgotten else None,
+            "forgotten": len(forgotten),
             "answer_pages": len(kept),
             "answer_tags": sum(len(t) for t in kept.values()),
             "decided": len(latest),
@@ -213,12 +236,13 @@ class Store:
         }
 
 
-class Selection:
-    """The pages selected for tagging, by key in the order selected, in <data>/app/selection.json: kept across
-    searches and restarts until cleared."""
+class Keys:
+    """Page keys in order, one private file under <data>/app/ replaced whole on every change: the selection
+    (selection.json, kept across searches and restarts until cleared), the pinned pages (pinned.json) and the
+    pages forgotten in the app (forgotten.json, apart from the tag decisions)."""
 
-    def __init__(self, root: Path):
-        self.path = root / "selection.json"
+    def __init__(self, root: Path, name: str):
+        self.path = root / name
         self.keys: list[str] = json.loads(self.path.read_text())["keys"] if self.path.exists() else []
 
     def set(self, keys: list[str]) -> None:

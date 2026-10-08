@@ -21,7 +21,7 @@ import numpy as np
 from ..paths import Paths, read_json
 from ..zeroshot import prototype, query_variants
 from . import engine
-from .store import Exclusions, Selection, Store, tag_name
+from .store import Exclusions, Keys, Store, tag_name
 
 STATIC = Path(__file__).with_name("static")
 MAX_RESULTS = 50
@@ -35,7 +35,15 @@ class App:
     def __init__(self, lib: engine.Library, store: Store, encode: engine.Encode):
         self.lib, self.store, self.encode = engine.add_tags(lib, store.tags(), encode), store, encode
         self.exclusions = Exclusions(store.root)
-        self.selection = Selection(store.root)
+        self.selection = Keys(store.root, "selection.json")
+        self.pins = Keys(store.root, "pinned.json")
+        self.forgotten = Keys(store.root, "forgotten.json")
+
+    def live(self) -> np.ndarray:
+        """Rows the screen shows: the library's live pages less those forgotten in the app."""
+        mask = self.lib.live.copy()
+        mask[[self.lib.rows[k] for k in self.forgotten.keys if k in self.lib.rows]] = False
+        return mask
 
     def own(self, row: int) -> list[str]:
         return [t for j, t in enumerate(self.lib.tags) if self.lib.Y[row, j]]
@@ -60,7 +68,8 @@ class App:
 
     def library(self) -> dict:
         return {
-            "pages": int(self.lib.live.sum()),
+            "pages": int(self.live().sum()),
+            "forgotten": [self.lib.rows[k] for k in self.forgotten.keys if k in self.lib.rows],
             "tags": engine.tag_info(self.lib),
             "app_tags": self.app_tags(),
             "images": self.lib.image is not None,
@@ -69,8 +78,8 @@ class App:
         }
 
     def untagged(self, tag: str | None = None) -> np.ndarray:
-        """Live pages without any app tag, or without the given app tag."""
-        mask = self.lib.live.copy()
+        """Shown pages without any app tag, or without the given app tag."""
+        mask = self.live()
         mask[
             [
                 self.lib.rows[k]
@@ -91,7 +100,7 @@ class App:
         q = self.encode([query])[0]
         encoded = time.perf_counter()
         images = bool(body.get("images"))
-        among = self.untagged() if body.get("untagged") else self.lib.live
+        among = self.untagged() if body.get("untagged") else self.live()
         plain = engine.search(self.lib, q, query, n, images, among, offset)
         while True:
             hits = plain
@@ -131,9 +140,11 @@ class App:
             "suggested": engine.suggest(self.lib, included) if included else [],
         }
 
-    def rows(self, body: dict) -> list[int]:
+    def rows(self, body: dict, among: np.ndarray | None = None) -> list[int]:
+        """The body's rows, each a page `among` (default: the shown pages)."""
+        among = self.live() if among is None else among
         rows = [int(r) for r in body.get("rows", [])]
-        if any(r < 0 or r >= len(self.lib.records) or not self.lib.live[r] for r in rows):
+        if any(r < 0 or r >= len(self.lib.records) or not among[r] for r in rows):
             raise ValueError("a row is not a page of this library")
         return rows
 
@@ -177,20 +188,49 @@ class App:
         rows, tag, value = self.rows(body), str(body.get("tag", "")), body.get("value")
         if not rows or tag not in self.lib.tags or not isinstance(value, bool):
             raise ValueError("name pages, one of your tags, and true or false")
-        changed = self.store.apply([self.lib.records[r]["key"] for r in rows], tag, value)
+        changed, batch = self.store.apply([self.lib.records[r]["key"] for r in rows], tag, value)
         pages = [{"row": r, "tags": self.page(r)["tags"]} for r in rows]
-        return {"pages": pages, "changed": len(changed), "app_tags": self.app_tags()}
+        return {"pages": pages, "changed": len(changed), "batch": batch, "app_tags": self.app_tags()}
 
-    def selected(self) -> dict:
-        """The selected pages this library still shows, in the order selected."""
-        rows = [self.lib.rows[k] for k in self.selection.keys if k in self.lib.rows]
-        return {"pages": [self.page(r) for r in rows if self.lib.live[r]]}
+    def undo(self, body: dict) -> dict:
+        """Retract one apply's decisions (its `batch`): each page it changed back as it was."""
+        keys = self.store.undo(int(body.get("batch", 0)))
+        rows = [self.lib.rows[k] for k in dict.fromkeys(keys) if k in self.lib.rows]
+        return {"pages": [{"row": r, "tags": self.page(r)["tags"]} for r in rows], "app_tags": self.app_tags()}
 
-    def select(self, body: dict) -> dict:
-        """Replace the selection with the given pages (none clears it)."""
+    def listed(self, keys: Keys) -> dict:
+        """The selected or pinned pages this library still shows, in the order added."""
+        live = self.live()
+        rows = [self.lib.rows[k] for k in keys.keys if k in self.lib.rows]
+        return {"pages": [self.page(r) for r in rows if live[r]]}
+
+    def replace(self, keys: Keys, body: dict) -> dict:
+        """Replace the selection or the pins with the given pages (none clears them)."""
         rows = self.rows(body)
-        self.selection.set([self.lib.records[r]["key"] for r in rows])
+        keys.set([self.lib.records[r]["key"] for r in rows])
         return {"rows": rows}
+
+    def forget(self, body: dict) -> dict:
+        """Forget the given pages (`value` true): they leave every search, ≈, the selection and the pins, and go
+        to the export's forget manifest. `value` false brings them back (Undo puts back the selection and pins)."""
+        value = body.get("value")
+        if not isinstance(value, bool):
+            raise ValueError("name pages, and true or false")
+        rows = self.rows(body, None if value else self.lib.live)
+        if not rows:
+            raise ValueError("name pages, and true or false")
+        keys = {self.lib.records[r]["key"] for r in rows}
+        if value:
+            self.forgotten.set(self.forgotten.keys + sorted(keys))
+            for kept in (self.selection, self.pins):
+                if keys & set(kept.keys):
+                    kept.set([k for k in kept.keys if k not in keys])
+        else:
+            self.forgotten.set([k for k in self.forgotten.keys if k not in keys])
+        return {"pages": int(self.live().sum())}
+
+    def export(self) -> dict:
+        return self.store.export(self.forgotten.keys)
 
     def create(self, body: dict) -> dict:
         """A result set of the given rows less any excluded for the query, so excluded pages never reach review."""
@@ -259,14 +299,18 @@ ROUTES = [
     ),
     ("POST", re.compile(r"/api/search"), lambda app, m, b: app.search(b)),
     ("POST", re.compile(r"/api/exclusions"), lambda app, m, b: app.exclude(b)),
-    ("GET", re.compile(r"/api/selection"), lambda app, m, b: app.selected()),
-    ("POST", re.compile(r"/api/selection"), lambda app, m, b: app.select(b)),
+    ("GET", re.compile(r"/api/selection"), lambda app, m, b: app.listed(app.selection)),
+    ("POST", re.compile(r"/api/selection"), lambda app, m, b: app.replace(app.selection, b)),
+    ("GET", re.compile(r"/api/pins"), lambda app, m, b: app.listed(app.pins)),
+    ("POST", re.compile(r"/api/pins"), lambda app, m, b: app.replace(app.pins, b)),
+    ("POST", re.compile(r"/api/forget"), lambda app, m, b: app.forget(b)),
+    ("POST", re.compile(r"/api/undo"), lambda app, m, b: app.undo(b)),
     ("POST", re.compile(r"/api/tags"), lambda app, m, b: app.tag(b)),
     ("POST", re.compile(r"/api/apply"), lambda app, m, b: app.apply(b)),
     ("POST", re.compile(r"/api/like"), lambda app, m, b: app.like(b)),
     ("POST", re.compile(r"/api/sessions"), lambda app, m, b: app.create(b)),
     ("POST", re.compile(r"/api/sessions/(\d+)/pages/(\d+)"), lambda app, m, b: app.update(int(m[1]), int(m[2]), b)),
-    ("POST", re.compile(r"/api/export"), lambda app, m, b: app.store.export()),
+    ("POST", re.compile(r"/api/export"), lambda app, m, b: app.export()),
 ]
 
 

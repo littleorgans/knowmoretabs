@@ -49,19 +49,28 @@ One screen: search (EG2 cosine over B, else A, fused by reciprocal rank with TF-
 images on request; "Untagged only" keeps pages with no app tag), click results to select them, tag the selection.
 Results come 50 at a time ("51 to 100 of 240", of every page the search ranks); Previous and Next replace them.
 App tags are the tags made in this app, applied directly or kept in an earlier review; archive tags stay out of the
-screen. The sticky strip above the grid lists the app tags in view with counts ("Trains 3/20"): the name tags every
-selected page, or takes the tag off them all when they all have it (partial when some do); the count filters to
-pages with it, then without; ≈ ("pages like this, without this tag") ranks pages without that app tag by refine's
+screen. The sticky strip above the grid lists the app tags in view, each `[× | Trains 26/38 | ≈]`, acting on the
+selection only: the name adds the tag to every selected page (filled when all have it, filled in part when some do);
+× takes it off every selected page that has it (shown when one does); the count is how many of the selection have
+it (hidden with none selected); ≈ ("pages like this, without this tag") ranks pages without that app tag by refine's
 prototype (the tag's name as the query, toward its pages, away from pages it was taken off) and is a toggle: ≈
 again, Esc or Back returns to the search, page, scroll and selection intact. "+ New tag" applies a tag to the selection,
 picking yours in any case or making one by `tag --import`'s name rules (kept in `state.json`). A tile chip's ×
-takes that tag off that page. Open (hover, focus, `o`) shows an http or https page in a new tab and selects nothing.
-Keys: `/` search, space or `x` select, `o` open, Esc leaves ≈ (else clears the selection), `?` help.
-Decisions live in `<data>/app/state.json` (review sessions, and direct decisions: page, tag, kept, time); the
-selection in `<data>/app/selection.json`, until cleared. Export writes `<data>/app/exports/<UTC time>/answers.jsonl`
-(a `tag --import` file, source `kmt-tagger-app`, the kept tags per page, latest decision winning) and
-`decisions.jsonl` (page, tag, answer, the model's precheck and session, both null for a direct decision). Created
-tags need `tag --import --accept-new`, which creates them in the archive. The app never writes an archive.
+takes that tag off that page. A tag change offers Undo ("Added Trains to 38 pages"), which retracts that action's
+decisions, so every page is exactly as before. Over a tile's picture (hover, focus, always on touch): Forget (red,
+`f`), Open (`o`, an http or https page in a new tab) and Pin (`p`); none selects. Forget takes the page out of every
+search, ≈, the selection, the pins and the counts at once ("Forgotten", Undo puts it back in its place, selected and
+pinned as it was). Pin parks a page for later; "Pinned N" beside the selection shows the pinned pages as a view (again,
+Esc or Back returns to the results). Keys: `/` search, space or `x` select, `o` open, `f` forget, `p` pin, `u` or
+Ctrl+Z undo while the message shows, Esc leaves ≈ or Pinned (else clears the selection), `?` help.
+Decisions live in `<data>/app/state.json` (review sessions, and direct decisions: page, tag, kept, time, batch); the
+selection, the pins and the forgotten pages in `selection.json`, `pinned.json` and `forgotten.json` beside it.
+Export writes `<data>/app/exports/<UTC time>/answers.jsonl` (a `tag --import` file, source `kmt-tagger-app`, the kept
+tags per page, latest decision winning, forgotten pages left out), `decisions.jsonl` (page, tag, answer, the model's
+precheck and session, both null for a direct decision) and, when pages were forgotten, `forget.urls` (their exact
+addresses, each ended by a NUL). Created tags need `tag --import --accept-new`, which creates them in the archive; the
+forgotten pages go through `xargs -0 knowmoretabs --root <archive copy> forget -- < forget.urls` (`restore` in place
+of `forget` brings them back). Pins are not exported. The app never writes an archive.
 The P1 to P4 review, swipe, tag picker, suggestions and query exclusions (`<data>/app/not-relevant.json`) keep
 their code, API and tests but are not on this screen; their decisions still count as app tags.
 `--smoke` prints load and query timings, then exits.

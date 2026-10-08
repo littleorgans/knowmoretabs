@@ -1,5 +1,5 @@
 """The one screen in headless Chrome (`browser.cjs`) on the app serving the synthetic archive: lit-html under the
-server's CSP, tile nodes kept across updates, result pages, and ≈ back to the same page."""
+server's CSP, tile nodes kept across updates, result pages, ≈ back to the same page, and Forget, Undo and Pin."""
 
 import shutil
 import subprocess
@@ -43,6 +43,9 @@ class BrowserTests(Fixture):
 
     def test_a_selection_or_tag_update_keeps_the_tile_node(self):
         self.run_case("identity")
+
+    def test_forget_undo_and_pin_select_nothing_and_persist_over_a_reload(self):
+        self.run_case("forgetPin")
 
     def test_previous_and_next_replace_the_hits_from_the_top_keeping_the_selection(self):
         self.run_case("pages")

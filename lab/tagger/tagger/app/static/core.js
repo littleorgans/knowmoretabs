@@ -54,18 +54,20 @@
   K.opens = (e) => { if (!e.target.closest("[data-open]")) return false; e.stopPropagation(); return true; };
   K.openIn = (el) => { const a = el && el.querySelector("[data-open]"); if (a) a.click(); return !!a; };
 
-  /* ---- toast ---- */
+  /* ---- toast: one message, with Undo when the action can be taken back (its button, u or Ctrl+Z) ---- */
   let toastTimer = 0;
+  K.undo = null;   // the shown toast's Undo
   K.toast = (msg, onUndo) => {
     const t = K.$("toast");
     K.$("toast-msg").textContent = msg;
     K.$("toast-undo").hidden = !onUndo;
-    K.$("toast-undo").onclick = () => { hide(); onUndo(); };
+    K.undo = onUndo ? () => { hide(); onUndo(); } : null;
+    K.$("toast-undo").onclick = K.undo;
     t.hidden = false;
     requestAnimationFrame(() => t.classList.add("in"));
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(hide, 4500);
-    function hide() { t.classList.remove("in"); setTimeout(() => { if (!t.classList.contains("in")) t.hidden = true; }, 200); }
+    toastTimer = setTimeout(hide, onUndo ? 6000 : 4500);
+    function hide() { K.undo = null; t.classList.remove("in"); setTimeout(() => { if (!t.classList.contains("in")) t.hidden = true; }, 200); }
   };
 
   /* every view re-renders through this hook (set by app.js) */

@@ -31,6 +31,7 @@
   <section class="panel" aria-label="Selection and tags">
     <div class="bar selbar" id="selbar">
       <span><b id="n-sel">0</b> selected</span>
+      <button type="button" class="lnk" id="show-pins" aria-pressed="false" title="Show the pinned pages">Pinned <b id="n-pin">0</b></button>
       <button type="button" class="lnk sp" id="show-sel" aria-pressed="false">Show selection</button>
       <button type="button" class="lnk" id="clear" title="Clear the selection (Esc)">Clear</button>
     </div>
@@ -46,7 +47,7 @@
   </section>
 
   <section aria-label="Results">
-    <div class="bar"><output id="v-pos" aria-live="polite"></output><span id="v-filter" class="filt"></span></div>
+    <div class="bar"><output id="v-pos" aria-live="polite"></output></div>
     <ol class="grid" id="grid"></ol>
     <nav class="acts" id="pager" aria-label="Result pages" hidden>
       <button type="button" id="prev">← Previous</button>
@@ -65,12 +66,15 @@
     <dt><kbd>/</kbd></dt><dd>Search.</dd>
     <dt><kbd>space</kbd> <kbd>x</kbd></dt><dd>Select the focused page, or unselect it. A click does the same.</dd>
     <dt><kbd>o</kbd></dt><dd>Open the focused page in a new tab. Selects nothing.</dd>
-    <dt><kbd>Esc</kbd></dt><dd>Leave the ≈ view; with none open, clear the selection.</dd>
+    <dt><kbd>f</kbd></dt><dd>Forget the focused page: it leaves every view. Selects nothing.</dd>
+    <dt><kbd>p</kbd></dt><dd>Pin the focused page for later, or unpin it. Selects nothing.</dd>
+    <dt><kbd>u</kbd> <kbd>Ctrl</kbd> <kbd>Z</kbd></dt><dd>Undo, while its message shows.</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Leave the ≈ or Pinned view; with none open, clear the selection.</dd>
     <dt><kbd>e</kbd></dt><dd>Export.</dd>
     <dt><kbd>t</kbd></dt><dd>Light or dark.</dd>
     <dt><kbd>?</kbd></dt><dd>This help.</dd>
   </dl>
-  <p>In the tag strip, a tag's name tags the selected pages (again takes it off), its count filters the view, and ≈ finds similar pages without that tag. A tag's × on a page takes it off that page only.</p>
+  <p>In the tag strip, a tag's name adds it to the selected pages, its × takes it off them, its count is how many of them have it, and ≈ finds similar pages without that tag. A tag's × on a page takes it off that page only.</p>
   <p class="pref"><label><input type="checkbox" id="motion" checked> Animate</label></p>
   <p class="row-btns"><button type="button" id="help-close" autofocus>Close</button></p>
 </dialog>
