@@ -202,21 +202,25 @@ def _ranks(scores: np.ndarray, eligible: np.ndarray) -> np.ndarray:
     return rank
 
 
-def search(lib: Library, q: np.ndarray, text: str, n: int, images: bool = False) -> list[dict]:
-    """The top `n` live pages by reciprocal rank fusion of EG2 cosine, keyword score and, with `images`, the
-    image cosine. Each hit carries every source's score and rank (0: the source did not rank it)."""
-    sources = {"text": (lib.X @ q, lib.live)}
+def search(
+    lib: Library, q: np.ndarray, text: str, n: int, images: bool = False, among: np.ndarray | None = None
+) -> list[dict]:
+    """The top `n` pages `among` (default: the live ones) by reciprocal rank fusion of EG2 cosine, keyword score
+    and, with `images`, the image cosine. Each hit carries every source's score and rank (0: the source did not
+    rank it)."""
+    among = lib.live if among is None else among
+    sources = {"text": (lib.X @ q, among)}
     kw = np.asarray((lib.K @ lib.keywords.transform([text]).T).todense()).ravel()
-    sources["keyword"] = (kw, lib.live & (kw > 0))
+    sources["keyword"] = (kw, among & (kw > 0))
     if images and lib.image is not None:
-        sources["image"] = (lib.image @ q, lib.live & lib.has_image)
+        sources["image"] = (lib.image @ q, among & lib.has_image)
     fused = np.zeros(len(lib.records))
     ranks = {}
     for name, (scores, eligible) in sources.items():
         ranks[name] = _ranks(scores, eligible)
         fused += np.where(ranks[name] > 0, 1 / (RRF_K + ranks[name]), 0)
-    fused[~lib.live] = -np.inf
-    top = np.argsort(-fused, kind="stable")[: min(n, int(lib.live.sum()))]
+    fused[~among] = -np.inf
+    top = np.argsort(-fused, kind="stable")[: min(n, int(among.sum()))]
     return [
         {
             "row": int(i),

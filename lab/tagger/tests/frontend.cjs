@@ -28,17 +28,27 @@ function setup(...files) {
     state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
     lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
     search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
+    views: { render() {}, key: () => false, restore: async () => {} }, strip: { render() {} },
+  };
+  const listeners = {}, keys = {};   // the window's and the document's, by event
+  const history = {       // one tab's entries; back() delivers popstate a turn later, as browsers do
+    entries: [null], pushes: 0,
+    get state() { return this.entries[this.entries.length - 1]; },
+    pushState(state) { this.entries.push(state); this.pushes++; },
+    replaceState(state) { this.entries[this.entries.length - 1] = state; },
+    back() { if (this.entries.length > 1) this.entries.pop(); setImmediate(() => listeners.popstate && listeners.popstate({ state: this.state })); },
   };
   const context = vm.createContext({
-    window: { KMT: K }, document: { activeElement: null, documentElement: node('root'), querySelector() { return null; }, addEventListener() {} },
-    location: { hash: '' }, addEventListener() {}, matchMedia: () => ({ matches: false }),
-    setTimeout, clearTimeout, console, performance, URL,
+    window: { KMT: K }, document: { activeElement: null, documentElement: node('root'), querySelector() { return null; }, addEventListener(event, fn) { keys[event] = fn; } },
+    location: { hash: '' }, addEventListener(event, fn) { listeners[event] = fn; }, matchMedia: () => ({ matches: false }),
+    history, scrollY: 0, setTimeout, clearTimeout, console, performance, URL,
   });
+  context.scrollTo = (x, y) => { context.scrollY = y; };
   for (const file of ['core.js', ...files]) {   // the real open helpers, everything else mocked
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../tagger/app/static', file), 'utf8'), context);
     if (file === 'core.js') Object.assign(K, mocks);
   }
-  return { K, node };
+  return { K, node, history, context, keys };
 }
 const turn = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made inside the scripts' realm
@@ -316,7 +326,7 @@ async function exportWait() {
   const { K } = setup('app.js');
   await turn();
   let finish, exports = 0;
-  K.review.pending = new Promise((resolve) => { finish = resolve; });
+  K.writes = new Promise((resolve) => { finish = resolve; });
   K.api = async () => { exports++; return { decided: 0, answers: '' }; };
   const exporting = K.exportNow();
   await turn();
@@ -407,5 +417,183 @@ async function openNoDrag() {
   assert.deepEqual(decided, ['yes'], 'the card itself still swipes');
 }
 
-const cases = { newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+/* ---- one screen: search, select, tag ---- */
+const page = (row, tags = []) => ({ row, title: `Page ${row}`, host: 'example.test', url: `https://example.test/${row}`, image: false, tags });
+
+/* the search "q" has found pages 1 (tagged A), 2 and 3 */
+async function screenFixture() {
+  const f = setup('pages.js', 'views.js', 'strip.js');
+  const { K, node } = f;
+  K.changed = () => { K.views.render(); K.strip.render(); };
+  K.lib = { sizes: [20, 50], images: true, pages: 9, app_tags: ['A'] };
+  const requests = [];
+  K.api = (route, body) => new Promise((resolve, reject) => requests.push({ route, body: plain(body), resolve, reject }));
+  node('s-q').value = 'q';
+  const searching = K.views.run();
+  requests.shift().resolve({ hits: [page(1, ['A']), page(2), page(3)] });
+  await searching;
+  const tile = (row) => ({ dataset: { row: String(row) }, querySelector: () => f.opened });
+  f.requests = requests;
+  f.opened = { clicks: 0, click() { this.clicks++; } };
+  f.click = (row, at = {}) => {   // a click on tile `row`, on whatever `at` says is under it
+    const e = { stopped: false, stopPropagation() { this.stopped = true; }, target: { closest: (s) => (s === '.tile[data-row]' ? tile(row) : at[s] || null) } };
+    node('grid').click(e);
+    return e;
+  };
+  f.key = (row, key) => K.views.key({ key, target: { closest: (s) => (s === '.tile[data-row]' && row !== null ? tile(row) : null) } });
+  f.chip = (tag, act) => node('strip').click({ target: { closest: (s) => (s === 'button[data-act]' ? { dataset: { act }, closest: () => ({ dataset: { tag } }) } : null) } });
+  f.settle = async () => { await turn(); while (requests.length) { const r = requests.shift(); r.resolve(reply(r)); await turn(); } };
+  /* what the server answers, from what the page sent */
+  const reply = (r) => (r.route === '/api/apply'
+    ? { pages: r.body.rows.map((row) => ({ row, tags: K.pages.get(row).tags })), changed: r.body.rows.length, app_tags: ['A'] }
+    : { rows: r.body.rows });
+  return f;
+}
+
+async function select() {
+  const { K, node, requests, click, key, settle } = await screenFixture();
+  click(2);
+  assert.deepEqual(plain(K.sel), [2], 'a click selects the tile');
+  assert.match(node('grid').innerHTML, /class="hit tile sel" data-row="2"/);
+  assert.doesNotMatch(node('grid').innerHTML, /class="hit tile sel" data-row="[13]"/);
+  assert.equal(node('n-sel').textContent, 1);
+  await turn();
+  assert.deepEqual(requests[0], { ...requests[0], route: '/api/selection', body: { rows: [2] } }, 'the selection is kept by the server');
+  assert.equal(key(3, ' '), true, 'space on the focused tile is handled');
+  assert.deepEqual(plain(K.sel), [2, 3], 'space selects the focused tile');
+  assert.equal(key(2, 'x'), true);
+  assert.deepEqual(plain(K.sel), [3], 'x unselects it');
+  assert.equal(requests.length, 1, 'writes go one at a time');
+  await settle();
+  click(3);
+  assert.deepEqual(plain(K.sel), [], 'a second click unselects');
+  await turn();
+  assert.deepEqual(requests[0].body, { rows: [] }, 'each write carries the selection as it is when sent');
+}
+
+async function tagToggle() {
+  const { K, node, requests, click, chip, settle } = await screenFixture();
+  chip('A', 'toggle');
+  await turn();
+  assert.equal(requests.length, 0, 'no selection, nothing tagged');
+  assert.match(K.toasted, /Select pages first/);
+  click(1); click(2); await settle();
+  assert.match(node('strip').innerHTML, /<li class="tc" data-on="some" data-tag="A"><button type="button" class="nm" data-act="toggle" aria-pressed="mixed"/, 'some selected have it: partial');
+  assert.match(node('strip').innerHTML, />1\/3<\/button>/, 'the count: pages in view with it, of all in view');
+  chip('A', 'toggle');
+  assert.match(node('strip').innerHTML, /data-on="all"/, 'the chip fills at once');
+  await turn();
+  assert.deepEqual(requests[0].body, { rows: [2], tag: 'A', value: true }, 'partial: only the pages lacking it are tagged');
+  await settle();
+  assert.match(K.toasted, /Tagged 1 page “A”/);
+  chip('A', 'toggle');
+  await turn();
+  assert.deepEqual(requests[0].body, { rows: [1, 2], tag: 'A', value: false }, 'all have it: it comes off them all');
+  await settle();
+  assert.match(node('strip').innerHTML, /data-on="none"[^]*aria-pressed="false"/);
+  assert.equal((node('grid').innerHTML.match(/Untagged/g) || []).length, 3, 'tiles show it gone');
+  assert.match(node('strip').innerHTML, />0\/3<\/button>/, 'a tag taken off every page stays in the strip to put back');
+}
+
+async function untagAndOpenDoNotSelect() {
+  const { K, node, requests, click, key, opened, settle } = await screenFixture();
+  const e = click(1, { '[data-untag]': { dataset: { untag: 'A' } } });
+  assert.deepEqual(plain(K.sel), [], 'a tag chip × does not select');
+  assert.doesNotMatch(node('grid').innerHTML, /data-untag="A"/, 'the tag leaves the tile at once');
+  await turn();
+  assert.deepEqual(requests[0].body, { rows: [1], tag: 'A', value: false }, '× takes the tag off that page only');
+  await settle();
+  const open = click(2, { '[data-open]': {}, 'a, button': {} });
+  assert.equal(open.stopped, true, 'a click on Open stops at the control');
+  assert.deepEqual(plain(K.sel), [], 'Open does not select');
+  assert.equal(key(3, 'o'), true);
+  assert.equal(opened.clicks, 1, 'o opens the focused page');
+  assert.deepEqual(plain(K.sel), [], 'o does not select');
+  await turn();
+  assert.equal(requests.length, 0, 'opening writes nothing');
+  assert.equal(e.stopped, false);
+}
+
+async function likeToggle() {
+  const { K, node, requests, click, chip, key, settle, history, context } = await screenFixture();
+  click(2); await settle();
+  const enter = async (scroll) => {
+    context.scrollY = scroll;
+    chip('A', 'like');
+    assert.equal(context.scrollY, 0, 'the ≈ view starts at the top');
+    await turn();
+    assert.deepEqual(requests[0].body, { tag: 'A', n: 20, images: false });
+    requests.shift().resolve({ tag: 'A', hits: [page(7), page(8)] });
+    await turn(); await turn();
+    assert.match(node('grid').innerHTML, /data-row="7"[^]*data-row="8"/);
+    assert.doesNotMatch(node('grid').innerHTML, /data-row="[123]"/);
+    assert.match(node('v-pos').innerHTML, /Untagged pages like <b>A<\/b>/, 'the view is named');
+    assert.match(node('strip').innerHTML, /data-act="like" aria-pressed="true" title="Back to your search/, '≈ shows as active');
+  };
+  const back = async (scroll, how) => {
+    await turn(); await turn();
+    assert.match(node('grid').innerHTML, /data-row="1"[^]*data-row="2"[^]*data-row="3"/, `${how} returns to the search's results`);
+    assert.equal(context.scrollY, scroll, `${how} restores the scroll position`);
+    assert.equal(history.entries.length, 1, `${how} leaves no ≈ entry behind`);
+    assert.match(node('grid').innerHTML, /class="hit tile sel" data-row="2"/, `${how} keeps the selection`);
+  };
+  await enter(480);
+  assert.equal(history.pushes, 1, '≈ is a history entry, so Back leaves it');
+  click(7); chip('A', 'toggle'); await settle();
+  assert.match(node('grid').innerHTML, /data-row="7"/, 'a page tagged in the view stays until you leave it');
+  chip('A', 'like');
+  await back(480, '≈ again');
+  assert.deepEqual(plain(K.sel), [2, 7]);
+  await enter(300);
+  assert.equal(key(null, 'Escape'), true);
+  await back(300, 'Esc');
+  assert.deepEqual(plain(K.sel), [2, 7], 'Esc leaves ≈ before it clears anything');
+  await enter(120);
+  history.back();   // the browser's Back
+  await back(120, 'Back');
+  assert.equal(key(null, 'Escape'), true);
+  assert.deepEqual(plain(K.sel), [], 'with no ≈ open, Esc clears the selection');
+  assert.equal(key(null, 'Escape'), false, 'nothing left for Esc');
+}
+
+async function newTagApplies() {
+  const { K, node, requests, click, settle } = await screenFixture();
+  const submit = (name) => { node('new-tag').value = name; node('newtag').submit({ preventDefault() {} }); };
+  submit('Night trains');
+  await turn();
+  assert.equal(requests.length, 0, 'no selection, no tag made');
+  assert.match(node('new-msg').textContent, /Select pages first/);
+  click(2); click(3); await settle();
+  submit('  Night trains ');
+  await turn();
+  assert.deepEqual(requests[0].body, { name: 'Night trains' }, 'the name goes trimmed, through the tag rules');
+  requests.shift().resolve({ tag: 'Night trains', created: true, tags: [] });
+  await turn(); await turn();
+  assert.deepEqual(requests[0].body, { rows: [2, 3], tag: 'Night trains', value: true }, 'it goes on every selected page');
+  assert.equal(node('new-tag').value, '', 'the box empties for the next one');
+  await settle();
+  submit('a');
+  await turn();
+  requests.shift().reject(new Error('cannot use that name as a tag: it is empty'));
+  await turn(); await turn();
+  assert.match(node('new-msg').textContent, /cannot use that name as a tag/, 'a refusal shows inline');
+  assert.equal(node('new-tag').value, 'a', 'the name stays to fix');
+}
+
+/* the shell's keys: a ticked box keeps them; a text box does not */
+async function keysBesideCheckbox() {
+  const { K, keys } = setup('app.js');
+  await turn();
+  const seen = [];
+  K.views.key = (e) => { seen.push(e.key); return true; };
+  const element = (...matches) => ({ closest: (s) => (s.split(',').some((part) => matches.includes(part.trim())) ? {} : null) });
+  const press = (target) => keys.keydown({ key: 'Escape', target, preventDefault() {} });
+  press(element('input', 'input[type=checkbox]'));
+  assert.deepEqual(seen, ['Escape'], 'Esc on a focused checkbox reaches the views');
+  press(element('input', 'input:not([type=checkbox])'));
+  press(element('textarea'));
+  assert.deepEqual(seen, ['Escape'], 'keys typed into a text box stay there');
+}
+
+const cases = { keysBesideCheckbox, select, tagToggle, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

@@ -5,18 +5,12 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="light dark">
-<title>Search · knowmoretabs tagger</title>
+<title>knowmoretabs tagger</title>
 <link rel="stylesheet" href="app.css">
 </head>
 <body>
 <header class="top">
-  <a class="brand" href="#search">knowmoretabs</a>
-  <nav class="views" aria-label="Steps">
-    <a href="#search" id="nav-search">1 Search</a>
-    <a href="#tag" id="nav-tag">2 Tag</a>
-    <a href="#review" id="nav-review">3 Review <small id="n-review"></small></a>
-  </nav>
-  <button type="button" id="sets-btn" class="pill" title="Earlier result sets (o, with no page focused)"><span id="n-sets">0</span> <span id="sets-word">sets</span></button>
+  <span class="brand">knowmoretabs <small>tagger</small></span>
   <button type="button" id="export-btn" class="pill" title="Write the answers file and the decision log (e)">Export</button>
   <button type="button" id="help-btn" class="sq" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
   <button type="button" id="theme" class="sq theme" aria-label="Switch theme" title="Switch theme (t)">
@@ -27,57 +21,38 @@
 
 <div class="frame">
 <main>
-  <section id="view-search" class="view" aria-label="Search your library">
-    <form id="s-form" class="sform" role="search">
-      <input id="s-q" type="search" placeholder="Search your library: anything, in your own words" autocomplete="off" aria-label="Search">
-      <label class="tog"><input type="checkbox" id="s-img"> Include images</label>
-      <button type="submit" class="go">Search</button>
-    </form>
-    <div class="bar"><output id="s-pos" aria-live="polite"></output><span id="s-ms"></span></div>
-    <ol class="grid" id="s-grid"></ol>
-    <div class="acts">
-      <button type="button" data-act="more" id="s-more">Show more</button>
-      <button type="button" data-act="refine" id="s-refine" title="Rank again toward the results kept and away from those excluded">Refine</button>
-      <button type="button" data-act="tag" class="primary" id="s-tag"><span>Tag these results</span><kbd>↵</kbd></button>
+  <form id="s-form" class="sform" role="search">
+    <input id="s-q" type="search" placeholder="Search your library: anything, in your own words" autocomplete="off" aria-label="Search">
+    <label class="tog"><input type="checkbox" id="s-img"> Include images</label>
+    <label class="tog" title="Only pages with no tags made in this app"><input type="checkbox" id="s-untag"> Untagged only</label>
+    <button type="submit" class="go">Search</button>
+  </form>
+
+  <section class="panel" aria-label="Selection and tags">
+    <div class="bar selbar" id="selbar">
+      <span><b id="n-sel">0</b> selected</span>
+      <button type="button" class="lnk sp" id="show-sel" aria-pressed="false">Show selection</button>
+      <button type="button" class="lnk" id="clear" title="Clear the selection (Esc)">Clear</button>
     </div>
+    <div class="tagrow">
+      <p class="lbl">Tags in view</p>
+      <ul class="tagstrip" id="strip"></ul>
+      <form id="newtag" class="newtag">
+        <input id="new-tag" type="text" list="app-tags" placeholder="+ New tag" autocomplete="off" aria-label="New tag, put on the selected pages" title="Type a name, then ↵: it goes on every selected page">
+      </form>
+      <datalist id="app-tags"></datalist>
+      <p id="new-msg" class="msg" role="alert" hidden></p>
+    </div>
+    <p class="hint" id="hint"></p>
   </section>
 
-  <section id="view-tag" class="view" aria-label="Pick tags for these results" hidden>
-    <div class="bar"><output id="t-pos" aria-live="polite"></output><span id="t-picked"></span></div>
-    <div class="pick">
-      <p class="lbl">Suggested for these results</p>
-      <ul class="chips" id="t-sugg"></ul>
-      <p class="lbl">All your tags</p>
-      <input id="t-filter" type="search" placeholder="Filter your tags" autocomplete="off" aria-label="Filter your tags">
-      <ul class="chips" id="t-all"></ul>
-    </div>
-    <div class="acts">
-      <button type="button" data-act="back"><kbd>←</kbd><span>Back to results</span></button>
-      <button type="button" data-act="review" class="primary" id="t-go">Review</button>
-    </div>
-  </section>
-
-  <section id="view-review" class="view" aria-label="Review the picked tags" hidden>
-    <ol class="strip" id="r-strip" aria-hidden="true"></ol>
-    <div class="bar"><output id="r-pos" aria-live="polite"></output>
-      <span class="modes" role="group" aria-label="Review mode"><button type="button" data-mode="grid">Grid</button><button type="button" data-mode="swipe">Swipe</button></span></div>
-    <div id="r-grid-view">
-      <ol class="grid review" id="r-grid"></ol>
-      <div class="acts"><button type="button" data-act="confirm-all" class="primary" id="r-confirm-all">Confirm every open page</button></div>
-    </div>
-    <div id="r-swipe-view" hidden>
-      <div class="stage"><div class="deck" id="r-deck"></div></div>
-      <div class="acts" id="r-acts">
-        <button type="button" data-act="reject" title="Reject every picked tag on this page (← or h)"><kbd>←</kbd><span>Reject all</span></button>
-        <button type="button" data-act="skip" title="Decide later; the page goes to the back (↑ or s)"><kbd>↑</kbd><span>Skip</span></button>
-        <button type="button" data-act="undo" title="Bring back the last page (u)"><kbd>u</kbd><span>Undo</span></button>
-        <button type="button" data-act="accept" class="primary" title="Keep the checked tags, reject the rest (→, l or ↵)"><kbd>→</kbd><span id="r-accept">Accept</span></button>
-      </div>
-      <p class="hint"><span class="key-only">Press <kbd>→</kbd></span><span class="touch-only">Swipe right</span> to keep the checked tags and reject the rest. <span class="key-only">Press a number</span><span class="touch-only">Tap a tag</span> to flip one first.</p>
-    </div>
+  <section aria-label="Results">
+    <div class="bar"><output id="v-pos" aria-live="polite"></output><span id="v-filter" class="filt"></span></div>
+    <ol class="grid" id="grid"></ol>
+    <div class="acts"><button type="button" id="more" hidden>Show more</button></div>
   </section>
 </main>
-<footer class="cell"><p>Local prototype on 127.0.0.1. Decisions stay in the data folder on this machine; the archive is never written.</p></footer>
+<footer class="cell"><p>Local prototype on 127.0.0.1. Tags made here stay in the data folder on this machine until you export them; the archive is never written.</p></footer>
 </div>
 
 <div id="toast" role="status" aria-live="polite" hidden><span id="toast-msg"></span><button type="button" id="toast-undo">Undo</button></div>
@@ -86,28 +61,16 @@
   <h2 id="help-h">Keyboard</h2>
   <dl>
     <dt><kbd>/</kbd></dt><dd>Search.</dd>
-    <dt><kbd>↵</kbd></dt><dd>Search: tag these results. Tag: review them.</dd>
-    <dt><kbd>x</kbd></dt><dd>Search: the focused result is not relevant, or is again. A click does the same.</dd>
-    <dt><kbd>c</kbd></dt><dd>Search: cut every result below the focused one, or undo the cut.</dd>
-    <dt><kbd>→</kbd> <kbd>l</kbd></dt><dd>Swipe review: keep the checked tags, reject the rest.</dd>
-    <dt><kbd>←</kbd> <kbd>h</kbd></dt><dd>Swipe review: reject every picked tag on the page.</dd>
-    <dt><kbd>1</kbd>–<kbd>9</kbd></dt><dd>Swipe review: flip a tag. <kbd>a</kbd> checks them all.</dd>
-    <dt><kbd>↑</kbd> <kbd>s</kbd></dt><dd>Swipe review: skip; the page comes back at the end.</dd>
-    <dt><kbd>u</kbd></dt><dd>Swipe review: undo the last decision.</dd>
-    <dt><kbd>g</kbd></dt><dd>Review: grid or swipe.</dd>
-    <dt><kbd>o</kbd></dt><dd>Open the focused page, or the swipe card's, in a new tab; with none, earlier sets. A click on Open does the same and changes nothing.</dd>
+    <dt><kbd>space</kbd> <kbd>x</kbd></dt><dd>Select the focused page, or unselect it. A click does the same.</dd>
+    <dt><kbd>o</kbd></dt><dd>Open the focused page in a new tab. Selects nothing.</dd>
+    <dt><kbd>Esc</kbd></dt><dd>Leave the ≈ view; with none open, clear the selection.</dd>
     <dt><kbd>e</kbd></dt><dd>Export.</dd>
     <dt><kbd>t</kbd></dt><dd>Light or dark.</dd>
+    <dt><kbd>?</kbd></dt><dd>This help.</dd>
   </dl>
-  <p class="pref"><label><input type="checkbox" id="motion" checked> Animate cards</label></p>
+  <p>In the tag strip, a tag's name tags the selected pages (again takes it off), its count filters the view, and ≈ finds untagged pages like it. A tag's × on a page takes it off that page only.</p>
+  <p class="pref"><label><input type="checkbox" id="motion" checked> Animate</label></p>
   <p class="row-btns"><button type="button" id="help-close" autofocus>Close</button></p>
-</dialog>
-
-<dialog id="sets" aria-labelledby="sets-h">
-  <h2 id="sets-h">Result sets</h2>
-  <p class="lede">Every set you tagged, newest first. Decisions are kept; open one to carry on.</p>
-  <ol id="sets-list" class="dlist"></ol>
-  <p class="row-btns"><button type="button" id="sets-close" autofocus>Done</button></p>
 </dialog>
 
 <dialog id="export" aria-labelledby="export-h">
@@ -117,10 +80,9 @@
 </dialog>
 
 <script src="core.js"></script>
-<script src="swipe.js"></script>
-<script src="search.js"></script>
-<script src="pick.js"></script>
-<script src="review.js"></script>
+<script src="pages.js"></script>
+<script src="views.js"></script>
+<script src="strip.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

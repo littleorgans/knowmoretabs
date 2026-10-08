@@ -1,7 +1,8 @@
 /* knowmoretabs · tagger app · core
    The server keeps every decision; this browser keeps only where you are:
-   the last search (query, images, size, picked tags), the open set, the
-   review mode, theme and motion. Results are fetched again after a reload. */
+   the last search (query, images, untagged only, size; the review's picked
+   tags, open set and mode), theme and motion. Results are fetched again
+   after a reload. */
 (function () {
   const KEY = "kmt-tagger-app-v1";
   const K = (window.KMT = window.KMT || {});
@@ -16,7 +17,7 @@
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(KEY)) || {}; } catch { /* a fresh start */ }
   K.state = {
-    search: saved.search || { query: "", images: false, n: 20, picked: [] },
+    search: saved.search || { query: "", images: false, untagged: false, n: 20, picked: [] },
     session: saved.session || null,
     mode: saved.mode || "grid",
     theme: saved.theme || null,
@@ -37,11 +38,11 @@
   };
   K.fail = (err) => K.toast(`Something went wrong: ${err.message}`);
 
-  /* ---- a page's picture: the captured image, or the host's initial ---- */
-  K.thumb = (p, cls) => {
+  /* ---- a page's picture: the captured image, or the host's initial; `inner` goes on top ---- */
+  K.thumb = (p, cls, inner = "") => {
     const initial = K.esc((p.host.replace(/^www\./, "")[0] || "?").toUpperCase());
-    return p.image ? `<div class="${cls}"><img src="/img/${p.row}" alt="" loading="lazy" decoding="async"></div>`
-                   : `<div class="${cls} none" aria-label="No image captured"><b aria-hidden="true">${initial}</b></div>`;
+    return p.image ? `<div class="${cls}"><img src="/img/${p.row}" alt="" loading="lazy" decoding="async">${inner}</div>`
+                   : `<div class="${cls} none" aria-label="No image captured"><b aria-hidden="true">${initial}</b>${inner}</div>`;
   };
   K.own = (p) => (p.own.length ? p.own.map((t) => `<li class="tag">${K.esc(t)}</li>`).join("") : `<li class="none">None yet</li>`);
 

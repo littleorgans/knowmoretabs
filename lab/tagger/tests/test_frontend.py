@@ -32,6 +32,12 @@ import pytest
         "newTagExisting",
         "newTagCancelAndRefusal",
         "newTagKeyboardFocus",
+        "select",
+        "tagToggle",
+        "untagAndOpenDoNotSelect",
+        "likeToggle",
+        "newTagApplies",
+        "keysBesideCheckbox",
     ],
 )
 def test_frontend_round_trips(case):

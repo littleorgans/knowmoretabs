@@ -1,4 +1,4 @@
-"""`tagger app`: the search then tag prototype as a local web app on 127.0.0.1.
+"""`tagger app`: search, select and tag on one screen, as a local web app on 127.0.0.1.
 
 Static files come from `static/`; page images are served by row from the archive given with `--root`; the
 JSON API runs the engine and the store. One request at a time (the model is not shared across threads).
@@ -20,7 +20,7 @@ import numpy as np
 from ..paths import Paths, read_json
 from ..zeroshot import prototype, query_variants
 from . import engine
-from .store import Exclusions, Store, tag_name
+from .store import Exclusions, Selection, Store, tag_name
 
 STATIC = Path(__file__).with_name("static")
 MAX_RESULTS = 50
@@ -34,11 +34,13 @@ class App:
     def __init__(self, lib: engine.Library, store: Store, encode: engine.Encode):
         self.lib, self.store, self.encode = engine.add_tags(lib, store.tags(), encode), store, encode
         self.exclusions = Exclusions(store.root)
+        self.selection = Selection(store.root)
 
     def own(self, row: int) -> list[str]:
         return [t for j, t in enumerate(self.lib.tags) if self.lib.Y[row, j]]
 
     def page(self, row: int) -> dict:
+        """A page as the views show it: `tags` are its app tags; `own`, its archive tags, only the review shows."""
         r = self.lib.records[row]
         return {
             "row": row,
@@ -47,31 +49,46 @@ class App:
             "url": r["key"],
             "image": r["image_ok"],
             "own": self.own(row),
+            "tags": self.store.app_tags().get(r["key"], []),
         }
+
+    def app_tags(self) -> list[str]:
+        """Tags made or applied in the app, by name."""
+        held = {t for tags in self.store.app_tags().values() for t in tags}
+        return sorted(held | set(self.store.tags()), key=str.lower)
 
     def library(self) -> dict:
         return {
             "pages": int(self.lib.live.sum()),
             "tags": engine.tag_info(self.lib),
+            "app_tags": self.app_tags(),
             "images": self.lib.image is not None,
             "input": self.lib.input_name,
             "sizes": [20, MAX_RESULTS],
         }
 
+    def untagged(self) -> np.ndarray:
+        """Live pages without an app tag."""
+        mask = self.lib.live.copy()
+        mask[[self.lib.rows[k] for k in self.store.app_tags() if k in self.lib.rows]] = False
+        return mask
+
     def search(self, body: dict) -> dict:
+        """Ranked results for `query`; with `untagged`, among pages without an app tag only."""
         query = str(body.get("query", ""))
         if not query.strip():
             raise ValueError("type a search")
-        n = min(max(int(body.get("n", 20)), 1), MAX_RESULTS)
+        n = _size(body)
         start = time.perf_counter()
         q = self.encode([query])[0]
         encoded = time.perf_counter()
         images = bool(body.get("images"))
-        plain = engine.search(self.lib, q, query, n, images)
+        among = self.untagged() if body.get("untagged") else None
+        plain = engine.search(self.lib, q, query, n, images, among)
         while True:
             hits = plain
             if body.get("refine"):
-                hits = engine.search(self.lib, self.refined(query, q, plain), query, n, images)
+                hits = engine.search(self.lib, self.refined(query, q, plain), query, n, images, among)
             before = self.exclusions.keys(query)
             judged = self.judged(query, [h["row"] for h in hits])
             # A cut can discover new exclusions in the refined ranking. Settle against those too,
@@ -129,6 +146,40 @@ class App:
             self.store.add_tag(name)
             self.lib = engine.add_tags(self.lib, [name], self.encode)
         return {"tag": have or name, "created": have is None, "tags": engine.tag_info(self.lib)}
+
+    def like(self, body: dict) -> dict:
+        """More like this, not yet tagged: the tag's name as a query moved toward the pages holding it and away
+        from those it was taken off (refine's prototype), ranked among pages without an app tag."""
+        tag = str(body.get("tag", ""))
+        if tag not in self.lib.tags:
+            raise ValueError("name one of your tags")
+        held: dict[bool, list[int]] = {True: [], False: []}
+        for (key, t), d in self.store.decisions().items():
+            if t == tag and key in self.lib.rows:
+                held[d["value"]].append(self.lib.rows[key])
+        q = prototype(self.encode([tag])[0], self.lib.X[held[True]], self.lib.X[held[False]])
+        hits = engine.search(self.lib, q, tag, _size(body), bool(body.get("images")), self.untagged())
+        return {"tag": tag, "hits": [self.page(h["row"]) for h in hits]}
+
+    def apply(self, body: dict) -> dict:
+        """Add one tag to (`value` true) or take it off the given pages, as direct decisions."""
+        rows, tag, value = self.rows(body), str(body.get("tag", "")), body.get("value")
+        if not rows or tag not in self.lib.tags or not isinstance(value, bool):
+            raise ValueError("name pages, one of your tags, and true or false")
+        changed = self.store.apply([self.lib.records[r]["key"] for r in rows], tag, value)
+        pages = [{"row": r, "tags": self.page(r)["tags"]} for r in rows]
+        return {"pages": pages, "changed": len(changed), "app_tags": self.app_tags()}
+
+    def selected(self) -> dict:
+        """The selected pages this library still shows, in the order selected."""
+        rows = [self.lib.rows[k] for k in self.selection.keys if k in self.lib.rows]
+        return {"pages": [self.page(r) for r in rows if self.lib.live[r]]}
+
+    def select(self, body: dict) -> dict:
+        """Replace the selection with the given pages (none clears it)."""
+        rows = self.rows(body)
+        self.selection.set([self.lib.records[r]["key"] for r in rows])
+        return {"rows": rows}
 
     def create(self, body: dict) -> dict:
         """A result set of the given rows less any excluded for the query, so excluded pages never reach review."""
@@ -197,11 +248,19 @@ ROUTES = [
     ),
     ("POST", re.compile(r"/api/search"), lambda app, m, b: app.search(b)),
     ("POST", re.compile(r"/api/exclusions"), lambda app, m, b: app.exclude(b)),
+    ("GET", re.compile(r"/api/selection"), lambda app, m, b: app.selected()),
+    ("POST", re.compile(r"/api/selection"), lambda app, m, b: app.select(b)),
     ("POST", re.compile(r"/api/tags"), lambda app, m, b: app.tag(b)),
+    ("POST", re.compile(r"/api/apply"), lambda app, m, b: app.apply(b)),
+    ("POST", re.compile(r"/api/like"), lambda app, m, b: app.like(b)),
     ("POST", re.compile(r"/api/sessions"), lambda app, m, b: app.create(b)),
     ("POST", re.compile(r"/api/sessions/(\d+)/pages/(\d+)"), lambda app, m, b: app.update(int(m[1]), int(m[2]), b)),
     ("POST", re.compile(r"/api/export"), lambda app, m, b: app.store.export()),
 ]
+
+
+def _size(body: dict) -> int:
+    return min(max(int(body.get("n", 20)), 1), MAX_RESULTS)
 
 
 def _found(value, view):

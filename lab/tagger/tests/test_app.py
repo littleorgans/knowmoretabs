@@ -276,6 +276,33 @@ class StoreTests(unittest.TestCase):
         store.update(sets[0]["id"], 0, {"A": False}, None)
         self.assertFalse(Store(self.tmp).decisions()[("u1", "A")]["value"])
 
+    def test_applying_to_a_partly_tagged_selection_tags_only_the_rest(self):
+        store = Store(self.tmp)
+        self.assertEqual(["u1", "u2"], store.apply(["u1", "u2"], "A", True))
+        self.assertEqual(["u3"], store.apply(["u1", "u2", "u3"], "A", True))
+        self.assertEqual([], store.apply(["u1", "u2", "u3"], "A", True))  # applying twice writes nothing
+        self.assertEqual([], store.apply(["u4"], "A", False))  # nor does removing a tag a page lacks
+        self.assertEqual(3, len(store.state["direct"]))
+        self.assertEqual(["u2"], store.apply(["u2", "u4"], "A", False))
+        self.assertEqual({"u1": ["A"], "u3": ["A"]}, Store(self.tmp).app_tags())
+
+    def test_export_carries_direct_tags_and_a_direct_removal_overrides_a_review(self):
+        store = Store(self.tmp)
+        s = store.create("q", False, ["u1", "u2"], ["A"], [self.sugg(("A", False))] * 2)
+        store.update(s["id"], 0, {"A": True}, "decided")
+        store.update(s["id"], 1, {"A": True}, "decided")
+        self.assertEqual({"u1": ["A"], "u2": ["A"]}, store.app_tags())  # kept in a review
+        store.apply(["u2"], "A", False)
+        store.apply(["u3"], "B", True)
+        out = Store(self.tmp).export()
+        answers = [json.loads(line) for line in Path(out["answers"]).read_text().splitlines()]
+        expected = [{"url": "u1", "tags": ["A"], "source": SOURCE}, {"url": "u3", "tags": ["B"], "source": SOURCE}]
+        self.assertEqual(expected, answers)
+        log = {(r["url"], r["tag"]): r for r in map(json.loads, Path(out["decisions"]).read_text().splitlines())}
+        self.assertEqual(("no", None, None), tuple(log[("u2", "A")][k] for k in ("answer", "model", "session")))
+        self.assertEqual({"url", "tag", "answer", "model", "session", "at"}, set(log[("u3", "B")]))
+        self.assertEqual((3, 1), (out["decided"], out["flipped"]))  # direct decisions have no model to flip
+
     def test_export_writes_private_answers_and_log_alone_in_a_folder(self):
         store = Store(self.tmp)
         s = store.create("q", False, ["u1", "u2", "u3"], ["A", "B"], [self.sugg(("A", True), ("B", True))] * 3)
@@ -531,6 +558,71 @@ class ServerTests(Fixture):
             app.refined(query, q, hits)
         self.assertEqual(10, len(prototype.call_args.args[1]))
         self.assertEqual(40, len(prototype.call_args.args[2]))
+
+    def rows_for(self, query: str, n: int = 20, **body) -> list[int]:
+        return [h["row"] for h in self.call("POST", "/api/search", {"query": query, "n": n, **body})[1]["hits"]]
+
+    def test_a_tag_applies_to_and_comes_off_the_selected_pages(self):
+        rows = self.rows_for("night train")[:3]
+        status, out, _ = self.call("POST", "/api/apply", {"rows": rows, "tag": "Trains", "value": True})
+        self.assertEqual((200, 3), (status, out["changed"]))
+        self.assertEqual([{"row": r, "tags": ["Trains"]} for r in rows], out["pages"])
+        self.assertEqual(["Trains"], out["app_tags"])
+        out = self.call("POST", "/api/apply", {"rows": rows[:1], "tag": "Trains", "value": False})[1]
+        self.assertEqual(([{"row": rows[0], "tags": []}], 1), (out["pages"], out["changed"]))
+        found = {h["row"]: h["tags"] for h in self.call("POST", "/api/search", {"query": "night train"})[1]["hits"]}
+        self.assertEqual([[], ["Trains"], ["Trains"]], [found[r] for r in rows])
+        for bad in ({"tag": "Nope", "value": True}, {"tag": "Trains", "value": "yes"}, {"tag": "Trains"}):
+            self.assertEqual(400, self.call("POST", "/api/apply", {"rows": rows, **bad})[0])
+        self.assertEqual(400, self.call("POST", "/api/apply", {"rows": [], "tag": "Trains", "value": True})[0])
+
+    def test_the_selection_persists_privately_in_order_until_cleared(self):
+        self.assertEqual({"pages": []}, self.call("GET", "/api/selection")[1])
+        rows = self.rows_for("espresso")[:2] + self.rows_for("night train")[:2]
+        picked = [rows[3], rows[0], rows[2]]
+        self.assertEqual(200, self.call("POST", "/api/selection", {"rows": picked})[0])
+        restarted = server.App(self.lib, Store(self.data), fake_encode)
+        self.assertEqual(picked, [p["row"] for p in restarted.selected()["pages"]])
+        self.assertEqual(0o600, stat.S_IMODE((self.data / "selection.json").stat().st_mode))
+        self.assertEqual(400, self.call("POST", "/api/selection", {"rows": [-1]})[0])
+        self.assertEqual(picked, [p["row"] for p in self.call("GET", "/api/selection")[1]["pages"]])
+        self.call("POST", "/api/selection", {"rows": []})
+        self.assertEqual([], server.App(self.lib, Store(self.data), fake_encode).selected()["pages"])
+
+    def test_untagged_only_leaves_out_pages_with_an_app_tag_and_ignores_archive_tags(self):
+        rows = self.rows_for("night train")
+        self.call("POST", "/api/apply", {"rows": rows[:5], "tag": "Trains", "value": True})
+        untagged = self.rows_for("night train", untagged=True)
+        self.assertEqual(20, len(untagged))
+        self.assertFalse(set(rows[:5]) & set(untagged))
+        self.assertEqual(set(rows[5:]), set(untagged[:15]))  # the rest, ranked again among untagged pages
+        archive_tagged = [r for r in untagged if self.lib.Y[r].any()]
+        self.assertTrue(archive_tagged)  # a page holding only archive tags is still untagged here
+
+    def test_more_like_this_offers_untagged_pages_near_the_tags_pages(self):
+        self.call("POST", "/api/tags", {"name": "Sleeper cars"})
+        trains = [r for r in self.rows_for("night train") if topic_of(self.lib.records[r]["key"]) == "trains"]
+        self.call("POST", "/api/apply", {"rows": trains[:4], "tag": "Sleeper cars", "value": True})
+        self.call("POST", "/api/apply", {"rows": trains[4:6], "tag": "Rust", "value": True})
+        status, out, _ = self.call("POST", "/api/like", {"tag": "Sleeper cars", "n": 20})
+        self.assertEqual((200, "Sleeper cars", 20), (status, out["tag"], len(out["hits"])))
+        liked = [h["row"] for h in out["hits"]]
+        self.assertFalse(set(trains[:6]) & set(liked))  # neither this tag's pages nor any other tagged page
+        self.assertTrue(all(h["tags"] == [] for h in out["hits"]))
+        self.assertEqual(["trains"] * 5, [topic_of(self.lib.records[r]["key"]) for r in liked[:5]])
+        self.assertEqual(400, self.call("POST", "/api/like", {"tag": "Nope"})[0])
+
+    def test_more_like_this_ranks_toward_the_tags_pages(self):
+        for name in ("Zephyr", "Quill"):  # names no page or topic word shares: only the tag's pages can pull
+            self.call("POST", "/api/tags", {"name": name})
+        trains = [r for r in self.rows_for("night train") if topic_of(self.lib.records[r]["key"]) == "trains"]
+        self.call("POST", "/api/apply", {"rows": trains[:6], "tag": "Zephyr", "value": True})
+
+        def trains_in_top_10(tag: str) -> int:
+            hits = self.call("POST", "/api/like", {"tag": tag, "n": 20})[1]["hits"][:10]
+            return sum(topic_of(h["url"]) == "trains" for h in hits)
+
+        self.assertGreaterEqual(trains_in_top_10("Zephyr"), trains_in_top_10("Quill") + 3)
 
     def test_refined_cut_ranking_is_stable_after_reload_and_restart(self):
         body = {"query": "night train ", "n": 50}

@@ -1,9 +1,11 @@
 """The app's decisions, in one private file under <data>/app/ replaced whole on every change.
 
 A session is one search and its picked tags: the result pages, by key, each with the model's prechecks, the
-user's marks and a status (open, skipped, decided). Export folds every decided page over all sessions,
-latest decision per page and tag, into a `tag --import` answers file and a decision log. Results marked not
-relevant to a query live apart, in `Exclusions`, and are never exported. Tags the owner makes in the app
+user's marks and a status (open, skipped, decided). A direct decision tags or untags one page outside any
+session (the one screen flow). Export folds every decided page over all sessions and every direct decision,
+latest decision per page and tag, into a `tag --import` answers file and a decision log; a page's app tags
+are the tags its latest decisions keep. Results marked not relevant to a query live apart, in `Exclusions`,
+and are never exported; the pages selected for tagging live in `Selection`. Tags the owner makes in the app
 are kept in the same file, by the spelling `tag --import` would store. Nothing here touches an archive.
 """
 
@@ -51,8 +53,10 @@ class Store:
         self.root = root
         self.path = root / "state.json"
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {"version": 1, "sessions": []}
+        self._app_tags: dict[str, list[str]] | None = None
 
     def _save(self) -> None:
+        self._app_tags = None
         _write(self.path, json.dumps(self.state, indent=1, ensure_ascii=False) + "\n")
 
     def sessions(self) -> list[dict]:
@@ -117,18 +121,50 @@ class Store:
         self._save()
         return page
 
+    def apply(self, keys: list[str], tag: str, value: bool) -> list[str]:
+        """Tag (`value` true) or untag pages directly: a decision for each page whose app tags change, so
+        applying twice, or removing a tag a page lacks, writes nothing. The keys changed."""
+        held = self.app_tags()
+        changed = [k for k in dict.fromkeys(keys) if (tag in held.get(k, ())) != value]
+        if changed:
+            at = time.time()
+            self.state.setdefault("direct", []).extend(
+                {"key": k, "tag": tag, "value": value, "at": at} for k in changed
+            )
+            self._save()
+        return changed
+
     def decisions(self) -> dict[tuple[str, str], dict]:
-        """The latest decision per (page key, tag) over every session's decided pages."""
+        """The latest decision per (page key, tag) over every session's decided pages and every direct decision
+        (no model precheck, no session)."""
         latest = {}
+
+        def keep(k: tuple[str, str], decision: dict) -> None:
+            if k not in latest or decision["at"] >= latest[k]["at"]:
+                latest[k] = decision
+
         for s in self.state["sessions"]:
             for page in s["pages"]:
                 if page["status"] != "decided":
                     continue
                 for tag, value in page["marks"].items():
-                    k = (page["key"], tag)
-                    if k not in latest or page["at"] >= latest[k]["at"]:
-                        latest[k] = {"value": value, "model": page["model"][tag], "session": s["id"], "at": page["at"]}
+                    keep(
+                        (page["key"], tag),
+                        {"value": value, "model": page["model"][tag], "session": s["id"], "at": page["at"]},
+                    )
+        for d in self.state.get("direct", []):
+            keep((d["key"], d["tag"]), {"value": d["value"], "model": None, "session": None, "at": d["at"]})
         return latest
+
+    def app_tags(self) -> dict[str, list[str]]:
+        """Page key -> the tags its latest decisions keep (made in the app, direct or reviewed), by name."""
+        if self._app_tags is None:
+            tags: dict[str, list[str]] = {}
+            for (key, tag), d in sorted(self.decisions().items()):
+                if d["value"]:
+                    tags.setdefault(key, []).append(tag)
+            self._app_tags = tags
+        return self._app_tags
 
     def export(self) -> dict:
         """answers.jsonl (pages with a kept tag, the kept tags) and decisions.jsonl (every page, tag and
@@ -154,7 +190,7 @@ class Store:
                     "url": key,
                     "tag": tag,
                     "answer": "yes" if d["value"] else "no",
-                    "model": "yes" if d["model"] else "no",
+                    "model": None if d["model"] is None else "yes" if d["model"] else "no",
                     "session": d["session"],
                     "at": datetime.fromtimestamp(d["at"], UTC).isoformat(timespec="seconds"),
                 },
@@ -172,9 +208,22 @@ class Store:
             "answer_pages": len(kept),
             "answer_tags": sum(len(t) for t in kept.values()),
             "decided": len(latest),
-            "flipped": sum(d["value"] != d["model"] for d in latest.values()),
+            "flipped": sum(d["model"] is not None and d["value"] != d["model"] for d in latest.values()),
             "source": SOURCE,
         }
+
+
+class Selection:
+    """The pages selected for tagging, by key in the order selected, in <data>/app/selection.json: kept across
+    searches and restarts until cleared."""
+
+    def __init__(self, root: Path):
+        self.path = root / "selection.json"
+        self.keys: list[str] = json.loads(self.path.read_text())["keys"] if self.path.exists() else []
+
+    def set(self, keys: list[str]) -> None:
+        self.keys = list(dict.fromkeys(keys))
+        _write(self.path, json.dumps({"version": 1, "keys": self.keys}, ensure_ascii=False) + "\n")
 
 
 class Exclusions:

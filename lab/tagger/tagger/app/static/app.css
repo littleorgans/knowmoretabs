@@ -1,7 +1,9 @@
 /* knowmoretabs · tagger app
    The swipe review mockup's stylesheet (tokens copied from the library's
    web/app.css), its discover mode dropped, plus the search grid, the tag
-   picker and the review grid. Nothing is fetched from anywhere else. */
+   picker, the review grid and the one screen (sticky selection bar and tag
+   strip over selectable tiles). Square corners throughout. Nothing is
+   fetched from anywhere else. */
 
 :root {
   color-scheme: light dark;
@@ -14,6 +16,7 @@
   --ink-2:  light-dark(#5b5955, #a4a29d);
   --ink-3:  light-dark(#8b8882, #6c6a66);
   --forget: light-dark(#a8432a, #e2896c);
+  --accent: light-dark(oklch(0.5 0.15 250), oklch(0.74 0.13 245));
   --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
   --serif: ui-serif, "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Times New Roman", serif;
   --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
@@ -41,7 +44,8 @@ kbd { display: inline-block; min-width: 1.5em; padding: 0 0.35em; font: 0.6875re
 
 /* ---- top bar ---- */
 .top { position: sticky; top: 0; z-index: 4; display: flex; align-items: center; gap: 1rem; height: var(--top); padding: 0 1.5rem; background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); border-bottom: 1px solid var(--line); }
-.top .brand { font-weight: 700; letter-spacing: -0.02em; font-size: 0.9375rem; margin-right: 0.5rem; }
+.top .brand { font-weight: 700; letter-spacing: -0.02em; font-size: 0.9375rem; margin-right: auto; }
+.top .brand small { margin-left: 0.4rem; font-weight: 400; letter-spacing: 0; color: var(--ink-3); }
 .views { display: flex; gap: 0.25rem; margin-right: auto; }
 .views a { white-space: nowrap; color: var(--ink-2); padding: 0.35rem 0.6rem; font-size: 0.8125rem; font-weight: 500; transition: color 0.15s var(--ease); }
 .views a small { font-size: 0.75rem; color: var(--ink-3); margin-left: 0.2em; }
@@ -152,9 +156,13 @@ main { flex: 1; }
 
 /* ---- search: a ruled form, then the results grid ---- */
 .sform { display: flex; align-items: center; gap: 1rem; padding: 1rem 1.5rem; border-bottom: 1px solid var(--line); }
-.sform input[type="search"] { flex: 1; min-width: 0; height: 2.75rem; padding: 0 1rem; background: var(--bg-1); border: 0; box-shadow: inset 0 -2px 0 var(--ink); outline: 0; font-size: 1rem; }
-.tog { display: inline-flex; align-items: center; gap: 0.45rem; color: var(--ink-2); white-space: nowrap; }
-.tog input { margin: 0; accent-color: var(--ink); }
+.sform input[type="search"] { flex: 1; min-width: 0; height: 2.75rem; padding: 0 1rem; background: var(--bg-1); border: 0; border-radius: 0; appearance: none; box-shadow: inset 0 -2px 0 var(--ink); outline: 0; font-size: 1rem; }
+.tog { display: inline-flex; align-items: center; gap: 0.5rem; color: var(--ink-2); white-space: nowrap; cursor: pointer; }
+/* a square box, filled with a square when ticked: native checkboxes are rounded */
+.tog input { appearance: none; flex: none; width: 1rem; height: 1rem; margin: 0; border: 1.5px solid var(--ink-2); background: none; cursor: inherit; }
+.tog input:checked { background: var(--ink); border-color: var(--ink); box-shadow: inset 0 0 0 2.5px var(--bg); }
+.tog input:disabled { opacity: 0.4; }
+.tog input:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
 .go { height: 2.75rem; padding: 0 1.25rem; background: var(--ink); color: var(--bg); border: 0; font-weight: 600; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(17rem, 1fr)); gap: 0; margin: 0; padding: 0; list-style: none; }
 .grid > li { border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); }
@@ -197,6 +205,64 @@ main { flex: 1; }
 input.chip { width: 14rem; background: var(--bg-1); border-color: var(--ink); outline: 0; }
 .chips .msg { align-self: center; font-size: 0.75rem; color: var(--forget); }
 
+/* ---- one screen: a sticky panel (the selection bar and the tag strip) over selectable tiles ---- */
+.panel { position: sticky; top: var(--top); z-index: 3; background: var(--bg); border-bottom: 1px solid var(--line); }
+.panel .bar { padding-block: 0.4rem; }
+.selbar.has { background: var(--bg-1); }
+.sp { margin-left: auto; }
+.lnk { height: 2rem; padding: 0 0.9rem; background: none; border: 1px solid var(--line-2); color: var(--ink-2); font-size: 0.6875rem; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
+.lnk:hover:not(:disabled) { border-color: var(--ink); color: var(--ink); }
+.lnk[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+.lnk:disabled { color: var(--line-2); border-color: var(--line); cursor: default; }
+.filt { display: inline-flex; align-items: center; gap: 0.75rem; }
+.tagrow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.625rem; padding: 1.25rem 1.5rem 0.75rem; }
+.tagrow .lbl { margin: 0 0.5rem 0 0; }
+.tagstrip { display: contents; }
+.tagstrip > li { list-style: none; }
+.tagstrip .none { color: var(--ink-3); font-size: 0.8125rem; }
+/* a strip chip: three targets, ruled apart. The name tags the selection, the count filters, ≈ finds more */
+.tc { display: inline-flex; align-items: stretch; border: 1px solid var(--line-2); }
+.tc > button { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.9rem; background: none; border: 0; color: var(--ink); white-space: nowrap; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
+.tc > button + button { border-left: 1px solid var(--line-2); }
+.tc .nm { font-weight: 600; }
+.tc .ct { font-size: 0.75rem; color: var(--ink-2); }
+.tc .ml { padding-inline: 0.8rem; font-size: 1.0625rem; line-height: 1; color: var(--ink-2); }
+.tc > button:hover { background: var(--ink); color: var(--bg); }
+.tc[data-on="all"] .nm { background: var(--ink); color: var(--bg); }
+.tc[data-on="some"] .nm { box-shadow: inset 0.3rem 0 0 var(--ink); }
+.tc[data-on="some"] .nm::after { content: "partial"; font-size: 0.625rem; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-3); }
+.tc[data-on="some"] .nm:hover::after { color: inherit; }
+.tc .ct[data-f] { background: var(--bg-2); color: var(--ink); }
+.tc .ct[data-f="has"]::before { content: "only"; }
+.tc .ct[data-f="not"]::before { content: "not"; }
+.tc .ct[data-f]::before { font-size: 0.625rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+.tc .ml[aria-pressed="true"] { background: var(--accent); color: var(--bg); }
+.tc:has(.ml[aria-pressed="true"]) { border-color: var(--accent); }
+.newtag input { width: 10rem; height: 2.375rem; padding: 0 0.9rem; background: var(--bg-1); border: 1px dashed var(--line-2); border-radius: 0; outline: 0; transition: width 0.15s var(--ease); }
+.newtag input:focus { width: 14rem; border-style: solid; border-color: var(--ink); }
+.tagrow .msg { margin: 0; font-size: 0.75rem; color: var(--forget); }
+.panel .hint { padding: 0 1.5rem 1.1rem; text-align: left; }
+/* a tile: a click selects it. Selected: accent frame, a light tint, a square check badge (shape as well as colour) */
+.tile { user-select: none; -webkit-user-select: none; transition: background-color 0.12s var(--ease); }
+.tile:hover { background: var(--bg-1); }
+.tile:focus-visible { outline: 2px solid var(--ink-2); outline-offset: -2px; }
+.tile.sel { background: color-mix(in srgb, var(--accent) 12%, var(--bg)); }
+.tile.sel::before { content: ""; position: absolute; inset: 0; z-index: 2; border: 2px solid var(--accent); pointer-events: none; }
+.tile.sel::after { content: "✓"; position: absolute; top: 0.625rem; right: 0.625rem; z-index: 2; display: grid; place-items: center; width: 1.625rem; height: 1.625rem; background: var(--accent); color: var(--bg); font-size: 0.875rem; font-weight: 700; pointer-events: none; }
+.tile .hb { gap: 0.6rem; padding: 1.1rem 1.25rem 1.35rem; }
+/* Open: hidden until hover or keyboard focus, then a large target over the picture's centre */
+.tile .open { top: 50%; left: 50%; translate: -50% -50%; display: inline-flex; align-items: center; min-height: 2.75rem; padding: 0 1.5rem; background: color-mix(in srgb, var(--bg) 85%, transparent); font-size: 0.875rem; font-weight: 600; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); pointer-events: none; }
+.tile:hover .open, .tile:focus-visible .open, .tile .open:focus-visible { opacity: 1; pointer-events: auto; }
+@media (hover: hover) { .tile:not(:hover):not(:focus-visible) .open:not(:focus-visible) { opacity: 0; } }   /* a click's focus is not keyboard focus */
+.tile .open:hover { background: var(--ink); color: var(--bg); }
+.tile .tags { gap: 0.5rem; }
+.tile .tag { align-items: center; padding: 0.3rem 0 0.3rem 0.75rem; font-size: 0.75rem; }
+/* × takes the tag off this page; its room is kept so chips never shift */
+.tile .tag .x { align-self: stretch; width: 1.75rem; margin: -0.3rem 0; padding: 0; background: none; border: 0; color: inherit; font-size: 0.875rem; line-height: 1; visibility: hidden; }
+.tile .tag:hover .x, .tile .tag:focus-within .x { visibility: visible; }
+.tile .tag .x:hover { background: var(--ink); color: var(--bg); }
+.tile .tags .none { font-style: italic; }
+
 /* ---- review: grid or swipe ---- */
 .modes { display: inline-flex; border: 1px solid var(--line-2); }
 .modes button { height: 1.75rem; padding: 0 0.75rem; background: none; border: 0; color: var(--ink-2); font-size: 0.6875rem; letter-spacing: 0.06em; text-transform: uppercase; }
@@ -235,7 +301,7 @@ dialog dd code { font-size: 0.6875rem; }
 .hint { margin: 0; padding: 0.9rem 1.5rem; text-align: center; font-size: 0.75rem; color: var(--ink-3); }
 .hint.gone { visibility: hidden; }
 .touch-only { display: none; }
-@media (hover: none) { .open { opacity: 1; } .acts kbd, .sg kbd { display: none; } .key-only { display: none; } .touch-only { display: inline; } .sg { grid-template-columns: 1rem minmax(0, 1fr) 4.5rem 3ch; } }
+@media (hover: none) { .open, .tile .open { opacity: 1; pointer-events: auto; } .tile .tag .x { visibility: visible; } .acts kbd, .sg kbd { display: none; } .key-only { display: none; } .touch-only { display: inline; } .sg { grid-template-columns: 1rem minmax(0, 1fr) 4.5rem 3ch; } }
 
 /* ---- toast and dialogs, as in the library ---- */
 #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: 1.25rem; z-index: 5; display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0.5rem 0.5rem 1rem; background: var(--bg); color: var(--ink); border: 1px solid var(--ink); box-shadow: 0 12px 40px light-dark(rgb(0 0 0 / 0.14), rgb(0 0 0 / 0.6)); font-size: 0.8125rem; max-width: calc(100vw - 2rem); opacity: 0; translate: 0 8px; transition: opacity 0.18s var(--ease), translate 0.18s var(--ease); }

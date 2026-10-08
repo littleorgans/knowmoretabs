@@ -41,24 +41,29 @@ assigns them from fit fold rules alone: zero shot, LR heads (zero shot below 10 
 (the top share of the set, that share calibrated on fit fold slices). Baseline: the same heads over every tag.
 The CLI sets umask 077, so every output is private (0600).
 
-## Search then tag app (P1)
+## Search, select and tag app (P1, one screen since P5)
 
 `uv run --locked tagger app --root <snapshot>` serves the prototype on 127.0.0.1 (a free port, or `--port`) and
 prints its address. Needs `dataset` and `embed --model eg2` done for that snapshot; runs offline (`HF_HUB_OFFLINE`).
-Search (EG2 cosine over B, else A, fused by reciprocal rank with TF-IDF over title, metadata and text; images on
-request), pick tags (suggested by S2's mean z ranking, or any of yours), review (S2's supervised rules fitted on
-every owner label, zero shot under 10 positives; picked tags the page holds are shown, not asked), export.
-Decisions live in `<data>/app/state.json`; export writes `<data>/app/exports/<UTC time>/answers.jsonl` (a
-`tag --import` file, source `kmt-tagger-app`, the kept tags per page) and `decisions.jsonl` (page, tag, answer,
-the model's precheck). A click on a search result (x on the focused one) marks it not relevant to that query;
-Cut here (c) excludes every result below one, and new results that later show below it; Refine ranks again toward
-the kept results and away from the excluded ones. Excluded results never reach pick, suggestions or review for that
-query, and touch no other query. They live in `<data>/app/not-relevant.json` (query, page, rank when excluded, by
-click or cut), apart from the decisions, and are never exported. Open (o on the focused result or the swipe card) shows an http or https page in a new
-tab and changes no exclusion or decision. "+ New tag" in the suggestions row takes a name (↵ adds, Esc cancels): one
-you have in any case is picked; any other, checked by `tag --import`'s name rules, becomes a zero shot tag (its name
-the query, no positives), is picked and is kept in `state.json`. Its kept answers need `tag --import --accept-new`,
-which creates it in the archive. The app never writes an archive. `--smoke` prints load and query timings, then exits.
+One screen: search (EG2 cosine over B, else A, fused by reciprocal rank with TF-IDF over title, metadata and text;
+images on request; "Untagged only" keeps pages with no app tag), click results to select them, tag the selection.
+App tags are the tags made in this app, applied directly or kept in an earlier review; archive tags stay out of the
+screen. The sticky strip above the grid lists the app tags in view with counts ("Trains 3/20"): the name tags every
+selected page, or takes the tag off them all when they all have it (partial when some do); the count filters to
+pages with it, then without; ≈ ("more like this, not yet tagged") ranks pages without any app tag by refine's
+prototype (the tag's name as the query, toward its pages, away from pages it was taken off) and is a toggle: ≈
+again, Esc or Back returns to the search, scroll and selection intact. "+ New tag" applies a tag to the selection,
+picking yours in any case or making one by `tag --import`'s name rules (kept in `state.json`). A tile chip's ×
+takes that tag off that page. Open (hover, focus, `o`) shows an http or https page in a new tab and selects nothing.
+Keys: `/` search, space or `x` select, `o` open, Esc leaves ≈ (else clears the selection), `?` help.
+Decisions live in `<data>/app/state.json` (review sessions, and direct decisions: page, tag, kept, time); the
+selection in `<data>/app/selection.json`, until cleared. Export writes `<data>/app/exports/<UTC time>/answers.jsonl`
+(a `tag --import` file, source `kmt-tagger-app`, the kept tags per page, latest decision winning) and
+`decisions.jsonl` (page, tag, answer, the model's precheck and session, both null for a direct decision). Created
+tags need `tag --import --accept-new`, which creates them in the archive. The app never writes an archive.
+The P1 to P4 review, swipe, tag picker, suggestions and query exclusions (`<data>/app/not-relevant.json`) keep
+their code, API and tests but are not on this screen; their decisions still count as app tags.
+`--smoke` prints load and query timings, then exits.
 Synthetic archive for trying it: `uv run --locked python tests/synthetic_archive.py <archive> <data>`.
 
 Steps skip work whose output exists; use a fresh data directory to recompute.
