@@ -55,10 +55,10 @@
     let act = null;
     if (lib.value === "forgotten") act = ["Restore", "restore"];
     else if (job.failed) act = ["Retry", again];
-    else if (st.search && st.search.state === "done" && !indexed) act = ["Retry", "index"];
     else if (SIGN_IN.includes(got.status)) act = ["Try signed in", "signed_in"];
     else if (got.status === "not_found") act = ["Remove", "forget"];
-    else if (RETRY.includes(got.status)) act = ["Retry", again === "index" ? "add" : again];
+    else if (RETRY.includes(got.status)) act = ["Retry", again];
+    else if (st.search && st.search.state === "done" && !indexed) act = ["Retry", "index"];   // lab only
     return { segs, act, framed: LISTED.includes(lib.value), indexed, title: (job.page && job.page.title) || got.title || "",
              picture: st.image ? st.image.state !== "done" ? "wait" : st.image.status === "ok" ? "ok" : "none" : indexed ? "none" : "" };
   }

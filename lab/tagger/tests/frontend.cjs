@@ -1029,6 +1029,9 @@ async function addStates() {
   assert.deepEqual(plain(retry('add', [L('added'), C('blocked', 'web'), S('indexed')])), ['Try signed in', 'signed_in']);
   assert.deepEqual(plain(retry('add', [L('added'), C('not_found', 'web'), S('indexed')])), ['Remove', 'forget']);
   assert.deepEqual(plain(retry('add', [L('forgotten')])), ['Restore', 'restore']);
+  assert.deepEqual(plain(retry('add', [L('added'), C('ok', 'web'), S('not_indexed')])), ['Retry', 'index'], 'an index failure retries the lab only');
+  assert.deepEqual(plain(retry('add', [L('added'), C('blocked', 'web'), S('not_indexed')])), ['Try signed in', 'signed_in'], 'a content action also indexes');
+  assert.deepEqual(plain(retry('forget', [], { failed: true })), ['Retry', 'forget'], 'Retry repeats a failed Remove');
   const failed = K.add.say(job([ev('library', 'running')], { failed: true }));
   assert.deepEqual([failed.segs[0][0], plain(failed.act)], ['Not added', ['Retry', 'add']], 'knowmoretabs could not run');
   const tile = (stages, page) => { const s = K.add.say(job(stages, { page })); return plain([s.framed, s.indexed, s.title, s.picture]); };
@@ -1037,18 +1040,5 @@ async function addStates() {
   assert.deepEqual(tile([L('known'), C('chrome_not_running', 'signed_in'), S('indexed')], { title: 'Kept' }), [true, true, 'Kept', 'none'], 'settled with no image');
 }
 
-async function addIndexRetry() {
-  const { K } = setup({ lit, strip: { render() {}, sayIn: () => () => {} } }, 'add.js');
-  for (const status of ['ok', 'blocked']) {
-    const result = K.add.say({ action: 'add', failed: false, page: null, stages: {
-      library: { stage: 'library', state: 'done', value: 'added' },
-      content: { stage: 'content', state: 'done', status, tier: 'web' },
-      search: { stage: 'search', state: 'done', value: 'not_indexed' },
-    } });
-    assert.deepEqual(plain(result.act), ['Retry', 'index'], 'index failure offers a lab only retry');
-  }
-}
-
 const cases = { addStates, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
-cases.addIndexRetry = addIndexRetry;
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });
