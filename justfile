@@ -4,8 +4,8 @@ check:
     cargo fmt --all -- --check
     python3 scripts/clippy.py
     cargo run --locked --package xtask -- slices --check
-    uv run --locked --project lab/tagger ruff check lab/tagger
-    uv run --locked --project lab/tagger ruff format --check lab/tagger
+    uv run --locked --project lab/tagger ruff check lab/tagger scripts/clippy.py
+    uv run --locked --project lab/tagger ruff format --check lab/tagger scripts/clippy.py
     @echo 'Python type checker: none configured'
 
 test:
@@ -17,7 +17,8 @@ install:
     #!/usr/bin/env sh
     set -eu
     cargo install --path . --locked
-    constraints="$(mktemp "${TMPDIR:?TMPDIR must name a scratch directory}/kmt-tagger-constraints.XXXXXX")"
+    constraints="$(mktemp)"
+    trap 'rm -f -- "$constraints"' EXIT
     uv export --locked --project lab/tagger --no-dev --no-emit-project --no-hashes --output-file "$constraints" > /dev/null
     uv tool install --force --constraints "$constraints" ./lab/tagger
 
