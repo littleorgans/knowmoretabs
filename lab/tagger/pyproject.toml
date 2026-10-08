@@ -1,0 +1,38 @@
+[project]
+name = "kmt-tagger"
+version = "0.1.0"
+description = "Prototype: local embedding tagger for knowmoretabs, evaluated against the owner's tags"
+requires-python = "==3.12.*"
+dependencies = [
+    "sentence-transformers[image]==6.1.0",
+    "transformers==5.19.0",
+    "torch==2.14.1",
+    "torchvision==0.29.1",
+    "numpy==2.5.3",
+    "pillow==12.3.0",
+    "scikit-learn==1.9.1",
+    "iterative-stratification==0.1.9",
+    "joblib==1.5.2",
+    "psutil==7.1.0",
+]
+
+[project.scripts]
+tagger = "tagger.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["tagger"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["F", "E9", "B"]
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+]
