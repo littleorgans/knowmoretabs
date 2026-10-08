@@ -27,24 +27,33 @@
     return next;
   }
 
-  /* ---- the selection and the pins: lists the server keeps, sent whole ---- */
+  /* ---- the selection and the pins: lists the server keeps, sent whole. A list is sent only once its
+     startup load is in: a change made before then is made again on the loaded list, which is then sent ---- */
   const lists = { selection: () => K.sel, pins: () => K.pins };
-  const versions = { selection: 0, pins: 0 };
-  const keep = (name) => { versions[name]++; return write(`/api/${name}`, () => ({ rows: lists[name]() })).catch(K.fail); };
-  const flip = (list, row) => { const i = list.indexOf(row); if (i >= 0) list.splice(i, 1); else list.push(row); };
-  K.select = (row) => { flip(K.sel, row); K.changed(); keep("selection"); };
-  K.pin = (row) => { flip(K.pins, row); K.changed(); keep("pins"); };
+  const early = { selection: [], pins: [] };   // changes made before the list loaded; null once it has
+  const edit = (name, change) => { change(lists[name]()); if (early[name]) early[name].push(change); };
+  const keep = (name) => (early[name] ? Promise.resolve() : write(`/api/${name}`, () => ({ rows: lists[name]() })).catch(K.fail));
+  const put = (row, on) => (list) => {   // `row` in (on) or out of the list; again changes nothing
+    const i = list.indexOf(row);
+    if (on && i < 0) list.push(row);
+    if (!on && i >= 0) list.splice(i, 1);
+  };
+  K.select = (row) => { edit("selection", put(row, !K.sel.includes(row))); K.changed(); keep("selection"); };
+  K.pin = (row) => { edit("pins", put(row, !K.pins.includes(row))); K.changed(); keep("pins"); };
   K.clearSel = () => {
     if (!K.sel.length) return;
-    K.sel = [];
+    edit("selection", (list) => list.splice(0));
     K.changed();
     keep("selection");
   };
   K.loadLists = async () => {
-    const started = { ...versions };
     for (const [name, field] of [["selection", "sel"], ["pins", "pins"]]) {
       const out = await K.api(`/api/${name}`);
-      if (started[name] === versions[name]) K[field] = K.know(out.pages);
+      K[field] = K.know(out.pages);
+      const changes = early[name];
+      early[name] = null;
+      for (const change of changes) change(K[field]);
+      if (changes.length) keep(name);
     }
   };
 
@@ -55,15 +64,14 @@
     const was = { selection: K.sel.indexOf(row), pins: K.pins.indexOf(row) };
     const out = () => {
       K.gone.add(row);
-      for (const name in was) { const list = lists[name](), i = list.indexOf(row); if (i >= 0) { list.splice(i, 1); versions[name]++; } }
+      for (const name in was) if (lists[name]().includes(row)) edit(name, put(row, false));
       K.lib.pages--;
       K.changed();
     };
     const back = () => {
       K.gone.delete(row);
       for (const name in was) {
-        const list = lists[name]();
-        if (was[name] >= 0 && !list.includes(row)) { list.splice(Math.min(was[name], list.length), 0, row); versions[name]++; }
+        if (was[name] >= 0) edit(name, (list) => { if (!list.includes(row)) list.splice(Math.min(was[name], list.length), 0, row); });
       }
       K.lib.pages++;
       K.changed();

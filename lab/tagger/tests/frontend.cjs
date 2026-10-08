@@ -449,7 +449,10 @@ async function screenFixture(...more) {
   K.changed = () => { K.views.render(); K.strip.render(); };
   K.lib = { sizes: [20, 50], images: true, pages: 9, app_tags: ['A'] };
   const requests = [];
-  K.api = (route, body) => new Promise((resolve, reject) => requests.push({ route, body: plain(body), resolve, reject }));
+  K.api = (route, body) => new Promise((resolve, reject) => requests.push({ route, body: body && plain(body), resolve, reject }));
+  const loading = K.loadLists();   // the startup load of the selection and the pins, both empty
+  for (let i = 0; i < 2; i++) { await turn(); requests.shift().resolve({ pages: [] }); }
+  await loading;
   node('s-q').value = 'q';
   const searching = K.views.run();
   await turn();
@@ -1126,22 +1129,40 @@ async function addSignedInStages() {
     assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier: 'web', http_status: 403, reason } } }).act, null, `${reason}`);
 }
 
+/* The server keeps the selection [1] and the pins [1] and replaces a list whole on a write. The user selects and
+   pins page 2 before the startup load of that list is in (pins: before, or while its load is out): the server
+   keeps both pages, and no list is sent before its load is in. */
 async function startupListsKeepChanges() {
-  const { K } = setup('pages.js');
-  const requests = [];
-  K.api = (route, body) => new Promise((resolve) => requests.push({ route, body, resolve }));
-  K.know([page(2)]);
-  const loading = K.loadLists();
-  K.select(2);
-  await turn();
-  requests.shift().resolve({ pages: [] });
-  await turn();
-  assert.deepEqual(plain(K.sel), [2], 'startup selection cannot erase a user decision');
-  K.pin(2);
-  const pins = requests.find((r) => r.route === '/api/pins' && r.body === undefined);
-  pins.resolve({ pages: [] });
-  await loading;
-  assert.deepEqual(plain(K.pins), [2], 'startup pins cannot erase a user decision');
+  for (const pinWhileLoading of [false, true]) {
+    const { K } = setup('pages.js');
+    const server = { selection: [1], pins: [1] }, loaded = new Set(), late = [], early = [];
+    K.api = (route, body) => {
+      const name = route.replace('/api/', '');
+      if (body !== undefined) {
+        if (!loaded.has(name)) early.push([name, body.rows]);
+        server[name] = [...body.rows];
+        return Promise.resolve({ rows: body.rows });
+      }
+      const rows = [...server[name]];
+      return new Promise((resolve) => late.push(() => { loaded.add(name); resolve({ pages: rows.map((row) => page(row)) }); }));
+    };
+    K.know([page(2), page(3)]);
+    const loading = K.loadLists();
+    await turn();
+    K.select(2);
+    if (pinWhileLoading) { late.shift()(); await turn(); await turn(); }
+    K.pin(2);
+    await turn();
+    while (late.length) { late.shift()(); await turn(); await turn(); }
+    await loading;
+    await K.writes;
+    assert.deepEqual(plain(early), [], 'no list is sent before its startup load');
+    assert.deepEqual(server, { selection: [1, 2], pins: [1, 2] }, 'the server keeps both');
+    assert.deepEqual({ sel: plain(K.sel), pins: plain(K.pins) }, { sel: [1, 2], pins: [1, 2] }, 'the page keeps both');
+    K.select(3);
+    await K.writes;
+    assert.deepEqual(server.selection, [1, 2, 3]);
+  }
 }
 
 const cases = { addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
