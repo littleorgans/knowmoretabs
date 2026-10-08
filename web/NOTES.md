@@ -437,6 +437,10 @@ Rules the backend must keep:
 
 - `snapshots` is ascending by time. The client uses the array index as the
   strip column and as the sort key for first/last seen.
+- The snapshot with id `added` holds the pages `knowmoretabs add` put in the
+  library, dated by the first add. It is not a browser capture: "Open now"
+  means a sighting in the newest snapshot that is not `added`, and a library
+  of added pages alone has nothing open now.
 - Every `page_index` in a tab tuple is a valid index into `pages`. A page
   with no tab rows is allowed; the client never shows it.
 - `tab_id` is unique within one snapshot (it is the deep-link target).

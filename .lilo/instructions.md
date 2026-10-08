@@ -2,7 +2,7 @@
 - Scoped: `cargo test --locked --test <file>`
 - Structural: `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - Full: `cargo test --workspace --all-targets --locked`
-- CI parity: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --all-targets --locked && cargo run --locked --package xtask -- slices --check`
+- CI parity: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --all-targets --locked && cargo run --locked --package xtask -- slices --check && node --test tests/serve_frontend.cjs`
 - CI pins 1.89.0; run clippy on it too, with `PATH="$HOME/.rustup/toolchains/1.89.0-aarch64-apple-darwin/bin:$PATH"`.
 - Every `.rs` under `src/` and `xtask/src/` needs a `//!` header with `slice:` and `why:`; run the slices check after changing one.
 - The slice matrix doc is generated from `slices.toml` by `cargo xtask slices`; never hand-edit it.
