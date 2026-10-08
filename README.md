@@ -18,7 +18,7 @@ Vivaldi, on macOS, Linux and Windows.
 ## Install
 
 For the CLI and local tagger, install Rust, Python 3.12, uv and just, then run
-from this repository:
+from this repository, rerunning installation after each pull:
 
 ```sh
 just install
@@ -30,6 +30,8 @@ and cached model weights; it refuses missing data instead of rebuilding it.
 Both tools resolve the archive as `--root` > `KMT_ROOT` > `~/.knowmoretabs`
 (the Rust default on Windows is `%LOCALAPPDATA%\knowmoretabs`). Tagger data
 resolves as `--data` > `KMT_TAGGER_DATA` > `<resolved root>/tagger`.
+Empty environment variables mean unset. To prepare vectors for the app,
+run `tagger embed --model eg2`; a `dataset/` directory is unnecessary.
 `tagger app` runs from any folder. See [the tagger guide](lab/tagger/README.md)
 for preparing data and the experiment workflows.
 
@@ -206,7 +208,7 @@ answer unless you pass `--partial`; `--source NAME` names the model when the
 file does not.
 
 Options, all accepted before or after the command: `--root DIR` (where the
-archive lives), `--browser NAME`, `--profile NAME` (a profile directory or its
+archive lives, overriding `KMT_ROOT`), `--browser NAME`, `--profile NAME` (a profile directory or its
 display name), `--user-data-dir DIR` (a relocated browser user-data
 directory), `--session FILE` (read this session file, skipping discovery),
 `--json` (one machine-readable document on stdout), `-v` (source file,
@@ -512,7 +514,9 @@ tier is ready; a missing tool is a warning.
 └── export/                    # what `export` writes by default; rebuildable
 ```
 
-`--root DIR` puts it somewhere else. `snapshot.json` is pretty-printed JSON
+`--root DIR` puts it somewhere else, followed in precedence by `KMT_ROOT`
+and then the platform default. Empty `KMT_ROOT` means unset.
+`snapshot.json` is pretty-printed JSON
 with a `schema_version`; it is the source of truth and readable in any
 editor. Everything under `export/` is derived and can be deleted.
 

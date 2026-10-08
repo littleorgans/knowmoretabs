@@ -129,7 +129,7 @@ class LoadTests(Synthetic):
         self.assertTrue(made["created"])
         self.assertEqual(["Trains"], [s["tag"] for s in engine.suggest(app.lib, [0, 1])])
 
-    def test_known_pages_the_dataset_lacks_are_embedded_at_load_from_the_running_root(self):
+    def test_new_archive_pages_are_embedded_at_load_from_the_running_root(self):
         before, _ = self.load()
         capture(self.root, NEW, "An invented page on zeppelin timetables")
         gone = "https://added.example/gone"
@@ -137,8 +137,8 @@ class LoadTests(Synthetic):
         state = json.loads((self.root / "library.json").read_text())
         (self.root / "library.json").write_text(json.dumps({**state, "forgotten": [*state["forgotten"], gone]}))
         lib, stats = self.load()
-        self.assertEqual((2, len(before.records) + 2), (stats["gap_pages"], stats["pages"]))
-        self.assertEqual([r["key"] for r in before.records], [r["key"] for r in lib.records[:-2]])
+        self.assertEqual(len(before.records) + 2, stats["pages"])
+        self.assertEqual({r["key"] for r in before.records}, {r["key"] for r in lib.records} - {NEW, gone})
         row = lib.rows[NEW]
         r = lib.records[row]
         self.assertEqual("An invented page on zeppelin timetables", r["title"])
@@ -185,12 +185,15 @@ class LoadTests(Synthetic):
         (self.root / "library.json").write_text(json.dumps({**state, "forgotten": []}))
         self.assertTrue(engine.sync(hidden, Archive.load(self.root), key, fake_embed).live[5])
 
-    def test_a_dataset_page_the_archive_does_not_list_is_refused(self):
-        state = json.loads((self.root / "snapshots/2026-10-01-000000Z/snapshot.json").read_text())
-        state["tabs"] = state["tabs"][1:]
-        (self.root / "snapshots/2026-10-01-000000Z/snapshot.json").write_text(json.dumps(state))
-        with self.assertRaisesRegex(SystemExit, "1 of its"):
-            self.load()
+    def test_manifest_startup_ignores_dataset_pages_absent_from_the_archive(self):
+        before, _ = self.load()
+        file = self.paths.dataset / "pages.jsonl"
+        records = [json.loads(line) for line in file.read_text().splitlines()]
+        records[0]["key"] = "synthetic-absent"
+        file.write_text("".join(json.dumps(record) + "\n" for record in records))
+        after, stats = self.load()
+        self.assertEqual(before.rows, after.rows)
+        self.assertEqual(0, stats["vectors"]["embedded"])
 
 
 class StoreTagNameTests(Synthetic):

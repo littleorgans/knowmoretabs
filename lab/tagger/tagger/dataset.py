@@ -5,6 +5,8 @@ signals): tab title, URL host and path, and the page's own head metadata from `e
 """
 
 import collections
+from collections.abc import Callable
+from functools import partial
 import json
 import re
 import urllib.parse
@@ -81,24 +83,16 @@ def record(archive: Archive, url: str) -> dict:
     }
 
 
-def app_records(paths: Paths, archive: Archive, *, keys: list[str] | None = None) -> tuple[list[dict], list[dict]]:
+def app_records(
+    paths: Paths, archive: Archive, *, keys: list[str] | None = None
+) -> tuple[Callable[[], list[dict]] | None, list[dict]]:
     """Current archive inputs for startup, CLI embedding and individual syncs.
 
-    Full loads keep dataset order for legacy migration, then append archive gaps.
-    A sync requests its keys directly without reading the positional dataset.
+    Positional inputs are loaded only if a vector store needs migration.
+    A sync requests its keys directly and never migrates positional data.
     """
-    legacy = []
-    if keys is None:
-        legacy, _ = load(paths)
-        dataset_keys = {r["key"] for r in legacy}
-        known = set(archive.known)
-        if unknown := sum(r["key"] not in known for r in legacy):
-            raise SystemExit(
-                f"the dataset holds {unknown} of its {len(legacy)} pages that this archive does not list, so it was "
-                "built from another archive; rerun `tagger dataset` and `tagger embed` on it"
-            )
-        keys = [r["key"] for r in legacy] + [key for key in archive.known if key not in dataset_keys]
-    return legacy, [record(archive, key) for key in keys]
+    legacy = partial(load_records, paths, missing_ok=True) if keys is None else None
+    return legacy, [record(archive, key) for key in (archive.known if keys is None else keys)]
 
 
 def run(paths: Paths) -> None:
@@ -136,7 +130,15 @@ def run(paths: Paths) -> None:
     print(json.dumps(summary))
 
 
+def load_records(paths: Paths, *, missing_ok: bool = False) -> list[dict]:
+    try:
+        with (paths.dataset / "pages.jsonl").open() as f:
+            return [json.loads(line) for line in f]
+    except FileNotFoundError:
+        if not missing_ok:
+            raise
+        return []
+
+
 def load(paths: Paths) -> tuple[list[dict], dict]:
-    with (paths.dataset / "pages.jsonl").open() as f:
-        records = [json.loads(line) for line in f]
-    return records, json.loads((paths.dataset / "tags.json").read_text())
+    return load_records(paths), json.loads((paths.dataset / "tags.json").read_text())

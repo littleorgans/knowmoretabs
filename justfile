@@ -2,7 +2,7 @@ set positional-arguments
 
 check:
     cargo fmt --all -- --check
-    cargo clippy --workspace --all-targets --locked -- -D warnings
+    python3 scripts/clippy.py
     cargo run --locked --package xtask -- slices --check
     uv run --locked --project lab/tagger ruff check lab/tagger
     uv run --locked --project lab/tagger ruff format --check lab/tagger
@@ -14,8 +14,12 @@ test:
     uv run --locked --project lab/tagger pytest -q lab/tagger/tests
 
 install:
+    #!/usr/bin/env sh
+    set -eu
     cargo install --path . --locked
-    uv tool install --force ./lab/tagger
+    constraints="$(mktemp "${TMPDIR:?TMPDIR must name a scratch directory}/kmt-tagger-constraints.XXXXXX")"
+    uv export --locked --project lab/tagger --no-dev --no-emit-project --no-hashes --output-file "$constraints" > /dev/null
+    uv tool install --force --constraints "$constraints" ./lab/tagger
 
 tagger *args:
     uv run --locked --project lab/tagger tagger app "$@"

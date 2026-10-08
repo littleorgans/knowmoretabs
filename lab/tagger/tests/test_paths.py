@@ -40,7 +40,7 @@ def test_missing_or_empty_data_fails_before_model_load(tmp_path, present):
         paths.data.mkdir()
     with patch("tagger.embed.load_text") as load, pytest.raises(SystemExit) as error:
         server.run(paths, tmp_path / "archive", 0, False)
-    assert str(error.value) == f"missing tagger data at {paths.data}; set KMT_TAGGER_DATA"
+    assert str(error.value) == f"missing tagger vectors at {paths.data}; run tagger embed --model eg2"
     load.assert_not_called()
     assert paths.data.exists() == present
     assert not present or not list(paths.data.iterdir())

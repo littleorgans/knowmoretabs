@@ -39,7 +39,7 @@ class CliTests(unittest.TestCase):
             patch("sentence_transformers.SentenceTransformer", side_effect=cached_only),
             self.assertRaises(SystemExit),
         ):
-            server.run(Paths(Path(tempfile.gettempdir())), None, 0, True)
+            server.run(Paths(Path(tempfile.gettempdir())), Path(tempfile.gettempdir()), 0, True)
 
     def test_app_forces_offline_before_loading_the_model(self):
         old_umask = os.umask(0o077)
@@ -195,14 +195,6 @@ class EngineTests(Fixture):
         lib = engine.add_tags(self.lib, ["New", "NEW", "trains"], fake_encode)
         self.assertEqual([*self.lib.tags, "New"], lib.tags)
         self.assertEqual("Coffee", engine.find_tag(lib, "cOFFEE"))
-
-    def test_a_dataset_from_another_snapshot_is_refused(self):
-        other = self.tmp / "other"
-        shutil.copytree(self.tmp / "archive", other)
-        shutil.rmtree(other / "snapshots")
-        (other / "snapshots").mkdir()
-        with self.assertRaises(SystemExit):
-            engine.load(self.paths, other, fake_encode, fake_embed, embed_image=fake_image, dim=DIM)
 
 
 class StoreTests(unittest.TestCase):

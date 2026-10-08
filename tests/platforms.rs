@@ -22,6 +22,41 @@ use tempfile::TempDir;
 const CLASSIC_MAX_PATH: usize = 260;
 
 #[test]
+fn empty_root_environment_preserves_the_default_archive() {
+    let fx = Fixture::new();
+    fx.write_session("Default", 20, &two_tab_session());
+    let output = fx
+        .command_without_root()
+        .env("KMT_ROOT", "")
+        .arg("--json")
+        .output()
+        .unwrap();
+    assert_success(&output);
+    let saved: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert!(
+        Path::new(saved["saved"]["path"].as_str().unwrap())
+            .starts_with(under(fx.home.path(), default_root_names()))
+    );
+}
+
+#[test]
+fn environment_root_receives_the_windows_privacy_warning() {
+    let fx = Fixture::new();
+    let outside = TempDir::new().unwrap();
+    let output = fx
+        .command_without_root()
+        .env("KMT_ROOT", outside.path())
+        .arg("list")
+        .output()
+        .unwrap();
+    assert_success(&output);
+    assert_eq!(
+        stderr(&output).contains("outside your user profile"),
+        cfg!(windows)
+    );
+}
+
+#[test]
 fn root_environment_is_used_unless_the_flag_overrides_it() {
     for use_flag in [false, true] {
         let fx = Fixture::new();

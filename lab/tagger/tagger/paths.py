@@ -50,12 +50,12 @@ class Paths:
 
 
 def resolve_root(flag: str | None, env: str | None, home: Path) -> Path:
-    return Path(flag if flag is not None else env if env is not None else home / ".knowmoretabs").resolve()
+    return Path(flag if flag is not None else env or home / ".knowmoretabs").resolve()
 
 
 def resolve(data: str | None, root: Path | None = None) -> Paths:
     root = root if root is not None else resolve_root(None, os.environ.get("KMT_ROOT"), Path.home())
-    value = data if data is not None else os.environ.get("KMT_TAGGER_DATA")
+    value = data if data is not None else os.environ.get("KMT_TAGGER_DATA") or None
     return Paths(Path(value).resolve() if value is not None else root / "tagger")
 
 
