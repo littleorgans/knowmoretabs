@@ -177,18 +177,12 @@ pub struct Line {
     pub attempt: u32,
 }
 
-/// Now, to the second, as a line records when it was attempted.
-pub fn now() -> Timestamp {
-    let now = Timestamp::now();
-    Timestamp::from_second(now.as_second()).unwrap_or(now)
-}
-
 impl Line {
     pub fn new(url: &str, status: Status) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             url: url.to_owned(),
-            attempted_at: now(),
+            attempted_at: archive::now(),
             status,
             tier: None,
             extractor: None,

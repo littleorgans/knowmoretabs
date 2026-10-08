@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::archive::Archive;
+use crate::archive::{self, Archive};
 use crate::capture::Log;
 use crate::error::Error;
 use crate::{export, library, library_history, out, suggestions};
@@ -81,7 +81,7 @@ pub fn export(
     log: Log,
 ) -> Result<(), Error> {
     let archive = Archive::open(root)?;
-    let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
+    let _lock = archive.lock(|| log.warn(archive::WAITING))?;
     let loaded = library::load(&archive)?;
     report_skipped(&loaded, log);
     let state = library::State::read(root)?;

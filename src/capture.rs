@@ -133,7 +133,7 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
     }
 
     let archive = Archive::open(&opts.root)?;
-    let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
+    let _lock = archive.lock(|| log.warn(archive::WAITING))?;
     let removed = archive::clean_stale_staging(&archive.snapshots_dir())?;
     if removed > 0 {
         log.note(&format!(

@@ -215,26 +215,44 @@ pub fn read<R: DeserializeOwned + Keyed>(
     path: &Path,
     what: &'static str,
 ) -> Result<Latest<R>, Error> {
-    let text = match fs::read(path) {
-        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Latest::default()),
-        Err(err) => return Err(Error::io(what, path)(err)),
-    };
-    Ok(parse(&text))
+    Ok(parse(&text(path, what)?))
+}
+
+/// The log's text, for a reader that needs its lines in order; a missing
+/// file is an empty log.
+pub fn text(path: &Path, what: &'static str) -> Result<String, Error> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(String::from_utf8_lossy(&bytes).into_owned()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(err) => Err(Error::io(what, path)(err)),
+    }
 }
 
 /// Blank lines are not counted; a line that is not a record is.
 pub fn parse<R: DeserializeOwned + Keyed>(text: &str) -> Latest<R> {
-    let mut latest = Latest::default();
-    for line in text.lines().filter(|line| !line.trim().is_empty()) {
-        match serde_json::from_str::<R>(line) {
-            Ok(record) => {
-                latest.pages.insert(record.key().to_owned(), record);
-            }
-            Err(_) => latest.unreadable += 1,
-        }
+    let (records, unreadable) = records::<R>(text);
+    let mut latest = Latest {
+        unreadable,
+        ..Latest::default()
+    };
+    for record in records {
+        latest.pages.insert(record.key().to_owned(), record);
     }
     latest
+}
+
+/// Every record in the order it was written, and how many lines were not
+/// one. Blank lines are not counted.
+pub fn records<R: DeserializeOwned>(text: &str) -> (Vec<R>, usize) {
+    let mut records = Vec::new();
+    let mut unreadable = 0;
+    for line in text.lines().filter(|line| !line.trim().is_empty()) {
+        match serde_json::from_str::<R>(line) {
+            Ok(record) => records.push(record),
+            Err(_) => unreadable += 1,
+        }
+    }
+    (records, unreadable)
 }
 
 #[cfg(test)]

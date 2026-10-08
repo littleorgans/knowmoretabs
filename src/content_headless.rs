@@ -22,12 +22,13 @@ use std::time::{Duration, Instant};
 
 use url::Url;
 
+use crate::archive;
 use crate::browser::{self, Broken, Browser, Outcome, Readiness};
 use crate::capture::Log;
 use crate::content::{seconds, spread};
 use crate::content_image::Images;
 use crate::content_pdf;
-use crate::content_store::{self, Line, Page, Status, Tier};
+use crate::content_store::{Line, Page, Status, Tier};
 use crate::error::Error;
 use crate::fetch::{Fetcher, Refusal};
 use crate::guard;
@@ -192,7 +193,7 @@ fn copied(baseline: &Line, note: &str, tier: Tier) -> Line {
     let mut line = baseline.clone();
     line.tier = Some(tier);
     line.access = Some(tier.access());
-    line.attempted_at = content_store::now();
+    line.attempted_at = archive::now();
     line.reason = Some(match &baseline.reason {
         Some(reason) => format!("{reason}; {note}"),
         None => note.to_owned(),
@@ -479,7 +480,7 @@ pub fn run(
 mod tests {
     use super::*;
     use crate::content_fetch::{self, Capture};
-    use crate::content_store::{Access, Store};
+    use crate::content_store::{self, Access, Store};
     use crate::content_test::page;
 
     fn web(url: &str, status: Status, reason: &str) -> Line {

@@ -4,6 +4,9 @@
 //! why: Both test the same library and attempt shapes, so their fixtures
 //!      have one owner independent of either module's private tests.
 
+use std::path::Path;
+
+use crate::archive::{Archive, SNAPSHOT_JSON};
 use crate::browser;
 use crate::content_plan::Work;
 use crate::content_store::{self, Line, Status};
@@ -36,6 +39,19 @@ pub(crate) fn snapshot(urls: &[&str]) -> Snapshot {
         "windows": [], "groups": [], "tabs": tabs,
     }))
     .unwrap()
+}
+
+/// [`snapshot`] of `urls`, saved in the archive at `root` as `save` would.
+pub(crate) fn saved(root: &Path, urls: &[&str]) {
+    let archive = Archive::open(root).unwrap();
+    let snapshot = snapshot(urls);
+    let dir = archive.snapshots_dir().join(&snapshot.id);
+    std::fs::create_dir(&dir).unwrap();
+    std::fs::write(
+        dir.join(SNAPSHOT_JSON),
+        serde_json::to_vec(&snapshot).unwrap(),
+    )
+    .unwrap();
 }
 
 pub(crate) fn state(forgotten: &[&str]) -> State {

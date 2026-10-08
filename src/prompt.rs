@@ -155,7 +155,7 @@ pub fn write(root: &Path, options: &PromptOptions, log: Log) -> Result<Written, 
     }
     let dir = check_folder(root, options.dir)?;
     let archive = Archive::open(root)?;
-    let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
+    let _lock = archive.lock(|| log.warn(archive::WAITING))?;
     let loaded = library::load(&archive)?;
     let state = State::read(root)?;
     let active = state.active_vocabulary();

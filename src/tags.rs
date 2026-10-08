@@ -15,7 +15,7 @@ use std::path::Path;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::archive::Archive;
+use crate::archive::{self, Archive};
 use crate::capture::Log;
 use crate::error::Error;
 use crate::library::{self, PageTags, State, Term, VocabularyEntry, fold, tag_order};
@@ -69,12 +69,6 @@ fn disjoint(first: &[String], second: &[String], reason: &'static str) -> Result
         }),
         None => Ok(()),
     }
-}
-
-/// Vocabulary times are whole seconds, like the snapshot ids beside them.
-pub fn now() -> Timestamp {
-    let now = Timestamp::now();
-    Timestamp::from_second(now.as_second()).unwrap_or(now)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -222,7 +216,7 @@ pub fn apply(
     disjoint(&add, &clear, "it is named both to add and to clear")?;
     disjoint(&remove, &clear, "it is named both to remove and to clear")?;
     let archive = Archive::open(root)?;
-    let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
+    let _lock = archive.lock(|| log.warn(archive::WAITING))?;
     let loaded = library::load(&archive)?;
     let known = library::known_urls(&loaded.snapshots);
     let mut state = State::read(root)?;
@@ -300,7 +294,7 @@ fn targets(
     clear: &[String],
     outcome: &mut Outcome,
 ) -> Vec<(String, Target)> {
-    let now = now();
+    let now = archive::now();
     let mut targets = Vec::new();
     for name in add {
         if let Some((spelling, term)) = state.term(name)
@@ -359,7 +353,7 @@ pub fn undo(root: &Path, undo: &Undo, log: Log) -> Result<Outcome, Error> {
         }
     }
     let archive = Archive::open(root)?;
-    let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
+    let _lock = archive.lock(|| log.warn(archive::WAITING))?;
     let loaded = library::load(&archive)?;
     let known = library::known_urls(&loaded.snapshots);
     let mut state = State::read(root)?;
@@ -520,10 +514,10 @@ pub fn edit_vocabulary(
         "it is named both to define and to retire",
     )?;
     let archive = Archive::open(root)?;
-    let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
+    let _lock = archive.lock(|| log.warn(archive::WAITING))?;
     let mut state = State::read(root)?;
     let mut outcome = VocabularyOutcome::default();
-    let now = now();
+    let now = archive::now();
     for name in &retire {
         let folded = fold(name);
         match state

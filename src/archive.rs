@@ -20,6 +20,8 @@ use crate::model::Snapshot;
 pub const SNAPSHOTS_DIR: &str = "snapshots";
 pub const LOCK_FILE: &str = "lock";
 pub const SNAPSHOT_JSON: &str = "snapshot.json";
+/// What a run says on stderr while another run holds the archive lock.
+pub const WAITING: &str = "another knowmoretabs run holds the archive; waiting";
 /// Dot-prefixed so listings skip it; under the lock, any such directory
 /// left over from a previous run is stale by definition.
 pub const STAGING_PREFIX: &str = ".staging-";
@@ -64,6 +66,10 @@ impl Archive {
         Ok(Self {
             root: root.to_path_buf(),
         })
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     pub fn snapshots_dir(&self) -> PathBuf {
@@ -230,6 +236,13 @@ impl Staging {
         file.sync_all().map_err(Error::io("sync", &path))?;
         Ok(())
     }
+}
+
+/// Now, to the second, as the archive records a time: a log line, a
+/// vocabulary entry, a snapshot id.
+pub fn now() -> Timestamp {
+    let now = Timestamp::now();
+    Timestamp::from_second(now.as_second()).unwrap_or(now)
 }
 
 /// `2026-09-20-084415Z`: UTC, second resolution, sorts as text, contains no

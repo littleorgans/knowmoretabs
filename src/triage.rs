@@ -10,7 +10,7 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::archive::Archive;
+use crate::archive::{self, Archive};
 use crate::capture::Log;
 use crate::error::Error;
 use crate::library::{self, State};
@@ -56,7 +56,7 @@ pub fn apply(
     log: Log,
 ) -> Result<Outcome, Error> {
     let archive = Archive::open(root)?;
-    let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
+    let _lock = archive.lock(|| log.warn(archive::WAITING))?;
     let loaded = library::load(&archive)?;
     let known = library::known_urls(&loaded.snapshots);
     let mut state = State::read(root)?;
