@@ -105,10 +105,6 @@
     } catch (err) { if (mine === asked) K.fail(err); }
   }
   async function settle(j) {
-    if (j.page) {
-      row = K.know([j.page])[0];
-      K.gone.delete(row);
-    }
     if (j.stages.library && [...LISTED, "forgotten"].includes(j.stages.library.value)) K.lib = await K.api("/api/library");
     K.changed();
   }
@@ -116,6 +112,9 @@
     if (!j.page) {
       if (j.action === "forget" && !j.failed && row !== null) K.gone.add(row);   // removed: out of every view
       row = null;
+    } else if (row === null) {   // indexed: the page is known as Indexed shows, so the tile and the strip open with it
+      row = K.know([j.page])[0];
+      K.gone.delete(row);
     }
     job = j;
     const box = K.$("a-link"), s = say(j);

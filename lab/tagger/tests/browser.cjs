@@ -324,6 +324,7 @@ const cases = {
     $('#a-link').value = url;
     $('#a-link').dispatchEvent(new Event('input'));
     check(!$('#a-go').disabled, 'a link turns Add on');
+    window.holdLibrary = true;   // the library reply after the add is held: Indexed must open the strip without it
     $('#a-form').requestSubmit();
     const seen = new Set();
     await until(() => { for (const k of ['library', 'content', 'image', 'search']) seen.add(`${k}:${seg(k)}:${look(k)}`); return seg('search') === 'Indexed'; }, 'Indexed');
@@ -334,6 +335,8 @@ const cases = {
     const tile = $('#a-tile .tile');
     check(tile.classList.contains('sel') && !$('#a-tagrow').classList.contains('off'), 'Indexed opens the tile and the strip');
     check($('#a-tile .ht').textContent === 'An invented page on zeppelin timetables' && $('#a-tile .host').textContent === 'added.example', 'title and host');
+    await until(() => window.releaseLibrary, 'the library reply held');
+    window.releaseLibrary();
     const img = $('#a-tile .th img');
     await until(() => img && img.complete && img.naturalWidth > 0, 'the picture');
     check(/^\/img\/[0-9a-f]{64}$/.test(new URL(img.src).pathname), 'addressed by page');
@@ -538,6 +541,16 @@ async function main() {
           };
         }
         return response;
+      };
+    ` }, sessionId);
+    if (name === 'addFlow') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+      const fetchNormally = window.fetch;
+      window.fetch = async (...args) => {
+        if (window.holdLibrary && args[0] === '/api/library' && !args[1]?.method) {
+          window.holdLibrary = false;
+          await new Promise((resolve) => { window.releaseLibrary = resolve; });
+        }
+        return fetchNormally(...args);
       };
     ` }, sessionId);
     if (name === 'startupDuringPage') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
