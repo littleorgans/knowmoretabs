@@ -401,7 +401,10 @@ class AddJobTests(Served):
         ended = [self.values(self.add(url))["content"]]
         for _ in range(3):
             ended.append(self.values(self.add(url, retry=["content"]))["content"])
+            self.assertEqual(["add", "--json", "--retry", "content"], self.argv())
         self.assertEqual(["error", "error", "unavailable", "unavailable"], ended)
+        image = fake_knowmoretabs.latest(self.root, "images.jsonl", url)
+        self.assertEqual("none", image["status"], "an unavailable text settles the image with no request")
 
     def test_nothing_recorded_is_unknown(self):
         job = self.add("https://added.example/video")

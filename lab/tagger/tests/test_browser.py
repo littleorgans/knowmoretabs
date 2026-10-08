@@ -125,7 +125,9 @@ class AddBrowserTests(Browser, Synthetic):
         )
 
     def test_each_failure_shows_its_value_and_its_action(self):
+        runs = self.logged()
         self.run_case("addFailures", "#add")
+        self.assertEqual(["add", "--json", "--retry", "content"], runs()[-1][:-2], "Retry reads the text alone")
 
     def test_retry_runs_only_the_failed_stages(self):
         runs = self.logged()

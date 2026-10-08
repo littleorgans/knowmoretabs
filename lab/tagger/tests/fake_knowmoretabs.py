@@ -7,7 +7,9 @@ else is a web page captured with an image). Later runs follow the page's log lin
 reads the text again after an error and retries a failed image; `--signed-in` reads a page whose public tier was
 blocked, behind a login or paywalled (`TRANSIENT` pages find Chrome out of reach unless it is a Retry); `--retry`
 runs only the stages named, each only where it failed, and reports every other stage as recorded. A text read again
-is kept (`stuck` fails every time) and the third failed run is `unavailable`. A known URL is `known`; a forgotten one
+is kept (`stuck` fails every time) and the third failed run is `unavailable`. A page with no image line gets one once
+its text settles (`none`, without a request, when the text is `unavailable`); when the text runs and the page's
+intake line has no title, the kept text's title joins it. A known URL is `known`; a forgotten one
 is refused as `forgotten`, anything but a public http(s) page as `refused`, and under `--retry` an unknown one as
 `refused`, `not_in_library`, all exiting 1. `--title` or `--no-content` with `--retry` is a usage error: exit 2,
 nothing on stdout. `forget` and `restore` edit `library.json`'s forgotten list. `FAKE_KMT_DELAY` (seconds) paces the
@@ -120,13 +122,13 @@ def eligible(row: dict | None, signed_in: bool) -> bool:
     return row is None or row["status"] == "error"
 
 
-def capture_text(root: Path, url: str, seg: str, args: dict, fresh: bool) -> tuple[str, bool]:
-    """The content stage: its status, and whether a text settled this run."""
+def capture_text(root: Path, url: str, seg: str, args: dict, fresh: bool) -> tuple[str, str | None]:
+    """The content stage: its status, and the status a text settled on this run, if one did."""
     row, signed_in = latest(root, "content.jsonl", url), args["signed_in"]
     if (args["retry"] and "content" not in args["retry"]) or not eligible(row, signed_in):
         done = reported(root, url, None if signed_in and row is None else row)
         emit(done)
-        return done["status"], False
+        return done["status"], None
     if signed_in:
         transient = TRANSIENT.get(seg) if not args["retry"] else None
         out = text(transient, "signed_in") if transient else READ[True]
@@ -139,27 +141,28 @@ def capture_text(root: Path, url: str, seg: str, args: dict, fresh: bool) -> tup
         emit({"stage": "content", "state": "retrying", "after_s": 2})
     if out["status"] in UNRECORDED:
         emit(reported(root, url, out))
-        return out["status"], False
-    if out["status"] == "ok":
-        content = root / "pages" / "content" / f"{sha256_hex(url)}.md"
+        return out["status"], None
+    content = root / "pages" / "content" / f"{sha256_hex(url)}.md"
+    if out["status"] in ("ok", "thin"):
         content.parent.mkdir(parents=True, exist_ok=True)
         content.write_text(f"---\nurl: {url}\n---\n# {TITLE}\n\n{BODY}\n")
     record(root, "content.jsonl", url, out)
     intake = latest(root, "added.jsonl", url)
-    if out["status"] in ("ok", "thin") and intake and not intake.get("title"):  # a title joins the page's line
+    if content.exists() and intake and not intake.get("title"):  # the kept text's title joins the page's line
         append(root / "pages" / "added.jsonl", {"schema_version": 1, "url": url, "added_at": AT, "title": TITLE})
     done = reported(root, url, latest(root, "content.jsonl", url))
     emit(done)
-    return done["status"], done["status"] != "error"
+    return done["status"], None if done["status"] == "error" else done["status"]
 
 
-def capture_image(root: Path, url: str, seg: str, args: dict, fresh: bool, settled: bool) -> str:
+def capture_image(root: Path, url: str, seg: str, args: dict, fresh: bool, settled: str | None) -> str:
+    """The image stage; `settled`: the status a text settled on this run, if one did."""
     row = latest(root, "images.jsonl", url)
     emit({"stage": "image", "state": "running"})
     if fresh:
         status = SCENARIOS.get(seg, (None, "ok"))[1]
     elif row is None and settled:  # the image follows a text this run settled
-        status = "ok"
+        status = "none" if settled == "unavailable" else "ok"
     elif row and row["status"] == "error" and ("image" in args["retry"] or not (args["retry"] or args["signed_in"])):
         status = "ok"
     else:
