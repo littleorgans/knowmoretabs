@@ -34,7 +34,7 @@
         ? `<p class="lede">${x.decided} decisions: ${x.answer_tags} tags kept on ${x.answer_pages} pages.</p>` +
           `<dl><dt>Answers</dt><dd><code>${K.esc(x.answers)}</code></dd><dt>Log</dt><dd><code>${K.esc(x.decisions)}</code></dd></dl>` +
           `<p>Replace <code>/path/to/archive-copy</code> with a writable copy of your archive and check it. Drop <code>--dry-run</code> to import into that copy (source <code>${K.esc(x.source)}</code>):</p><pre>${K.esc(cmd)}</pre>`
-        : `<p class="lede">Nothing tagged yet, so the files are empty. Select pages and tag them first.</p>`;
+        : `<p class="lede">Nothing tagged yet.</p>`;
       K.$("export").showModal();
     } catch (err) { K.fail(err); }
   };

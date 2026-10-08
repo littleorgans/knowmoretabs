@@ -107,8 +107,8 @@
   function position(v) {
     const n = v.rows.length;
     if (v.kind === "like") return v.loading && !n ? `Finding pages like <b>${K.esc(v.tag)}</b>, not tagged <b>${K.esc(v.tag)}</b>…`
-      : `Pages like <b>${K.esc(v.tag)}</b>, not tagged <b>${K.esc(v.tag)}</b> · ${n}<span class="wide"> · ≈, Esc or Back returns to your search</span>`;
-    if (v.kind === "selection") return `Your selection · ${plural(n, "page")}<span class="wide"> · Show selection or Back returns to your search</span>`;
+      : `Pages like <b>${K.esc(v.tag)}</b>, not tagged <b>${K.esc(v.tag)}</b> · ${n}`;
+    if (v.kind === "selection") return `Your selection · ${plural(n, "page")}`;
     if (v.loading) return "Searching…";
     if (S.query) return `${plural(n, "result")} for “${K.esc(K.short(S.query))}”${S.untagged ? " · untagged only" : ""}`;
     return K.lib ? `${K.lib.pages} pages in your library` : "";
@@ -118,7 +118,7 @@
     if (v.filter) return "No page in view matches this filter.";
     if (v.kind === "like") return `No pages like ${K.esc(v.tag)} without that tag are left.`;
     if (v.kind === "selection") return "Nothing selected.";
-    return S.query ? `Nothing found${S.untagged ? " among untagged pages" : ""}.` : "Search your library, then click pages to select them.";
+    return S.query ? `Nothing found${S.untagged ? " among untagged pages" : ""}.` : "";
   }
 
   K.views = {

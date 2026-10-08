@@ -215,11 +215,10 @@ input.chip { width: 14rem; background: var(--bg-1); border-color: var(--ink); ou
 .lnk[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .lnk:disabled { color: var(--line-2); border-color: var(--line); cursor: default; }
 .filt { display: inline-flex; align-items: center; gap: 0.75rem; }
-.tagrow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.625rem; padding: 1.25rem 1.5rem 0.75rem; }
+.tagrow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.625rem; padding: 1.25rem 1.5rem; }
 .tagrow .lbl { margin: 0 0.5rem 0 0; }
 .tagstrip { display: contents; }
 .tagstrip > li { list-style: none; }
-.tagstrip .none { color: var(--ink-3); font-size: 0.8125rem; }
 /* a strip chip: three targets, ruled apart. The name tags the selection, the count filters, ≈ finds more */
 .tc { display: inline-flex; align-items: stretch; border: 1px solid var(--line-2); }
 .tc > button { display: inline-flex; align-items: center; gap: 0.5rem; padding: 0.5rem 0.9rem; background: none; border: 0; color: var(--ink); white-space: nowrap; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
@@ -241,7 +240,6 @@ input.chip { width: 14rem; background: var(--bg-1); border-color: var(--ink); ou
 .newtag input { width: 10rem; height: 2.375rem; padding: 0 0.9rem; background: var(--bg-1); border: 1px dashed var(--line-2); border-radius: 0; outline: 0; transition: width 0.15s var(--ease); }
 .newtag input:focus { width: 14rem; border-style: solid; border-color: var(--ink); }
 .tagrow .msg { margin: 0; font-size: 0.75rem; color: var(--forget); }
-.panel .hint { padding: 0 1.5rem 1.1rem; text-align: left; }
 /* a tile: a click selects it. Selected: accent frame, a light tint, a square check badge (shape as well as colour) */
 .tile { user-select: none; -webkit-user-select: none; transition: background-color 0.12s var(--ease); }
 .tile:hover { background: var(--bg-1); }
@@ -298,8 +296,6 @@ dialog dd code { font-size: 0.6875rem; }
 .acts .primary:disabled { background: var(--bg-2); }
 .acts .flash { animation: flash 0.3s var(--ease); }
 @keyframes flash { 0% { background: var(--ink); color: var(--bg); } }
-.hint { margin: 0; padding: 0.9rem 1.5rem; text-align: center; font-size: 0.75rem; color: var(--ink-3); }
-.hint.gone { visibility: hidden; }
 .touch-only { display: none; }
 @media (hover: none) { .open, .tile .open { opacity: 1; pointer-events: auto; } .tile .tag .x { visibility: visible; } .acts kbd, .sg kbd { display: none; } .key-only { display: none; } .touch-only { display: inline; } .sg { grid-template-columns: 1rem minmax(0, 1fr) 4.5rem 3ch; } }
 
@@ -342,7 +338,6 @@ dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--ink); vertical-al
   .sform input[type="search"] { flex-basis: 100%; }
   .pick { padding: 1rem; }
   .bar { padding-inline: 1rem; letter-spacing: 0.04em; }
-  .bar .wide { display: none; }
   .page { grid-template-columns: 1fr; min-height: 0; }
   .shot { min-height: 8.5rem; border-right: 0; border-bottom: 1px solid var(--line); }
   .shot.none b { font-size: 3rem; }

@@ -58,11 +58,8 @@
       const names = v.tags;
       for (const r of v.rows.concat(K.sel)) for (const t of K.pages.get(r).tags) names.add(t);
       if (v.kind === "like") names.add(v.tag);
-      K.$("strip").innerHTML = names.size ? [...names].sort(byName).map((t) => chip(t, v)).join("")
-        : `<li class="none">No tags here yet: select pages, then make a new tag.</li>`;
+      K.$("strip").innerHTML = [...names].sort(byName).map((t) => chip(t, v)).join("");
       K.$("app-tags").innerHTML = (K.lib ? K.lib.app_tags : []).map((t) => `<option value="${K.esc(t)}"></option>`).join("");
-      K.$("hint").textContent = n ? `A tag's name tags the ${n} selected, or takes it off when they all have it. Its count filters the view; ≈ finds similar pages without that tag.`
-        : "Click pages to select them. The selection stays across searches until you clear it.";
     }
   };
 
