@@ -1,10 +1,11 @@
 """Add link: each action on one page is a job, a thread that runs knowmoretabs on the app's archive and keeps what
-it reports, so the screen can poll it. `add` and `add --signed-in` stream the contract's `--json` stage events
-(library, content, image, done); `restore` runs before an `add`; `forget` stands alone. Once knowmoretabs lists the
-page, the job brings the app's library in line with the archive under the app's lock (the Search stage: the page
-embedded and indexed, or its files and visibility refreshed). `index` retries Search in the lab only. Roots inside
-the lab data directory are refused before a worker starts. Job state has its own lock, so a poll never waits on
-the model. Nothing a job reads from knowmoretabs is printed; its stderr is dropped.
+it reports, so the screen can poll it. `add` streams the contract's `--json` stage events (library, content, image,
+done), with the link's title, `--signed-in` (Try signed in) or `--retry` naming the failed stages (Retry, which runs
+only those); `restore` runs before a plain `add`; `forget` stands alone. Once knowmoretabs lists the page, the job
+brings the app's library in line with the archive under the app's lock (the Search stage: the page embedded and
+indexed, or its files and visibility refreshed). `index` retries Search in the lab only. Roots inside the lab data
+directory are refused before a worker starts. Job state has its own lock, so a poll never waits on the model.
+Nothing a job reads from knowmoretabs is printed; its stderr is dropped.
 """
 
 import itertools
@@ -20,22 +21,19 @@ from ..archive import Archive
 STAGES = ("library", "content", "image", "search")
 LISTED = ("added", "known")  # `library` done values after which the library lists the page
 KEEP = 32  # finished jobs kept for polling
-MAX_URL = 8192
+MAX = 8192  # the longest link or title taken
+ACTIONS = ("add", "restore", "forget", "index")
+RETRY = ("content", "image")  # the stages `add --retry` runs again
 
 
-def _add(*flags: str):
-    # Main requires --no-content until content capture lands (PR B); remove it there. With it no content stage
-    # reports, so the screen never offers Try signed in.
-    return lambda url: [["add", "--json", "--no-content", *flags, "--", url]]
-
-
-ACTIONS = {
-    "add": _add(),
-    "signed_in": _add("--signed-in"),
-    "restore": lambda url: [["restore", "--", url], *_add()(url)],
-    "forget": lambda url: [["forget", "--", url]],
-    "index": lambda url: [],  # Retry the lab's Search stage without changing the archive
-}
+def commands(job: "Job") -> list[list[str]]:
+    """The knowmoretabs runs a job makes, in order; `index` makes none (the lab's Search only)."""
+    flags = [f for stage in job.retry for f in ("--retry", stage)] + (["--signed-in"] if job.signed_in else [])
+    flags += [f"--title={job.title}"] if job.title else []  # `=`: a title may start with a dash
+    add = ["add", "--json", *flags, "--", job.url]
+    return {"add": [add], "restore": [["restore", "--", job.url], add], "forget": [["forget", "--", job.url]]}.get(
+        job.action, []
+    )
 
 
 @dataclass
@@ -43,6 +41,10 @@ class Job:
     id: int
     url: str
     action: str
+    retry: tuple[str, ...] = ()  # the stages an `add` retries
+    signed_in: bool = False
+    title: str | None = None  # the link's title, for its intake line
+    restored: bool = False  # a `restore` succeeded; Retry adds only
     started: float = field(default_factory=time.monotonic)
     ended: float | None = None
     stages: dict = field(default_factory=dict)  # stage -> its latest event
@@ -69,6 +71,10 @@ class Job:
                 "id": self.id,
                 "url": self.url,
                 "action": self.action,
+                "retry": list(self.retry),
+                "signed_in": self.signed_in,
+                "title": self.title,
+                "restored": self.restored,
                 "stages": self.stages,
                 "finished": self.ended is not None,
                 "failed": self.failed,
@@ -86,13 +92,21 @@ class Jobs:
         self.ids = itertools.count(1)
 
     def start(self, body: dict) -> dict:
-        url, action = body.get("url"), body.get("action", "add")
-        if not isinstance(url, str) or not url.strip() or len(url) > MAX_URL:
+        url, action, retry = body.get("url"), body.get("action", "add"), body.get("retry", [])
+        signed_in, title = body.get("signed_in", False), body.get("title")
+        if not isinstance(url, str) or not url.strip() or len(url) > MAX:
             raise ValueError("give a link")
         if action not in ACTIONS:
             raise ValueError(f"action is one of {', '.join(ACTIONS)}")
+        if not isinstance(retry, list) or not set(retry) <= set(RETRY) or len(set(retry)) != len(retry):
+            raise ValueError(f"retry lists stages among {', '.join(RETRY)}")
+        if not isinstance(signed_in, bool) or not (title is None or isinstance(title, str) and len(title) <= MAX):
+            raise ValueError("signed_in is true or false; a title is text")
+        if (action != "add" and (retry or signed_in or title)) or (retry and title):
+            raise ValueError("only an add takes flags, and a Retry no title")
+        retry, title = tuple(s for s in RETRY if s in retry), (title or "").strip() or None
         with self.lock:
-            job = Job(next(self.ids), url, action)
+            job = Job(next(self.ids), url, action, retry, signed_in, title)
             # The store lives at <data>/app. Resolve both paths so an alias cannot write into a snapshot copy.
             if self.app.lib.root.resolve().is_relative_to(self.app.store.root.parent.resolve()):
                 job.stages["library"] = {"stage": "library", "state": "done", "value": "refused", "reason": "snapshot"}
@@ -121,7 +135,14 @@ class Jobs:
             if job.action == "index":
                 self._search(job)
                 return
-            ok = all(self._command(job, args) for args in ACTIONS[job.action](job.url))
+            ok = True
+            for args in commands(job):
+                ok = self._command(job, args)
+                if not ok:
+                    break
+                if args[0] == "restore":
+                    with self.lock:
+                        job.restored = True
             if job.action == "forget":
                 if ok:
                     self._sync(job)

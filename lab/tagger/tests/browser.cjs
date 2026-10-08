@@ -320,14 +320,18 @@ const cases = {
   addDeepLink: async ({ $, until, check }) => {
     const first = 'https://added.example/a b?x=1&y=é';
     check($('#a-link').value === first && document.activeElement === $('#a-go') && !$('#a-go').disabled, 'filled, Add focused');
+    check(!document.body.innerText.includes('A deep linked title'), 'the title is not shown before the add');
     await new Promise((r) => setTimeout(r, 600));
     check($('#a-stages').hidden, 'nothing starts before Enter');
+    $('#a-go').click();
+    await until(() => $('#a-search .val').textContent === 'Indexed', 'Indexed');
+    check($('#a-tile .ht').textContent === 'A deep linked title', `the tile has the link's title (${$('#a-tile .ht').textContent})`);
     const second = 'https://added.example/notes/two';
     location.hash = '#add=' + encodeURIComponent(second);
     await until(() => $('#a-link').value === second, 'the new fragment');
     check(document.activeElement === $('#a-go'), 'Add focused again');
     $('#a-go').click();
-    await until(() => $('#a-search .val').textContent === 'Indexed', 'Indexed');
+    await until(() => $('#a-search .val').textContent === 'Indexed' && $('#a-tile .host').textContent === 'added.example' && $('#a-tile .ht').textContent !== 'A deep linked title', 'Indexed');
     check(document.activeElement === $('#a-link') && $('#a-link').value === '', 'ready for the next link');
   },
   /* each failure shows its value and its one action; the action runs and the bar follows it */
@@ -364,7 +368,65 @@ const cases = {
     await until(() => window.KMT.lib.pages === actual.pages, 'the library count after Restore');
     await add('https://added.example/timeout');
     await until(() => seg('search') === 'Indexed', 'timed out');
-    check(seg('content') === 'Timed out' && $('#a-act').textContent === 'Retry', 'Retry');
+    check(seg('content') === 'Timed out' && seg('image') === 'No image' && $('#a-act').textContent === 'Retry', 'Retry');
+    $('#a-act').click();
+    await until(() => seg('content') === 'Ok · Web' && seg('image') === 'Ok' && seg('search') === 'Indexed', 'the text, then its image');
+    check(seg('library') === 'Already in library' && $('#a-act').hidden, 'no action');
+  },
+  /* Retry runs the failed stages only, row by row of the contract's lab mapping; terminal states offer nothing */
+  addRetry: async ({ $, until, check }) => {
+    const seg = (k) => $(`#a-${k} .val`).textContent, act = () => ($('#a-act').hidden ? '' : $('#a-act').textContent);
+    const settled = async (what) => { await until(() => seg('search') === 'Indexed', what); };
+    const press = async (label, what) => {
+      check(act() === label, `${what}: ${label} (${act()})`);
+      $('#a-act').click();
+      await until(() => seg('search') === '', `${what}: a new job`);
+      await settled(what);
+    };
+    const add = async (url) => {
+      $('#a-link').value = url;
+      $('#a-link').dispatchEvent(new Event('input'));
+      $('#a-form').requestSubmit();
+      await until(() => seg('library') === 'Adding' && seg('search') === '', 'the new job');
+      await settled(url);
+    };
+    await add('https://added.example/error');
+    check(seg('content') === 'Error · 503' && $('#a-content').dataset.k === 'bad', `error reads ${seg('content')}`);
+    await press('Retry', 'error');
+    check(seg('content') === 'Ok · Web' && act() === '', 'read again');
+    for (const [name, value] of [['offline', 'Chrome not reachable'], ['asleep', 'Chrome not reachable'], ['refused', 'Not allowed']]) {
+      await add(`https://added.example/${name}`);
+      await press('Try signed in', name);
+      check(seg('content') === value, `${name} reads ${seg('content')}`);
+      await press('Retry', name);
+      check(seg('content') === 'Ok · Signed in' && act() === '', `${name}: read signed in`);
+    }
+    await add('https://added.example/imagefail');
+    check(seg('content') === 'Ok · Web' && seg('image') === 'Error' && $('#a-image').dataset.k === 'bad', `image reads ${seg('image')}`);
+    await press('Retry', 'image');
+    check(seg('image') === 'Ok' && act() === '', 'the image');
+    await until(() => $('#a-tile .th img'), 'the picture on the tile');
+    await add('https://added.example/bothfail');
+    check(seg('content') === 'Error · 503' && seg('image') === 'Error', 'both failed');
+    await press('Retry', 'both');
+    check(seg('content') === 'Ok · Web' && seg('image') === 'Ok' && act() === '', 'both in one run');
+    await add('https://added.example/stuck');
+    await press('Retry', 'stuck');
+    await press('Retry', 'stuck again');
+    check(seg('content') === 'Unavailable' && act() === '', `terminal: ${seg('content')}, ${act()}`);
+    await add('https://added.example/video');
+    check(seg('content') === 'Not recorded' && seg('image') === 'No image' && act() === '', 'nothing recorded, nothing offered');
+    await window.KMT.add.start('https://added.example/never', { action: 'add', retry: ['content'] });
+    check(seg('library') === 'Not in library' && act() === '' && $('#a-result').hidden, 'a Retry never adds a page');
+    const url = 'https://added.example/relapse';
+    await add(url);
+    await window.KMT.add.start(url, { action: 'forget' });
+    check(act() === 'Restore', 'Forgotten offers Restore');
+    $('#a-act').click();
+    await until(() => seg('library') === 'Not added', 'the add after the restore failed');
+    check(act() === 'Retry', 'Retry');
+    $('#a-act').click();
+    await until(() => seg('library') === 'Already in library' && seg('search') === 'Indexed', 'added, not restored again');
   },
   /* a web address pasted into the empty box starts at once */
   addPaste: async ({ $, until, check }) => {
@@ -375,11 +437,11 @@ const cases = {
     check($('#a-link').value === '', 'the box is ready for the next link');
   },
   addSnapshot: async ({ $, until, check }) => {
-    for (const action of ['add', 'signed_in', 'forget', 'restore']) {
+    for (const ask of [{ action: 'add' }, { action: 'add', signed_in: true }, { action: 'add', retry: ['content'] }, { action: 'forget' }, { action: 'restore' }]) {
       // Stale output from a previous job must leave with the refusal.
       for (const stage of ['library', 'content', 'image', 'search']) $(`#a-${stage} .val`).textContent = 'Old state';
       $('#a-result').hidden = false;
-      await window.KMT.add.start('https://added.example/protected', action);
+      await window.KMT.add.start('https://added.example/protected', ask);
       check($('#a-library .val').textContent === 'Read only snapshot', 'the bar explains the snapshot refusal');
       for (const stage of ['content', 'image', 'search']) check($(`#a-${stage} .val`).textContent === '', 'old stages cleared');
       check($('#a-result').hidden && $('#a-act').hidden, 'no tile or retry action');

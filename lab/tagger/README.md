@@ -76,11 +76,18 @@ addresses, each ended by a NUL). Created tags need `tag --import --accept-new`, 
 forgotten pages go through `xargs -0 knowmoretabs forget -- < forget.urls` (`restore` in place of `forget` brings
 them back). Both dialog commands target your default library, independently of the app's snapshot root.
 Pins are not exported. The app never writes an archive itself.
-Add link (`#add`; `#add=<encoded link>` fills the box and focuses Add, which waits for Enter): Add, Enter, or a
-paste of a web address into the empty box starts a job that runs `knowmoretabs --root <archive> add --json -- <link>`
-(the binary from PATH), relays its stage events (`GET /api/add/<id>`, polled every 250 ms) and then indexes the page
-(`engine.sync`). Four segments show Library, Content, Image and Search; a failure shows its value and one action:
-Try signed in (`add --signed-in`), Retry (the same add again), Remove (`forget`) or Restore (`restore`, then `add`).
+Add link (`#add`; `#add=<encoded link>&title=<encoded title>` fills the box and focuses Add, which waits for Enter):
+Add, Enter, or a paste of a web address into the empty box starts a job that runs
+`knowmoretabs --root <archive> add --json [--title=<title>] -- <link>` (the binary from PATH; the title only for the
+deep link's own link), relays its stage events (`GET /api/add/<id>`, polled every 250 ms) and then indexes the page
+(`engine.sync`). Four segments show Library, Content, Image and Search; a failure shows its value and one action. Try
+signed in (`add --signed-in`) follows a blocked, login or paywalled read on a public tier. Retry runs only the failed
+stages in one run: `--retry content` after an error or a timeout, `--retry content --signed-in` when Chrome was out of
+reach or not allowed, `--retry image` after an image error (`--retry` needs knowmoretabs quick add step C). `Unavailable`, `Not recorded` and every other outcome
+stand. Retry after a job that ended without a result asks for the same again, except that a Restore that held is not
+repeated; Retry after Not indexed indexes the page in the lab only. Remove is `forget`, Restore is `restore` then `add`.
+Bookmarklet (Chrome's bookmarks bar):
+`javascript:void(window.open('http://127.0.0.1:7879/#add='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'kmt-tagger'))`.
 The tile is framed once the library lists the page and opens at Indexed with every app tag in the strip, acting on
 that page only. knowmoretabs is the only writer of the archive, so the app must run on the archive `add` should
 change. Page images are addressed by their hashed name (`/img/<sha256>`), so a cached image stays with its page.

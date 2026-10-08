@@ -6,6 +6,7 @@ import http.client
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import threading
@@ -267,8 +268,8 @@ class AddJobTests(Served):
         env.start()
         self.addCleanup(env.stop)
 
-    def add(self, url: str, action: str = "add") -> dict:
-        status, job = self.call(self.port, "POST", "/api/add", {"url": url, "action": action})
+    def add(self, url: str, action: str = "add", **flags) -> dict:
+        status, job = self.call(self.port, "POST", "/api/add", {"url": url, "action": action, **flags})
         self.assertEqual(200, status, job)
         for _ in range(400):
             status, job = self.call(self.port, "GET", f"/api/add/{job['id']}")
@@ -279,6 +280,14 @@ class AddJobTests(Served):
 
     def values(self, job: dict) -> dict:
         return {k: e.get("value", e.get("status", e["state"])) for k, e in job["stages"].items()}
+
+    def argv(self, n: int = -1) -> list[str]:
+        """The flags of the `n`th knowmoretabs run, root and link left out."""
+        argv = json.loads(self.log.read_text().splitlines()[n])["argv"]
+        return argv[2 : argv.index("--")]
+
+    def logs(self) -> dict:
+        return {name: (self.root / "pages" / name).read_bytes() for name in ("content.jsonl", "images.jsonl")}
 
     def test_a_new_page_is_added_captured_indexed_and_tagged(self):
         job = self.add(NEW)
@@ -296,7 +305,7 @@ class AddJobTests(Served):
         self.assertEqual((200, ["Trains"]), (status, out["pages"][0]["tags"]))
         self.assertEqual(self.app.library()["pages"], self.call(self.port, "GET", "/api/library")[1]["pages"])
         argv = json.loads(self.log.read_text().splitlines()[0])["argv"]
-        self.assertEqual(["--root", str(self.root), "add", "--json", "--no-content", "--", NEW], argv)
+        self.assertEqual(["--root", str(self.root), "add", "--json", "--", NEW], argv)
 
     def test_a_known_page_is_already_in_the_library_and_not_indexed_twice(self):
         key = self.lib.records[3]["key"]
@@ -316,12 +325,108 @@ class AddJobTests(Served):
         self.add("--root=/elsewhere")
         self.assertEqual(["--", "--root=/elsewhere"], json.loads(self.log.read_text())["argv"][-2:])
 
-    def test_every_add_passes_no_content_until_pr_b(self):
-        actions = ("add", "signed_in", "restore")  # Retry repeats one of these
-        adds = [args for action in actions for args in add.ACTIONS[action](NEW) if args[0] == "add"]
-        self.assertEqual(len(actions), len(adds))
-        for args in adds:
-            self.assertIn("--no-content", args[: args.index("--")], args)
+    def test_each_request_runs_its_commands(self):
+        for kw, expected in (
+            ({}, [["add", "--json", "--", NEW]]),
+            ({"title": "-One"}, [["add", "--json", "--title=-One", "--", NEW]]),
+            ({"signed_in": True}, [["add", "--json", "--signed-in", "--", NEW]]),
+            ({"retry": ("content",)}, [["add", "--json", "--retry", "content", "--", NEW]]),
+            (
+                {"retry": ("content",), "signed_in": True},
+                [["add", "--json", "--retry", "content", "--signed-in", "--", NEW]],
+            ),
+            ({"retry": ("image",)}, [["add", "--json", "--retry", "image", "--", NEW]]),
+            ({"retry": ("content", "image")}, [["add", "--json", "--retry", "content", "--retry", "image", "--", NEW]]),
+            ({"action": "restore"}, [["restore", "--", NEW], ["add", "--json", "--", NEW]]),
+            ({"action": "forget"}, [["forget", "--", NEW]]),
+            ({"action": "index"}, []),
+        ):
+            with self.subTest(**kw):
+                self.assertEqual(expected, add.commands(add.Job(1, NEW, **{"action": "add", **kw})))
+
+    def test_a_deep_link_title_joins_the_intake_line(self):
+        job = self.add(NEW, title=" One note ")
+        self.assertEqual(["add", "--json", "--title=One note"], self.argv())
+        self.assertEqual("One note", json.loads((self.root / "pages/added.jsonl").read_text().splitlines()[0])["title"])
+        self.assertEqual("One note", job["title"])
+
+    def test_a_timeout_retries_the_text_alone_and_its_image_follows(self):
+        url = "https://added.example/timeout"
+        job = self.add(url)
+        self.assertEqual(("error", "timeout"), (self.values(job)["content"], job["stages"]["content"]["reason"]))
+        self.assertEqual("unknown", self.values(job)["image"], "no image after a failed text")
+        intake = (self.root / "pages/added.jsonl").read_bytes()
+        job = self.add(url, retry=["content"])
+        self.assertEqual(["add", "--json", "--retry", "content"], self.argv())
+        self.assertEqual({"library": "known", "content": "ok", "image": "ok", "search": "indexed"}, self.values(job))
+        self.assertTrue((self.root / "pages/added.jsonl").read_bytes().startswith(intake), "no new address line")
+        self.assertTrue(self.app.lib.records[job["page"]["row"]]["text_ok"])
+
+    def test_chrome_out_of_reach_retries_the_text_signed_in(self):
+        for name, status in (("offline", "off"), ("asleep", "not_running"), ("refused", "not_allowed")):
+            with self.subTest(status=status):
+                url = f"https://added.example/{name}"
+                self.add(url)
+                text = self.logs()["content.jsonl"]
+                job = self.add(url, signed_in=True)
+                self.assertEqual((status, "signed_in"), (self.values(job)["content"], job["stages"]["content"]["tier"]))
+                self.assertEqual(text, self.logs()["content.jsonl"], "nothing recorded")
+                job = self.add(url, retry=["content"], signed_in=True)
+                self.assertEqual(["add", "--json", "--retry", "content", "--signed-in"], self.argv())
+                self.assertEqual(("ok", "signed_in"), (self.values(job)["content"], job["stages"]["content"]["tier"]))
+
+    def test_an_image_retry_leaves_the_text_alone(self):
+        url = "https://added.example/imagefail"
+        job = self.add(url)
+        self.assertEqual(("ok", "error"), (self.values(job)["content"], self.values(job)["image"]))
+        text = self.logs()["content.jsonl"]
+        job = self.add(url, retry=["image"])
+        self.assertEqual(["add", "--json", "--retry", "image"], self.argv())
+        self.assertEqual(("ok", "ok", "indexed"), tuple(self.values(job)[k] for k in ("content", "image", "search")))
+        self.assertEqual(text, self.logs()["content.jsonl"], "a kept text is never read again")
+        self.assertTrue(self.app.lib.records[job["page"]["row"]]["image_ok"])
+
+    def test_both_failed_stages_retry_in_one_run(self):
+        url = "https://added.example/bothfail"
+        job = self.add(url)
+        self.assertEqual(("error", "error"), (self.values(job)["content"], self.values(job)["image"]))
+        runs = len(self.log.read_text().splitlines())
+        job = self.add(url, retry=["image", "content"])
+        self.assertEqual(runs + 1, len(self.log.read_text().splitlines()), "one run")
+        self.assertEqual(["add", "--json", "--retry", "content", "--retry", "image"], self.argv())
+        self.assertEqual(("ok", "ok"), (self.values(job)["content"], self.values(job)["image"]))
+
+    def test_a_third_failed_run_is_unavailable_and_stands(self):
+        url = "https://added.example/stuck"
+        ended = [self.values(self.add(url))["content"]]
+        for _ in range(3):
+            ended.append(self.values(self.add(url, retry=["content"]))["content"])
+        self.assertEqual(["error", "error", "unavailable", "unavailable"], ended)
+
+    def test_nothing_recorded_is_unknown(self):
+        job = self.add("https://added.example/video")
+        self.assertEqual(("unknown", "not_recorded"), (self.values(job)["content"], job["stages"]["content"]["reason"]))
+        self.assertEqual(("unknown", "indexed"), (self.values(job)["image"], self.values(job)["search"]))
+
+    def test_a_retry_never_adds_a_page(self):
+        job = self.add(NEW, retry=["content"])
+        self.assertEqual({"library": "refused"}, self.values(job))
+        self.assertEqual(
+            ("not_in_library", False, None), (job["stages"]["library"]["reason"], job["failed"], job["page"])
+        )
+        self.assertFalse((self.root / "pages/added.jsonl").exists())
+        self.assertEqual(len(self.lib.records), len(self.app.lib.records))
+
+    def test_a_failure_after_restore_never_restores_again(self):
+        url = "https://added.example/relapse"
+        self.add(url)
+        self.add(url, "forget")
+        job = self.add(url, "restore")
+        self.assertEqual((True, True, {"library": "running"}), (job["failed"], job["restored"], self.values(job)))
+        self.assertNotIn(url, json.loads((self.root / "library.json").read_text())["forgotten"], "the restore held")
+        job = self.add(url)
+        self.assertEqual(("known", "indexed"), (self.values(job)["library"], self.values(job)["search"]))
+        self.assertEqual(["restore", "add", "add"], [self.argv(n)[0] for n in (-3, -2, -1)])
 
     def test_blocked_then_signed_in(self):
         url = "https://added.example/blocked"
@@ -330,7 +435,7 @@ class AddJobTests(Served):
             {"library": "added", "content": "blocked", "image": "none", "search": "indexed"}, self.values(job)
         )
         self.assertEqual(403, job["stages"]["content"]["http_status"])
-        job = self.add(url, "signed_in")
+        job = self.add(url, signed_in=True)
         self.assertEqual(
             ("known", "ok", "signed_in"),
             (self.values(job)["library"], self.values(job)["content"], job["stages"]["content"]["tier"]),
@@ -344,7 +449,7 @@ class AddJobTests(Served):
         row = job["page"]["row"]
         vector = self.app.lib.X[row].copy()
         with patch.object(self.app, "embed", side_effect=AssertionError("an existing vector stays cached")):
-            job = self.add(url, "signed_in")
+            job = self.add(url, signed_in=True)
         self.assertEqual("indexed", self.values(job)["search"])
         hits = self.call(self.port, "POST", "/api/search", {"query": "airship", "n": 50})[1]["hits"]
         hit = next(h for h in hits if h["row"] == row)
@@ -426,7 +531,39 @@ class AddJobTests(Served):
     def test_requests_are_checked(self):
         self.assertEqual(400, self.call(self.port, "POST", "/api/add", {})[0])
         self.assertEqual(400, self.call(self.port, "POST", "/api/add", {"url": NEW, "action": "rm"})[0])
+        for bad in (
+            {"retry": ["text"]},
+            {"retry": "content"},
+            {"retry": ["image", "image"]},
+            {"retry": ["content"], "title": "One"},
+            {"signed_in": "yes"},
+            {"title": 3},
+            {"title": "x" * (add.MAX + 1)},
+            {"action": "forget", "retry": ["content"]},
+            {"action": "restore", "signed_in": True},
+            {"action": "index", "title": "One"},
+        ):
+            with self.subTest(**bad):
+                self.assertEqual(400, self.call(self.port, "POST", "/api/add", {"url": NEW, **bad})[0])
         self.assertEqual(404, self.call(self.port, "GET", "/api/add/99")[0])
+
+
+class FakeTests(unittest.TestCase):
+    """The fake keeps the contract's usage errors: a Retry takes no title and never skips its content."""
+
+    def test_a_retry_with_a_title_or_without_content_is_a_usage_error(self):
+        with tempfile.TemporaryDirectory() as work:
+            binary = fake_binary(Path(work))
+            for flags in (
+                ["--retry", "content", "--title=T"],
+                ["--retry", "content", "--no-content"],
+                ["--retry=text"],
+            ):
+                with self.subTest(flags=flags):
+                    out = subprocess.run(
+                        [binary, "--root", work, "add", "--json", *flags, "--", NEW], capture_output=True, text=True
+                    )
+                    self.assertEqual((2, ""), (out.returncode, out.stdout))
 
 
 class SnapshotWriteTests(Served):

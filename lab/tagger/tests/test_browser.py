@@ -2,6 +2,7 @@
 server's CSP, tile nodes kept across updates, result pages, ≈ back to the same page, Forget, Undo and Pin, and
 Add link driven against a fake knowmoretabs on a fresh copy of the archive."""
 
+import json
 import os
 import shutil
 import subprocess
@@ -99,15 +100,52 @@ class AddBrowserTests(Browser, Synthetic):
         env.start()
         self.addCleanup(env.stop)
 
+    def logged(self):
+        """A reader of each knowmoretabs run's arguments, root left out."""
+        log = self.work / "argv.jsonl"
+        env = patch.dict(os.environ, {"FAKE_KMT_LOG": str(log)})
+        env.start()
+        self.addCleanup(env.stop)
+        return lambda: [json.loads(line)["argv"][2:] for line in log.read_text().splitlines()]
+
     def test_a_link_is_added_tagged_and_found(self):
         self.paced(0.3)
         self.run_case("addFlow", "#add")
 
     def test_a_deep_link_fills_the_box_and_waits_for_enter(self):
-        self.run_case("addDeepLink", "#add=" + quote("https://added.example/a b?x=1&y=é", safe=""))
+        runs = self.logged()
+        link, title = "https://added.example/a b?x=1&y=é", "A deep linked title"
+        self.run_case("addDeepLink", f"#add={quote(link, safe='')}&title={quote(title, safe='')}")
+        self.assertEqual(
+            [
+                ["add", "--json", f"--title={title}", "--", link],
+                ["add", "--json", "--", "https://added.example/notes/two"],
+            ],
+            runs(),
+        )
 
     def test_each_failure_shows_its_value_and_its_action(self):
         self.run_case("addFailures", "#add")
+
+    def test_retry_runs_only_the_failed_stages(self):
+        runs = self.logged()
+        self.run_case("addRetry", "#add")
+        retries = [run[2:-2] for run in runs() if run[0] == "add" and ("--retry" in run or "--signed-in" in run)]
+        signed_in = [["--signed-in"], ["--retry", "content", "--signed-in"]]
+        self.assertEqual(
+            [
+                ["--retry", "content"],
+                *signed_in * 3,
+                ["--retry", "image"],
+                ["--retry", "content", "--retry", "image"],
+                ["--retry", "content"],
+                ["--retry", "content"],
+                ["--retry", "content"],
+            ],
+            retries,
+        )
+        relapse = [run[0] for run in runs() if run[-1] == "https://added.example/relapse"]
+        self.assertEqual(["add", "forget", "restore", "add", "add"], relapse, "one restore")
 
     def test_a_pasted_web_address_starts_at_once(self):
         self.run_case("addPaste", "#add")

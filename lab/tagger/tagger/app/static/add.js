@@ -5,8 +5,9 @@
    library lists the page its tile is framed; title and picture fill in as
    they land; at Indexed the tile and the strip (every app tag, by name)
    open, acting on this page only. A failed stage shows its value and one
-   action, which starts a job of its own. `#add=<encoded link>` fills the
-   box and focuses Add, which waits for Enter. */
+   action, which starts a job of its own: Retry runs only the stages that
+   failed. `#add=<encoded link>&title=<encoded title>` fills the box and
+   focuses Add, which waits for Enter; the title goes with that link. */
 (function () {
   const K = window.KMT;
   const { html, nothing, render, unsafeHTML } = K.lit;
@@ -14,51 +15,64 @@
   const SEGS = ["library", "content", "image", "search"];
 
   /* ---- what a job's stages read as (design section 9) ---- */
-  const RUNNING = { web: "Web", github: "GitHub", x: "X", youtube: "YouTube", pdf: "PDF", headless: "Rendering", signed_in: "Signed in" };
+  const RUNNING = { web: "Web", github: "GitHub", x: "X", youtube: "YouTube", headless: "Rendering", signed_in: "Signed in" };
   const TIER = { ...RUNNING, headless: "Headless" };
   const STATUS = {
     ok: "Ok", thin: "Thin", empty_shell: "Empty", blocked: "Blocked", behind_login: "Behind login", paywalled: "Paywalled",
-    not_found: "Not found", error: "Error", timeout: "Timed out", not_html: "Not HTML", media: "Media", skipped: "Skipped",
-    unavailable: "Unavailable", chrome_not_running: "Chrome not reachable", off: "Chrome not reachable", not_allowed: "Not allowed",
+    not_found: "Not found", error: "Error", not_html: "Not HTML", media: "Media", skipped: "Skipped", unavailable: "Unavailable",
+    unknown: "Not recorded", off: "Chrome not reachable", not_running: "Chrome not reachable", not_allowed: "Not allowed",
   };
-  const SOFT = ["thin", "empty_shell", "not_html", "media", "skipped"];
+  const SOFT = ["thin", "empty_shell", "not_html", "media", "skipped", "unknown"];
   const WITH_TIER = ["ok", "thin"], WITH_CODE = ["blocked", "not_found", "error"];
   const SIGN_IN = ["blocked", "behind_login", "paywalled"];
-  const RETRY = ["timeout", "error", "chrome_not_running", "off", "not_allowed", "unavailable"];
+  const PUBLIC = ["web", "github", "x", "youtube", "headless"];   // the tiers a signed in read starts from
+  const UNREACHED = ["off", "not_running", "not_allowed"];         // Chrome out of reach: Retry signed in
   const LISTED = ["added", "known"];
   const wait = (e) => e.state === "waiting" || e.state === "retrying";
+  const pending = (e, running) => (e.state === "retrying" ? ["Retrying", "wait"] : e.state === "waiting" ? ["Waiting", "wait"] : [running, "run"]);
 
   function library(e, failed) {
     if (e.reason === "snapshot") return ["Read only snapshot", "bad"];
     if (failed && e.state !== "done") return ["Not added", "bad"];
     if (e.state !== "done") return wait(e) ? ["Waiting", "wait"] : ["Adding", "run"];
+    if (e.reason === "not_in_library") return ["Not in library", "bad"];
     return { added: ["Added", "ok"], known: ["Already in library", "ok"], forgotten: ["Forgotten", "bad"] }[e.value] || ["Not a web page", "bad"];
   }
   function content(e) {
-    if (e.state === "retrying") return ["Retrying", "wait"];
-    if (e.state === "waiting") return ["Waiting", "wait"];
-    if (e.state !== "done") return [RUNNING[e.tier] || "Fetching", "run"];
+    if (e.state !== "done") return pending(e, RUNNING[e.tier] || "Fetching");
+    if (e.status === "error" && e.reason === "timeout") return ["Timed out", "bad"];
     const name = STATUS[e.status] || e.status;
     const text = WITH_TIER.includes(e.status) && TIER[e.tier] ? `${name} · ${TIER[e.tier]}`
       : WITH_CODE.includes(e.status) && e.http_status ? `${name} · ${e.http_status}` : name;
     return [text, e.status === "ok" ? "ok" : SOFT.includes(e.status) ? "soft" : "bad"];
   }
-  const image = (e) => (e.state !== "done" ? ["Fetching", "run"] : e.status === "ok" ? ["Ok", "ok"] : ["No image", "soft"]);
+  const image = (e) => (e.state !== "done" ? pending(e, "Fetching")
+    : { ok: ["Ok", "ok"], error: ["Error", "bad"], unavailable: ["Unavailable", "bad"] }[e.status] || ["No image", "soft"]);
   const search = (e) => (e.state !== "done" ? ["Indexing", "run"] : e.value === "indexed" ? ["Indexed", "ok"] : ["Not indexed", "bad"]);
 
-  /* a job as the screen shows it: per segment [value, look], the one action, and the tile's state */
+  /* the stages Retry runs again (the contract's lab mapping), all in one run: the text after an error or a
+     timeout, or signed in again when Chrome was out of reach; the image after an error. Nothing else. */
+  function failed(st) {
+    const text = st.content && st.content.status, signed_in = UNREACHED.includes(text);
+    const retry = [...(text === "error" || signed_in ? ["content"] : []), ...(st.image && st.image.status === "error" ? ["image"] : [])];
+    return retry.length ? { action: "add", retry, signed_in } : null;
+  }
+  /* what a job asked for; a failed one is asked again, after a Restore that held as an add */
+  const request = (job) => (job.restored ? { action: "add" } : { action: job.action, retry: job.retry, signed_in: job.signed_in, title: job.title });
+
+  /* a job as the screen shows it: per segment [value, look], the one action [label, request], and the tile's state */
   function say(job) {
     const st = job.stages, read = { library: (e) => library(e, job.failed), content, image, search };
     const segs = SEGS.map((k) => (st[k] ? read[k](st[k]) : ["", ""]));
     const lib = st.library || {}, got = st.content || {}, indexed = !!st.search && st.search.value === "indexed";
-    const again = job.action;   // Retry repeats what failed
+    const again = failed(st);
     let act = null;
-    if (lib.value === "forgotten") act = ["Restore", "restore"];
-    else if (job.failed) act = ["Retry", again];
-    else if (SIGN_IN.includes(got.status)) act = ["Try signed in", "signed_in"];
-    else if (got.status === "not_found") act = ["Remove", "forget"];
-    else if (RETRY.includes(got.status)) act = ["Retry", again];
-    else if (st.search && st.search.state === "done" && !indexed) act = ["Retry", "index"];   // lab only
+    if (lib.value === "forgotten") act = ["Restore", { action: "restore" }];
+    else if (job.failed) act = ["Retry", request(job)];
+    else if (SIGN_IN.includes(got.status) && PUBLIC.includes(got.tier)) act = ["Try signed in", { action: "add", signed_in: true }];
+    else if (got.status === "not_found") act = ["Remove", { action: "forget" }];
+    else if (again) act = ["Retry", again];
+    else if (st.search && st.search.state === "done" && !indexed) act = ["Retry", { action: "index" }];   // lab only
     return { segs, act, framed: LISTED.includes(lib.value), indexed, title: (job.page && job.page.title) || got.title || "",
              picture: st.image ? st.image.state !== "done" ? "wait" : st.image.status === "ok" ? "ok" : "none" : indexed ? "none" : "" };
   }
@@ -68,13 +82,15 @@
   let asked = 0;       // the latest job started; a poll for an older one stops
   let row = null;      // the indexed page's row (in K.pages)
   let cleared = 0;     // the job whose link left the box once the library listed it
+  let offer = null;    // the request the action button starts
+  let titled = null;   // [link, title] from the deep link, sent with that link's Add
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
   const web = (s) => { try { return ["http:", "https:"].includes(new URL(s).protocol); } catch { return false; } };
 
-  async function start(url, action = "add") {
+  async function start(url, ask = { action: "add" }) {
     const mine = ++asked;
     try {
-      let j = await K.api("/api/add", { url, action });
+      let j = await K.api("/api/add", { url, ...ask });
       while (mine === asked) {
         if (j.action !== "forget" || j.finished) show(j);   // a Remove shows its outcome only
         if (j.finished) return settle(j);
@@ -136,7 +152,7 @@
     const act = K.$("a-act");
     act.hidden = !s.act;
     act.textContent = s.act ? s.act[0] : "";
-    act.dataset.action = s.act ? s.act[1] : "";
+    offer = s.act ? s.act[1] : null;
     const result = K.$("a-result"), opening = result.hidden && s.framed;
     result.hidden = !s.framed;
     if (opening) { result.classList.remove("in"); void result.offsetWidth; result.classList.add("in"); }
@@ -150,10 +166,11 @@
   }
 
   /* ---- the deep link: fill the box, focus Add, wait for Enter ---- */
+  const decode = (s) => { try { return decodeURIComponent(s); } catch { return s; } };
   function enter() {
-    const m = location.hash.match(/^#add=(.*)$/s);
-    let link = null;
-    if (m) { try { link = decodeURIComponent(m[1]); } catch { link = m[1]; } }
+    const m = location.hash.match(/^#add=(.*?)(?:&title=(.*))?$/s);
+    const link = m ? decode(m[1]) : null;
+    titled = m && m[2] ? [link.trim(), decode(m[2])] : null;
     if (link !== null) {
       K.$("a-link").value = link;
       K.$("a-go").disabled = !link.trim();
@@ -165,7 +182,10 @@
 
   /* ---- wiring ---- */
   const box = K.$("a-link");
-  const submit = () => { const url = box.value.trim(); if (url) start(url); };
+  const submit = () => {
+    const url = box.value.trim();
+    if (url) start(url, { action: "add", title: titled && titled[0] === url ? titled[1] : null });
+  };
   K.$("a-form").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
   box.addEventListener("input", () => { K.$("a-go").disabled = !box.value.trim(); });
   box.addEventListener("paste", (e) => {   // a web address pasted into the empty box starts at once
@@ -176,7 +196,7 @@
     K.$("a-go").disabled = false;
     submit();
   });
-  K.$("a-act").addEventListener("click", (e) => { if (job) start(job.url, e.currentTarget.dataset.action); });
+  K.$("a-act").addEventListener("click", () => { if (job && offer) start(job.url, offer); });
   K.$("a-tile").addEventListener("click", (e) => {
     if (K.opens(e)) return;
     const x = e.target.closest("[data-untag]");
