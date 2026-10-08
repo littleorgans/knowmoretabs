@@ -61,7 +61,7 @@
      Undo puts it back in its place, selected and pinned as it was ---- */
   K.forget = (row) => {
     if (K.gone.has(row)) return;
-    const was = { selection: K.sel.indexOf(row), pins: K.pins.indexOf(row) };
+    const was = { selection: -1, pins: -1 };   // its place in each list, set as it leaves
     const out = () => {
       K.gone.add(row);
       for (const name in was) edit(name, (list) => {
@@ -87,7 +87,7 @@
       if (!K.gone.has(row)) return;
       back();
       send(false).then(() => K.views.restored(row)).catch((err) => { out(); K.fail(err); });
-      for (const name in was) if (was[name] >= 0 || early[name]) keep(name);
+      for (const name in was) if (was[name] >= 0) keep(name);
     });
   };
 
