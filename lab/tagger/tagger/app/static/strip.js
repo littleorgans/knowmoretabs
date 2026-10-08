@@ -83,6 +83,5 @@
     e.preventDefault();
     e.target.value = "";
     say("");
-    e.target.blur();
   });
 })();

@@ -46,7 +46,10 @@
   /* ---- keys ---- */
   document.addEventListener("keydown", (e) => {
     if (document.querySelector("dialog[open]")) return;   // the dialog's own keys; esc closes it
-    if (e.key !== "Escape" && e.target.closest("input:not([type=checkbox]), textarea")) return;   // Esc also leaves a view while typing
+    if (e.target.closest("input:not([type=checkbox]), textarea")) {   // typing; a ticked box keeps the keys
+      if (e.key === "Escape") e.target.blur();   // Esc leaves the box only; the next one acts on the view
+      return;
+    }
     if (e.altKey || e.metaKey || e.ctrlKey) return;
     let done = true;
     if (e.key === "?") K.$("help").showModal();

@@ -421,8 +421,8 @@ async function openNoDrag() {
 const page = (row, tags = []) => ({ row, title: `Page ${row}`, host: 'example.test', url: `https://example.test/${row}`, image: false, tags });
 
 /* the search "q" has found pages 1 (tagged A), 2 and 3 */
-async function screenFixture() {
-  const f = setup('pages.js', 'views.js', 'strip.js');
+async function screenFixture(...more) {
+  const f = setup('pages.js', 'views.js', 'strip.js', ...more);
   const { K, node } = f;
   K.changed = () => { K.views.render(); K.strip.render(); };
   K.lib = { sizes: [20, 50], images: true, pages: 9, app_tags: ['A'] };
@@ -596,28 +596,36 @@ async function keysBesideCheckbox() {
 }
 
 async function escapeFromTextInputs() {
-  const { K, keys, context } = setup('app.js');
-  await turn();
-  let overlay = true;
-  K.sel = [2, 7];
-  K.views.key = (e) => {
-    assert.equal(e.key, 'Escape');
-    if (overlay) overlay = false;
-    else K.sel = [];
-    return true;
+  const { K, node, keys, click, chip, settle } = await screenFixture('app.js');
+  click(2);
+  chip('A', 'like');
+  await settle();
+  const typing = (id) => Object.assign(node(id), { blurs: 0, blur() { this.blurs++; }, closest: (s) => (s.startsWith('input') ? {} : null) });
+  const press = (target) => {   // the box's own listener, then the document's, as the event bubbles
+    const e = { key: 'Escape', target, preventDefault() {} };
+    if (target.keydown) target.keydown(e);
+    keys.keydown(e);
   };
-  const target = { closest: () => ({}) };  // focused search, new tag or textarea
-  let prevented = 0;
-  const press = () => keys.keydown({ key: 'Escape', target, preventDefault() { prevented++; } });
-  press();
-  assert.equal(overlay, false, 'Esc from a text input leaves the like view first');
-  assert.deepEqual(K.sel, [2, 7], 'leaving the like view keeps the selection');
-  press();
-  assert.deepEqual(K.sel, [], 'Esc from a text input with no like view clears selection');
-  assert.equal(prevented, 2);
-  context.document.querySelector = () => ({});  // an open dialog owns Escape
-  press();
-  assert.equal(prevented, 2, 'an open dialog keeps its native Escape handling');
+  const box = typing('new-tag');
+  box.value = 'Half typed';
+  press(box);
+  await turn();
+  assert.equal(box.value, '', 'Esc in + New tag cancels it');
+  assert.equal(box.blurs, 1, 'and leaves it');
+  assert.match(node('v-pos').innerHTML, /Pages like <b>A<\/b>/, 'and stays in the like view');
+  assert.deepEqual(plain(K.sel), [2], 'and keeps the selection');
+  press(typing('s-q'));
+  await turn();
+  assert.equal(node('s-q').blurs, 1, 'Esc in the search box leaves it');
+  assert.match(node('v-pos').innerHTML, /Pages like <b>A<\/b>/, 'and stays in the like view');
+  assert.deepEqual(plain(K.sel), [2], 'and keeps the selection');
+  const page = { closest: () => null };
+  press(page);
+  await turn();
+  assert.doesNotMatch(node('v-pos').innerHTML, /Pages like/, 'the next Esc leaves the like view');
+  assert.deepEqual(plain(K.sel), [2]);
+  press(page);
+  assert.deepEqual(plain(K.sel), [], 'and the one after clears the selection');
 }
 
 async function likeNaming() {
