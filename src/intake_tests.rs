@@ -136,3 +136,34 @@ fn a_torn_tail_or_another_schema_costs_only_its_own_line() {
     let urls: Vec<_> = snapshot.tabs.iter().map(|t| t.url.as_str()).collect();
     assert_eq!(urls, [A]);
 }
+
+#[test]
+fn a_captured_title_joins_only_an_untitled_page_dated_as_it_was_added() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let added = at("2026-10-08T09:00:00Z");
+    append(
+        root,
+        &[Line::new(A, added, None), Line::new(B, added, Some("Two"))],
+    );
+    let not_held = || panic!("nothing else holds the lock");
+    assert!(!retitle(root, C, "Three", not_held).unwrap(), "not added");
+    assert!(
+        !retitle(root, B, "Other", not_held).unwrap(),
+        "already titled"
+    );
+    assert!(!retitle(root, A, "  ", not_held).unwrap(), "a blank title");
+    let before = fs::read(path(root)).unwrap();
+    assert!(retitle(root, A, "One", not_held).unwrap());
+    assert!(!retitle(root, A, "Again", not_held).unwrap(), "once");
+    let after = fs::read_to_string(path(root)).unwrap();
+    let new: Vec<Line> = jsonl::records(&after[before.len()..]).0;
+    assert_eq!(new, [Line::new(A, added, Some("One"))]);
+    let tabs = snapshot(root).unwrap().unwrap().tabs;
+    assert_eq!(
+        tabs.iter()
+            .map(|t| (t.url.as_str(), t.title.as_str()))
+            .collect::<Vec<_>>(),
+        [(A, "One"), (B, "Two")]
+    );
+}

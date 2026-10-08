@@ -69,6 +69,16 @@ impl Route {
         }
     }
 
+    /// The tier a read by this route is recorded under.
+    pub fn tier(&self) -> Tier {
+        match self {
+            Self::Web => Tier::Web,
+            Self::XPost(_) => Tier::X,
+            Self::Github(_) => Tier::Github,
+            Self::Youtube(_) => Tier::Youtube,
+        }
+    }
+
     /// The host every request goes to, when it is not the page's own.
     pub fn host(&self) -> Option<&'static str> {
         match self {
@@ -129,7 +139,9 @@ impl Route {
     pub fn capture(&self, fetcher: &Fetcher, tools: Tools, raw: &str, images: bool) -> Capture {
         match (self, tools.gh, tools.ytdlp) {
             (Self::XPost(id), ..) => xpost::capture(fetcher, raw, id),
-            (Self::Github(target), Some(gh), _) => github_api::capture(gh, raw, target, images),
+            (Self::Github(target), Some(gh), _) => {
+                github_api::capture(gh, fetcher, raw, target, images)
+            }
             (Self::Youtube(id), _, Some(tool)) => ytdlp::capture(tool, raw, id),
             (Self::Youtube(_), _, None) => Capture::ended(
                 content_fetch::line(raw, Tier::Youtube, Status::Error)

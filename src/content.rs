@@ -16,25 +16,29 @@
 //!      by the run's last line for it. `--signed-in` runs the same render
 //!      pass in the owner's own browser over the pages `content_signed_in`
 //!      plans, after attaching to it and before writing anything, so a
-//!      browser that cannot be reached leaves the archive as it was.
+//!      browser that cannot be reached leaves the archive as it was. A
+//!      caller following one page (`add`) is told, as it happens, which tier
+//!      reads it, each wait before a retry, and how its text and image
+//!      settled, and gets no report: the batch run tells no one.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use crate::archive::Archive;
 use crate::browser::{self, Browser};
 use crate::capture::Log;
+use crate::content_events::{self, Events, NoOne};
 use crate::content_fetch::{self, Capture};
-use crate::content_headless::{self, Escalated, Headless};
+use crate::content_headless::{self, Escalated, Headless, Render};
 use crate::content_image::{self, Images};
 use crate::content_plan::{self, Work};
 use crate::content_route::Tools;
 use crate::content_signed_in;
-use crate::content_store::{self, Line, Status, Store};
+use crate::content_store::{self, Line, Status, Store, Tier};
 use crate::error::Error;
 use crate::fetch::Fetcher;
 use crate::github_api::Readiness;
@@ -80,7 +84,7 @@ impl Tally {
 }
 
 /// What a `content` run was asked for.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone, Copy)]
 pub struct Args<'a> {
     pub options: Options,
     /// Only these library pages; every page when empty.
@@ -94,6 +98,23 @@ pub struct Args<'a> {
     /// Open the pages a public read could not get in the owner's own
     /// browser, signed in, and nothing else.
     pub signed_in: bool,
+    /// Who follows the run, told as it happens instead of a report; no one
+    /// for a batch run.
+    pub events: Option<&'a Arc<dyn Events>>,
+}
+
+impl Args<'_> {
+    fn follower(&self) -> &dyn Events {
+        self.events.map_or(&NoOne, |events| &**events)
+    }
+}
+
+/// How a run reaches its pages, and who follows it.
+struct Reach<'a> {
+    fetcher: &'a Fetcher,
+    /// How renders get their browser; none renders nothing.
+    start: Option<Start>,
+    events: &'a dyn Events,
 }
 
 /// How a run's renders get their browser.
@@ -113,6 +134,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
         browser,
         no_browser,
         signed_in,
+        events,
     } = args;
     let archive = Archive::at(root);
     let loaded = library::load(&archive)?;
@@ -146,6 +168,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
     let (plan, work) = content_plan::plan(
         &snapshots, &state, &known, options, github, youtube, rendering,
     );
+    content_events::kept_home(&plan, args.follower());
     let images = if no_images {
         None
     } else {
@@ -189,11 +212,18 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
             .as_ref()
             .and_then(browser::Readiness::path)
             .map(|path| Start::Launch(path.to_owned()));
-        let fetcher = Fetcher::new(&state.forgotten);
-        run(root, work, images, headless, &fetcher, start, log)?
+        let fetcher = content_events::following(Fetcher::new(&state.forgotten), events);
+        let reach = Reach {
+            fetcher: &fetcher,
+            start,
+            events: args.follower(),
+        };
+        run(root, work, images, headless, reach, log)?
     };
     tally.waiting = waiting;
-    report(&plan, &tally, &notes, started.elapsed(), root, json, log);
+    if events.is_none() {
+        report(&plan, &tally, &notes, started.elapsed(), root, json, log);
+    }
     Ok(())
 }
 
@@ -250,13 +280,21 @@ fn signed_in(
             ..Tally::default()
         }
     } else {
+        // Said before attaching: Chrome may wait for the owner to allow it.
+        args.follower().reading(Tier::SignedIn);
         let browser = content_signed_in::attach(args.browser, name)?;
         let images = images.filter(|images| !images.is_empty());
-        let fetcher = Fetcher::signed_in(&state.forgotten);
-        let start = Some(Start::Attached(Box::new(browser)));
-        run(root, work, images, headless, &fetcher, start, log)?
+        let fetcher = content_events::following(Fetcher::signed_in(&state.forgotten), args.events);
+        let reach = Reach {
+            fetcher: &fetcher,
+            start: Some(Start::Attached(Box::new(browser))),
+            events: args.follower(),
+        };
+        run(root, work, images, headless, reach, log)?
     };
-    report(&plan, &tally, &notes, started.elapsed(), root, json, log);
+    if args.events.is_none() {
+        report(&plan, &tally, &notes, started.elapsed(), root, json, log);
+    }
     Ok(())
 }
 
@@ -291,22 +329,23 @@ fn only<'a>(snapshots: &'a [Snapshot], urls: &[String]) -> Result<Cow<'a, [Snaps
 }
 
 /// Records the pages that need no request, then fetches the rest through
-/// `fetcher`, each host's pages in order on one of the shared workers,
+/// the fetcher, each host's pages in order on one of the shared workers,
 /// each page's image after its text; then renders the pages that read thin
-/// or empty in the browser `start` gives, each page's image after its
-/// render; then retries the images that failed before.
+/// or empty in the browser `reach` starts, each page's image after its
+/// render; then retries the images that failed before. Each page's text is
+/// told to whoever follows once it is final for the run.
 fn run(
     root: &Path,
     work: Work,
     images: Option<content_image::Plan>,
     mut headless: Headless,
-    fetcher: &Fetcher,
-    start: Option<Start>,
+    reach: Reach<'_>,
     log: Log,
 ) -> Result<Tally, Error> {
+    let (fetcher, events) = (reach.fetcher, reach.events);
     let store = Mutex::new(Store::open(root)?);
     let images = images
-        .map(|plan| Images::open(root, plan, log))
+        .map(|plan| Images::open(root, plan, events, log))
         .transpose()?;
     let tally = Mutex::new(Tally::default());
     let write = |line: Line, page: Option<&content_store::Page>| -> Result<Line, Error> {
@@ -331,9 +370,9 @@ fn run(
         Ok(line)
     };
     for line in work.unsent {
-        write(line, None)?;
+        events.content(&write(line, None)?);
     }
-    let escalated = Escalated::new(start.is_some());
+    let escalated = Escalated::new(reach.start.is_some());
     let tools = Tools {
         gh: work.github.as_ref().and_then(Readiness::gh),
         ytdlp: work.youtube.as_ref().and_then(ytdlp::Readiness::tool),
@@ -344,6 +383,7 @@ fn run(
             .iter()
             .map(|fetch| (fetch.host.as_str(), fetch)),
         |fetch| {
+            events.reading(fetch.route.tier());
             let started = Instant::now();
             let Capture {
                 line,
@@ -367,6 +407,9 @@ fn run(
             if escalated.keep(&lines, &found) {
                 return Ok(());
             }
+            for line in &lines {
+                events.content(line);
+            }
             images
                 .as_ref()
                 .map_or(Ok(()), |images| images.after(fetcher, &lines, &found))
@@ -381,23 +424,7 @@ fn run(
     headless.wait(unrendered);
     let mut renders = work.renders;
     renders.extend(escalated);
-    if let Some(start) = start
-        && !renders.is_empty()
-    {
-        let browser = match start {
-            Start::Launch(path) => Browser::launch(&path, log),
-            Start::Attached(browser) => Ok(*browser),
-        };
-        content_headless::run(
-            &renders,
-            browser,
-            fetcher,
-            images.as_ref(),
-            write,
-            &mut headless,
-            log,
-        )?;
-    }
+    render(&renders, reach, images.as_ref(), write, &mut headless, log)?;
     if let Some(images) = &images {
         images.retry(fetcher)?;
     }
@@ -405,6 +432,43 @@ fn run(
     tally.headless = headless;
     tally.images = images.map(Images::counts);
     Ok(tally)
+}
+
+/// The second pass, when there are pages and `reach` has a browser to
+/// start: renders `renders`, each page's line written through `write` and
+/// told to whoever follows.
+fn render(
+    renders: &[Render],
+    reach: Reach<'_>,
+    images: Option<&Images>,
+    write: impl Fn(Line, Option<&content_store::Page>) -> Result<Line, Error> + Sync,
+    headless: &mut Headless,
+    log: Log,
+) -> Result<(), Error> {
+    let Some(start) = reach.start.filter(|_| !renders.is_empty()) else {
+        return Ok(());
+    };
+    // An attached browser was told of before it was reached.
+    let browser = match start {
+        Start::Launch(path) => {
+            reach.events.reading(Tier::Headless);
+            Browser::launch(&path, log)
+        }
+        Start::Attached(browser) => Ok(*browser),
+    };
+    content_headless::run(
+        renders,
+        browser,
+        reach.fetcher,
+        images,
+        |line, page| {
+            let line = write(line, page)?;
+            reach.events.content(&line);
+            Ok(line)
+        },
+        headless,
+        log,
+    )
 }
 
 /// Seconds to a tenth.
@@ -513,6 +577,10 @@ fn report(
 }
 
 #[cfg(test)]
+#[path = "content_events_tests.rs"]
+mod events_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::content_plan::plan;
@@ -543,13 +611,17 @@ mod tests {
         assert_eq!(plan.skip_counts()[&Skip::NotWeb], 2);
         assert!(work.fetches.is_empty());
         let root = tempfile::tempdir().unwrap();
+        let reach = Reach {
+            fetcher: &Fetcher::new(&state.forgotten),
+            start: None,
+            events: &NoOne,
+        };
         run(
             root.path(),
             work,
             None,
             Headless::default(),
-            &Fetcher::new(&state.forgotten),
-            None,
+            reach,
             Log::default(),
         )
         .unwrap();

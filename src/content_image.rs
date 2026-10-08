@@ -25,6 +25,7 @@ use std::sync::{Mutex, PoisonError};
 use url::Url;
 
 use crate::capture::Log;
+use crate::content_events::Events;
 use crate::content_fetch;
 use crate::content_plan::Work;
 use crate::content_store::{Line as TextLine, Status as Text};
@@ -176,26 +177,35 @@ fn retries(
     retries
 }
 
-/// A run's image work: the store it writes, and what it counted.
-pub struct Images {
+/// A run's image work: the store it writes, what it counted, and who
+/// follows it.
+pub struct Images<'a> {
     plan: Plan,
     store: Mutex<Store>,
     defaults: SiteDefaults,
     counts: Mutex<Counts<Status>>,
+    events: &'a dyn Events,
     log: Log,
 }
 
-impl Images {
+impl<'a> Images<'a> {
     /// Opens the image store, which clears what an interrupted run left
     /// staged in it.
-    pub fn open(root: &Path, plan: Plan, log: Log) -> Result<Self, Error> {
+    pub fn open(root: &Path, plan: Plan, events: &'a dyn Events, log: Log) -> Result<Self, Error> {
         Ok(Self {
             store: Mutex::new(Store::open(root)?),
             defaults: SiteDefaults::of(&plan.metadata),
             plan,
             counts: Mutex::new(Counts::default()),
+            events,
             log,
         })
+    }
+
+    /// An image is fetched: told to whoever follows.
+    fn fetch(&self, fetcher: &Fetcher, candidates: &[Candidate]) -> Captured {
+        self.events.imaging();
+        image_fetch::capture(fetcher, candidates)
     }
 
     /// The image of the pages one fetch or render stood for, by the
@@ -227,7 +237,7 @@ impl Images {
             Ok(page) => image_pick::ladder(candidates, &page, &self.defaults),
             Err(_) => candidates,
         };
-        let captured = image_fetch::capture(fetcher, &candidates);
+        let captured = self.fetch(fetcher, &candidates);
         settled
             .iter()
             .try_for_each(|url| self.record(url, &captured))
@@ -243,7 +253,7 @@ impl Images {
                 .iter()
                 .map(|retry| (retry.host.as_str(), retry)),
             |retry| {
-                let captured = image_fetch::capture(fetcher, &retry.candidates);
+                let captured = self.fetch(fetcher, &retry.candidates);
                 self.record(&retry.url, &captured)
             },
             |_, _| {},
@@ -274,6 +284,7 @@ impl Images {
             line.status.word(),
             reason.map(|r| format!(" ({r})")).unwrap_or_default()
         ));
+        self.events.image(&line);
         Ok(())
     }
 

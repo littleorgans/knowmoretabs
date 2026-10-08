@@ -5,6 +5,7 @@
 
 pub mod history_builder;
 pub mod session_builder;
+pub mod site;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};

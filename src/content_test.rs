@@ -211,3 +211,64 @@ pub(crate) fn page(markdown: &str, chars: usize) -> content_store::Page {
         markdown: markdown.to_owned(),
     }
 }
+
+/// A loopback stand-in for every site a test reads, one request per
+/// connection: `answer` gives the whole response to the `n`th request (from
+/// 1) for a path, or `None` to read the request and say nothing.
+pub(crate) fn site(
+    answer: impl Fn(&str, usize) -> Option<String> + Send + Sync + 'static,
+) -> std::net::SocketAddr {
+    use std::collections::HashMap;
+    use std::io::{BufRead, BufReader, Write};
+    use std::sync::{Arc, Mutex};
+    let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let address = listener.local_addr().unwrap();
+    let answer = Arc::new(answer);
+    let asked: Arc<Mutex<HashMap<String, usize>>> = Arc::default();
+    std::thread::spawn(move || {
+        for mut stream in listener.incoming().flatten() {
+            let (answer, asked) = (Arc::clone(&answer), Arc::clone(&asked));
+            std::thread::spawn(move || {
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut first = String::new();
+                reader.read_line(&mut first).unwrap_or_default();
+                let mut line = String::new();
+                while reader.read_line(&mut line).is_ok_and(|n| n > 2) {
+                    line.clear();
+                }
+                let path = first.split_whitespace().nth(1).unwrap_or_default();
+                let n = {
+                    let mut asked = asked.lock().unwrap();
+                    let n = asked.entry(path.to_owned()).or_default();
+                    *n += 1;
+                    *n
+                };
+                match answer(path, n) {
+                    Some(response) => {
+                        let _ = stream.write_all(response.as_bytes());
+                    }
+                    None => std::thread::sleep(std::time::Duration::from_secs(5)),
+                }
+            });
+        }
+    });
+    address
+}
+
+/// A whole HTTP response of `status` with an HTML `body`.
+pub(crate) fn html(status: u16, body: &str) -> String {
+    format!(
+        "HTTP/1.1 {status} X\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+        body.len()
+    )
+}
+
+/// An article titled `title` with enough text to keep, or, `thin`, too
+/// little.
+pub(crate) fn article(title: &str, thin: bool) -> String {
+    let words = if thin { 2 } else { 150 };
+    format!(
+        "<html><head><title>{title}</title></head><body><main><h1>{title}</h1><p>{}</p></main></body></html>",
+        "Words the page says about itself. ".repeat(words)
+    )
+}

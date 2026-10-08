@@ -48,6 +48,17 @@ pub enum Unavailable {
     NotAllowed,
 }
 
+impl Unavailable {
+    /// The name a caller following the run gets.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::NotRunning => "not_running",
+            Self::NotAllowed => "not_allowed",
+        }
+    }
+}
+
 /// Whether a page whose latest line is `line` is opened signed in: read by
 /// a public tier as behind a login, paywalled or blocked, or rendered thin
 /// or empty because the site answered 403.
@@ -210,6 +221,7 @@ mod tests {
     use super::*;
     use crate::browser::Outcome;
     use crate::capture::Log;
+    use crate::content_events::NoOne;
     use crate::content_fetch::{self, Capture};
     use crate::content_headless::{Headless, Render, ended, run, settle};
     use crate::content_image::{Images, Plan as ImagePlan};
@@ -576,7 +588,7 @@ mod tests {
             )
             .unwrap()
             .without_retries();
-            let images = Images::open(root.path(), plan, Log::default()).unwrap();
+            let images = Images::open(root.path(), plan, &NoOne, Log::default()).unwrap();
             let peer = Peer::start(closing);
             let name = "Google Chrome".to_owned();
             let browser = Browser::attach(peer.port, PEER_ROUTE, name.clone()).unwrap();

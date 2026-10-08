@@ -214,6 +214,7 @@ fn tag_content_and_forget_accept_an_added_page() {
                 browser: crate::platform::CHROME,
                 no_browser: true,
                 signed_in: false,
+                events: None,
             },
             false,
             QUIET,
@@ -269,7 +270,7 @@ fn json_lines_are_the_contract_shape() {
         );
     }
     assert_eq!(
-        done_line(A, Outcome::Known),
+        done_line(A, Outcome::Known, &Ended::default()),
         json!({"stage": "done", "state": "done", "url": A, "value": "known",
             "content": null, "image": null})
     );

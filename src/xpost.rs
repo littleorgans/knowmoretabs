@@ -66,7 +66,7 @@ pub fn reachable(fetcher: &Fetcher) -> Result<u16, String> {
 /// passing failures as the web route does. Never fails: a failure is a
 /// capture too.
 pub fn capture(fetcher: &Fetcher, raw: &str, id: &str) -> Capture {
-    content_fetch::retrying(|| once(fetcher, raw, id))
+    content_fetch::retrying(fetcher, || once(fetcher, raw, id))
 }
 
 fn once(fetcher: &Fetcher, raw: &str, id: &str) -> Result<Capture, Passing> {
