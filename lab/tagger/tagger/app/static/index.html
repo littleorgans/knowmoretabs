@@ -48,7 +48,10 @@
   <section aria-label="Results">
     <div class="bar"><output id="v-pos" aria-live="polite"></output><span id="v-filter" class="filt"></span></div>
     <ol class="grid" id="grid"></ol>
-    <div class="acts"><button type="button" id="more" hidden>Show more</button></div>
+    <nav class="acts" id="pager" aria-label="Result pages" hidden>
+      <button type="button" id="prev">← Previous</button>
+      <button type="button" id="next">Next →</button>
+    </nav>
   </section>
 </main>
 <footer class="cell"><p>Local prototype on 127.0.0.1. Tags made here stay in the data folder on this machine until you export them; the archive is never written.</p></footer>
@@ -78,10 +81,11 @@
   <p class="row-btns"><button type="button" id="export-close" autofocus>Done</button></p>
 </dialog>
 
-<script src="core.js"></script>
-<script src="pages.js"></script>
-<script src="views.js"></script>
-<script src="strip.js"></script>
-<script src="app.js"></script>
+<script src="core.js" defer></script>
+<script src="lit.js" type="module"></script>
+<script src="pages.js" defer></script>
+<script src="views.js" defer></script>
+<script src="strip.js" defer></script>
+<script src="app.js" defer></script>
 </body>
 </html>

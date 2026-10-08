@@ -599,6 +599,26 @@ class ServerTests(Fixture):
         archive_tagged = [r for r in untagged if self.lib.Y[r].any()]
         self.assertTrue(archive_tagged)  # a page holding only archive tags is still untagged here
 
+    def test_search_and_like_pages_follow_on_from_an_offset_and_count_the_pages_ranked(self):
+        every = self.rows_for("night train", n=server.MAX_RESULTS * 4)  # capped at one page
+        self.assertEqual(server.MAX_RESULTS, len(every))
+        first = self.call("POST", "/api/search", {"query": "night train", "n": 50})[1]
+        second = self.call("POST", "/api/search", {"query": "night train", "n": 50, "offset": 50})[1]
+        live = int(self.lib.live.sum())
+        self.assertEqual((0, 50, live), (first["offset"], second["offset"], second["total"]))
+        ranked = [h["row"] for h in engine.search(self.lib, fake_encode(["night train"])[0], "night train", 100)]
+        self.assertEqual(ranked, [h["row"] for h in first["hits"] + second["hits"]])
+        last = self.call("POST", "/api/search", {"query": "night train", "n": 50, "offset": live - 3})[1]
+        self.assertEqual(3, len(last["hits"]))
+        self.call("POST", "/api/apply", {"rows": ranked[:5], "tag": "Trains", "value": True})
+        untagged = self.call("POST", "/api/search", {"query": "night train", "untagged": True, "offset": 10})[1]
+        self.assertEqual(live - 5, untagged["total"])
+        like = self.call("POST", "/api/like", {"tag": "Trains", "n": 50, "offset": 50})[1]
+        self.assertEqual((50, live - 5), (like["offset"], like["total"]))
+        before = self.call("POST", "/api/like", {"tag": "Trains", "n": 50})[1]["hits"]
+        self.assertEqual(set(), {h["row"] for h in like["hits"]} & {h["row"] for h in before})
+        self.assertEqual(50, len(like["hits"]))
+
     def test_more_like_this_excludes_only_its_tag_near_the_tags_pages(self):
         self.call("POST", "/api/tags", {"name": "Sleeper cars"})
         trains = [r for r in self.rows_for("night train") if topic_of(self.lib.records[r]["key"]) == "trains"]

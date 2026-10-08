@@ -80,21 +80,22 @@ class App:
         return mask
 
     def search(self, body: dict) -> dict:
-        """Ranked results for `query`; with `untagged`, among pages without an app tag only."""
+        """One page of ranked results for `query`, from rank `offset`; with `untagged`, among pages without an app
+        tag only. `total` counts the pages ranked."""
         query = str(body.get("query", ""))
         if not query.strip():
             raise ValueError("type a search")
-        n = _size(body)
+        n, offset = _size(body), _offset(body)
         start = time.perf_counter()
         q = self.encode([query])[0]
         encoded = time.perf_counter()
         images = bool(body.get("images"))
-        among = self.untagged() if body.get("untagged") else None
-        plain = engine.search(self.lib, q, query, n, images, among)
+        among = self.untagged() if body.get("untagged") else self.lib.live
+        plain = engine.search(self.lib, q, query, n, images, among, offset)
         while True:
             hits = plain
             if body.get("refine"):
-                hits = engine.search(self.lib, self.refined(query, q, plain), query, n, images, among)
+                hits = engine.search(self.lib, self.refined(query, q, plain), query, n, images, among, offset)
             before = self.exclusions.keys(query)
             judged = self.judged(query, [h["row"] for h in hits])
             # A cut can discover new exclusions in the refined ranking. Settle against those too,
@@ -104,6 +105,8 @@ class App:
         done = time.perf_counter()
         return {
             "hits": [{**self.page(h["row"]), "fused": h["fused"], "sources": h["sources"]} for h in hits],
+            "offset": offset,
+            "total": int(among.sum()),
             **judged,
             "ms": {"encode": round(1000 * (encoded - start), 1), "rank": round(1000 * (done - encoded), 1)},
         }
@@ -155,7 +158,7 @@ class App:
 
     def like(self, body: dict) -> dict:
         """The tag's name as a query moved toward the pages holding it and away from those it was taken off
-        (refine's prototype), ranked among pages without that app tag."""
+        (refine's prototype), ranked among pages without that app tag: one page from rank `offset`, and `total`."""
         tag = str(body.get("tag", ""))
         if tag not in self.lib.tags:
             raise ValueError("name one of your tags")
@@ -164,8 +167,9 @@ class App:
             if t == tag and key in self.lib.rows:
                 held[d["value"]].append(self.lib.rows[key])
         q = prototype(self.encode([tag])[0], self.lib.X[held[True]], self.lib.X[held[False]])
-        hits = engine.search(self.lib, q, tag, _size(body), bool(body.get("images")), self.untagged(tag))
-        return {"tag": tag, "hits": [self.page(h["row"]) for h in hits]}
+        among, offset = self.untagged(tag), _offset(body)
+        hits = engine.search(self.lib, q, tag, _size(body), bool(body.get("images")), among, offset)
+        return {"tag": tag, "hits": [self.page(h["row"]) for h in hits], "offset": offset, "total": int(among.sum())}
 
     def apply(self, body: dict) -> dict:
         """Add one tag to (`value` true) or take it off the given pages, as direct decisions."""
@@ -269,6 +273,10 @@ def _size(body: dict) -> int:
     return min(max(int(body.get("n", 20)), 1), MAX_RESULTS)
 
 
+def _offset(body: dict) -> int:
+    return max(int(body.get("offset", 0)), 0)
+
+
 def _found(value, view):
     if value is None:
         raise LookupError
@@ -353,9 +361,15 @@ def handler(app: App, port: int):
     return Handler
 
 
+class Server(HTTPServer):
+    # One request at a time, so a page of tiles queues its pictures: the default backlog of 5 resets the rest,
+    # and with them any API call made meanwhile.
+    request_queue_size = 128
+
+
 def serve(app: App, port: int) -> HTTPServer:
     """Bound to the loopback interface only; port 0 picks a free one."""
-    server = HTTPServer(("127.0.0.1", port), None)
+    server = Server(("127.0.0.1", port), None)
     server.RequestHandlerClass = handler(app, server.server_address[1])
     return server
 

@@ -40,6 +40,9 @@ import pytest
         "keysBesideCheckbox",
         "escapeFromTextInputs",
         "likeNaming",
+        "pages",
+        "restorePage",
+        "likeBackToPage",
     ],
 )
 def test_frontend_round_trips(case):

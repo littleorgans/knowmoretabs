@@ -203,11 +203,17 @@ def _ranks(scores: np.ndarray, eligible: np.ndarray) -> np.ndarray:
 
 
 def search(
-    lib: Library, q: np.ndarray, text: str, n: int, images: bool = False, among: np.ndarray | None = None
+    lib: Library,
+    q: np.ndarray,
+    text: str,
+    n: int,
+    images: bool = False,
+    among: np.ndarray | None = None,
+    offset: int = 0,
 ) -> list[dict]:
-    """The top `n` pages `among` (default: the live ones) by reciprocal rank fusion of EG2 cosine, keyword score
-    and, with `images`, the image cosine. Each hit carries every source's score and rank (0: the source did not
-    rank it)."""
+    """The `n` pages `among` (default: the live ones) from rank `offset` (0 based) by reciprocal rank fusion of EG2
+    cosine, keyword score and, with `images`, the image cosine. Each hit carries every source's score and rank (0:
+    the source did not rank it)."""
     among = lib.live if among is None else among
     sources = {"text": (lib.X @ q, among)}
     kw = np.asarray((lib.K @ lib.keywords.transform([text]).T).todense()).ravel()
@@ -220,7 +226,7 @@ def search(
         ranks[name] = _ranks(scores, eligible)
         fused += np.where(ranks[name] > 0, 1 / (RRF_K + ranks[name]), 0)
     fused[~among] = -np.inf
-    top = np.argsort(-fused, kind="stable")[: min(n, int(among.sum()))]
+    top = np.argsort(-fused, kind="stable")[offset : min(offset + n, int(among.sum()))]
     return [
         {
             "row": int(i),

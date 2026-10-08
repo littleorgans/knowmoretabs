@@ -47,12 +47,13 @@ The CLI sets umask 077, so every output is private (0600).
 prints its address. Needs `dataset` and `embed --model eg2` done for that snapshot; runs offline (`HF_HUB_OFFLINE`).
 One screen: search (EG2 cosine over B, else A, fused by reciprocal rank with TF-IDF over title, metadata and text;
 images on request; "Untagged only" keeps pages with no app tag), click results to select them, tag the selection.
+Results come 50 at a time ("51 to 100 of 240", of every page the search ranks); Previous and Next replace them.
 App tags are the tags made in this app, applied directly or kept in an earlier review; archive tags stay out of the
 screen. The sticky strip above the grid lists the app tags in view with counts ("Trains 3/20"): the name tags every
 selected page, or takes the tag off them all when they all have it (partial when some do); the count filters to
 pages with it, then without; ≈ ("pages like this, without this tag") ranks pages without that app tag by refine's
 prototype (the tag's name as the query, toward its pages, away from pages it was taken off) and is a toggle: ≈
-again, Esc or Back returns to the search, scroll and selection intact. "+ New tag" applies a tag to the selection,
+again, Esc or Back returns to the search, page, scroll and selection intact. "+ New tag" applies a tag to the selection,
 picking yours in any case or making one by `tag --import`'s name rules (kept in `state.json`). A tile chip's ×
 takes that tag off that page. Open (hover, focus, `o`) shows an http or https page in a new tab and selects nothing.
 Keys: `/` search, space or `x` select, `o` open, Esc leaves ≈ (else clears the selection), `?` help.
@@ -64,6 +65,12 @@ tags need `tag --import --accept-new`, which creates them in the archive. The ap
 The P1 to P4 review, swipe, tag picker, suggestions and query exclusions (`<data>/app/not-relevant.json`) keep
 their code, API and tests but are not on this screen; their decisions still count as app tags.
 `--smoke` prints load and query timings, then exits.
+The grid renders with lit-html (keyed by page, so a tile keeps its node across updates); the other parts of the
+screen are plain DOM. `static/lit-html.js` is lit-html 3.3.3 (BSD-3-Clause, licence comments kept), from the npm
+tarball `lit-html-3.3.3.tgz` (sha512 matches the registry's integrity), bundled to one ES module of `html`, `render`,
+`nothing`, `repeat` and `unsafeHTML` with `esbuild@0.28.2 --bundle --format=esm --minify --legal-comments=inline`;
+10,129 bytes, sha256 `afcf956778ba22a4d5f62b2192746610a89216ed391088073f9bd10ff748187f`. No eval, so it runs under
+the app's CSP (`script-src 'self'`). `static/lit.js` hands it to the classic scripts, all deferred to keep their order.
 Synthetic archive for trying it: `uv run --locked python tests/synthetic_archive.py <archive> <data>`.
 
 Steps skip work whose output exists; use a fresh data directory to recompute.
@@ -80,4 +87,5 @@ Reproduce: run everything into a fresh data directory, then
 Every head (`heads.fit_lr`, `fit_knn`, `fit_prior`) sees only its fit rows and tunes C, k and thresholds on inner folds of them.
 `zeroshot.run` takes its input choice from `cv_summary.json` and can run before test scoring.
 
-Synthetic regression checks: `uv run --locked pytest`.
+Synthetic regression checks: `uv run --locked pytest`. `tests/test_frontend.py` runs the scripts in Node with a
+string DOM; `tests/test_browser.py` runs the screen in headless Chrome (`tests/browser.cjs`), skipped without one.

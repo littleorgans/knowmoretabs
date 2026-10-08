@@ -4,6 +4,13 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
+/* lit-html's API over this string DOM: a template renders as its markup with the values in place */
+const nothing = Symbol('nothing');
+const markup = (v) => (v === nothing || v == null ? '' : Array.isArray(v) ? v.map(markup).join('')
+  : v.strings ? v.strings.reduce((out, s, i) => out + markup(v.values[i - 1]) + s) : String(v));
+const lit = { nothing, html: (strings, ...values) => ({ strings, values }), repeat: (items, key, each) => items.map(each),
+  unsafeHTML: String, render(v, el) { el.innerHTML = markup(v); } };
+
 function setup(...files) {
   const nodes = new Map();
   const node = (id) => {
@@ -28,7 +35,7 @@ function setup(...files) {
     state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
     lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
     search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
-    views: { render() {}, key: () => false, restore: async () => {} }, strip: { render() {} },
+    views: { render() {}, key: () => false, restore: async () => {} }, strip: { render() {} }, lit,
   };
   const listeners = {}, keys = {};   // the window's and the document's, by event
   const history = {       // one tab's entries; back() delivers popstate a turn later, as browsers do
@@ -430,7 +437,7 @@ async function screenFixture(...more) {
   K.api = (route, body) => new Promise((resolve, reject) => requests.push({ route, body: plain(body), resolve, reject }));
   node('s-q').value = 'q';
   const searching = K.views.run();
-  requests.shift().resolve({ hits: [page(1, ['A']), page(2), page(3)] });
+  requests.shift().resolve({ hits: [page(1, ['A']), page(2), page(3)], offset: 0, total: 3 });
   await searching;
   const tile = (row) => ({ dataset: { row: String(row) }, querySelector: () => f.opened });
   f.requests = requests;
@@ -522,8 +529,8 @@ async function likeToggle() {
     chip('A', 'like');
     assert.equal(context.scrollY, 0, 'the ≈ view starts at the top');
     await turn();
-    assert.deepEqual(requests[0].body, { tag: 'A', n: 20, images: false });
-    requests.shift().resolve({ tag: 'A', hits: [page(7), page(8)] });
+    assert.deepEqual(requests[0].body, { tag: 'A', offset: 0, n: 50, images: false });
+    requests.shift().resolve({ tag: 'A', hits: [page(7), page(8)], offset: 0, total: 2 });
     await turn(); await turn();
     assert.match(node('grid').innerHTML, /data-row="7"[^]*data-row="8"/);
     assert.doesNotMatch(node('grid').innerHTML, /data-row="[123]"/);
@@ -633,11 +640,96 @@ async function likeNaming() {
   assert.match(node('strip').innerHTML, /Find pages like A, not tagged A/);
   chip('A', 'like');
   assert.match(node('v-pos').innerHTML, /Finding pages like <b>A<\/b>, not tagged <b>A<\/b>/);
-  requests.shift().resolve({ tag: 'A', hits: [] });
+  requests.shift().resolve({ tag: 'A', hits: [], offset: 0, total: 0 });
   await turn();
-  assert.match(node('v-pos').innerHTML, /Pages like <b>A<\/b>, not tagged <b>A<\/b>/);
+  assert.match(node('v-pos').innerHTML, /Pages like <b>A<\/b>, not tagged <b>A<\/b> · <b>0<\/b>/);
   assert.match(node('grid').innerHTML, /No pages like A without that tag are left/);
 }
 
-const cases = { escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, tagToggle, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+/* ---- pages of hits: Previous and Next replace them; the search "q" ranks 120 pages, 50 at a time ---- */
+const rows = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => page(from + i));
+async function pagedFixture() {
+  const f = await screenFixture();
+  const { K, node, requests, context } = f;
+  K.views.run();
+  requests.shift().resolve({ hits: rows(1, 50), offset: 0, total: 120 });
+  await turn(); await turn();
+  f.shown = () => [...node('grid').innerHTML.matchAll(/data-row="(\d+)"/g)].map((m) => Number(m[1]));
+  f.turnTo = async (button, offset, hits, scroll = 900) => {   // press Previous or Next from `scroll` down; the server answers
+    context.scrollY = scroll;
+    node(button).click();
+    assert.equal(node('prev').disabled && node('next').disabled, true, 'both wait for the page');
+    await turn();
+    assert.deepEqual(requests[0].body, { query: 'q', untagged: false, offset, n: 50, images: false });
+    requests.shift().resolve({ hits, offset, total: 120 });
+    await turn(); await turn();
+  };
+  return f;
+}
+
+async function pages() {
+  const { K, node, click, settle, context, shown, turnTo } = await pagedFixture();
+  assert.deepEqual(shown(), rows(1, 50).map((p) => p.row));
+  assert.match(node('v-pos').innerHTML, /^<b>1 to 50<\/b> of 120 for “q”$/, 'the position: which hits, of how many');
+  assert.equal(node('pager').hidden, false);
+  assert.equal(node('prev').disabled, true, 'no Previous on the first page');
+  assert.equal(node('next').disabled, false);
+  click(2); await settle();
+  await turnTo('next', 50, rows(51, 100));
+  assert.deepEqual(shown(), rows(51, 100).map((p) => p.row), 'Next replaces the hits');
+  assert.equal(context.scrollY, 0, 'and shows them from the top');
+  assert.match(node('v-pos').innerHTML, /^<b>51 to 100<\/b> of 120 for “q”$/);
+  assert.deepEqual(plain(K.sel), [2], 'the selection stays');
+  assert.equal(node('n-sel').textContent, 1);
+  click(60); await settle();
+  assert.match(node('grid').innerHTML, /class="hit tile sel" data-row="60"/);
+  await turnTo('next', 100, rows(101, 120));
+  assert.match(node('v-pos').innerHTML, /^<b>101 to 120<\/b> of 120 for “q”$/);
+  assert.equal(node('next').disabled, true, 'no Next on the last page');
+  assert.equal(node('prev').disabled, false);
+  await turnTo('prev', 50, rows(51, 100), 400);
+  assert.deepEqual(shown(), rows(51, 100).map((p) => p.row), 'Previous goes back');
+  assert.equal(context.scrollY, 0);
+  await turnTo('prev', 0, rows(1, 50));
+  assert.match(node('grid').innerHTML, /class="hit tile sel" data-row="2"/, 'a page selected before shows selected');
+  assert.deepEqual(plain(K.sel), [2, 60]);
+  assert.equal(K.state.search.offset, 0, 'a reload comes back to this page');
+}
+
+async function restorePage() {
+  const { K, node, requests } = await screenFixture();
+  Object.assign(K.state.search, { query: 'q', offset: 50 });
+  node('s-q').value = '';
+  K.views.restore();
+  assert.equal(node('s-q').value, 'q');
+  assert.deepEqual(requests[0].body, { query: 'q', untagged: false, offset: 50, n: 50, images: false }, 'a reload asks for the page it left');
+}
+
+async function likeBackToPage() {
+  const { node, requests, chip, key, history, context, shown, turnTo } = await pagedFixture();
+  await turnTo('next', 50, rows(51, 100));
+  const away = async (scroll) => {
+    context.scrollY = scroll;
+    chip('A', 'like');
+    await turn();
+    requests.shift().resolve({ tag: 'A', hits: [page(7), page(8)], offset: 0, total: 2 });
+    await turn(); await turn();
+    assert.deepEqual(shown(), [7, 8]);
+    assert.equal(node('pager').hidden, true, 'one page of ≈: no pager');
+  };
+  const back = async (how) => {
+    await turn(); await turn();
+    assert.deepEqual(shown(), rows(51, 100).map((p) => p.row), `${how} returns to the same page`);
+    assert.match(node('v-pos').innerHTML, /^<b>51 to 100<\/b> of 120/, `${how} keeps its position`);
+    assert.equal(node('pager').hidden, false);
+    assert.equal(node('prev').disabled, false);
+    assert.equal(context.scrollY, 700, `${how} restores the scroll`);
+  };
+  await away(700); chip('A', 'like'); await back('≈ again');
+  await away(700); assert.equal(key(null, 'Escape'), true); await back('Esc');
+  await away(700); history.back(); await back('Back');
+  assert.equal(requests.length, 0, 'going back asks the server for nothing');
+}
+
+const cases = { pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, tagToggle, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });
