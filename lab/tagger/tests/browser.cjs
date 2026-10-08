@@ -436,6 +436,16 @@ const cases = {
     await until(() => $('#a-search .val').textContent === 'Indexed', 'Indexed');
     check($('#a-link').value === '', 'the box is ready for the next link');
   },
+  addSignedStages: async ({ $, until, check }) => {
+    const seg = (k) => $(`#a-${k} .val`).textContent;
+    for (const [name, status] of [['thin403', 'Ok · Signed in'], ['offlineimage', 'Chrome not reachable']]) {
+      await window.KMT.add.start(`https://added.example/${name}`);
+      check($('#a-act').textContent === 'Try signed in' && seg('image') === 'Error', 'signed in and image action');
+      $('#a-act').click();
+      await until(() => seg('content') === status && seg('image') === 'Ok' && seg('search') === 'Indexed', 'both selected stages settled');
+      check($('#a-act').hidden === (name === 'thin403'), 'only unreachable Chrome offers Retry');
+    }
+  },
   addSnapshot: async ({ $, until, check }) => {
     for (const ask of [{ action: 'add' }, { action: 'add', signed_in: true }, { action: 'add', retry: ['content'] }, { action: 'forget' }, { action: 'restore' }]) {
       // Stale output from a previous job must leave with the refusal.

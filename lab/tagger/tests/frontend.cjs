@@ -1044,6 +1044,7 @@ async function addStates() {
   assert.deepEqual(plain(retry('add', [L('known'), C('ok', 'web'), I('error'), S('indexed')])), again(['image']), 'an image error');
   assert.deepEqual(plain(retry('add', [L('known'), C('error', 'web'), I('error'), S('indexed')])), again(['content', 'image']), 'both');
   assert.deepEqual(plain(retry('add', [L('known'), C('off', 'signed_in'), I('error'), S('indexed')])), again(['content', 'image'], true), 'signed in and the image');
+  assert.deepEqual(plain(retry('add', [L('known'), C('not_found', 'web'), I('error'), S('indexed')])), again(['image']), 'a failed image still retries after Not found');
   assert.deepEqual(plain(retry('add', [L('known'), C('unavailable', 'web'), I('error'), S('indexed')])), again(['image']), 'a failed image even after unavailable');
   for (const [status, tier] of [['unavailable', 'web'], ['unknown', null], ['thin', 'headless'], ['skipped', null], ['media', 'web'], ['not_html', 'web'], ['empty_shell', 'headless']])
     for (const img of ['ok', 'none', 'unknown', 'unavailable'])
@@ -1051,14 +1052,14 @@ async function addStates() {
   /* Try signed in: a public baseline that was blocked, behind a login or paywalled */
   for (const status of ['blocked', 'behind_login', 'paywalled'])
     for (const tier of ['web', 'github', 'x', 'youtube', 'headless'])
-      assert.deepEqual(plain(retry('add', [L('added'), C(status, tier), S('indexed')])), ['Try signed in', { action: 'add', signed_in: true }], `${status} · ${tier}`);
+      assert.deepEqual(plain(retry('add', [L('added'), C(status, tier), S('indexed')])), ['Try signed in', { action: 'add', retry: ['content'], signed_in: true }], `${status} · ${tier}`);
   for (const tier of ['signed_in', null, 'other'])
     assert.equal(retry('add', [L('known'), C('blocked', tier), I('none'), S('indexed')]), null, `no signed in read from ${tier}`);
   assert.deepEqual(plain(retry('add', [L('known'), C('behind_login', null), I('error'), S('indexed')])), again(['image']), 'its image still retries');
   assert.deepEqual(plain(retry('add', [L('added'), C('not_found', 'web'), S('indexed')])), ['Remove', { action: 'forget' }]);
   assert.deepEqual(plain(retry('add', [L('forgotten')])), ['Restore', { action: 'restore' }]);
   assert.deepEqual(plain(retry('add', [L('added'), C('ok', 'web'), I('ok'), S('not_indexed')])), ['Retry', { action: 'index' }], 'an index failure retries the lab only');
-  assert.deepEqual(plain(retry('add', [L('added'), C('blocked', 'web'), S('not_indexed')])), ['Try signed in', { action: 'add', signed_in: true }], 'a content action also indexes');
+  assert.deepEqual(plain(retry('add', [L('added'), C('blocked', 'web'), S('not_indexed')])), ['Try signed in', { action: 'add', retry: ['content'], signed_in: true }], 'a content action also indexes');
   assert.deepEqual(plain(retry('add', [L('added'), C('ok', 'web'), I('error'), S('not_indexed')])), again(['image']), 'an image Retry also indexes');
   /* a job that ended without a result is asked again, a Restore that held as an add */
   const ask = { retry: [], signed_in: false, title: null };
@@ -1110,5 +1111,18 @@ async function addRequests() {
   assert.deepEqual(plain(asked[0]), ['/api/add', { url: link, action: 'add', retry: ['content', 'image'], signed_in: true }], 'Retry starts the failed stages');
 }
 
-const cases = { addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+async function addSignedInStages() {
+  const { K } = setup({ lit, strip: { render() {}, sayIn: () => () => {} } }, 'add.js');
+  for (const value of ['added', 'known']) for (const tier of ['web', 'github', 'x', 'youtube', 'headless'])
+    for (const status of ['blocked', 'behind_login', 'paywalled', 'thin']) for (const image of ['error', 'ok', 'none', 'unavailable', 'unknown']) {
+      const stages = { library: { state: 'done', value }, content: { state: 'done', status, tier, http_status: 403 }, image: { state: 'done', status: image } };
+      const action = K.add.say({ stages }).act;
+      assert.deepEqual(plain(action), ['Try signed in', { action: 'add', retry: image === 'error' ? ['content', 'image'] : ['content'], signed_in: true }]);
+    }
+  for (const tier of ['signed_in', 'other', null])
+    assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier, http_status: 403 } } }).act, null);
+  assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier: 'web', http_status: 200 } } }).act, null);
+}
+
+const cases = { addSignedInStages, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

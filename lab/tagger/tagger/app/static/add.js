@@ -52,8 +52,9 @@
 
   /* the stages Retry runs again (the contract's lab mapping), all in one run: the text after an error or a
      timeout, or signed in again when Chrome was out of reach; the image after an error. Nothing else. */
-  function failed(st) {
-    const text = st.content && st.content.status, signed_in = UNREACHED.includes(text);
+  function failed(st, signed_in = false) {
+    const text = st.content && st.content.status;
+    signed_in ||= UNREACHED.includes(text);
     const retry = [...(text === "error" || signed_in ? ["content"] : []), ...(st.image && st.image.status === "error" ? ["image"] : [])];
     return retry.length ? { action: "add", retry, signed_in } : null;
   }
@@ -65,13 +66,14 @@
     const st = job.stages, read = { library: (e) => library(e, job.failed), content, image, search };
     const segs = SEGS.map((k) => (st[k] ? read[k](st[k]) : ["", ""]));
     const lib = st.library || {}, got = st.content || {}, indexed = !!st.search && st.search.value === "indexed";
-    const again = failed(st);
+    const signed = PUBLIC.includes(got.tier) && (SIGN_IN.includes(got.status) || got.status === "thin" && got.http_status === 403);
+    const again = failed(st, signed);
     let act = null;
     if (lib.value === "forgotten") act = ["Restore", { action: "restore" }];
     else if (job.failed) act = ["Retry", request(job)];
-    else if (SIGN_IN.includes(got.status) && PUBLIC.includes(got.tier)) act = ["Try signed in", { action: "add", signed_in: true }];
-    else if (got.status === "not_found") act = ["Remove", { action: "forget" }];
+    else if (signed) act = ["Try signed in", again];
     else if (again) act = ["Retry", again];
+    else if (got.status === "not_found") act = ["Remove", { action: "forget" }];
     else if (st.search && st.search.state === "done" && !indexed) act = ["Retry", { action: "index" }];   // lab only
     return { segs, act, framed: LISTED.includes(lib.value), indexed, title: (job.page && job.page.title) || got.title || "",
              picture: st.image ? st.image.state !== "done" ? "wait" : st.image.status === "ok" ? "ok" : "none" : indexed ? "none" : "" };

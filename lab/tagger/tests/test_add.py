@@ -368,12 +368,34 @@ class AddJobTests(Served):
                 url = f"https://added.example/{name}"
                 self.add(url)
                 text = self.logs()["content.jsonl"]
-                job = self.add(url, signed_in=True)
+                job = self.add(url, retry=["content"], signed_in=True)
                 self.assertEqual((status, "signed_in"), (self.values(job)["content"], job["stages"]["content"]["tier"]))
                 self.assertEqual(text, self.logs()["content.jsonl"], "nothing recorded")
                 job = self.add(url, retry=["content"], signed_in=True)
                 self.assertEqual(["add", "--json", "--retry", "content", "--signed-in"], self.argv())
                 self.assertEqual(("ok", "signed_in"), (self.values(job)["content"], job["stages"]["content"]["tier"]))
+
+    def test_signed_in_retry_uses_thin_403_and_retries_image_when_chrome_is_off(self):
+        for name in ("thin403", "offline"):
+            with self.subTest(name=name):
+                url = f"https://added.example/{name}"
+                if name == "thin403":
+                    self.add(url)
+                    fake_knowmoretabs.record(
+                        self.root,
+                        "content.jsonl",
+                        url,
+                        fake_knowmoretabs.text("thin", "headless", 403, "not rendered: HTTP 403"),
+                    )
+                else:
+                    self.add(url)
+                fake_knowmoretabs.record(self.root, "images.jsonl", url, {"status": "error"})
+                job = self.add(url, retry=["content", "image"], signed_in=True)
+                self.assertEqual("ok" if name == "thin403" else "off", self.values(job)["content"])
+                self.assertEqual("ok", self.values(job)["image"], "image runs even without Chrome")
+                self.assertEqual(
+                    ["add", "--json", "--retry", "content", "--retry", "image", "--signed-in"], self.argv()
+                )
 
     def test_an_image_retry_leaves_the_text_alone(self):
         url = "https://added.example/imagefail"
@@ -438,7 +460,7 @@ class AddJobTests(Served):
             {"library": "added", "content": "blocked", "image": "none", "search": "indexed"}, self.values(job)
         )
         self.assertEqual(403, job["stages"]["content"]["http_status"])
-        job = self.add(url, signed_in=True)
+        job = self.add(url, retry=["content"], signed_in=True)
         self.assertEqual(
             ("known", "ok", "signed_in"),
             (self.values(job)["library"], self.values(job)["content"], job["stages"]["content"]["tier"]),
@@ -452,7 +474,7 @@ class AddJobTests(Served):
         row = job["page"]["row"]
         vector = self.app.lib.X[row].copy()
         with patch.object(self.app, "embed", side_effect=AssertionError("an existing vector stays cached")):
-            job = self.add(url, signed_in=True)
+            job = self.add(url, retry=["content"], signed_in=True)
         self.assertEqual("indexed", self.values(job)["search"])
         hits = self.call(self.port, "POST", "/api/search", {"query": "airship", "n": 50})[1]["hits"]
         hit = next(h for h in hits if h["row"] == row)

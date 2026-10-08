@@ -53,6 +53,7 @@ import pytest
         "likeBackToPage",
         "likeWaitsForTag",
         "backDuringPage",
+        "addSignedInStages",
         "addStates",
         "addRequests",
     ],

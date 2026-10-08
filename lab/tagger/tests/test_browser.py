@@ -133,7 +133,7 @@ class AddBrowserTests(Browser, Synthetic):
         runs = self.logged()
         self.run_case("addRetry", "#add")
         retries = [run[2:-2] for run in runs() if run[0] == "add" and ("--retry" in run or "--signed-in" in run)]
-        signed_in = [["--signed-in"], ["--retry", "content", "--signed-in"]]
+        signed_in = [["--retry", "content", "--signed-in"]] * 2
         self.assertEqual(
             [
                 ["--retry", "content"],
@@ -148,6 +148,12 @@ class AddBrowserTests(Browser, Synthetic):
         )
         relapse = [run[0] for run in runs() if run[-1] == "https://added.example/relapse"]
         self.assertEqual(["add", "forget", "restore", "add", "add"], relapse, "one restore")
+
+    def test_try_signed_in_selects_thin_403_and_failed_image_even_without_chrome(self):
+        runs = self.logged()
+        self.run_case("addSignedStages", "#add")
+        selected = [run[2:-2] for run in runs() if "--signed-in" in run]
+        self.assertEqual([["--retry", "content", "--retry", "image", "--signed-in"]] * 2, selected)
 
     def test_a_pasted_web_address_starts_at_once(self):
         self.run_case("addPaste", "#add")

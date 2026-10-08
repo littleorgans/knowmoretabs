@@ -5,7 +5,7 @@ JSON object per line, flushed) and writes what the real command would: an intake
 line, an image and its log line. The URL's last path segment picks the first run's outcome (`SCENARIOS`; anything
 else is a web page captured with an image). Later runs follow the page's log lines as the contract says: a plain add
 reads the text again after an error and retries a failed image; `--signed-in` reads a page whose public tier was
-blocked, behind a login or paywalled (`TRANSIENT` pages find Chrome out of reach unless it is a Retry); `--retry`
+blocked, behind a login or paywalled (`TRANSIENT` pages find Chrome out of reach on their first signed in attempt); `--retry`
 runs only the stages named, each only where it failed, and reports every other stage as recorded. A text read again
 is kept (`stuck` fails every time) and the third failed run is `unavailable`. A page with no image line gets one once
 its text settles (`none`, without a request, when the text is `unavailable`); when the text runs and the page's
@@ -49,6 +49,8 @@ SCENARIOS = {
     "stuck": (text("error", http=503), None),
     "missing": (text("not_found", http=404), "none"),
     "thin": (text("thin", "headless", 200), "ok"),
+    "thin403": (text("thin", "headless", 403, "not rendered: HTTP 403"), "error"),
+    "offlineimage": (text("blocked", http=403), "error"),
     "skipped": (text("skipped", None, reason="personal app"), "none"),
     "video": (text("unknown", None, reason="not_recorded"), None),
     "noimage": (text("ok", http=200), "none"),
@@ -58,7 +60,12 @@ SCENARIOS = {
     "asleep": (text("blocked", http=403), "none"),
     "refused": (text("blocked", http=403), "none"),
 }
-TRANSIENT = {"offline": "off", "asleep": "not_running", "refused": "not_allowed"}  # Chrome as a signed in add finds it
+TRANSIENT = {
+    "offline": "off",
+    "offlineimage": "off",
+    "asleep": "not_running",
+    "refused": "not_allowed",
+}  # Chrome as a signed in add finds it
 READ = {False: text("ok", http=200), True: text("ok", "signed_in", 200)}  # a text read again, by signed in or not
 
 
@@ -118,7 +125,15 @@ def reported(root: Path, url: str, row: dict | None) -> dict:
 
 def eligible(row: dict | None, signed_in: bool) -> bool:
     if signed_in:
-        return row is not None and row["status"] in SIGN_IN and row.get("tier") in PUBLIC
+        return (
+            row is not None
+            and row.get("tier") in PUBLIC
+            and (
+                row["status"] in SIGN_IN
+                or row["status"] in ("thin", "empty_shell")
+                and (row.get("reason") or "").endswith("not rendered: HTTP 403")
+            )
+        )
     return row is None or row["status"] == "error"
 
 
@@ -130,7 +145,8 @@ def capture_text(root: Path, url: str, seg: str, args: dict, fresh: bool) -> tup
         emit(done)
         return done["status"], None
     if signed_in:
-        transient = TRANSIENT.get(seg) if not args["retry"] else None
+        tried = any(run[-1] == url and "--signed-in" in run for run in prior_runs())
+        transient = TRANSIENT.get(seg) if not tried else None
         out = text(transient, "signed_in") if transient else READ[True]
     else:
         out = SCENARIOS.get(seg, (READ[False],))[0] if fresh or seg == "stuck" else READ[False]
@@ -181,12 +197,17 @@ def capture_image(root: Path, url: str, seg: str, args: dict, fresh: bool, settl
     return status
 
 
+def prior_runs() -> list[list[str]]:
+    """The fake's command history before the current run, when a test logs it."""
+    log = os.environ.get("FAKE_KMT_LOG")
+    return [json.loads(line)["argv"] for line in Path(log).read_text().splitlines()][:-1] if log else []
+
+
 def relapsed(url: str) -> bool:
     """A `relapse` page's add fails once, right after its restore."""
-    log = os.environ.get("FAKE_KMT_LOG")
-    if not log or not url.endswith("/relapse"):
+    if not url.endswith("/relapse"):
         return False
-    before = [json.loads(line)["argv"] for line in Path(log).read_text().splitlines()][-2:-1]
+    before = prior_runs()[-1:]
     return bool(before) and before[0][2] == "restore" and before[0][-1] == url
 
 
