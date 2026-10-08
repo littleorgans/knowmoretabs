@@ -89,7 +89,7 @@
 
   applyTheme();
   route();
-  (async () => {
+  K.ready = (async () => {
     try {
       K.lib = await K.api("/api/library");
       K.gone = new Set(K.lib.forgotten);

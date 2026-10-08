@@ -29,7 +29,8 @@
 
   /* ---- the selection and the pins: lists the server keeps, sent whole ---- */
   const lists = { selection: () => K.sel, pins: () => K.pins };
-  const keep = (name) => write(`/api/${name}`, () => ({ rows: lists[name]() })).catch(K.fail);
+  const versions = { selection: 0, pins: 0 };
+  const keep = (name) => { versions[name]++; return write(`/api/${name}`, () => ({ rows: lists[name]() })).catch(K.fail); };
   const flip = (list, row) => { const i = list.indexOf(row); if (i >= 0) list.splice(i, 1); else list.push(row); };
   K.select = (row) => { flip(K.sel, row); K.changed(); keep("selection"); };
   K.pin = (row) => { flip(K.pins, row); K.changed(); keep("pins"); };
@@ -40,8 +41,11 @@
     keep("selection");
   };
   K.loadLists = async () => {
-    K.sel = K.know((await K.api("/api/selection")).pages);
-    K.pins = K.know((await K.api("/api/pins")).pages);
+    const started = { ...versions };
+    for (const [name, field] of [["selection", "sel"], ["pins", "pins"]]) {
+      const out = await K.api(`/api/${name}`);
+      if (started[name] === versions[name]) K[field] = K.know(out.pages);
+    }
   };
 
   /* ---- forget: the page leaves every view, the selection, the pins and the counts at once.
@@ -51,7 +55,7 @@
     const was = { selection: K.sel.indexOf(row), pins: K.pins.indexOf(row) };
     const out = () => {
       K.gone.add(row);
-      for (const name in was) { const list = lists[name](), i = list.indexOf(row); if (i >= 0) list.splice(i, 1); }
+      for (const name in was) { const list = lists[name](), i = list.indexOf(row); if (i >= 0) { list.splice(i, 1); versions[name]++; } }
       K.lib.pages--;
       K.changed();
     };
@@ -59,7 +63,7 @@
       K.gone.delete(row);
       for (const name in was) {
         const list = lists[name]();
-        if (was[name] >= 0 && !list.includes(row)) list.splice(Math.min(was[name], list.length), 0, row);
+        if (was[name] >= 0 && !list.includes(row)) { list.splice(Math.min(was[name], list.length), 0, row); versions[name]++; }
       }
       K.lib.pages++;
       K.changed();

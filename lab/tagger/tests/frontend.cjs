@@ -1124,5 +1124,23 @@ async function addSignedInStages() {
   assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier: 'web', http_status: 200 } } }).act, null);
 }
 
-const cases = { addSignedInStages, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+async function startupListsKeepChanges() {
+  const { K } = setup('pages.js');
+  const requests = [];
+  K.api = (route, body) => new Promise((resolve) => requests.push({ route, body, resolve }));
+  K.know([page(2)]);
+  const loading = K.loadLists();
+  K.select(2);
+  await turn();
+  requests.shift().resolve({ pages: [] });
+  await turn();
+  assert.deepEqual(plain(K.sel), [2], 'startup selection cannot erase a user decision');
+  K.pin(2);
+  const pins = requests.find((r) => r.route === '/api/pins' && r.body === undefined);
+  pins.resolve({ pages: [] });
+  await loading;
+  assert.deepEqual(plain(K.pins), [2], 'startup pins cannot erase a user decision');
+}
+
+const cases = { addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

@@ -54,6 +54,7 @@ import pytest
         "likeWaitsForTag",
         "backDuringPage",
         "addSignedInStages",
+        "startupListsKeepChanges",
         "addStates",
         "addRequests",
     ],

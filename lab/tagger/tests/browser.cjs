@@ -513,7 +513,7 @@ async function main() {
       const reloaded = load();
       await send('Page.reload', {}, sessionId);
       await reloaded;
-      const restored = await send('Runtime.evaluate', { expression: `(${afterReload[name]})((${inPage})())`,
+      const restored = await send('Runtime.evaluate', { expression: `window.KMT.ready.then(() => (${afterReload[name]})((${inPage})()))`,
         awaitPromise: true, returnByValue: true }, sessionId);
       if (restored.exceptionDetails) throw new Error(restored.exceptionDetails.exception?.description || restored.exceptionDetails.text);
     }
