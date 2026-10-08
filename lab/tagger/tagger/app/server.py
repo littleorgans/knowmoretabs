@@ -464,7 +464,7 @@ def smoke(paths: Paths, app: App) -> dict:
 
 
 def run(paths: Paths, root: Path | None, port: int, smoke_only: bool) -> None:
-    from ..embed import MODELS, embed_input, load_text
+    from ..embed import IMAGE_MODEL, MODELS, embed_image_rows, embed_input, load, load_text, release
     from ..zeroshot import encode_queries
 
     start = time.perf_counter()
@@ -476,7 +476,14 @@ def run(paths: Paths, root: Path | None, port: int, smoke_only: bool) -> None:
     def embed(records: list[dict], name: str) -> np.ndarray:
         return embed_input(st, MODELS[engine.MODEL], records, name)[0]
 
-    lib, stats = engine.load(paths, (root or paths.snapshot).resolve(), encode, embed)
+    def embed_image(records):
+        image_st, _ = load(IMAGE_MODEL, local_files_only=True)
+        try:
+            return embed_image_rows(image_st, records)[0]
+        finally:
+            release(image_st)
+
+    lib, stats = engine.load(paths, (root or paths.snapshot).resolve(), encode, embed, embed_image=embed_image)
     app = App(lib, Store(paths.data / "app"), encode, embed)
     stats |= {"model_load_s": model["load_s"], "startup_s": round(time.perf_counter() - start, 2)}
     print(json.dumps(stats))

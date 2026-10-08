@@ -17,6 +17,7 @@ import numpy as np
 import synthetic_archive
 
 from tagger import cli, dataset
+from tagger.embed import CHAR_CAP, IMAGE_MODEL, MAX_TOKENS, MODELS, model_identity, page_texts
 from tagger.app import engine, server
 from tagger.app.store import SOURCE, Exclusions, Store, tag_name
 from tagger.archive import sha256_hex
@@ -67,8 +68,12 @@ def fake_encode(texts: list[str]) -> np.ndarray:
 
 
 def fake_embed(records: list[dict], name: str) -> np.ndarray:
-    """Page vectors on the same topic axes, from each page's title and input A text."""
-    return fake_encode([f"{r['title']}\n{r['a_text']}" for r in records])
+    """Page vectors on the same topic axes, from each formatted input including its body."""
+    return fake_encode([f"{title}\n{text}" for title, text in page_texts(records, name == "B", MAX_TOKENS * CHAR_CAP)])
+
+
+def fake_image(records: list[dict]) -> np.ndarray:
+    return fake_embed(records, "A")
 
 
 def build(root: Path) -> Paths:
@@ -85,10 +90,12 @@ def build(root: Path) -> Paths:
     X = unit(X + 0.3 * rng.normal(size=X.shape).astype(np.float32))
     (paths.emb / "eg2").mkdir(parents=True)
     np.save(paths.emb / "eg2" / "B.npy", X)
+    (paths.emb / "eg2" / "B.json").write_text(json.dumps(model_identity(MODELS["eg2"], dim=DIM)))
     (paths.emb / "image").mkdir(parents=True)
     mask = np.array([r["image_ok"] for r in records])
     np.save(paths.emb / "image" / "eg2-full.npy", np.where(mask[:, None], X, 0))
     np.save(paths.emb / "image" / "eg2-full-mask.npy", mask)
+    (paths.emb / "image" / "eg2-full.json").write_text(json.dumps(model_identity(IMAGE_MODEL, image=True, dim=DIM)))
     return paths
 
 
@@ -98,7 +105,9 @@ class Fixture(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp())
         cls.paths = build(cls.tmp)
         with patch("builtins.print"):
-            cls.lib, cls.stats = engine.load(cls.paths, cls.tmp / "archive", fake_encode, fake_embed)
+            cls.lib, cls.stats = engine.load(
+                cls.paths, cls.tmp / "archive", fake_encode, fake_embed, embed_image=fake_image, dim=DIM
+            )
 
     @classmethod
     def tearDownClass(cls):
@@ -189,7 +198,7 @@ class EngineTests(Fixture):
         shutil.rmtree(other / "snapshots")
         (other / "snapshots").mkdir()
         with self.assertRaises(SystemExit):
-            engine.load(self.paths, other, fake_encode, fake_embed)
+            engine.load(self.paths, other, fake_encode, fake_embed, embed_image=fake_image, dim=DIM)
 
 
 class StoreTests(unittest.TestCase):

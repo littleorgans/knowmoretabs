@@ -1,4 +1,4 @@
-"""Step 2: embeddings per model x input, cached as .npy rows aligned with dataset/pages.jsonl.
+"""Step 2: durable page keyed document vectors, with legacy experiment caches preserved.
 
 A: title + URL host and path + head metadata. B: A + page text (A when no text is ok).
 C is assembled in `features` from B and the EG2 image embedding. Page text is read here only
@@ -6,6 +6,8 @@ and never printed; the log carries counts, timings and memory.
 """
 
 import gc
+import hashlib
+from io import BytesIO
 import json
 import time
 from dataclasses import dataclass, field
@@ -16,8 +18,9 @@ import psutil
 import torch
 
 from . import dataset
-from .archive import content_body
+from .archive import Archive, content_body, sha256_hex
 from .paths import Paths, write_json
+from .vector_store import VectorStore
 
 MAX_TOKENS = 2048
 CHUNKED_TOKENS = 8192
@@ -31,6 +34,7 @@ class Model:
     repo: str
     prompt: str  # recorded with every cache file
     config_kwargs: dict = field(default_factory=dict)
+    dim: int = 768
 
     def format(self, title: str, text: str) -> str:
         return self.prompt.format(title=title or "none", text=text)
@@ -42,7 +46,7 @@ MODELS = {
     "eg2": Model(
         "eg2", "google/embeddinggemma-2", "title: {title} | text: {text}", {"vision_config": None, "audio_config": None}
     ),
-    "qwen3": Model("qwen3", "Qwen/Qwen3-Embedding-0.6B", "{title}\n{text}"),
+    "qwen3": Model("qwen3", "Qwen/Qwen3-Embedding-0.6B", "{title}\n{text}", dim=1024),
 }
 IMAGE_MODEL = Model("eg2-full", "google/embeddinggemma-2", "(image, no prefix)")
 DTYPE = torch.float32
@@ -148,7 +152,7 @@ BATCH = {"A": 32, "B": 8, "B8k": 8}
 def embed_input(st, model: Model, records: list[dict], name: str) -> tuple[np.ndarray, dict]:
     """One text input for these pages: A, B (truncated at MAX_TOKENS) or B8k (chunked mean)."""
     if name in ("A", "B"):
-        docs = [model.format(t, x) for t, x in page_texts(records, name == "B", MAX_TOKENS * CHAR_CAP)]
+        docs = text_docs(records, model, name)
         emb, run = encode(st, docs, BATCH[name])
         return emb, {**run, "max_tokens": MAX_TOKENS, **token_stats(st, docs)}
     start = time.perf_counter()
@@ -176,16 +180,104 @@ def release(st) -> None:
         torch.mps.empty_cache()
 
 
-def embed_text(paths: Paths, records: list[dict], model: Model, chunked: bool) -> None:
-    wanted = ["B8k"] if chunked else ["A", "B"]
-    todo = [n for n in wanted if not (paths.emb / model.key / f"{n}.npy").exists()]
-    if not todo:
+def model_identity(model: Model, *, image: bool = False, dim: int | None = None) -> dict:
+    identity = {
+        "model": model.repo,
+        "prompt": model.prompt,
+        "config": model.config_kwargs,
+        "dim": dim if dim is not None else model.dim,
+        "dtype": str(DTYPE),
+        "normalize": True,
+    }
+    if not image:
+        identity.update(max_tokens=MAX_TOKENS, char_cap=CHAR_CAP)
+    else:
+        identity["image_mode"] = "RGB"
+    return identity
+
+
+def text_docs(records: list[dict], model: Model, name: str) -> list[str]:
+    """The exact formatted, character capped strings passed to encode."""
+    return [
+        r["_embedding_doc"]
+        if "_embedding_doc" in r
+        else model.format(*page_texts([r], name == "B", MAX_TOKENS * CHAR_CAP)[0])
+        for r in records
+    ]
+
+
+def input_rows(records: list[dict], model: Model, name: str) -> list[dict]:
+    return [
+        {"id": r["key"], "hash": sha256_hex(doc)}
+        for r, doc in zip(records, text_docs(records, model, name), strict=True)
+    ]
+
+
+def image_bytes(record: dict) -> bytes:
+    if "_image_bytes" in record:
+        return record["_image_bytes"]
+    return Path(record["image_path"]).read_bytes() if record["image_ok"] else b""
+
+
+def image_rows(records: list[dict]) -> list[dict]:
+    return [
+        {
+            "id": r["key"],
+            "hash": hashlib.sha256(image_bytes(r)).hexdigest(),
+        }
+        for r in records
+    ]
+
+
+def persist_text(paths, records, model, name, embed, *, legacy_records=None, retain=False, dim=None):
+    store = VectorStore(paths.emb / model.key, name)
+    records = [{**r, "_embedding_doc": doc} for r, doc in zip(records, text_docs(records, model, name), strict=True)]
+    return store.reconcile(
+        input_rows(records, model, name),
+        model_identity(model, dim=dim),
+        lambda indices: embed([records[i] for i in indices], name),
+        legacy_rows=input_rows(legacy_records, model, name) if legacy_records is not None else None,
+        retain=retain,
+    )
+
+
+def persist_images(paths, records, embed, *, legacy_records=None, retain=False, dim=None, allow_missing=False):
+    store = VectorStore(paths.emb / "image", IMAGE_MODEL.key)
+    records = [{**r, "_image_bytes": image_bytes(r)} for r in records]
+    return store.reconcile(
+        image_rows(records),
+        model_identity(IMAGE_MODEL, image=True, dim=dim),
+        lambda indices: embed([records[i] for i in indices]),
+        mask=[r["image_ok"] for r in records],
+        legacy_rows=image_rows(legacy_records) if legacy_records is not None else None,
+        retain=retain,
+        allow_missing=allow_missing,
+    )
+
+
+def embed_text(paths: Paths, records: list[dict], model: Model, chunked: bool, *, legacy_records=None) -> None:
+    if chunked:  # B8k remains the experiment's positional cache.
+        if not (paths.emb / model.key / "B8k.npy").exists():
+            st, stats = load_text(model)
+            emb, run = embed_input(st, model, records, "B8k")
+            save(paths, model.key, "B8k", emb, {"model": model.repo, "prompt": model.prompt, **stats, **run})
+            release(st)
         return
-    st, stats = load_text(model)
-    for name in todo:
-        emb, run = embed_input(st, model, records, name)
-        save(paths, model.key, name, emb, {"model": model.repo, "prompt": model.prompt, **stats, **run})
-    release(st)
+    st = None
+
+    def embed(records, name):
+        nonlocal st
+        if st is None:
+            st, _ = load_text(model)
+        return embed_input(st, model, records, name)[0]
+
+    try:
+        for name in ("A", "B"):
+            _, counts = persist_text(paths, records, model, name, embed, retain=True, legacy_records=legacy_records)
+            print(json.dumps({"store": f"{model.key}/{name}", **counts}))
+    finally:
+        if st is not None:
+            release(st)
 
 
 def embed_image_rows(st, records: list[dict]) -> tuple[np.ndarray, dict]:
@@ -193,26 +285,43 @@ def embed_image_rows(st, records: list[dict]) -> tuple[np.ndarray, dict]:
     from PIL import Image
 
     rows = [i for i, r in enumerate(records) if r["image_ok"]]
-    images = [Image.open(records[i]["image_path"]).convert("RGB") for i in rows]
-    emb, run = encode(st, [{"image": im} for im in images], 8) if rows else (np.zeros((0, 768), np.float32), {})
+    images = []
+    for i in rows:
+        with Image.open(BytesIO(image_bytes(records[i]))) as image:
+            images.append(image.convert("RGB"))
+    emb, run = (
+        encode(st, [{"image": im} for im in images], 8) if rows else (np.zeros((0, IMAGE_MODEL.dim), np.float32), {})
+    )
     full = np.zeros((len(records), emb.shape[1]), dtype=np.float32)
     full[rows] = emb
     return full, run
 
 
-def embed_images(paths: Paths, records: list[dict]) -> None:
-    if (paths.emb / "image" / "eg2-full.npy").exists():
-        return
-    st, stats = load(IMAGE_MODEL)
-    full, run = embed_image_rows(st, records)
-    save(paths, "image", "eg2-full", full, {"model": IMAGE_MODEL.repo, "prompt": IMAGE_MODEL.prompt, **stats, **run})
-    np.save(paths.emb / "image" / "eg2-full-mask.npy", np.array([r["image_ok"] for r in records]))
-    release(st)
+def embed_images(paths: Paths, records: list[dict], *, legacy_records=None) -> None:
+    st = None
+
+    def embed(records):
+        nonlocal st
+        if st is None:
+            st, _ = load(IMAGE_MODEL)
+        return embed_image_rows(st, records)[0]
+
+    try:
+        _, counts = persist_images(paths, records, embed, retain=True, legacy_records=legacy_records)
+        print(json.dumps({"store": "image/eg2-full", **counts}))
+    finally:
+        if st is not None:
+            release(st)
 
 
-def run(paths: Paths, models: list[str] | None, chunked: bool) -> None:
-    records, _ = dataset.load(paths)
+def run(paths: Paths, models: list[str] | None, chunked: bool, root: Path | None = None) -> None:
+    if chunked:
+        records, _ = dataset.load(paths)
+        legacy = None
+    else:
+        archive = Archive.load((root or paths.snapshot).resolve())
+        legacy, records = dataset.app_records(paths, archive)
     for key in models or list(MODELS):
-        embed_text(paths, records, MODELS[key], chunked)
+        embed_text(paths, records, MODELS[key], chunked, legacy_records=legacy)
     if not chunked:
-        embed_images(paths, records)
+        embed_images(paths, records, legacy_records=legacy)

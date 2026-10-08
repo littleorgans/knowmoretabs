@@ -14,11 +14,11 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import fake_knowmoretabs
 import numpy as np
-from test_app import DIM, build, fake_embed, fake_encode
+from test_app import DIM, build, fake_embed, fake_encode, fake_image
 
 from tagger import cli
 from tagger.app import add, engine, server
@@ -71,7 +71,7 @@ class Synthetic(unittest.TestCase):
         self.addCleanup(missing.stop)
 
     def load(self, encode=fake_encode) -> tuple[engine.Library, dict]:
-        return engine.load(self.paths, self.root, encode, fake_embed)
+        return engine.load(self.paths, self.root, encode, fake_embed, embed_image=fake_image, dim=DIM)
 
 
 class IntakeFoldTests(Synthetic):
@@ -145,7 +145,8 @@ class LoadTests(Synthetic):
         self.assertEqual(self.root / "pages/content" / f"{sha256_hex(NEW)}.md", Path(r["content_path"]))
         self.assertEqual(self.root / "pages/images" / f"{sha256_hex(NEW)}.jpg", Path(r["image_path"]))
         np.testing.assert_allclose(fake_embed([r], lib.input_name)[0], lib.X[row])
-        self.assertFalse(lib.Y[row].any() or lib.has_image[row] or lib.image[row].any())
+        self.assertFalse(lib.Y[row].any())
+        self.assertTrue(lib.has_image[row] and lib.image[row].any())
         self.assertEqual((True, False), (bool(lib.live[row]), bool(lib.live[lib.rows[gone]])))
         np.testing.assert_allclose(lib.rules.scores(lib.X[row : row + 1])["supervised"][0], lib.S[row], rtol=1e-6)
         hits = engine.search(lib, fake_encode(["zeppelin"])[0], "zeppelin", 3)
@@ -468,18 +469,19 @@ class AddJobTests(Served):
         self.assertIn("--signed-in", json.loads(self.log.read_text().splitlines()[-1])["argv"])
         self.assertTrue(self.app.lib.records[job["page"]["row"]]["text_ok"], "the indexed page points at its new text")
 
-    def test_signed_in_content_becomes_searchable_without_reembedding(self):
+    def test_signed_in_content_becomes_searchable_with_fresh_vectors(self):
         url = "https://added.example/blocked"
         job = self.add(url)
         row = job["page"]["row"]
         vector = self.app.lib.X[row].copy()
-        with patch.object(self.app, "embed", side_effect=AssertionError("an existing vector stays cached")):
+        with patch.object(self.app, "embed", wraps=self.app.embed) as embed:
             job = self.add(url, retry=["content"], signed_in=True)
         self.assertEqual("indexed", self.values(job)["search"])
         hits = self.call(self.port, "POST", "/api/search", {"query": "airship", "n": 50})[1]["hits"]
         hit = next(h for h in hits if h["row"] == row)
         self.assertGreater(hit["sources"]["keyword"]["score"], 0)
-        np.testing.assert_array_equal(vector, self.app.lib.X[row])
+        embed.assert_called_once()
+        self.assertFalse(np.array_equal(vector, self.app.lib.X[row]))
 
     def test_not_found_then_remove_then_restore(self):
         url = "https://added.example/missing"
@@ -495,6 +497,15 @@ class AddJobTests(Served):
             ("known", "indexed", row), (self.values(job)["library"], self.values(job)["search"], job["page"]["row"])
         )
         self.assertTrue(self.app.live()[row])
+
+    def test_an_image_failure_still_indexes_add_text(self):
+        self.app.lib = replace(self.app.lib, embed_image=Mock(side_effect=RuntimeError("synthetic image failure")))
+        job = self.add(NEW)
+        self.assertEqual("indexed", self.values(job)["search"])
+        row = job["page"]["row"]
+        self.assertTrue(self.app.lib.live[row])
+        self.assertFalse(self.app.lib.has_image[row])
+        np.testing.assert_array_equal(self.app.lib.X[row], fake_embed([self.app.lib.records[row]], "B")[0])
 
     def test_an_index_failure_is_not_indexed(self):
         with patch.object(self.app, "embed", side_effect=RuntimeError("no model")):
@@ -597,7 +608,7 @@ class SnapshotWriteTests(Served):
         protected = data / "snapshot-synthetic"
         shutil.copytree(self.root, protected)
         original = {p.relative_to(protected): p.read_bytes() for p in protected.rglob("*") if p.is_file()}
-        lib, _ = engine.load(self.paths, protected, fake_encode, fake_embed)
+        lib, _ = engine.load(self.paths, protected, fake_encode, fake_embed, embed_image=fake_image, dim=DIM)
         alias = self.work / "snapshot-alias"
         alias.symlink_to(protected, target_is_directory=True)
         for root in (protected, alias, data):

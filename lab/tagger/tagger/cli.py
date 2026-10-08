@@ -31,12 +31,14 @@ def main() -> None:
     steps.add_parser("cost", help="load time, RSS, throughput and single page latency per model")
     steps.add_parser("report", help="write out/results.md")
     app = steps.add_parser("app", help="the search then tag prototype, served on 127.0.0.1")
-    app.add_argument("--root", help="the archive (default: the snapshot under the data directory)")
     app.add_argument("--port", type=int, default=APP_PORT, help=f"port (default: {APP_PORT}; 0 picks a free one)")
     app.add_argument("--smoke", action="store_true", help="load, time searches, print numbers only, exit")
     compare = steps.add_parser("compare", help="compare metric outputs with another data directory")
     compare.add_argument("other")
+    for step in (embed, app):
+        step.add_argument("--root", help="the archive (default: the snapshot under the data directory)")
     args = parser.parse_args()
+    root = Path(args.root) if getattr(args, "root", None) else None
     paths = resolve(args.data)
     if args.step == "dataset":
         from . import dataset
@@ -45,7 +47,7 @@ def main() -> None:
     elif args.step == "embed":
         from . import embed
 
-        embed.run(paths, args.model, args.chunked)
+        embed.run(paths, args.model, args.chunked, root)
     elif args.step == "eval":
         from . import evaluate
 
@@ -86,7 +88,7 @@ def main() -> None:
         os.environ["HF_HUB_OFFLINE"] = "1"  # the model is cached; the app never goes online
         from .app import server
 
-        server.run(paths, Path(args.root) if args.root else None, args.port, args.smoke)
+        server.run(paths, root, args.port, args.smoke)
     elif args.step == "report":
         from . import report
 
