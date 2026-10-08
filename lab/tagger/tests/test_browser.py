@@ -14,7 +14,7 @@ from urllib.parse import quote
 
 import pytest
 from test_add import Synthetic, fake_binary
-from test_app import Fixture, fake_embed, fake_encode
+from test_app import DIM, Fixture, fake_embed, fake_encode, fake_image
 
 from tagger.app import engine, server
 from tagger.app.store import Store
@@ -178,7 +178,7 @@ class AddBrowserTests(Browser, Synthetic):
     def test_snapshot_refusal_replaces_all_segments_and_disables_the_tile(self):
         protected = self.data / "snapshot-synthetic"
         shutil.copytree(self.root, protected)
-        self.app.lib = engine.load(self.paths, protected, fake_encode, fake_embed)[0]
+        self.app.lib = engine.load(self.paths, protected, fake_encode, fake_embed, embed_image=fake_image, dim=DIM)[0]
         with patch.object(self.app.adds, "_command") as command:
             self.run_case("addSnapshot", "#add")
             command.assert_not_called()

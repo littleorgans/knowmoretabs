@@ -2,13 +2,14 @@
 rules fitted on every owner labelled page. Search fuses EG2 cosine with keywords (and images on request) by
 reciprocal rank; a result set gets suggested tags (S2's mean z ranking) and, for the picked tags, prechecks.
 Tags the owner makes in the app join the library as zero shot tags with their name as the query (`add_tags`).
-Known pages the dataset lacks (added since it was built) are embedded at load and join it (`add_pages`); `sync`
-brings one page in line with the archive after knowmoretabs adds, forgets or restores it.
+Document vectors are persisted by page id. Startup and `sync` refresh changed inputs
+and reuse matching rows after knowmoretabs adds, forgets or restores a page.
 
-`encode` turns texts into unit EG2 query vectors; the text model alone is loaded, since its query vectors
-equal the full model's, so one vector scores text and images. Page text feeds the keyword index only.
+`encode` turns texts into unit EG2 query vectors, shared by text and image search.
+The image model is loaded only when a missing or stale image needs embedding.
 """
 
+import json
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -19,7 +20,8 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 
 from .. import dataset
 from ..archive import Archive
-from ..embed import CHAR_CAP, MAX_TOKENS, page_texts
+from ..embed import CHAR_CAP, MAX_TOKENS, MODELS, page_texts, persist_text, persist_images
+from ..vector_store import COUNT_KEYS, VectorStore
 from ..guided.search_tag import Rules, fit_rules
 from ..paths import Paths, read_json
 from ..zeroshot import ZERO_K_SD, query_variants
@@ -50,6 +52,9 @@ class Library:
     threshold: np.ndarray
     spread: np.ndarray  # per tag SD of S over the library
     root: Path  # the archive the records point into
+    paths: Paths  # durable document stores
+    embed_image: Callable | None  # lazy image encoder, shared by startup and sync
+    dim: int
     added_q: np.ndarray  # queries of the tags `add_tags` appended, in tag order after the rules' own
     rows: dict = field(init=False)  # page key -> row
 
@@ -57,46 +62,53 @@ class Library:
         self.rows = {r["key"]: i for i, r in enumerate(self.records)}
 
 
-def _point(record: dict, archive: Archive) -> None:
-    """Point a record at the archive's files for its page, and at whether the archive forgets it."""
-    content, image = archive.text_ok.get(record["key"]), archive.image_ok.get(record["key"])
-    record.update(
-        text_ok=content is not None,
-        content_path=str(content) if content else None,
-        image_ok=image is not None,
-        image_path=str(image) if image else None,
-        forgotten=record["key"] in archive.forgotten,
-    )
-
-
-def _records(paths: Paths, archive: Archive) -> list[dict]:
-    """Dataset rows, which the cached vectors follow, checked against the archive and pointed at its files. Every
-    dataset page must be known; known pages the dataset lacks are left to `add_pages`."""
-    records, _ = dataset.load(paths)
+def _records(paths: Paths, archive: Archive) -> tuple[list[dict], list[dict]]:
+    """Keep the legacy dataset order for migration; refresh inputs from the archive."""
+    legacy, _ = dataset.load(paths)
     known = set(archive.known)
-    if unknown := sum(r["key"] not in known for r in records):
+    if unknown := sum(r["key"] not in known for r in legacy):
         raise SystemExit(
-            f"the dataset holds {unknown} of its {len(records)} pages that this archive does not list, so it was "
+            f"the dataset holds {unknown} of its {len(legacy)} pages that this archive does not list, so it was "
             "built from another archive; rerun `tagger dataset` and `tagger embed` on it"
         )
-    for r in records:
-        _point(r, archive)
-    return records
+    return legacy, [dataset.record(archive, r["key"]) for r in legacy]
 
 
-def _text_vectors(paths: Paths) -> tuple[str, np.ndarray]:
-    for name in TEXT_INPUTS:
-        path = paths.emb / MODEL / f"{name}.npy"
-        if path.exists():
-            return name, np.load(path)
-    raise SystemExit(f"no cached {MODEL} vectors; run `tagger embed --model {MODEL}`")
-
-
-def _image_vectors(paths: Paths, n: int) -> tuple[np.ndarray | None, np.ndarray]:
-    path = paths.emb / "image" / "eg2-full.npy"
-    if not path.exists():
-        return None, np.zeros(n, bool)
-    return np.load(path), np.load(paths.emb / "image" / "eg2-full-mask.npy")
+def _vectors(paths, records, embed, embed_image, dim, *, legacy_records=None, retain=False, preferred=None):
+    names = [name for name in TEXT_INPUTS if VectorStore(paths.emb / MODEL, name).exists] or [TEXT_INPUTS[0]]
+    if preferred in names:
+        names = [preferred, *(name for name in names if name != preferred)]
+    counts = dict.fromkeys(COUNT_KEYS, 0)
+    text = None
+    for name in names:
+        arrays, stats = persist_text(
+            paths,
+            records,
+            MODELS[MODEL],
+            name,
+            embed,
+            legacy_records=legacy_records,
+            retain=retain,
+            dim=dim,
+        )
+        if text is None:
+            text = arrays["vectors"]
+        for key in counts:
+            counts[key] += stats[key]
+    image, mask = None, np.zeros(len(records), bool)
+    if embed_image is not None:
+        arrays, stats = persist_images(
+            paths,
+            records,
+            embed_image,
+            legacy_records=legacy_records,
+            retain=retain,
+            dim=dim,
+        )
+        image, mask = arrays["vectors"], arrays["mask"]
+        for key in counts:
+            counts[key] += stats[key]
+    return names[0], text, image, mask, counts
 
 
 def _keyword_index(records: list[dict]) -> tuple[TfidfVectorizer, object]:
@@ -106,11 +118,15 @@ def _keyword_index(records: list[dict]) -> tuple[TfidfVectorizer, object]:
     return vec, vec.fit_transform(docs)
 
 
-def load(paths: Paths, root: Path, encode: Encode, embed: Embed) -> tuple[Library, dict]:
+def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=None, dim=None) -> tuple[Library, dict]:
+    dim = MODELS[MODEL].dim if dim is None else dim
     timings = {}
     start = time.perf_counter()
     archive = Archive.load(root)
-    records = _records(paths, archive)
+    legacy, records = _records(paths, archive)
+    dataset_keys = {r["key"] for r in records}
+    gap = [dataset.record(archive, key) for key in archive.known if key not in dataset_keys]
+    records.extend(gap)
     order = {n: i for i, n in enumerate(archive.active.values())}
     counts = {n: 0 for n in order}
     for tags in archive.owner_tags.values():
@@ -118,8 +134,15 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed) -> tuple[Librar
             counts[t] += 1
     tags = sorted(counts, key=lambda n: (-counts[n], n.lower()))
     Y = np.array([[t in archive.owner_tags.get(r["key"], ()) for t in tags] for r in records], np.int8)
-    input_name, X = _text_vectors(paths)
-    image, has_image = _image_vectors(paths, len(records))
+    input_name, X, image, has_image, vector_counts = _vectors(
+        paths,
+        records,
+        embed,
+        embed_image,
+        dim,
+        legacy_records=legacy,
+    )
+    print(json.dumps({"vectors": vector_counts}))
     timings["load_s"] = time.perf_counter() - start
 
     start = time.perf_counter()
@@ -157,14 +180,12 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed) -> tuple[Librar
         threshold=threshold,
         spread=_spread(S),
         root=root,
+        paths=paths,
+        embed_image=embed_image,
+        dim=dim,
         added_q=np.zeros((0, X.shape[1]), X.dtype),
     )
 
-    start = time.perf_counter()
-    gap = [dataset.record(archive, url) for url in archive.known if url not in lib.rows]
-    if gap:
-        lib = add_pages(lib, gap, embed(gap, input_name))
-    timings["gap_s"] = time.perf_counter() - start
     stats = {
         "pages": len(lib.records),
         "gap_pages": len(gap),
@@ -175,6 +196,7 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed) -> tuple[Librar
         "zero_shot_tags": len(tags) - len(rules.heads),
         "image_pages": int(lib.has_image.sum()),
         "input": input_name,
+        "vectors": vector_counts,
         **{k: round(v, 2) for k, v in timings.items()},
     }
     return lib, stats
@@ -222,47 +244,53 @@ def add_tags(lib: Library, names: list[str], encode: Encode) -> Library:
     )
 
 
-def add_pages(lib: Library, records: list[dict], X: np.ndarray) -> Library:
-    """The library with these pages appended, given their text vectors: unlabelled, no image vector, shown unless
-    the archive forgets them, scored by every tag (heads and thresholds stay as fitted), keyword index refitted."""
-    records = [*lib.records, *records]
-    n = len(X)
-    image = None if lib.image is None else np.vstack([lib.image, np.zeros((n, lib.image.shape[1]), lib.image.dtype)])
+def sync(lib: Library, archive: Archive, url: str, embed: Embed) -> Library:
+    """Refresh and persist one known page, preserving all other keyed cache rows."""
+    if url not in set(archive.known):
+        return lib
+    record = dataset.record(archive, url)
+    _, vectors, image_rows, mask, _ = _vectors(
+        lib.paths,
+        [record],
+        embed,
+        lib.embed_image,
+        lib.dim,
+        retain=True,
+        preferred=lib.input_name,
+    )
+    row = lib.rows.get(url)
+    records = lib.records.copy()
+    X, Y, live = lib.X.copy(), lib.Y.copy(), lib.live.copy()
+    image = None if lib.image is None else lib.image.copy()
+    has_image = lib.has_image.copy()
+    if row is None:
+        records.append(record)
+        X = np.vstack([X, vectors])
+        Y = np.vstack([Y, np.zeros((1, Y.shape[1]), Y.dtype)])
+        live = np.concatenate([live, [not record["forgotten"]]])
+        if image is not None:
+            image = np.vstack([image, image_rows])
+        has_image = np.concatenate([has_image, mask])
+    else:
+        records[row], X[row], live[row] = record, vectors[0], not record["forgotten"]
+        if image is not None:
+            image[row] = image_rows[0]
+        has_image[row] = mask[0]
     S = np.hstack([lib.rules.scores(X)["supervised"], X @ lib.added_q.T])
-    S = np.vstack([lib.S, S])
     keywords, K = _keyword_index(records)
     return replace(
         lib,
         records=records,
-        Y=np.vstack([lib.Y, np.zeros((n, lib.Y.shape[1]), lib.Y.dtype)]),
-        X=np.vstack([lib.X, X.astype(lib.X.dtype)]),
+        X=X,
+        Y=Y,
+        live=live,
         image=image,
-        has_image=np.concatenate([lib.has_image, np.zeros(n, bool)]),
-        live=np.concatenate([lib.live, [not r["forgotten"] for r in records[-n:]]]).astype(bool),
-        keywords=keywords,
-        K=K,
+        has_image=has_image,
         S=S,
         spread=_spread(S),
+        keywords=keywords,
+        K=K,
     )
-
-
-def sync(lib: Library, archive: Archive, url: str, embed: Embed) -> Library:
-    """The library with one page as the archive (loaded from the library's root) now has it: an indexed page is
-    refreshed from its files in the keyword index and shown or hidden as the archive forgets it; its text vector
-    stays cached. A known page the index lacks is embedded and joins it. A page the archive does not list is
-    left as it was."""
-    row = lib.rows.get(url)
-    if row is None:
-        if url not in set(archive.known):
-            return lib
-        record = dataset.record(archive, url)
-        return add_pages(lib, [record], embed([record], lib.input_name))
-    records = lib.records.copy()
-    records[row] = dataset.record(archive, url)
-    keywords, K = _keyword_index(records)
-    live = lib.live.copy()
-    live[row] = not records[row]["forgotten"]
-    return replace(lib, records=records, live=live, keywords=keywords, K=K)
 
 
 def _ranks(scores: np.ndarray, eligible: np.ndarray) -> np.ndarray:
