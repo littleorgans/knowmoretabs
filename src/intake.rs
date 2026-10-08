@@ -9,8 +9,8 @@
 //!      they were added. Every reader already derives pages from snapshot
 //!      tabs, so "not in your library" and "not shown" keep agreeing by
 //!      construction, and nothing on disk changes schema. The snapshot is
-//!      dated by the first add, not the latest, because the page treats
-//!      the newest snapshot as what is open now.
+//!      dated by the first add. The frontend excludes this snapshot when
+//!      deciding what is open now.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
