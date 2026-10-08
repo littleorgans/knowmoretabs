@@ -18,7 +18,7 @@ import psutil
 import torch
 
 from . import dataset
-from .archive import content_body, sha256_hex
+from .archive import Archive, content_body, sha256_hex
 from .paths import Paths, write_json
 from .vector_store import VectorStore
 
@@ -241,7 +241,7 @@ def persist_text(paths, records, model, name, embed, *, legacy_records=None, ret
     )
 
 
-def persist_images(paths, records, embed, *, legacy_records=None, retain=False, dim=None):
+def persist_images(paths, records, embed, *, legacy_records=None, retain=False, dim=None, allow_missing=False):
     store = VectorStore(paths.emb / "image", IMAGE_MODEL.key)
     records = [{**r, "_image_bytes": image_bytes(r)} for r in records]
     return store.reconcile(
@@ -251,10 +251,11 @@ def persist_images(paths, records, embed, *, legacy_records=None, retain=False, 
         mask=[r["image_ok"] for r in records],
         legacy_rows=image_rows(legacy_records) if legacy_records is not None else None,
         retain=retain,
+        allow_missing=allow_missing,
     )
 
 
-def embed_text(paths: Paths, records: list[dict], model: Model, chunked: bool) -> None:
+def embed_text(paths: Paths, records: list[dict], model: Model, chunked: bool, *, legacy_records=None) -> None:
     if chunked:  # B8k remains the experiment's positional cache.
         if not (paths.emb / model.key / "B8k.npy").exists():
             st, stats = load_text(model)
@@ -272,7 +273,7 @@ def embed_text(paths: Paths, records: list[dict], model: Model, chunked: bool) -
 
     try:
         for name in ("A", "B"):
-            _, counts = persist_text(paths, records, model, name, embed, retain=True)
+            _, counts = persist_text(paths, records, model, name, embed, retain=True, legacy_records=legacy_records)
             print(json.dumps({"store": f"{model.key}/{name}", **counts}))
     finally:
         if st is not None:
@@ -296,7 +297,7 @@ def embed_image_rows(st, records: list[dict]) -> tuple[np.ndarray, dict]:
     return full, run
 
 
-def embed_images(paths: Paths, records: list[dict]) -> None:
+def embed_images(paths: Paths, records: list[dict], *, legacy_records=None) -> None:
     st = None
 
     def embed(records):
@@ -306,16 +307,21 @@ def embed_images(paths: Paths, records: list[dict]) -> None:
         return embed_image_rows(st, records)[0]
 
     try:
-        _, counts = persist_images(paths, records, embed, retain=True)
+        _, counts = persist_images(paths, records, embed, retain=True, legacy_records=legacy_records)
         print(json.dumps({"store": "image/eg2-full", **counts}))
     finally:
         if st is not None:
             release(st)
 
 
-def run(paths: Paths, models: list[str] | None, chunked: bool) -> None:
-    records, _ = dataset.load(paths)
+def run(paths: Paths, models: list[str] | None, chunked: bool, root: Path | None = None) -> None:
+    if chunked:
+        records, _ = dataset.load(paths)
+        legacy = None
+    else:
+        archive = Archive.load((root or paths.snapshot).resolve())
+        legacy, records = dataset.app_records(paths, archive)
     for key in models or list(MODELS):
-        embed_text(paths, records, MODELS[key], chunked)
+        embed_text(paths, records, MODELS[key], chunked, legacy_records=legacy)
     if not chunked:
-        embed_images(paths, records)
+        embed_images(paths, records, legacy_records=legacy)

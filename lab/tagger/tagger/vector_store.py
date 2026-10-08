@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 
 VERSION = 1
-COUNT_KEYS = ("reused", "embedded", "stale", "dropped", "migrated", "cold_migration")
+COUNT_KEYS = ("reused", "embedded", "stale", "dropped", "migrated", "cold_migration", "failed")
 
 
 class VectorStore:
@@ -120,12 +120,15 @@ class VectorStore:
             return None
         return {"model": model, "rows": rows}, arrays
 
-    def reconcile(self, rows, model, embed, *, mask=None, legacy_rows=None, retain=False):
+    def reconcile(self, rows, model, embed, *, mask=None, legacy_rows=None, retain=False, allow_missing=False):
         """Return vectors in requested id order; embed only missing/stale eligible rows.
 
         `embed` receives requested row indices. Full startup drops absent ids; a
         partial sync retains all other ids. Legacy rows describe the dataset order.
+        Optional masked embeddings may fail; those rows stay absent and retry later.
         """
+        if allow_missing and mask is None:
+            raise ValueError("optional embeddings require a mask")
         if len({row["id"] for row in rows}) != len(rows):
             raise ValueError("duplicate vector row id")
         if mask is not None:
@@ -156,12 +159,21 @@ class VectorStore:
                     counts["stale"] += j is not None
                     if mask is None or mask[i]:
                         missing.append(i)
+            failed = []
             if missing:
-                encoded = np.asarray(embed(missing), dtype=np.float32)
-                if encoded.shape != (len(missing), model["dim"]) or not np.isfinite(encoded).all():
-                    raise ValueError("embedder returned invalid vectors")
-                vectors[missing] = encoded
-            counts["embedded"] = len(missing)
+                try:
+                    encoded = np.asarray(embed(missing), dtype=np.float32)
+                    if encoded.shape != (len(missing), model["dim"]) or not np.isfinite(encoded).all():
+                        raise ValueError("embedder returned invalid vectors")
+                except Exception:
+                    if not allow_missing:
+                        raise
+                    failed = missing
+                    mask[failed] = False
+                else:
+                    vectors[missing] = encoded
+            counts["embedded"] = len(missing) - len(failed)
+            counts["failed"] = len(failed)
             output = {"vectors": vectors}
             if mask is not None:
                 output["mask"] = mask
@@ -170,10 +182,16 @@ class VectorStore:
             counts["dropped"] = 0 if retain and same_model else len(extra)
             published_rows = rows
             published = output
+            if failed:
+                keep = np.ones(len(rows), bool)
+                keep[failed] = False
+                published_rows = [row for i, row in enumerate(rows) if keep[i]]
+                published = {key: value[keep] for key, value in output.items()}
             if retain and extra and same_model:
-                published_rows = [*rows, *(previous["rows"][i] for i in extra)]
-                published = {key: np.concatenate([value, arrays[key][extra]]) for key, value in output.items()}
-            changed = migrating or old is None or previous["model"] != model or counts["dropped"] > 0
-            if changed or counts["reused"] != len(rows):
+                published_rows = [*published_rows, *(previous["rows"][i] for i in extra)]
+                published = {key: np.concatenate([value, arrays[key][extra]]) for key, value in published.items()}
+            failed_cached = any(rows[i]["id"] in indices for i in failed)
+            changed = migrating or old is None or previous["model"] != model or counts["dropped"] > 0 or failed_cached
+            if changed or counts["reused"] + counts["failed"] != len(rows):
                 self._publish(published_rows, model, published)
             return output, counts

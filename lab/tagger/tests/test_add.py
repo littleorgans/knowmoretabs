@@ -14,7 +14,7 @@ import time
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import fake_knowmoretabs
 import numpy as np
@@ -497,6 +497,15 @@ class AddJobTests(Served):
             ("known", "indexed", row), (self.values(job)["library"], self.values(job)["search"], job["page"]["row"])
         )
         self.assertTrue(self.app.live()[row])
+
+    def test_an_image_failure_still_indexes_add_text(self):
+        self.app.lib = replace(self.app.lib, embed_image=Mock(side_effect=RuntimeError("synthetic image failure")))
+        job = self.add(NEW)
+        self.assertEqual("indexed", self.values(job)["search"])
+        row = job["page"]["row"]
+        self.assertTrue(self.app.lib.live[row])
+        self.assertFalse(self.app.lib.has_image[row])
+        np.testing.assert_array_equal(self.app.lib.X[row], fake_embed([self.app.lib.records[row]], "B")[0])
 
     def test_an_index_failure_is_not_indexed(self):
         with patch.object(self.app, "embed", side_effect=RuntimeError("no model")):

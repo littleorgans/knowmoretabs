@@ -32,7 +32,7 @@ def test_append_reorder_freshness_and_second_startup(tmp_path):
     wanted = rows(("second", "b"), ("first", "a"), ("third", "c"))
     result, counts = store.reconcile(wanted, MODEL, encode)
     encode.assert_called_once_with([2])
-    assert counts == dict(reused=2, embedded=1, stale=0, dropped=0, migrated=0, cold_migration=0)
+    assert counts == dict(reused=2, embedded=1, stale=0, dropped=0, migrated=0, cold_migration=0, failed=0)
     np.testing.assert_array_equal(result["vectors"][:2], original["vectors"][[1, 0]])
     encode.reset_mock()
     store.reconcile(wanted, MODEL, encode)
@@ -277,27 +277,6 @@ def test_concurrent_writers_reconcile_under_lock(tmp_path):
     manifest, arrays = store.read()
     assert {row["id"] for row in manifest["rows"]} == {"first", "second"}
     assert arrays["vectors"].shape == (2, 2)
-
-
-def test_sync_keeps_the_startup_text_variant_when_another_writer_adds_b(tmp_path):
-    from tagger import dataset, embed
-
-    paths = build(tmp_path)
-    root = tmp_path / "archive"
-    for suffix in (".npy", ".json"):
-        (paths.emb / "eg2" / ("B" + suffix)).rename(paths.emb / "eg2" / ("A" + suffix))
-    lib, _ = engine.load(paths, root, fake_encode, fake_embed, embed_image=fake_image, dim=DIM)
-    assert lib.input_name == "A"
-    records, _ = dataset.load(paths)
-    embed.persist_text(paths, records, embed.MODELS["eg2"], "B", fake_embed, dim=DIM)
-    capture(root, NEW)
-    record = dataset.record(Archive.load(root), NEW)
-    with Path(record["content_path"]).open("a") as stream:
-        stream.write("\nnight train")
-    lib = engine.sync(lib, Archive.load(root), NEW, fake_embed)
-    row = lib.rows[NEW]
-    np.testing.assert_array_equal(lib.X[row], fake_embed([record], "A")[0])
-    assert not np.array_equal(lib.X[row], fake_embed([record], "B")[0])
 
 
 def test_cli_images_preserve_added_rows_and_refresh_changed_bytes(tmp_path):

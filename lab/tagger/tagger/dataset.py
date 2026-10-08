@@ -81,6 +81,26 @@ def record(archive: Archive, url: str) -> dict:
     }
 
 
+def app_records(paths: Paths, archive: Archive, *, keys: list[str] | None = None) -> tuple[list[dict], list[dict]]:
+    """Current archive inputs for startup, CLI embedding and individual syncs.
+
+    Full loads keep dataset order for legacy migration, then append archive gaps.
+    A sync requests its keys directly without reading the positional dataset.
+    """
+    legacy = []
+    if keys is None:
+        legacy, _ = load(paths)
+        dataset_keys = {r["key"] for r in legacy}
+        known = set(archive.known)
+        if unknown := sum(r["key"] not in known for r in legacy):
+            raise SystemExit(
+                f"the dataset holds {unknown} of its {len(legacy)} pages that this archive does not list, so it was "
+                "built from another archive; rerun `tagger dataset` and `tagger embed` on it"
+            )
+        keys = [r["key"] for r in legacy] + [key for key in archive.known if key not in dataset_keys]
+    return legacy, [record(archive, key) for key in keys]
+
+
 def run(paths: Paths) -> None:
     archive = Archive.load(paths.snapshot)
     records = [record(archive, url) for url in archive.known]

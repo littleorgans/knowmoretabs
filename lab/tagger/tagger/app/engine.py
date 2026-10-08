@@ -21,7 +21,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from .. import dataset
 from ..archive import Archive
 from ..embed import CHAR_CAP, MAX_TOKENS, MODELS, page_texts, persist_text, persist_images
-from ..vector_store import COUNT_KEYS, VectorStore
+from ..vector_store import VectorStore
 from ..guided.search_tag import Rules, fit_rules
 from ..paths import Paths, read_json
 from ..zeroshot import ZERO_K_SD, query_variants
@@ -62,39 +62,18 @@ class Library:
         self.rows = {r["key"]: i for i, r in enumerate(self.records)}
 
 
-def _records(paths: Paths, archive: Archive) -> tuple[list[dict], list[dict]]:
-    """Keep the legacy dataset order for migration; refresh inputs from the archive."""
-    legacy, _ = dataset.load(paths)
-    known = set(archive.known)
-    if unknown := sum(r["key"] not in known for r in legacy):
-        raise SystemExit(
-            f"the dataset holds {unknown} of its {len(legacy)} pages that this archive does not list, so it was "
-            "built from another archive; rerun `tagger dataset` and `tagger embed` on it"
-        )
-    return legacy, [dataset.record(archive, r["key"]) for r in legacy]
-
-
-def _vectors(paths, records, embed, embed_image, dim, *, legacy_records=None, retain=False, preferred=None):
-    names = [name for name in TEXT_INPUTS if VectorStore(paths.emb / MODEL, name).exists] or [TEXT_INPUTS[0]]
-    if preferred in names:
-        names = [preferred, *(name for name in names if name != preferred)]
-    counts = dict.fromkeys(COUNT_KEYS, 0)
-    text = None
-    for name in names:
-        arrays, stats = persist_text(
-            paths,
-            records,
-            MODELS[MODEL],
-            name,
-            embed,
-            legacy_records=legacy_records,
-            retain=retain,
-            dim=dim,
-        )
-        if text is None:
-            text = arrays["vectors"]
-        for key in counts:
-            counts[key] += stats[key]
+def _vectors(paths, records, name, embed, embed_image, dim, *, legacy_records=None, retain=False):
+    arrays, counts = persist_text(
+        paths,
+        records,
+        MODELS[MODEL],
+        name,
+        embed,
+        legacy_records=legacy_records,
+        retain=retain,
+        dim=dim,
+    )
+    text = arrays["vectors"]
     image, mask = None, np.zeros(len(records), bool)
     if embed_image is not None:
         arrays, stats = persist_images(
@@ -104,11 +83,12 @@ def _vectors(paths, records, embed, embed_image, dim, *, legacy_records=None, re
             legacy_records=legacy_records,
             retain=retain,
             dim=dim,
+            allow_missing=True,
         )
         image, mask = arrays["vectors"], arrays["mask"]
         for key in counts:
             counts[key] += stats[key]
-    return names[0], text, image, mask, counts
+    return text, image, mask, counts
 
 
 def _keyword_index(records: list[dict]) -> tuple[TfidfVectorizer, object]:
@@ -123,10 +103,7 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
     timings = {}
     start = time.perf_counter()
     archive = Archive.load(root)
-    legacy, records = _records(paths, archive)
-    dataset_keys = {r["key"] for r in records}
-    gap = [dataset.record(archive, key) for key in archive.known if key not in dataset_keys]
-    records.extend(gap)
+    legacy, records = dataset.app_records(paths, archive)
     order = {n: i for i, n in enumerate(archive.active.values())}
     counts = {n: 0 for n in order}
     for tags in archive.owner_tags.values():
@@ -134,15 +111,16 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
             counts[t] += 1
     tags = sorted(counts, key=lambda n: (-counts[n], n.lower()))
     Y = np.array([[t in archive.owner_tags.get(r["key"], ()) for t in tags] for r in records], np.int8)
-    input_name, X, image, has_image, vector_counts = _vectors(
+    input_name = next((name for name in TEXT_INPUTS if VectorStore(paths.emb / MODEL, name).exists), TEXT_INPUTS[0])
+    X, image, has_image, vector_counts = _vectors(
         paths,
         records,
+        input_name,
         embed,
         embed_image,
         dim,
         legacy_records=legacy,
     )
-    print(json.dumps({"vectors": vector_counts}))
     timings["load_s"] = time.perf_counter() - start
 
     start = time.perf_counter()
@@ -188,7 +166,7 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
 
     stats = {
         "pages": len(lib.records),
-        "gap_pages": len(gap),
+        "gap_pages": len(records) - len(legacy),
         "live_pages": int(lib.live.sum()),
         "labelled_pages": len(fit),
         "tags": len(tags),
@@ -248,16 +226,19 @@ def sync(lib: Library, archive: Archive, url: str, embed: Embed) -> Library:
     """Refresh and persist one known page, preserving all other keyed cache rows."""
     if url not in set(archive.known):
         return lib
-    record = dataset.record(archive, url)
-    _, vectors, image_rows, mask, _ = _vectors(
+    _, records = dataset.app_records(lib.paths, archive, keys=[url])
+    record = records[0]
+    vectors, image_rows, mask, counts = _vectors(
         lib.paths,
-        [record],
+        records,
+        lib.input_name,
         embed,
         lib.embed_image,
         lib.dim,
         retain=True,
-        preferred=lib.input_name,
     )
+    if counts["failed"]:
+        print(json.dumps({"image_failed": counts["failed"]}))
     row = lib.rows.get(url)
     records = lib.records.copy()
     X, Y, live = lib.X.copy(), lib.Y.copy(), lib.live.copy()
