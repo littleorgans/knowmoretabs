@@ -105,6 +105,15 @@ impl Plan {
         self
     }
 
+    /// The same plan for a content Retry: an image only for a page with no
+    /// image line, so one kept or failed before stands, and no retries.
+    pub fn only_new(mut self) -> Self {
+        let known = &self.known.pages;
+        self.after_text.retain(|url| !known.contains_key(url));
+        self.retries.clear();
+        self
+    }
+
     pub fn is_empty(&self) -> bool {
         self.after_text.is_empty() && self.retries.is_empty()
     }
@@ -468,6 +477,60 @@ mod tests {
                  and 1 page retried from an earlier run"
             )
         );
+    }
+
+    #[test]
+    fn a_content_retry_gets_an_image_only_for_a_page_with_no_image_line() {
+        use crate::content_plan::Fetch;
+        use crate::content_route::Route;
+
+        let urls = [
+            "https://a.test/kept",
+            "https://a.test/failed",
+            "https://a.test/new",
+            "https://a.test/other",
+        ];
+        let snapshots = [snapshot(&urls)];
+        let root = tempfile::tempdir().unwrap();
+        let mut store = Store::open(root.path()).unwrap();
+        let mut ok = image_store::Line::new("https://a.test/kept", Status::Ok);
+        ok.image_url = Some("https://cdn.test/k.jpg".to_owned());
+        for line in [
+            ok,
+            error_line("https://a.test/failed", "https://cdn.test/f.jpg"),
+            error_line("https://a.test/other", "https://cdn.test/o.jpg"),
+        ] {
+            store.record(line, None).unwrap();
+        }
+        let mut work = Work::default();
+        work.fetches = urls[..3]
+            .iter()
+            .map(|url| Fetch {
+                url: (*url).to_owned(),
+                host: "a.test".to_owned(),
+                route: Route::Web,
+                pages: vec![((*url).to_owned(), 1)],
+            })
+            .collect();
+        let plan = Plan::new(
+            root.path(),
+            &snapshots,
+            &state(&[]),
+            &work,
+            Options::default(),
+            Log::default(),
+        )
+        .unwrap();
+        assert_eq!(plan.after_text.len(), 3);
+        assert_eq!(plan.retries.len(), 1, "the page not fetched");
+        let plan = plan.only_new();
+        let after: Vec<&str> = plan.after_text.iter().map(String::as_str).collect();
+        assert_eq!(
+            after,
+            ["https://a.test/new"],
+            "a kept or failed image stands"
+        );
+        assert_eq!(plan.retries, Vec::<Retry>::new());
     }
 
     #[test]

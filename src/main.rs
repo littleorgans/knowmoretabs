@@ -25,6 +25,7 @@ mod content_headless;
 mod content_image;
 mod content_pdf;
 mod content_plan;
+mod content_report;
 mod content_route;
 mod content_signed_in;
 mod content_store;
@@ -164,6 +165,7 @@ fn main() -> ExitCode {
                 no_browser: *no_browser,
                 signed_in: *signed_in,
                 events: None,
+                retry: None,
             },
             cli.json,
             log,
@@ -192,9 +194,18 @@ fn add(
     cli: &Cli,
     log: Log,
 ) -> Result<ExitCode, error::Error> {
+    let retry: Vec<content::Stage> = args
+        .retry
+        .iter()
+        .map(|stage| match stage {
+            cli::RetryStage::Content => content::Stage::Content,
+            cli::RetryStage::Image => content::Stage::Image,
+        })
+        .collect();
     let ask = add_content::Ask {
         browser: cli.browser.as_deref().unwrap_or(platform::CHROME),
         signed_in: args.signed_in,
+        retry: &retry,
     };
     let args = add::Args {
         url: &args.url,

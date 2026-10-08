@@ -3,6 +3,7 @@
 
 #![allow(dead_code)]
 
+pub mod add;
 pub mod history_builder;
 pub mod session_builder;
 pub mod site;

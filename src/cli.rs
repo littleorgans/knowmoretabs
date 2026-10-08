@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use clap::{ArgAction, Args, Parser, Subcommand};
+use clap::{ArgAction, Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -96,7 +96,10 @@ it back). Then, unless --no-content, the page's text and image are captured as c
 that one page, sending its address to its own site: rendered in the --browser binary when it reads thin, \
 and with --signed-in opened in your running Chrome as content --signed-in does. A title the text was \
 kept with joins the page's line when it had none. Run again, it captures the text again only when the \
-last attempt was an error, and retries an image that failed. With --json, one line per stage as it happens, the last saying how it ended. Exits 0 when \
+last attempt was an error, and retries an image that failed. With --retry, for a page already in the \
+library, it writes no line and runs only the stages named, each only where it failed: the text after an \
+error or with no attempt (with --signed-in, a page eligible for it), the image after an error, from the \
+candidates it kept; a text or image that was kept is never fetched again. With --json, one line per stage as it happens, the last saying how it ended. Exits 0 when \
 the page is in the library at the end, however its text and image ended."
     )]
     Add(AddArgs),
@@ -258,6 +261,23 @@ pub struct AddArgs {
     /// Add the page without capturing its text or image
     #[arg(long)]
     pub no_content: bool,
+    /// Retry a page in the library: only this stage, only where it failed; no line written (repeatable)
+    #[arg(
+        long,
+        value_name = "STAGE",
+        value_delimiter = ',',
+        conflicts_with_all = ["no_content", "title"]
+    )]
+    pub retry: Vec<RetryStage>,
+}
+
+/// A stage `add --retry` runs again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RetryStage {
+    /// The page's text
+    Content,
+    /// The page's preview image
+    Image,
 }
 
 /// `tag` has three forms: tag pages yourself, write a prompt for an agent,
@@ -747,8 +767,8 @@ mod tests {
         assert!(cli.json);
         assert!(matches!(
             &cli.command,
-            Some(Command::Add(AddArgs { url, title: Some(title), signed_in: false, no_content: true }))
-                if url == "https://a.test/" && title == "A"
+            Some(Command::Add(AddArgs { url, title: Some(title), signed_in: false, no_content: true, retry }))
+                if url == "https://a.test/" && title == "A" && retry.is_empty()
         ));
         let cli =
             Cli::try_parse_from(["knowmoretabs", "add", "https://a.test/", "--signed-in"]).unwrap();
@@ -761,10 +781,42 @@ mod tests {
                 ..
             }))
         ));
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "add",
+            "https://a.test/",
+            "--retry",
+            "content,image",
+            "--retry",
+            "image",
+            "--signed-in",
+        ])
+        .unwrap();
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Add(AddArgs { signed_in: true, retry, .. }))
+                if retry == &[RetryStage::Content, RetryStage::Image, RetryStage::Image]
+        ));
         for bad in [
             &["add", "--no-content"][..],
             &["add", "https://a.test/", "https://b.test/", "--no-content"],
             &["add", "https://a.test/", "--no-content", "--signed-in"],
+            &[
+                "add",
+                "https://a.test/",
+                "--retry",
+                "content",
+                "--no-content",
+            ],
+            &[
+                "add",
+                "https://a.test/",
+                "--retry",
+                "content",
+                "--title",
+                "A",
+            ],
+            &["add", "https://a.test/", "--retry", "nonsense"],
         ] {
             let mut args = vec!["knowmoretabs"];
             args.extend_from_slice(bad);
