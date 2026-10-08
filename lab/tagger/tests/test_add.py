@@ -385,7 +385,7 @@ class AddJobTests(Served):
                         self.root,
                         "content.jsonl",
                         url,
-                        fake_knowmoretabs.text("thin", "headless", 403, "not rendered: HTTP 403"),
+                        fake_knowmoretabs.text("thin", "headless", 200, "short text; not rendered: HTTP 403"),
                     )
                 else:
                     self.add(url)

@@ -1113,15 +1113,17 @@ async function addRequests() {
 
 async function addSignedInStages() {
   const { K } = setup({ lit, strip: { render() {}, sayIn: () => () => {} } }, 'add.js');
+  const refused = { http_status: 200, reason: 'short text; not rendered: HTTP 403' };   // the baseline's code, the render's refusal
   for (const value of ['added', 'known']) for (const tier of ['web', 'github', 'x', 'youtube', 'headless'])
-    for (const status of ['blocked', 'behind_login', 'paywalled', 'thin']) for (const image of ['error', 'ok', 'none', 'unavailable', 'unknown']) {
-      const stages = { library: { state: 'done', value }, content: { state: 'done', status, tier, http_status: 403 }, image: { state: 'done', status: image } };
+    for (const status of ['blocked', 'behind_login', 'paywalled', 'thin', 'empty_shell']) for (const image of ['error', 'ok', 'none', 'unavailable', 'unknown']) {
+      const stages = { library: { state: 'done', value }, content: { state: 'done', status, tier, ...(['thin', 'empty_shell'].includes(status) ? refused : { http_status: 403 }) }, image: { state: 'done', status: image } };
       const action = K.add.say({ stages }).act;
       assert.deepEqual(plain(action), ['Try signed in', { action: 'add', retry: image === 'error' ? ['content', 'image'] : ['content'], signed_in: true }]);
     }
   for (const tier of ['signed_in', 'other', null])
-    assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier, http_status: 403 } } }).act, null);
-  assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier: 'web', http_status: 200 } } }).act, null);
+    assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier, reason: 'not rendered: HTTP 403' } } }).act, null);
+  for (const reason of ['short text', 'short text; not rendered: HTTP 404', undefined])
+    assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier: 'web', http_status: 403, reason } } }).act, null, `${reason}`);
 }
 
 async function startupListsKeepChanges() {

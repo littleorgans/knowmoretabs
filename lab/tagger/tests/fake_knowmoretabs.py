@@ -49,7 +49,7 @@ SCENARIOS = {
     "stuck": (text("error", http=503), None),
     "missing": (text("not_found", http=404), "none"),
     "thin": (text("thin", "headless", 200), "ok"),
-    "thin403": (text("thin", "headless", 403, "not rendered: HTTP 403"), "error"),
+    "thin403": (text("thin", "headless", 200, "short text; not rendered: HTTP 403"), "error"),
     "offlineimage": (text("blocked", http=403), "error"),
     "skipped": (text("skipped", None, reason="personal app"), "none"),
     "video": (text("unknown", None, reason="not_recorded"), None),

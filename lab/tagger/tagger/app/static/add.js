@@ -25,6 +25,7 @@
   const SOFT = ["thin", "empty_shell", "not_html", "media", "skipped", "unknown"];
   const WITH_TIER = ["ok", "thin"], WITH_CODE = ["blocked", "not_found", "error"];
   const SIGN_IN = ["blocked", "behind_login", "paywalled"];
+  const REFUSED = ["thin", "empty_shell"];                          // signed in too after the site refused the render (403)
   const PUBLIC = ["web", "github", "x", "youtube", "headless"];   // the tiers a signed in read starts from
   const UNREACHED = ["off", "not_running", "not_allowed"];         // Chrome out of reach: Retry signed in
   const LISTED = ["added", "known"];
@@ -66,7 +67,8 @@
     const st = job.stages, read = { library: (e) => library(e, job.failed), content, image, search };
     const segs = SEGS.map((k) => (st[k] ? read[k](st[k]) : ["", ""]));
     const lib = st.library || {}, got = st.content || {}, indexed = !!st.search && st.search.value === "indexed";
-    const signed = PUBLIC.includes(got.tier) && (SIGN_IN.includes(got.status) || got.status === "thin" && got.http_status === 403);
+    const signed = PUBLIC.includes(got.tier)
+      && (SIGN_IN.includes(got.status) || REFUSED.includes(got.status) && (got.reason || "").endsWith("not rendered: HTTP 403"));
     const again = failed(st, signed);
     let act = null;
     if (lib.value === "forgotten") act = ["Restore", { action: "restore" }];
