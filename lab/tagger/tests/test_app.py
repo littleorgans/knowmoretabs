@@ -17,7 +17,7 @@ import synthetic_archive
 
 from tagger import cli, dataset
 from tagger.app import engine, server
-from tagger.app.store import SOURCE, Exclusions, Store
+from tagger.app.store import SOURCE, Exclusions, Store, tag_name
 from tagger.heads import unit
 from tagger.paths import Paths
 
@@ -152,6 +152,30 @@ class EngineTests(Fixture):
                 self.assertEqual(s["checked"], bool(self.lib.S[row, j] >= self.lib.threshold[j]))
                 self.assertEqual(s["checked"], s["p"] >= 0.5)
 
+    def test_a_created_tag_is_a_zero_shot_tag_queried_by_its_name(self):
+        lib = engine.add_tags(self.lib, ["Sleeper cars"], fake_encode)
+        self.assertEqual(len(self.lib.tags), len(lib.tags) - 1)  # the loaded library is left as it was
+        j = lib.tags.index("Sleeper cars")
+        s = lib.X @ fake_encode(["Sleeper cars"])[0]
+        np.testing.assert_allclose(s, lib.S[:, j], rtol=1e-6)
+        self.assertAlmostEqual(s.mean() + engine.ZERO_K_SD * s.std(), lib.threshold[j], places=5)
+        unseen = self.lib.tags.index("Woodworking")  # an owner tag nobody holds: the rule `load` gives it
+        self.assertFalse(self.lib.Y[:, unseen].any())
+        u = self.lib.S[:, unseen]
+        self.assertAlmostEqual(u.mean() + engine.ZERO_K_SD * u.std(), self.lib.threshold[unseen], places=5)
+        self.assertEqual({"name": "Sleeper cars", "positives": 0, "source": "zero shot"}, engine.tag_info(lib)[j])
+        rows = list(range(len(lib.records)))
+        sugg = [p[0] for p in engine.prechecks(lib, rows, ["Sleeper cars"])]
+        self.assertEqual({"zero shot"}, {x["source"] for x in sugg})
+        self.assertEqual([bool(x) for x in s >= lib.threshold[j]], [x["checked"] for x in sugg])
+        self.assertIn("Sleeper cars", {x["tag"] for x in engine.suggest(lib, rows, len(lib.tags))})
+
+    def test_add_tags_skips_names_the_library_has_in_any_case(self):
+        self.assertIs(self.lib, engine.add_tags(self.lib, ["coffee", "READ LATER"], fake_encode))
+        lib = engine.add_tags(self.lib, ["New", "NEW", "trains"], fake_encode)
+        self.assertEqual([*self.lib.tags, "New"], lib.tags)
+        self.assertEqual("Coffee", engine.find_tag(lib, "cOFFEE"))
+
     def test_a_dataset_from_another_snapshot_is_refused(self):
         other = self.tmp / "other"
         shutil.copytree(self.tmp / "archive", other)
@@ -190,6 +214,33 @@ class StoreTests(unittest.TestCase):
         self.assertTrue(latest[("u1", "B")]["value"])
         answers = [json.loads(line) for line in Path(again.export()["answers"]).read_text().splitlines()]
         self.assertEqual([{"url": "u1", "tags": ["B"], "source": SOURCE}], answers)
+
+    def test_tag_names_follow_the_import_rules(self):
+        self.assertEqual("Model context protocol", tag_name("  Model \t context\nprotocol "))
+        self.assertEqual("x" * 40, tag_name("x" * 40))
+        self.assertEqual("研究", tag_name("研究"))
+        self.assertEqual("a b", tag_name("a\u00a0\u3000b"))
+        for bad, reason in [
+            ("", "empty"),
+            ("   ", "empty"),
+            ("x" * 41, "longer than 40"),
+            ("a\u0007b", "control"),
+            ("\u0000", "control"),
+            ("a\u001cb", "control"),  # whitespace to str.split, a control character to Rust
+        ]:
+            with self.assertRaisesRegex(ValueError, f"cannot use that name as a tag: it .*{reason}"):
+                tag_name(bad)
+
+    def test_created_tags_persist_privately_and_export_with_their_decisions(self):
+        store = Store(self.tmp)
+        store.add_tag("Sleeper cars")
+        again = Store(self.tmp)
+        self.assertEqual(["Sleeper cars"], again.tags())
+        self.assertEqual(0o600, stat.S_IMODE((self.tmp / "state.json").stat().st_mode))
+        s = again.create("q", False, ["u1"], ["Sleeper cars"], [self.sugg(("Sleeper cars", False))])
+        again.update(s["id"], 0, {"Sleeper cars": True}, "decided")
+        answers = [json.loads(line) for line in Path(again.export()["answers"]).read_text().splitlines()]
+        self.assertEqual([{"url": "u1", "tags": ["Sleeper cars"], "source": SOURCE}], answers)
 
     def test_marks_name_only_offered_tags(self):
         store = Store(self.tmp)
@@ -367,6 +418,31 @@ class ServerTests(Fixture):
         self.assertEqual(1, listed[0]["decided"])
         status, out, _ = self.call("POST", "/api/export", {})
         self.assertEqual((200, 1, 1), (status, out["decided"], out["flipped"]))
+
+    def test_a_new_tag_is_made_once_then_reviewed_exported_and_kept_over_a_restart(self):
+        status, made, _ = self.call("POST", "/api/tags", {"name": "  Sleeper   cars "})
+        self.assertEqual((200, "Sleeper cars", True), (status, made["tag"], made["created"]))
+        self.assertIn({"name": "Sleeper cars", "positives": 0, "source": "zero shot"}, made["tags"])
+        for same, spelling in (("sleeper CARS", "Sleeper cars"), ("coffee", "Coffee")):
+            status, again, _ = self.call("POST", "/api/tags", {"name": same})
+            self.assertEqual((200, spelling, False), (status, again["tag"], again["created"]))
+            self.assertEqual(made["tags"], again["tags"])
+        for bad in ("  ", "x" * 41, "a\u0007b"):
+            status, err, _ = self.call("POST", "/api/tags", {"name": bad})
+            self.assertEqual(400, status)
+            self.assertRegex(err["error"], "^cannot use that name as a tag: it ")
+        self.assertEqual(["Sleeper cars"], Store(self.data).tags())
+        rows = [h["row"] for h in self.call("POST", "/api/search", {"query": "night train"})[1]["hits"]]
+        s = self.call("POST", "/api/sessions", {"query": "night train", "rows": rows, "picked": ["Sleeper cars"]})[1]
+        page = s["pages"][0]
+        self.assertEqual([("Sleeper cars", "zero shot")], [(x["tag"], x["source"]) for x in page["sugg"]])
+        path = f"/api/sessions/{s['id']}/pages/{page['index']}"
+        self.call("POST", path, {"marks": {"Sleeper cars": True}, "status": "decided"})
+        out = self.call("POST", "/api/export", {})[1]
+        answers = [json.loads(line) for line in Path(out["answers"]).read_text().splitlines()]
+        self.assertEqual([{"url": page["url"], "tags": ["Sleeper cars"], "source": SOURCE}], answers)
+        restarted = server.App(self.lib, Store(self.data), fake_encode)
+        self.assertEqual(made["tags"], restarted.library()["tags"])
 
     def test_excluded_results_stay_out_of_suggestions_review_and_export(self):
         found = self.call("POST", "/api/search", {"query": "night train", "n": 20})[1]

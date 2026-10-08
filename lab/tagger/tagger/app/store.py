@@ -3,17 +3,38 @@
 A session is one search and its picked tags: the result pages, by key, each with the model's prechecks, the
 user's marks and a status (open, skipped, decided). Export folds every decided page over all sessions,
 latest decision per page and tag, into a `tag --import` answers file and a decision log. Results marked not
-relevant to a query live apart, in `Exclusions`, and are never exported. Nothing here touches an archive.
+relevant to a query live apart, in `Exclusions`, and are never exported. Tags the owner makes in the app
+are kept in the same file, by the spelling `tag --import` would store. Nothing here touches an archive.
 """
 
 import json
 import os
+import re
 import time
+import unicodedata
 from datetime import UTC, datetime
 from pathlib import Path
 
 SOURCE = "kmt-tagger-app"
 STATUSES = ("open", "skipped", "decided")
+NAME_LIMIT = 40  # knowmoretabs `tags::NAME_LIMIT`
+# Unicode White_Space, what Rust `split_whitespace` splits on (str.split also splits on some control characters)
+SPACE = re.compile(r"[\t\n\v\f\r \x85\xa0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+")
+
+
+def tag_name(raw: str) -> str:
+    """The spelling knowmoretabs `tags::normalize` stores, refused for what it refuses: whitespace runs
+    collapsed to one space and trimmed, non-empty, at most 40 characters, no control character."""
+    name = " ".join(w for w in SPACE.split(raw) if w)
+    if not name:
+        reason = "it is empty"
+    elif len(name) > NAME_LIMIT:
+        reason = f"it is longer than {NAME_LIMIT} characters"
+    elif any(unicodedata.category(c) == "Cc" for c in name):
+        reason = "it contains a control character"
+    else:
+        return name
+    raise ValueError(f"cannot use that name as a tag: {reason}")
 
 
 def _write(path: Path, text: str) -> None:
@@ -36,6 +57,15 @@ class Store:
 
     def sessions(self) -> list[dict]:
         return self.state["sessions"]
+
+    def tags(self) -> list[str]:
+        """Tags made in the app, oldest first."""
+        return [t["name"] for t in self.state.get("tags", [])]
+
+    def add_tag(self, name: str) -> None:
+        """Keep a tag made in the app (a `tag_name` spelling the library lacks)."""
+        self.state.setdefault("tags", []).append({"name": name, "created_at": time.time()})
+        self._save()
 
     def session(self, sid: int) -> dict | None:
         return next((s for s in self.state["sessions"] if s["id"] == sid), None)

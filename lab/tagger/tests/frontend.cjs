@@ -170,6 +170,66 @@ async function pickIncluded() {
   assert.deepEqual(plain(requests[0].body.rows), [1, 3], 'excluded results must never reach review');
 }
 
+/* ---- "+ New tag": type a name, Enter picks it, made new by the server only when you lack it ---- */
+function newTagFixture() {
+  const f = resultsFixture('search.js', 'pick.js');
+  f.K.lib.tags = [{ name: 'Coffee', positives: 12, source: 'head' }, { name: 'Trains', positives: 11, source: 'head' }];
+  f.K.results.suggested = [{ tag: 'Coffee', z: 1.5 }];
+  f.K.state.search.picked = [];
+  f.node('t-new').id = 't-new';
+  f.K.pick.render();
+  f.open = () => f.node('view-tag').click({ target: { closest(selector) {
+    return selector === '[data-act]' ? { dataset: { act: 'new-tag' }, disabled: false } : null;
+  } } });
+  f.type = (value, key = 'Enter') => { f.node('t-new').value = value; f.node('view-tag').keydown({ key, preventDefault() {}, target: f.node('t-new') }); };
+  f.row = () => f.node('t-sugg').innerHTML;
+  return f;
+}
+
+async function newTag() {
+  const { K, requests, open, type, row } = newTagFixture();
+  assert.match(row(), /data-act="new-tag"><b>\+ New tag<\/b>/, 'the chip is always in the suggestions row');
+  open();
+  assert.match(row(), /<input id="t-new"/, 'a click opens an inline input');
+  type('  Night trains ');
+  await turn();
+  assert.equal(requests[0].route, '/api/tags');
+  assert.deepEqual(plain(requests[0].body), { name: 'Night trains' }, 'the name goes trimmed');
+  requests[0].resolve({ tag: 'Night trains', created: true, tags: [...K.lib.tags, { name: 'Night trains', positives: 0, source: 'zero shot' }] });
+  await turn(); await turn();
+  assert.deepEqual(plain(K.state.search.picked), ['Night trains']);
+  assert.match(row(), /data-tag="Night trains" aria-pressed="true"><b>Night trains<\/b><small>zero shot/, 'a filled chip in the row');
+  assert.doesNotMatch(row(), /t-new/, 'the input closes');
+  assert.match(row(), /\+ New tag/);
+}
+
+async function newTagExisting() {
+  const { K, requests, open, type, row } = newTagFixture();
+  open(); type('trains');
+  open(); type(' COFFEE ');
+  open(); type('Trains');
+  await turn();
+  assert.equal(requests.length, 0, 'a name you have makes no tag');
+  assert.deepEqual(plain(K.state.search.picked), ['Trains', 'Coffee'], 'it picks your tag once, as you spell it');
+  assert.match(row(), /data-tag="Coffee" aria-pressed="true"/);
+  assert.match(row(), /data-tag="Trains" aria-pressed="true"/);
+}
+
+async function newTagCancelAndRefusal() {
+  const { K, node, open, type, row } = newTagFixture();
+  open(); type('Half typed', 'Escape');
+  assert.doesNotMatch(row(), /t-new/, 'Escape cancels');
+  open(); type('   ');
+  assert.doesNotMatch(row(), /t-new/, 'an empty name cancels');
+  K.api = async () => { throw new Error('cannot use that name as a tag: it is longer than 40 characters'); };
+  open(); type('x'.repeat(41));
+  await turn(); await turn();
+  assert.match(row(), /<li class="msg" role="alert">cannot use that name as a tag: it is longer than 40 characters<\/li>/);
+  assert.match(row(), new RegExp(`<input id="t-new"[^>]*value="${'x'.repeat(41)}"`), 'the name stays to fix');
+  assert.deepEqual(plain(K.state.search.picked), [], 'nothing picked');
+  assert.equal(node('t-filter').value, '', 'the filter box is untouched');
+}
+
 function reviewFixture() {
   const { K, node } = setup('review.js');
   K.set = { id: 1, pages: [{ index: 0, status: 'open', sugg: [
@@ -329,5 +389,5 @@ async function openNoDrag() {
   assert.deepEqual(decided, ['yes'], 'the card itself still swipes');
 }
 
-const cases = { openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+const cases = { newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

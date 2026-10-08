@@ -194,6 +194,8 @@ main { flex: 1; }
 .chip:hover { border-color: var(--ink); }
 .chip[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
 .chip[aria-pressed="true"] small { color: inherit; opacity: 0.7; }
+input.chip { width: 14rem; background: var(--bg-1); border-color: var(--ink); outline: 0; }
+.chips .msg { align-self: center; font-size: 0.75rem; color: var(--forget); }
 
 /* ---- review: grid or swipe ---- */
 .modes { display: inline-flex; border: 1px solid var(--line-2); }

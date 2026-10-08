@@ -1,11 +1,14 @@
 /* knowmoretabs · tagger app · step 2, pick tags
    The model's suggestions for this result set come first (tags ranked by
    their mean z score over the results kept), then every tag you have. Pick a
-   few; the review offers only those, on kept pages that do not hold them yet. */
+   few; the review offers only those, on kept pages that do not hold them yet.
+   "+ New tag" in the suggestions row takes a name: one you have (in any
+   case) is picked, any other becomes a new zero shot tag and is picked. */
 (function () {
   const K = window.KMT;
   const S = K.state.search;
   const info = (t) => K.lib.tags.find((x) => x.name === t);
+  const fresh = { open: false, draft: "", error: "", busy: false };   // the "+ New tag" input
 
   function chip(t, extra) {
     const on = S.picked.includes(t), x = info(t);
@@ -18,6 +21,41 @@
     if (i >= 0) S.picked.splice(i, 1); else S.picked.push(t);
     K.save();
     K.pick.render();
+  }
+
+  function newTag() {
+    if (!fresh.open) return `<li><button type="button" class="chip" data-act="new-tag"><b>+ New tag</b></button></li>`;
+    return `<li><input id="t-new" class="chip" type="text" value="${K.esc(fresh.draft)}" placeholder="New tag, then ↵" autocomplete="off" aria-label="New tag name"></li>` +
+      (fresh.error ? `<li class="msg" role="alert">${K.esc(fresh.error)}</li>` : "");
+  }
+
+  function close() {
+    Object.assign(fresh, { open: false, draft: "", error: "" });
+    K.pick.render();
+  }
+
+  async function add(raw) {
+    const name = raw.trim();
+    if (!name) { close(); return; }
+    if (fresh.busy) return;
+    let tag = K.lib.tags.find((t) => t.name.toLowerCase() === name.toLowerCase());
+    tag = tag && tag.name;
+    if (!tag) {
+      fresh.busy = true;
+      try {
+        const out = await K.api("/api/tags", { name });
+        K.lib.tags = out.tags;
+        tag = out.tag;
+      } catch (err) {
+        Object.assign(fresh, { draft: raw, error: err.message });
+        K.pick.render();
+        K.$("t-new").focus();
+        return;
+      } finally { fresh.busy = false; }
+    }
+    if (!S.picked.includes(tag)) S.picked.push(tag);
+    K.save();
+    close();
   }
 
   async function review() {
@@ -48,7 +86,11 @@
       }
       K.$("t-pos").innerHTML = `<b>${kept}</b> results for “${K.esc(K.short(S.query))}”${kept < r.hits.length ? ` (${r.hits.length - kept} excluded)` : ""}`;
       K.$("t-picked").textContent = S.picked.length ? `${S.picked.length} picked` : "none picked";
-      K.$("t-sugg").innerHTML = r.suggested.map((s) => chip(s.tag, `z ${s.z.toFixed(2)}`)).join("");
+      const box = fresh.open && K.$("t-new");
+      if (box) fresh.draft = box.value;
+      const shown = r.suggested.map((s) => s.tag);
+      K.$("t-sugg").innerHTML = r.suggested.map((s) => chip(s.tag, `z ${s.z.toFixed(2)}`)).join("") +
+        S.picked.filter((t) => !shown.includes(t) && info(t)).map((t) => chip(t)).join("") + newTag();
       const f = K.$("t-filter").value.trim().toLowerCase();
       const all = K.lib.tags.filter((t) => !f || t.name.toLowerCase().includes(f));
       K.$("t-all").innerHTML = all.length ? all.map((t) => chip(t.name)).join("") : `<li class="none">No tag matches.</li>`;
@@ -65,12 +107,21 @@
   };
 
   K.$("view-tag").addEventListener("click", (e) => {
-    const c = e.target.closest(".chip");
-    if (c) { toggle(c.dataset.tag); return; }
     const a = e.target.closest("[data-act]");
-    if (!a || a.disabled) return;
-    if (a.dataset.act === "back") location.hash = "search";
-    if (a.dataset.act === "review") review();
+    if (a) {
+      if (a.disabled) return;
+      if (a.dataset.act === "back") location.hash = "search";
+      if (a.dataset.act === "review") review();
+      if (a.dataset.act === "new-tag") { fresh.open = true; K.pick.render(); K.$("t-new").focus(); }
+      return;
+    }
+    const c = e.target.closest("button.chip");
+    if (c) toggle(c.dataset.tag);
+  });
+  K.$("view-tag").addEventListener("keydown", (e) => {
+    if (e.target.id !== "t-new") return;
+    if (e.key === "Enter") { e.preventDefault(); add(e.target.value); }
+    else if (e.key === "Escape") { e.preventDefault(); close(); }
   });
   K.$("t-filter").addEventListener("input", () => K.pick.render());
 })();

@@ -20,7 +20,7 @@ import numpy as np
 from ..paths import Paths, read_json
 from ..zeroshot import prototype, query_variants
 from . import engine
-from .store import Exclusions, Store
+from .store import Exclusions, Store, tag_name
 
 STATIC = Path(__file__).with_name("static")
 MAX_RESULTS = 50
@@ -32,7 +32,7 @@ CSP = (
 
 class App:
     def __init__(self, lib: engine.Library, store: Store, encode: engine.Encode):
-        self.lib, self.store, self.encode = lib, store, encode
+        self.lib, self.store, self.encode = engine.add_tags(lib, store.tags(), encode), store, encode
         self.exclusions = Exclusions(store.root)
 
     def own(self, row: int) -> list[str]:
@@ -121,6 +121,15 @@ class App:
         self.exclusions.apply(query, keys, str(body.get("action")), key)
         return self.judged(query, rows)
 
+    def tag(self, body: dict) -> dict:
+        """The tag named `name`: the library's own in any case, else made and kept as a new zero shot tag."""
+        name = tag_name(str(body.get("name", "")))
+        have = engine.find_tag(self.lib, name)
+        if have is None:
+            self.store.add_tag(name)
+            self.lib = engine.add_tags(self.lib, [name], self.encode)
+        return {"tag": have or name, "created": have is None, "tags": engine.tag_info(self.lib)}
+
     def create(self, body: dict) -> dict:
         """A result set of the given rows less any excluded for the query, so excluded pages never reach review."""
         query = str(body.get("query", ""))
@@ -188,6 +197,7 @@ ROUTES = [
     ),
     ("POST", re.compile(r"/api/search"), lambda app, m, b: app.search(b)),
     ("POST", re.compile(r"/api/exclusions"), lambda app, m, b: app.exclude(b)),
+    ("POST", re.compile(r"/api/tags"), lambda app, m, b: app.tag(b)),
     ("POST", re.compile(r"/api/sessions"), lambda app, m, b: app.create(b)),
     ("POST", re.compile(r"/api/sessions/(\d+)/pages/(\d+)"), lambda app, m, b: app.update(int(m[1]), int(m[2]), b)),
     ("POST", re.compile(r"/api/export"), lambda app, m, b: app.store.export()),

@@ -28,6 +28,9 @@ import pytest
         "openSearch",
         "openReview",
         "openNoDrag",
+        "newTag",
+        "newTagExisting",
+        "newTagCancelAndRefusal",
     ],
 )
 def test_frontend_round_trips(case):

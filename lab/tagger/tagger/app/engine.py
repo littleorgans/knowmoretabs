@@ -1,6 +1,7 @@
 """The app's model side, loaded once: the library's cached vectors, a keyword index, and test S2's supervised
 rules fitted on every owner labelled page. Search fuses EG2 cosine with keywords (and images on request) by
 reciprocal rank; a result set gets suggested tags (S2's mean z ranking) and, for the picked tags, prechecks.
+Tags the owner makes in the app join the library as zero shot tags with their name as the query (`add_tags`).
 
 `encode` turns texts into unit EG2 query vectors; the text model alone is loaded, since its query vectors
 equal the full model's, so one vector scores text and images. Page text feeds the keyword index only.
@@ -8,7 +9,7 @@ equal the full model's, so one vector scores text and images. Page text feeds th
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import numpy as np
@@ -120,8 +121,8 @@ def load(paths: Paths, root: Path, encode: Encode) -> tuple[Library, dict]:
     rules = fit_rules(X[fit], Y[fit], q)
     S = rules.scores(X)["supervised"]
     threshold = rules.thresholds["supervised"].copy()
-    unseen = ~np.isfinite(threshold)  # no positives: the zero shot k = 0 rule over the library
-    threshold[unseen] = S[:, unseen].mean(axis=0) + ZERO_K_SD * S[:, unseen].std(axis=0)
+    unseen = ~np.isfinite(threshold)
+    threshold[unseen] = _zero_shot_threshold(S[:, unseen])
     timings["heads_s"] = time.perf_counter() - start
 
     start = time.perf_counter()
@@ -142,7 +143,7 @@ def load(paths: Paths, root: Path, encode: Encode) -> tuple[Library, dict]:
         rules=rules,
         S=S,
         threshold=threshold,
-        spread=np.maximum(S.std(axis=0), 1e-12),
+        spread=_spread(S),
     )
     stats = {
         "pages": len(records),
@@ -156,6 +157,41 @@ def load(paths: Paths, root: Path, encode: Encode) -> tuple[Library, dict]:
         **{k: round(v, 2) for k, v in timings.items()},
     }
     return lib, stats
+
+
+def _zero_shot_threshold(S: np.ndarray) -> np.ndarray:
+    """Per column with no positives: the zero shot k = 0 rule over the library."""
+    return S.mean(axis=0) + ZERO_K_SD * S.std(axis=0)
+
+
+def _spread(S: np.ndarray) -> np.ndarray:
+    return np.maximum(S.std(axis=0), 1e-12)
+
+
+def find_tag(lib: Library, name: str) -> str | None:
+    """The library's spelling of `name` in any case, as `tag --import` matches names."""
+    folded = name.lower()
+    return next((t for t in lib.tags if t.lower() == folded), None)
+
+
+def add_tags(lib: Library, names: list[str], encode: Encode) -> Library:
+    """The library with each name it lacks in any case appended as a zero shot tag: no positives, the name
+    as its query, scored and thresholded as `load` scores an owner tag nobody holds yet."""
+    new: list[str] = []
+    for name in names:
+        if find_tag(lib, name) is None and name.lower() not in {n.lower() for n in new}:
+            new.append(name)
+    if not new:
+        return lib
+    S = lib.X @ encode(new).T
+    return replace(
+        lib,
+        tags=[*lib.tags, *new],
+        Y=np.hstack([lib.Y, np.zeros((len(lib.Y), len(new)), lib.Y.dtype)]),
+        S=np.hstack([lib.S, S]),
+        threshold=np.concatenate([lib.threshold, _zero_shot_threshold(S)]),
+        spread=np.concatenate([lib.spread, _spread(S)]),
+    )
 
 
 def _ranks(scores: np.ndarray, eligible: np.ndarray) -> np.ndarray:
