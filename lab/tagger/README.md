@@ -50,7 +50,7 @@ images on request; "Untagged only" keeps pages with no app tag), click results t
 App tags are the tags made in this app, applied directly or kept in an earlier review; archive tags stay out of the
 screen. The sticky strip above the grid lists the app tags in view with counts ("Trains 3/20"): the name tags every
 selected page, or takes the tag off them all when they all have it (partial when some do); the count filters to
-pages with it, then without; ≈ ("more like this, not yet tagged") ranks pages without any app tag by refine's
+pages with it, then without; ≈ ("pages like this, without this tag") ranks pages without that app tag by refine's
 prototype (the tag's name as the query, toward its pages, away from pages it was taken off) and is a toggle: ≈
 again, Esc or Back returns to the search, scroll and selection intact. "+ New tag" applies a tag to the selection,
 picking yours in any case or making one by `tag --import`'s name rules (kept in `state.json`). A tile chip's ×

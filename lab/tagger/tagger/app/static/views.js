@@ -2,7 +2,7 @@
    Search, then click pages to select them (space or x on the focused one).
    Open (o) shows a page in a new tab and selects nothing; a chip's × takes
    that tag off that page only. Three views share the grid: the search's
-   results, ≈ (untagged pages like a tag's) and Show selection. ≈ and Show
+   results, ≈ (pages like a tag's without that tag) and Show selection. ≈ and Show
    selection sit over the search: pressing them again, Esc (≈) or Back
    returns to the search as it was left, scroll included. Esc with no ≈
    open clears the selection. Tagging never changes which pages a view
@@ -106,8 +106,8 @@
   const plural = (n, word) => `<b>${n}</b> ${word}${n === 1 ? "" : "s"}`;
   function position(v) {
     const n = v.rows.length;
-    if (v.kind === "like") return v.loading && !n ? `Finding untagged pages like <b>${K.esc(v.tag)}</b>…`
-      : `Untagged pages like <b>${K.esc(v.tag)}</b> · ${n}<span class="wide"> · ≈, Esc or Back returns to your search</span>`;
+    if (v.kind === "like") return v.loading && !n ? `Finding pages like <b>${K.esc(v.tag)}</b>, not tagged <b>${K.esc(v.tag)}</b>…`
+      : `Pages like <b>${K.esc(v.tag)}</b>, not tagged <b>${K.esc(v.tag)}</b> · ${n}<span class="wide"> · ≈, Esc or Back returns to your search</span>`;
     if (v.kind === "selection") return `Your selection · ${plural(n, "page")}<span class="wide"> · Show selection or Back returns to your search</span>`;
     if (v.loading) return "Searching…";
     if (S.query) return `${plural(n, "result")} for “${K.esc(K.short(S.query))}”${S.untagged ? " · untagged only" : ""}`;
@@ -116,7 +116,7 @@
   function empty(v) {
     if (v.loading) return "";
     if (v.filter) return "No page in view matches this filter.";
-    if (v.kind === "like") return `No untagged pages like ${K.esc(v.tag)} are left.`;
+    if (v.kind === "like") return `No pages like ${K.esc(v.tag)} without that tag are left.`;
     if (v.kind === "selection") return "Nothing selected.";
     return S.query ? `Nothing found${S.untagged ? " among untagged pages" : ""}.` : "Search your library, then click pages to select them.";
   }

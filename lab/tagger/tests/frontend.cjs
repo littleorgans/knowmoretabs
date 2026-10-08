@@ -527,7 +527,7 @@ async function likeToggle() {
     await turn(); await turn();
     assert.match(node('grid').innerHTML, /data-row="7"[^]*data-row="8"/);
     assert.doesNotMatch(node('grid').innerHTML, /data-row="[123]"/);
-    assert.match(node('v-pos').innerHTML, /Untagged pages like <b>A<\/b>/, 'the view is named');
+    assert.match(node('v-pos').innerHTML, /Pages like <b>A<\/b>, not tagged <b>A<\/b>/, 'the view is named');
     assert.match(node('strip').innerHTML, /data-act="like" aria-pressed="true" title="Back to your search/, '≈ shows as active');
   };
   const back = async (scroll, how) => {
@@ -587,13 +587,49 @@ async function keysBesideCheckbox() {
   const seen = [];
   K.views.key = (e) => { seen.push(e.key); return true; };
   const element = (...matches) => ({ closest: (s) => (s.split(',').some((part) => matches.includes(part.trim())) ? {} : null) });
-  const press = (target) => keys.keydown({ key: 'Escape', target, preventDefault() {} });
+  const press = (target, key = 'Escape') => keys.keydown({ key, target, preventDefault() {} });
   press(element('input', 'input[type=checkbox]'));
   assert.deepEqual(seen, ['Escape'], 'Esc on a focused checkbox reaches the views');
-  press(element('input', 'input:not([type=checkbox])'));
-  press(element('textarea'));
+  press(element('input', 'input:not([type=checkbox])'), 'x');
+  press(element('textarea'), '/');
   assert.deepEqual(seen, ['Escape'], 'keys typed into a text box stay there');
 }
 
-const cases = { keysBesideCheckbox, select, tagToggle, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+async function escapeFromTextInputs() {
+  const { K, keys, context } = setup('app.js');
+  await turn();
+  let overlay = true;
+  K.sel = [2, 7];
+  K.views.key = (e) => {
+    assert.equal(e.key, 'Escape');
+    if (overlay) overlay = false;
+    else K.sel = [];
+    return true;
+  };
+  const target = { closest: () => ({}) };  // focused search, new tag or textarea
+  let prevented = 0;
+  const press = () => keys.keydown({ key: 'Escape', target, preventDefault() { prevented++; } });
+  press();
+  assert.equal(overlay, false, 'Esc from a text input leaves the like view first');
+  assert.deepEqual(K.sel, [2, 7], 'leaving the like view keeps the selection');
+  press();
+  assert.deepEqual(K.sel, [], 'Esc from a text input with no like view clears selection');
+  assert.equal(prevented, 2);
+  context.document.querySelector = () => ({});  // an open dialog owns Escape
+  press();
+  assert.equal(prevented, 2, 'an open dialog keeps its native Escape handling');
+}
+
+async function likeNaming() {
+  const { K, node, requests, chip } = await screenFixture();
+  assert.match(node('strip').innerHTML, /Find pages like A, not tagged A/);
+  chip('A', 'like');
+  assert.match(node('v-pos').innerHTML, /Finding pages like <b>A<\/b>, not tagged <b>A<\/b>/);
+  requests.shift().resolve({ tag: 'A', hits: [] });
+  await turn();
+  assert.match(node('v-pos').innerHTML, /Pages like <b>A<\/b>, not tagged <b>A<\/b>/);
+  assert.match(node('grid').innerHTML, /No pages like A without that tag are left/);
+}
+
+const cases = { escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, tagToggle, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

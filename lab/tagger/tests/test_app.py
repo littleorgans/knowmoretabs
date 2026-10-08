@@ -599,7 +599,7 @@ class ServerTests(Fixture):
         archive_tagged = [r for r in untagged if self.lib.Y[r].any()]
         self.assertTrue(archive_tagged)  # a page holding only archive tags is still untagged here
 
-    def test_more_like_this_offers_untagged_pages_near_the_tags_pages(self):
+    def test_more_like_this_excludes_only_its_tag_near_the_tags_pages(self):
         self.call("POST", "/api/tags", {"name": "Sleeper cars"})
         trains = [r for r in self.rows_for("night train") if topic_of(self.lib.records[r]["key"]) == "trains"]
         self.call("POST", "/api/apply", {"rows": trains[:4], "tag": "Sleeper cars", "value": True})
@@ -607,8 +607,9 @@ class ServerTests(Fixture):
         status, out, _ = self.call("POST", "/api/like", {"tag": "Sleeper cars", "n": 20})
         self.assertEqual((200, "Sleeper cars", 20), (status, out["tag"], len(out["hits"])))
         liked = [h["row"] for h in out["hits"]]
-        self.assertFalse(set(trains[:6]) & set(liked))  # neither this tag's pages nor any other tagged page
-        self.assertTrue(all(h["tags"] == [] for h in out["hits"]))
+        self.assertFalse(set(trains[:4]) & set(liked))
+        self.assertTrue(set(trains[4:6]) <= set(liked))  # a different app tag still belongs in this view
+        self.assertTrue(all("Sleeper cars" not in h["tags"] for h in out["hits"]))
         self.assertEqual(["trains"] * 5, [topic_of(self.lib.records[r]["key"]) for r in liked[:5]])
         self.assertEqual(400, self.call("POST", "/api/like", {"tag": "Nope"})[0])
 

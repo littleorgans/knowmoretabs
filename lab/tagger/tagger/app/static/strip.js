@@ -5,7 +5,7 @@
    with three targets. The name tags every selected page, or takes the tag
    off them all when they all have it (partial when only some do). The
    count, pages in view with the tag of all in view, shows only those
-   pages, then only the others, then all. ≈ shows untagged pages like the
+   pages, then only the others, then all. ≈ shows pages without this tag like the
    tag's, and pressed again goes back. "+ New tag" makes a tag, or finds
    yours in any case, and puts it on every selected page. */
 (function () {
@@ -24,7 +24,7 @@
       : on === "some" ? `On ${s} of the ${n} selected: click to tag the rest` : `Tag the ${n} selected ${name}`;
     const count = f === "has" ? `Showing pages tagged ${name}; click for pages without it` : f === "not" ? `Showing pages without ${name}; click to show all`
       : `Show only pages tagged ${name}`;
-    const find = like ? `Back to your search (Esc)` : `Find untagged pages like ${name}`;
+    const find = like ? `Back to your search (Esc)` : `Find pages like ${name}, not tagged ${name}`;
     return `<li class="tc" data-on="${on}" data-tag="${name}">` +
       `<button type="button" class="nm" data-act="toggle" aria-pressed="${on === "all" ? "true" : on === "some" ? "mixed" : "false"}" title="${tip}">${name}</button>` +
       `<button type="button" class="ct" data-act="filter"${f ? ` data-f="${f}"` : ""} title="${count}" aria-label="${c} of ${v.rows.length} in view. ${count}">${c}/${v.rows.length}</button>` +
@@ -61,7 +61,7 @@
       K.$("strip").innerHTML = names.size ? [...names].sort(byName).map((t) => chip(t, v)).join("")
         : `<li class="none">No tags here yet: select pages, then make a new tag.</li>`;
       K.$("app-tags").innerHTML = (K.lib ? K.lib.app_tags : []).map((t) => `<option value="${K.esc(t)}"></option>`).join("");
-      K.$("hint").textContent = n ? `A tag's name tags the ${n} selected, or takes it off when they all have it. Its count filters the view; ≈ finds untagged pages like it.`
+      K.$("hint").textContent = n ? `A tag's name tags the ${n} selected, or takes it off when they all have it. Its count filters the view; ≈ finds similar pages without that tag.`
         : "Click pages to select them. The selection stays across searches until you clear it.";
     }
   };

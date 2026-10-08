@@ -38,6 +38,8 @@ import pytest
         "likeToggle",
         "newTagApplies",
         "keysBesideCheckbox",
+        "escapeFromTextInputs",
+        "likeNaming",
     ],
 )
 def test_frontend_round_trips(case):

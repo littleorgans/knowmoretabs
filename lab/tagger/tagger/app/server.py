@@ -67,10 +67,16 @@ class App:
             "sizes": [20, MAX_RESULTS],
         }
 
-    def untagged(self) -> np.ndarray:
-        """Live pages without an app tag."""
+    def untagged(self, tag: str | None = None) -> np.ndarray:
+        """Live pages without any app tag, or without the given app tag."""
         mask = self.lib.live.copy()
-        mask[[self.lib.rows[k] for k in self.store.app_tags() if k in self.lib.rows]] = False
+        mask[
+            [
+                self.lib.rows[k]
+                for k, tags in self.store.app_tags().items()
+                if k in self.lib.rows and (tag is None or tag in tags)
+            ]
+        ] = False
         return mask
 
     def search(self, body: dict) -> dict:
@@ -148,8 +154,8 @@ class App:
         return {"tag": have or name, "created": have is None, "tags": engine.tag_info(self.lib)}
 
     def like(self, body: dict) -> dict:
-        """More like this, not yet tagged: the tag's name as a query moved toward the pages holding it and away
-        from those it was taken off (refine's prototype), ranked among pages without an app tag."""
+        """The tag's name as a query moved toward the pages holding it and away from those it was taken off
+        (refine's prototype), ranked among pages without that app tag."""
         tag = str(body.get("tag", ""))
         if tag not in self.lib.tags:
             raise ValueError("name one of your tags")
@@ -158,7 +164,7 @@ class App:
             if t == tag and key in self.lib.rows:
                 held[d["value"]].append(self.lib.rows[key])
         q = prototype(self.encode([tag])[0], self.lib.X[held[True]], self.lib.X[held[False]])
-        hits = engine.search(self.lib, q, tag, _size(body), bool(body.get("images")), self.untagged())
+        hits = engine.search(self.lib, q, tag, _size(body), bool(body.get("images")), self.untagged(tag))
         return {"tag": tag, "hits": [self.page(h["row"]) for h in hits]}
 
     def apply(self, body: dict) -> dict:
