@@ -15,7 +15,7 @@ import pytest
 from test_add import Synthetic, fake_binary
 from test_app import Fixture, fake_embed, fake_encode
 
-from tagger.app import server
+from tagger.app import engine, server
 from tagger.app.store import Store
 
 MAC_CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
@@ -32,7 +32,7 @@ class Browser:
             pytest.skip("Node and Chrome are needed to run the screen in a browser")
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
-        app = server.App(lib, Store(self.data), fake_encode, fake_embed)
+        app = server.App(lib, Store(self.data / "app"), fake_encode, fake_embed)
         self.server = server.serve(app, 0)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
@@ -90,8 +90,8 @@ class BrowserTests(Browser, Fixture):
 class AddBrowserTests(Browser, Synthetic):
     def setUp(self):
         super().setUp()
-        app = self.start(self.load()[0])
-        app.adds.binary = fake_binary(self.work)
+        self.app = self.start(self.load()[0])
+        self.app.adds.binary = fake_binary(self.work)
 
     def paced(self, seconds: float) -> None:
         """Each stage line this long after the last; a state shorter than a poll may never show."""
@@ -111,3 +111,11 @@ class AddBrowserTests(Browser, Synthetic):
 
     def test_a_pasted_web_address_starts_at_once(self):
         self.run_case("addPaste", "#add")
+
+    def test_snapshot_refusal_replaces_all_segments_and_disables_the_tile(self):
+        protected = self.data / "snapshot-synthetic"
+        shutil.copytree(self.root, protected)
+        self.app.lib = engine.load(self.paths, protected, fake_encode, fake_embed)[0]
+        with patch.object(self.app.adds, "_command") as command:
+            self.run_case("addSnapshot", "#add")
+            command.assert_not_called()

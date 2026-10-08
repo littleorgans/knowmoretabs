@@ -29,6 +29,7 @@
   const wait = (e) => e.state === "waiting" || e.state === "retrying";
 
   function library(e, failed) {
+    if (e.reason === "snapshot") return ["Read only snapshot", "bad"];
     if (failed && e.state !== "done") return ["Not added", "bad"];
     if (e.state !== "done") return wait(e) ? ["Waiting", "wait"] : ["Adding", "run"];
     return { added: ["Added", "ok"], known: ["Already in library", "ok"], forgotten: ["Forgotten", "bad"] }[e.value] || ["Not a web page", "bad"];
@@ -50,13 +51,14 @@
     const st = job.stages, read = { library: (e) => library(e, job.failed), content, image, search };
     const segs = SEGS.map((k) => (st[k] ? read[k](st[k]) : ["", ""]));
     const lib = st.library || {}, got = st.content || {}, indexed = !!st.search && st.search.value === "indexed";
-    const again = job.action === "signed_in" ? "signed_in" : "add";   // Retry repeats what failed
+    const again = job.action;   // Retry repeats what failed
     let act = null;
     if (lib.value === "forgotten") act = ["Restore", "restore"];
     else if (job.failed) act = ["Retry", again];
+    else if (st.search && st.search.state === "done" && !indexed) act = ["Retry", "index"];
     else if (SIGN_IN.includes(got.status)) act = ["Try signed in", "signed_in"];
     else if (got.status === "not_found") act = ["Remove", "forget"];
-    else if (RETRY.includes(got.status) || (st.search && !indexed && st.search.state === "done")) act = ["Retry", again];
+    else if (RETRY.includes(got.status)) act = ["Retry", again === "index" ? "add" : again];
     return { segs, act, framed: LISTED.includes(lib.value), indexed, title: (job.page && job.page.title) || got.title || "",
              picture: st.image ? st.image.state !== "done" ? "wait" : st.image.status === "ok" ? "ok" : "none" : indexed ? "none" : "" };
   }
@@ -87,7 +89,7 @@
       row = K.know([j.page])[0];
       K.gone.delete(row);
     }
-    if (j.stages.library && ["added", "forgotten"].includes(j.stages.library.value)) K.lib = await K.api("/api/library");
+    if (j.stages.library && [...LISTED, "forgotten"].includes(j.stages.library.value)) K.lib = await K.api("/api/library");
     K.changed();
   }
   function show(j) {

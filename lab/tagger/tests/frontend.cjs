@@ -1037,5 +1037,18 @@ async function addStates() {
   assert.deepEqual(tile([L('known'), C('chrome_not_running', 'signed_in'), S('indexed')], { title: 'Kept' }), [true, true, 'Kept', 'none'], 'settled with no image');
 }
 
+async function addIndexRetry() {
+  const { K } = setup({ lit, strip: { render() {}, sayIn: () => () => {} } }, 'add.js');
+  for (const status of ['ok', 'blocked']) {
+    const result = K.add.say({ action: 'add', failed: false, page: null, stages: {
+      library: { stage: 'library', state: 'done', value: 'added' },
+      content: { stage: 'content', state: 'done', status, tier: 'web' },
+      search: { stage: 'search', state: 'done', value: 'not_indexed' },
+    } });
+    assert.deepEqual(plain(result.act), ['Retry', 'index'], 'index failure offers a lab only retry');
+  }
+}
+
 const cases = { addStates, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+cases.addIndexRetry = addIndexRetry;
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

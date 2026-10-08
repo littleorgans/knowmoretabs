@@ -2,7 +2,8 @@
 it reports, so the screen can poll it. `add` and `add --signed-in` stream the contract's `--json` stage events
 (library, content, image, done); `restore` runs before an `add`; `forget` stands alone. Once knowmoretabs lists the
 page, the job brings the app's library in line with the archive under the app's lock (the Search stage: the page
-embedded and indexed, or its files and visibility refreshed). Job state has its own lock, so a poll never waits on
+embedded and indexed, or its files and visibility refreshed). `index` retries Search in the lab only. Roots inside
+the lab data directory are refused before a worker starts. Job state has its own lock, so a poll never waits on
 the model. Nothing a job reads from knowmoretabs is printed; its stderr is dropped.
 """
 
@@ -11,6 +12,7 @@ import json
 import subprocess
 import threading
 import time
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 from ..archive import Archive
@@ -30,6 +32,7 @@ ACTIONS = {
     "signed_in": _add("--signed-in"),
     "restore": lambda url: [["restore", "--", url], *_add()(url)],
     "forget": lambda url: [["forget", "--", url]],
+    "index": lambda url: [],  # Retry the lab's Search stage without changing the archive
 }
 
 
@@ -59,16 +62,18 @@ class Job:
             self.stages[event["stage"]] = event
 
     def view(self) -> dict:
-        return {
-            "id": self.id,
-            "url": self.url,
-            "action": self.action,
-            "stages": self.stages,
-            "finished": self.ended is not None,
-            "failed": self.failed,
-            "seconds": round((self.ended or time.monotonic()) - self.started, 1),
-            "page": self.page,
-        }
+        return deepcopy(
+            {
+                "id": self.id,
+                "url": self.url,
+                "action": self.action,
+                "stages": self.stages,
+                "finished": self.ended is not None,
+                "failed": self.failed,
+                "seconds": round((self.ended or time.monotonic()) - self.started, 1),
+                "page": self.page,
+            }
+        )
 
 
 class Jobs:
@@ -86,14 +91,21 @@ class Jobs:
             raise ValueError(f"action is one of {', '.join(ACTIONS)}")
         with self.lock:
             job = Job(next(self.ids), url, action)
-            if action != "forget":
+            # The store lives at <data>/app. Resolve both paths so an alias cannot write into a snapshot copy.
+            if self.app.lib.root.resolve().is_relative_to(self.app.store.root.parent.resolve()):
+                job.stages["library"] = {"stage": "library", "state": "done", "value": "refused", "reason": "snapshot"}
+                job.ended = time.monotonic()
+            elif action == "index":
+                job.stages["library"] = {"stage": "library", "state": "done", "value": "known"}
+            elif action != "forget":
                 job.stages["library"] = {"stage": "library", "state": "running"}
             self.jobs[job.id] = job
             for old in sorted(self.jobs)[:-KEEP]:
                 if self.jobs[old].ended is not None:
                     del self.jobs[old]
             view = job.view()
-        threading.Thread(target=self._run, args=(job,), daemon=True).start()
+        if job.ended is None:
+            threading.Thread(target=self._run, args=(job,), daemon=True).start()
         return view
 
     def view(self, job_id: int) -> dict:
@@ -104,6 +116,9 @@ class Jobs:
 
     def _run(self, job: Job) -> None:
         try:
+            if job.action == "index":
+                self._search(job)
+                return
             ok = all(self._command(job, args) for args in ACTIONS[job.action](job.url))
             if job.action == "forget":
                 if ok:
@@ -111,11 +126,16 @@ class Jobs:
                     with self.lock:
                         job.stages = {"library": {"stage": "library", "state": "done", "value": "forgotten"}}
                 else:
-                    job.failed = True
+                    with self.lock:
+                        job.failed = True
             elif job.done is None:
-                job.failed = True
+                with self.lock:
+                    job.failed = True
             elif job.done.get("value") in LISTED:
                 self._search(job)
+        except Exception:  # A command or archive read failed; finish the job so the screen can offer Retry.
+            with self.lock:
+                job.failed = True
         finally:
             with self.lock:
                 job.ended = time.monotonic()

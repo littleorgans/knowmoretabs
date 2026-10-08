@@ -360,6 +360,8 @@ const cases = {
     $('#a-act').click();
     await until(() => seg('library') === 'Already in library' && seg('search') === 'Indexed', 'restored');
     check(!$('#a-result').hidden && $('#a-act').textContent === 'Remove', 'the tile is back');
+    const actual = await window.KMT.api('/api/library');
+    await until(() => window.KMT.lib.pages === actual.pages, 'the library count after Restore');
     await add('https://added.example/timeout');
     await until(() => seg('search') === 'Indexed', 'timed out');
     check(seg('content') === 'Timed out' && $('#a-act').textContent === 'Retry', 'Retry');
@@ -371,6 +373,17 @@ const cases = {
     $('#a-link').dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
     await until(() => $('#a-search .val').textContent === 'Indexed', 'Indexed');
     check($('#a-link').value === '', 'the box is ready for the next link');
+  },
+  addSnapshot: async ({ $, until, check }) => {
+    for (const action of ['add', 'signed_in', 'forget', 'restore']) {
+      // Stale output from a previous job must leave with the refusal.
+      for (const stage of ['library', 'content', 'image', 'search']) $(`#a-${stage} .val`).textContent = 'Old state';
+      $('#a-result').hidden = false;
+      await window.KMT.add.start('https://added.example/protected', action);
+      check($('#a-library .val').textContent === 'Read only snapshot', 'the bar explains the snapshot refusal');
+      for (const stage of ['content', 'image', 'search']) check($(`#a-${stage} .val`).textContent === '', 'old stages cleared');
+      check($('#a-result').hidden && $('#a-act').hidden, 'no tile or retry action');
+    }
   },
 };
 

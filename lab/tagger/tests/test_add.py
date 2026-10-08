@@ -20,7 +20,7 @@ import numpy as np
 from test_app import DIM, build, fake_embed, fake_encode
 
 from tagger import cli
-from tagger.app import engine, server
+from tagger.app import add, engine, server
 from tagger.app.store import Store
 from tagger.archive import Archive, sha256_hex
 
@@ -159,6 +159,19 @@ class LoadTests(Synthetic):
         self.assertEqual(len(lib.records), len(lib.S))
         self.assertAlmostEqual(float(lib.X[row] @ fake_encode(["Sleeper cars"])[0]), float(lib.S[row, j]), places=5)
 
+    def test_appended_pages_update_the_spread_used_by_suggestions_and_prechecks(self):
+        lib = engine.add_tags(self.load()[0], ["Sleeper cars"], fake_encode)
+        capture(self.root, NEW)
+        lib = engine.sync(lib, Archive.load(self.root), NEW, fake_embed)
+        expected = np.maximum(lib.S.std(axis=0), 1e-12)
+        np.testing.assert_allclose(lib.spread, expected)
+        row = lib.rows[NEW]
+        for result in engine.suggest(lib, [row], len(lib.tags)):
+            col = lib.tags.index(result["tag"])
+            self.assertAlmostEqual(
+                float((lib.S[row, col] - lib.S[:, col].mean()) / expected[col]), result["z"], places=5
+            )
+
     def test_sync_follows_the_archive_for_one_page(self):
         lib, _ = self.load()
         self.assertIs(lib, engine.sync(lib, Archive.load(self.root), NEW, fake_embed), "a page the archive lacks")
@@ -208,7 +221,7 @@ class PortTests(unittest.TestCase):
 
 class Served(Synthetic):
     def serve(self, lib: engine.Library) -> tuple[server.App, int]:
-        app = server.App(lib, Store(self.work / f"app-{id(lib)}"), fake_encode, fake_embed)
+        app = server.App(lib, Store(self.work / "lab-data" / f"app-{id(lib)}"), fake_encode, fake_embed)
         httpd = server.serve(app, 0)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         self.addCleanup(httpd.server_close)
@@ -318,6 +331,19 @@ class AddJobTests(Served):
         self.assertIn("--signed-in", json.loads(self.log.read_text().splitlines()[-1])["argv"])
         self.assertTrue(self.app.lib.records[job["page"]["row"]]["text_ok"], "the indexed page points at its new text")
 
+    def test_signed_in_content_becomes_searchable_without_reembedding(self):
+        url = "https://added.example/blocked"
+        job = self.add(url)
+        row = job["page"]["row"]
+        vector = self.app.lib.X[row].copy()
+        with patch.object(self.app, "embed", side_effect=AssertionError("an existing vector stays cached")):
+            job = self.add(url, "signed_in")
+        self.assertEqual("indexed", self.values(job)["search"])
+        hits = self.call(self.port, "POST", "/api/search", {"query": "airship", "n": 50})[1]["hits"]
+        hit = next(h for h in hits if h["row"] == row)
+        self.assertGreater(hit["sources"]["keyword"]["score"], 0)
+        np.testing.assert_array_equal(vector, self.app.lib.X[row])
+
     def test_not_found_then_remove_then_restore(self):
         url = "https://added.example/missing"
         job = self.add(url)
@@ -341,11 +367,40 @@ class AddJobTests(Served):
         )
         self.assertEqual("indexed", self.values(self.add(NEW))["search"], "Retry indexes it")
 
+    def test_an_index_retry_runs_only_the_lab_without_another_archive_command(self):
+        with patch.object(self.app, "embed", side_effect=RuntimeError("no model")):
+            job = self.add(NEW)
+        self.assertEqual("not_indexed", self.values(job)["search"])
+        commands = self.log.read_bytes()
+        with patch("tagger.app.add.subprocess.Popen") as popen:
+            job = self.add(NEW, "index")
+            popen.assert_not_called()
+        self.assertEqual("indexed", self.values(job)["search"])
+        self.assertEqual(NEW, job["page"]["url"])
+        self.assertEqual(commands, self.log.read_bytes())
+
     def test_a_missing_binary_fails_the_job(self):
         self.app.adds.binary = str(self.work / "absent")
         job = self.add(NEW)
         self.assertTrue(job["failed"])
         self.assertEqual({"library": "running"}, self.values(job))
+
+    def test_an_archive_read_failure_finishes_remove_as_failed(self):
+        url = self.lib.records[3]["key"]
+        with patch("tagger.app.add.Archive.load", side_effect=OSError("unreadable archive")):
+            job = self.add(url, "forget")
+        self.assertTrue(job["finished"] and job["failed"])
+
+    def test_poll_results_do_not_change_when_the_worker_reports_another_stage(self):
+        job = add.Job(99, NEW, "add")
+        job.take('{"stage":"library","state":"running"}')
+        with self.app.adds.lock:
+            self.app.adds.jobs[job.id] = job
+        view = self.app.adds.view(job.id)
+        with self.app.adds.lock:
+            job.take('{"stage":"library","state":"done","value":"added"}')
+            job.take('{"stage":"content","state":"running","tier":"web"}')
+        self.assertEqual({"library": {"stage": "library", "state": "running"}}, view["stages"])
 
     def test_start_and_poll_never_wait_on_the_model(self):
         with patch.dict(os.environ, {"FAKE_KMT_DELAY": "0.05"}), self.app.lock:
@@ -365,6 +420,43 @@ class AddJobTests(Served):
         self.assertEqual(400, self.call(self.port, "POST", "/api/add", {})[0])
         self.assertEqual(400, self.call(self.port, "POST", "/api/add", {"url": NEW, "action": "rm"})[0])
         self.assertEqual(404, self.call(self.port, "GET", "/api/add/99")[0])
+
+
+class SnapshotWriteTests(Served):
+    def test_snapshot_roots_refuse_every_archive_action_without_starting_a_process(self):
+        data = self.work / "lab-data"
+        protected = data / "snapshot-synthetic"
+        shutil.copytree(self.root, protected)
+        original = {p.relative_to(protected): p.read_bytes() for p in protected.rglob("*") if p.is_file()}
+        lib, _ = engine.load(self.paths, protected, fake_encode, fake_embed)
+        alias = self.work / "snapshot-alias"
+        alias.symlink_to(protected, target_is_directory=True)
+        for root in (protected, alias, data):
+            app, port = self.serve(replace(lib, root=root))
+            with patch("tagger.app.add.subprocess.Popen") as popen, app.lock:
+                for action in add.ACTIONS:
+                    with self.subTest(root=root.name, action=action):
+                        status, job = self.call(port, "POST", "/api/add", {"url": NEW, "action": action})
+                        self.assertEqual(200, status)
+                        self.assertTrue(job["finished"])
+                        self.assertFalse(job["failed"])
+                        self.assertEqual(
+                            {
+                                "library": {
+                                    "stage": "library",
+                                    "state": "done",
+                                    "value": "refused",
+                                    "reason": "snapshot",
+                                }
+                            },
+                            job["stages"],
+                        )
+                        self.assertIsNone(job["page"])
+                        self.assertEqual(job["stages"], self.call(port, "GET", f"/api/add/{job['id']}")[1]["stages"])
+                popen.assert_not_called()
+        self.assertEqual(
+            original, {p.relative_to(protected): p.read_bytes() for p in protected.rglob("*") if p.is_file()}
+        )
 
 
 if __name__ == "__main__":

@@ -229,6 +229,7 @@ def add_pages(lib: Library, records: list[dict], X: np.ndarray) -> Library:
     n = len(X)
     image = None if lib.image is None else np.vstack([lib.image, np.zeros((n, lib.image.shape[1]), lib.image.dtype)])
     S = np.hstack([lib.rules.scores(X)["supervised"], X @ lib.added_q.T])
+    S = np.vstack([lib.S, S])
     keywords, K = _keyword_index(records)
     return replace(
         lib,
@@ -240,24 +241,28 @@ def add_pages(lib: Library, records: list[dict], X: np.ndarray) -> Library:
         live=np.concatenate([lib.live, [not r["forgotten"] for r in records[-n:]]]).astype(bool),
         keywords=keywords,
         K=K,
-        S=np.vstack([lib.S, S]),
+        S=S,
+        spread=_spread(S),
     )
 
 
 def sync(lib: Library, archive: Archive, url: str, embed: Embed) -> Library:
     """The library with one page as the archive (loaded from the library's root) now has it: an indexed page is
-    pointed at its files and shown or hidden as the archive forgets it; a known page the index lacks is embedded
-    and joins it. A page the archive does not list is left as it was."""
+    refreshed from its files in the keyword index and shown or hidden as the archive forgets it; its text vector
+    stays cached. A known page the index lacks is embedded and joins it. A page the archive does not list is
+    left as it was."""
     row = lib.rows.get(url)
     if row is None:
         if url not in set(archive.known):
             return lib
         record = dataset.record(archive, url)
         return add_pages(lib, [record], embed([record], lib.input_name))
-    _point(lib.records[row], archive)
+    records = lib.records.copy()
+    records[row] = dataset.record(archive, url)
+    keywords, K = _keyword_index(records)
     live = lib.live.copy()
-    live[row] = not lib.records[row]["forgotten"]
-    return replace(lib, live=live)
+    live[row] = not records[row]["forgotten"]
+    return replace(lib, records=records, live=live, keywords=keywords, K=K)
 
 
 def _ranks(scores: np.ndarray, eligible: np.ndarray) -> np.ndarray:
