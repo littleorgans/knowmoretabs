@@ -296,7 +296,7 @@ class AddJobTests(Served):
         self.assertEqual((200, ["Trains"]), (status, out["pages"][0]["tags"]))
         self.assertEqual(self.app.library()["pages"], self.call(self.port, "GET", "/api/library")[1]["pages"])
         argv = json.loads(self.log.read_text().splitlines()[0])["argv"]
-        self.assertEqual(["--root", str(self.root), "add", "--json", "--", NEW], argv)
+        self.assertEqual(["--root", str(self.root), "add", "--json", "--no-content", "--", NEW], argv)
 
     def test_a_known_page_is_already_in_the_library_and_not_indexed_twice(self):
         key = self.lib.records[3]["key"]
@@ -315,6 +315,13 @@ class AddJobTests(Served):
     def test_an_option_like_link_stays_a_link(self):
         self.add("--root=/elsewhere")
         self.assertEqual(["--", "--root=/elsewhere"], json.loads(self.log.read_text())["argv"][-2:])
+
+    def test_every_add_passes_no_content_until_pr_b(self):
+        actions = ("add", "signed_in", "restore")  # Retry repeats one of these
+        adds = [args for action in actions for args in add.ACTIONS[action](NEW) if args[0] == "add"]
+        self.assertEqual(len(actions), len(adds))
+        for args in adds:
+            self.assertIn("--no-content", args[: args.index("--")], args)
 
     def test_blocked_then_signed_in(self):
         url = "https://added.example/blocked"

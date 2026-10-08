@@ -1,10 +1,11 @@
 """A stand in for `knowmoretabs --root <root> add|forget|restore` on a synthetic archive, for the Add link tests.
 
-`add --json [--signed-in] -- <url>` prints the contract's stage events (one JSON object per line, flushed) and writes
-what the real command would: an intake line, a content file and its log line, an image and its log line. The URL's
-last path segment picks the outcome (`SCENARIOS`; anything else is a web page captured with an image). A known URL
-is `known`, a forgotten one is refused as `forgotten` and anything but a public http(s) page as `refused`, both
-exiting 1. `forget` and `restore` edit `library.json`'s forgotten list. `FAKE_KMT_DELAY` (seconds) paces the lines;
+`add --json [--no-content] [--signed-in] -- <url>` prints the contract's stage events (one JSON object per line,
+flushed), content included whatever the flags (as after PR B), and writes what the real command would: an intake
+line, a content file and its log line, an image and its log line. The URL's last path segment picks the outcome
+(`SCENARIOS`; anything else is a web page captured with an image). A known URL is `known`, a forgotten one is refused
+as `forgotten` and anything but a public http(s) page as `refused`, both exiting 1. `forget` and `restore` edit
+`library.json`'s forgotten list. `FAKE_KMT_DELAY` (seconds) paces the lines;
 `FAKE_KMT_LOG` names a file that gets each argument list. Every page, title and text here is invented.
 """
 

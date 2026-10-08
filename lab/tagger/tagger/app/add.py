@@ -24,7 +24,9 @@ MAX_URL = 8192
 
 
 def _add(*flags: str):
-    return lambda url: [["add", "--json", *flags, "--", url]]
+    # Main requires --no-content until content capture lands (PR B); remove it there. With it no content stage
+    # reports, so the screen never offers Try signed in.
+    return lambda url: [["add", "--json", "--no-content", *flags, "--", url]]
 
 
 ACTIONS = {
