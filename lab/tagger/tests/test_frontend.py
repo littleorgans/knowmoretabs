@@ -31,6 +31,7 @@ import pytest
         "newTag",
         "newTagExisting",
         "newTagCancelAndRefusal",
+        "newTagKeyboardFocus",
     ],
 )
 def test_frontend_round_trips(case):

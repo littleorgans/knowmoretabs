@@ -32,6 +32,7 @@
   function close() {
     Object.assign(fresh, { open: false, draft: "", error: "" });
     K.pick.render();
+    K.$("t-sugg").querySelector('[data-act="new-tag"]').focus();
   }
 
   async function add(raw) {

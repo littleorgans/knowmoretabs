@@ -11,9 +11,12 @@ function setup(...files) {
       value: '', checked: false, disabled: false, innerHTML: '', textContent: '',
       dataset: {}, classList: { add() {}, remove() {}, toggle() {} },
       addEventListener(event, fn) { this[event] = fn; },
-      querySelectorAll() { return []; }, querySelector() { return id === 'r-acts' ? node('action') : null; },
+      querySelectorAll() { return []; }, querySelector() {
+        if (id === 't-sugg') return node('new-tag-control');
+        return id === 'r-acts' ? node('action') : null;
+      },
       getBoundingClientRect() { return {}; },
-      focus() {}, setAttribute() {}, removeAttribute() {}, showModal() {},
+      focus() { this.focusCalls = (this.focusCalls || 0) + 1; }, setAttribute() {}, removeAttribute() {}, showModal() {},
     });
     return nodes.get(id);
   };
@@ -230,6 +233,20 @@ async function newTagCancelAndRefusal() {
   assert.equal(node('t-filter').value, '', 'the filter box is untouched');
 }
 
+async function newTagKeyboardFocus() {
+  const { K, node, requests, open, type } = newTagFixture();
+  open(); type('Sleeper cars');
+  requests[0].resolve({ tag: 'Sleeper cars', tags: [...K.lib.tags, { name: 'Sleeper cars', positives: 0, source: 'zero shot' }] });
+  await turn(); await turn();
+  assert.equal(node('new-tag-control').focusCalls, 1, 'Enter returns focus to + New tag');
+  open(); type('COFFEE');
+  assert.equal(node('new-tag-control').focusCalls, 2, 'picking an existing tag also returns focus');
+  open(); type('Half typed', 'Escape');
+  assert.equal(node('new-tag-control').focusCalls, 3, 'Escape returns focus to + New tag');
+  open(); type('   ');
+  assert.equal(node('new-tag-control').focusCalls, 4, 'empty Enter returns focus to + New tag');
+}
+
 function reviewFixture() {
   const { K, node } = setup('review.js');
   K.set = { id: 1, pages: [{ index: 0, status: 'open', sugg: [
@@ -317,6 +334,7 @@ async function exportCommand() {
   const html = node('export-body').innerHTML;
   assert.ok(html.includes("--root '/path/to/archive-copy'"), 'import command must select a copy explicitly');
   assert.ok(html.includes("--import '/tmp/owner'\\''s data/answers.jsonl'"), 'answer path must be shell quoted');
+  assert.ok(html.includes('--accept-new'), 'created tags must validate without an existing archive tag');
 }
 
 /* ---- open the page: a control on http(s) pages whose click and key change nothing ---- */
@@ -389,5 +407,5 @@ async function openNoDrag() {
   assert.deepEqual(decided, ['yes'], 'the card itself still swipes');
 }
 
-const cases = { newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+const cases = { newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

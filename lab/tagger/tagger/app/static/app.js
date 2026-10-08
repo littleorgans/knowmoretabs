@@ -73,7 +73,7 @@
     try {
       await K.review.pending;
       const x = await K.api("/api/export", {});
-      const cmd = `knowmoretabs --root '/path/to/archive-copy' tag --import '${x.answers.replace(/'/g, "'\\''")}' --dry-run`;
+      const cmd = `knowmoretabs --root '/path/to/archive-copy' tag --import '${x.answers.replace(/'/g, "'\\''")}' --accept-new --dry-run`;
       K.$("export-body").innerHTML = x.decided
         ? `<p class="lede">${x.decided} decisions (${x.flipped} flipped from the model): ${x.answer_tags} tags kept on ${x.answer_pages} pages.</p>` +
           `<dl><dt>Answers</dt><dd><code>${K.esc(x.answers)}</code></dd><dt>Log</dt><dd><code>${K.esc(x.decisions)}</code></dd></dl>` +
