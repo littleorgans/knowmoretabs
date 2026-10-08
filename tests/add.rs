@@ -154,6 +154,7 @@ fn json_follows_the_text_and_the_image_and_titles_the_page() {
             json!({"stage": "library", "state": "done", "value": "known"}),
             json!({"stage": "content", "state": "done", "status": "ok", "tier": "web",
                 "http_status": 200, "title": "One note"}),
+            json!({"stage": "image", "state": "running"}),
             json!({"stage": "image", "state": "done", "status": "none"}),
             json!({"stage": "done", "state": "done", "url": A, "value": "known",
                 "content": "ok", "image": "none"}),
@@ -205,7 +206,7 @@ fn a_failed_read_exits_zero_and_only_an_error_is_read_again() {
     assert_eq!(
         first.last().unwrap(),
         &json!({"stage": "done", "state": "done", "url": A, "value": "added",
-            "content": "error", "image": null}),
+            "content": "error", "image": "unknown"}),
         "a failed text waits for its text before an image"
     );
     let output = add(&fx, &site, &[A, "--json"]);
@@ -242,6 +243,7 @@ fn a_failed_read_exits_zero_and_only_an_error_is_read_again() {
         [
             json!({"stage": "content", "state": "running", "tier": "signed_in"}),
             json!({"stage": "content", "state": "done", "status": "off", "tier": "signed_in"}),
+            json!({"stage": "image", "state": "running"}),
             json!({"stage": "image", "state": "done", "status": "none"}),
             json!({"stage": "done", "state": "done", "url": "http://a.test/blocked",
                 "value": "known", "content": "off", "image": "none"}),
@@ -354,4 +356,66 @@ fn batch_content_json_is_one_end_document_as_before() {
         ]
     );
     assert_eq!(lines[0]["statuses"], json!({"ok": 1}));
+}
+
+#[test]
+fn unrecorded_stages_still_complete_once_in_order() {
+    let site = Site::start(|_, _, _| Reply::status(500));
+    for args in [
+        vec![A, "--json"],
+        vec!["http://a.test/reset?token=abc123", "--json"],
+        vec![A, "--signed-in", "--json"],
+    ] {
+        let fx = Fixture::new();
+        let output = add(&fx, &site, &args);
+        assert_success(&output);
+        let events = lines(&output);
+        let completed: Vec<&str> = events
+            .iter()
+            .filter(|event| event["state"] == "done")
+            .map(|event| event["stage"].as_str().unwrap())
+            .collect();
+        assert_eq!(completed, ["library", "content", "image", "done"]);
+        assert_eq!(events.last().unwrap()["stage"], "done");
+        assert!(
+            events
+                .iter()
+                .any(|event| { event["stage"] == "image" && event["state"] == "running" })
+        );
+        for stage in ["content", "image"] {
+            let settled = events
+                .iter()
+                .find(|event| event["stage"] == stage && event["state"] == "done")
+                .unwrap();
+            assert_eq!(settled["status"], events.last().unwrap()[stage]);
+        }
+    }
+}
+
+#[test]
+fn a_title_write_failure_keeps_the_library_success_and_final_event() {
+    let fx = Fixture::new();
+    let intake_path = fx.root.join("pages/added.jsonl");
+    let site = Site::start(move |_, path, _| match path {
+        "/one" => Reply::html(article("Captured title").replace(
+            "</head>",
+            "<meta property=\"og:image\" content=\"http://cdn.test/image\"></head>",
+        )),
+        "/image" => {
+            // During the image request no archive writer holds the lock.
+            // Make the later title append fail without disturbing the
+            // already committed intake line or the content and image stores.
+            std::fs::rename(&intake_path, intake_path.with_extension("saved")).unwrap();
+            std::fs::create_dir(&intake_path).unwrap();
+            Reply::status(404)
+        }
+        _ => Reply::status(404),
+    });
+    let output = add(&fx, &site, &[A, "--json"]);
+    assert_success(&output);
+    assert!(stderr(&output).contains("read the intake log"));
+    let events = lines(&output);
+    assert_eq!(events.last().unwrap()["stage"], "done");
+    assert_eq!(events.last().unwrap()["value"], "added");
+    assert!(!events.iter().any(|event| event.get("error").is_some()));
 }

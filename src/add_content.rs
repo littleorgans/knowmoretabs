@@ -9,9 +9,10 @@
 //!      The run tells `add` which tier reads the page, each wait, and how
 //!      its text and image settled, and `add` says each as one line. A
 //!      stage the run did not settle is said from what the logs hold, so a
-//!      known page reports how it stands without a request. A browser that
-//!      cannot be reached is the content stage's outcome, not the run's
-//!      failure: the page is in the library either way.
+//!      known page reports how it stands without a request. Without a log
+//!      line the stage completes as unknown, without inventing a capture.
+//!      A browser that cannot be reached is the content stage's outcome,
+//!      not the run's failure: the page is in the library either way.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -138,9 +139,10 @@ impl Follow {
         let latest = content_store::read(&self.root)
             .ok()
             .and_then(|mut log| log.pages.remove(&self.url));
-        if let Some(line) = latest {
-            self.content_line(&line);
-        }
+        let line = latest.unwrap_or_else(|| {
+            Line::new(&self.url, content_store::Status::Unknown).with_reason("not_recorded")
+        });
+        self.content_line(&line);
     }
 
     /// Says how the image stands by the image log, unless the run said it.
@@ -151,12 +153,13 @@ impl Follow {
         let latest = image_store::read(&self.root)
             .ok()
             .and_then(|mut log| log.pages.remove(&self.url));
-        if let Some(line) = latest {
-            self.image_line(&line);
-        }
+        let line = latest
+            .unwrap_or_else(|| image_store::Line::new(&self.url, image_store::Status::Unknown));
+        self.image_line(&line);
     }
 
     fn image_line(&self, line: &image_store::Line) {
+        self.imaging();
         let status = line.status.word();
         let text = match (&line.reason, line.status) {
             (Some(reason), image_store::Status::None | image_store::Status::Error) => {
@@ -197,8 +200,9 @@ impl Events for Follow {
     /// image retried.
     fn imaging(&self) {
         self.settle_content();
-        self.imaging.store(true, Ordering::Relaxed);
-        self.say(&json!({"stage": "image", "state": "running"}));
+        if !self.imaging.swap(true, Ordering::Relaxed) {
+            self.say(&json!({"stage": "image", "state": "running"}));
+        }
     }
 
     fn image(&self, line: &image_store::Line) {

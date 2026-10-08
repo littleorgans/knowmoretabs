@@ -163,12 +163,14 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
         Some(ask) if outcome.in_library() => add_content::capture(root, url, ask, json, log),
         _ => Ended::default(),
     };
-    if let Some(title) = &ended.title {
-        intake::retitle(root, url, title, || {
+    if let Some(title) = &ended.title
+        && let Err(err) = intake::retitle(root, url, title, || {
             if !json {
                 log.warn(archive::WAITING);
             }
-        })?;
+        })
+    {
+        out::problem(&format!("knowmoretabs: {err}"));
     }
     if json {
         out::json(&done_line(url, outcome, &ended));
