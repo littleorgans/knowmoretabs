@@ -64,6 +64,41 @@ function inPage() {
 }
 
 const cases = {
+  startupDuringPage: async ({ $, pos, until, check, search }) => {
+    await until(() => window.pinsWaiting, 'startup waiting for pins');
+    await search('night train');
+    $('#next').click();
+    await until(() => window.nextWaiting, 'Next waiting for its response');
+    window.releasePins();
+    await until(() => window.pinsRead, 'startup pin response read');
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    check(window.searchRequests === 2, 'startup must not replay the search while Next is pending');
+    window.releaseNext();
+    await until(() => pos().startsWith('51 to '), 'page two after startup completes');
+    check(window.KMT.views.view().offset === 50, 'startup must preserve the submitted search and Next');
+  },
+  forgetUndoAfterNavigation: async ({ $, tiles, tileOf, pos, until, check, search, page }) => {
+    await search('night train');
+    const row = tiles()[2].dataset.row, all = Number(pos().match(/of (\d+)/)[1]);
+    tileOf(row).click();
+    tileOf(row).querySelector('[data-pin]').click();
+    tileOf(row).querySelector('[data-forget]').click();
+    await window.KMT.writes;
+    await search('espresso');
+    $('#toast-undo').click();
+    await until(() => Number(pos().match(/of (\d+)/)?.[1]) === all, 'Undo updates the new search count');
+    await window.KMT.writes;
+    check($('#n-sel').textContent === '1' && $('#n-pin').textContent === '1', 'Undo restores selection and pin after a new search');
+    await search('night train');
+    const victim = tiles()[2].dataset.row;
+    tileOf(victim).querySelector('[data-forget]').click();
+    await window.KMT.writes;
+    await page('#next', 50);
+    $('#toast-undo').click();
+    await until(() => Number(pos().match(/of (\d+)/)?.[1]) === all, 'Undo updates page two count');
+    const expected = await window.KMT.api('/api/search', { query: 'night train', offset: 49, n: 50 });
+    check(tiles().map((t) => Number(t.dataset.row)).join() === expected.hits.map((p) => p.row).join(), 'Undo refreshes page two to the real ranking');
+  },
   newSearch: async ({ $, pos, check, search, page }) => {
     await search('night train');
     await page('#next', 51);
@@ -259,6 +294,28 @@ async function main() {
     const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
     for (const domain of ['Page', 'Runtime', 'Log']) await send(`${domain}.enable`, {}, sessionId);
+    if (name === 'startupDuringPage') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+      const fetchNormally = window.fetch;
+      window.searchRequests = 0;
+      window.fetch = async (...args) => {
+        if (args[0] === '/api/search') {
+          window.searchRequests++;
+          if (JSON.parse(args[1].body).offset === 50) {
+            window.nextWaiting = true;
+            await new Promise((resolve) => { window.releaseNext = resolve; });
+          }
+        }
+        if (args[0] === '/api/pins') {
+          window.pinsWaiting = true;
+          await new Promise((resolve) => { window.releasePins = resolve; });
+          const response = await fetchNormally(...args);
+          const read = response.json.bind(response);
+          response.json = async () => { const out = await read(); window.pinsRead = true; return out; };
+          return response;
+        }
+        return fetchNormally(...args);
+      };
+    ` }, sessionId);
     const loaded = load();
     await send('Page.navigate', { url }, sessionId);
     await loaded;

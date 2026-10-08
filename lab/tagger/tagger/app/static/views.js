@@ -21,6 +21,7 @@
   const blank = (kind, extra) => ({ kind, rows: [], tags: new Set(), offset: 0, total: 0, loading: false, scroll: 0, ...extra });
   let base = blank("search");   // the search's results
   let over = null;              // the view over them: ≈ ("like"), "selection" or "pinned"
+  let searched = false;         // a submitted search takes precedence over startup restoration
   const view = () => over || base;
   const per = () => (K.lib ? K.lib.sizes[1] : 50);   // hits on a page: the most the server sends
   const listed = (v) => v.kind === "selection" || v.kind === "pinned";   // a list the owner keeps, in one page
@@ -92,6 +93,7 @@
   async function run(offset = 0, scroll = 0) {
     const q = K.$("s-q").value;
     if (!q.trim()) { K.$("s-q").focus(); return Promise.resolve(false); }
+    searched = true;
     Object.assign(S, { query: q, images: K.$("s-img").checked, untagged: K.$("s-untag").checked, offset, scroll });
     K.save();
     over = null;  // a new search replaces the view over the old one
@@ -190,8 +192,14 @@
       K.$("next").disabled = v.loading || end;
     },
     go,
+    async restored(row) {
+      const v = view();
+      if (listed(v) || (!v.loading && v.rows.includes(row)) || !S.query) return;
+      const scroll = scrollY;
+      if (await fetchPage(v, v.offset) && v === view()) { scrollTo(0, scroll); remember(); }
+    },
     restore() {   // the form is empty after a reload: fill it from the saved search
-      if (!S.query) return Promise.resolve();
+      if (!S.query || searched) return Promise.resolve();
       K.$("s-q").value = S.query;
       K.$("s-img").checked = S.images;
       K.$("s-untag").checked = !!S.untagged;

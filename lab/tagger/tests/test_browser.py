@@ -44,6 +44,12 @@ class BrowserTests(Fixture):
     def test_a_selection_or_tag_update_keeps_the_tile_node(self):
         self.run_case("identity")
 
+    def test_startup_finishing_during_next_keeps_page_two(self):
+        self.run_case("startupDuringPage")
+
+    def test_forget_undo_after_navigation_refreshes_the_rank_and_restores_lists(self):
+        self.run_case("forgetUndoAfterNavigation")
+
     def test_forget_undo_and_pin_select_nothing_and_persist_over_a_reload(self):
         self.run_case("forgetPin")
 

@@ -27,7 +27,7 @@
   /* ---- export: the answers to import and, when pages were forgotten, their addresses to forget (one per NUL,
      so xargs passes each as one argument whatever it holds) ---- */
   const word = (s) => `'${s.replace(/'/g, "'\\''")}'`;   // one shell word
-  const ROOT = "knowmoretabs --root '/path/to/archive-copy'";
+  const ROOT = "knowmoretabs";
   K.exportNow = async () => {
     try {
       await K.writes;
@@ -35,9 +35,9 @@
       const files = (x.decided ? `<dt>Answers</dt><dd><code>${K.esc(x.answers)}</code></dd><dt>Log</dt><dd><code>${K.esc(x.decisions)}</code></dd>` : "") +
         (x.forgotten ? `<dt>Forget</dt><dd><code>${K.esc(x.forget)}</code></dd>` : "");
       const tagged = `<p class="lede">${x.decided} decisions: ${x.answer_tags} tags kept on ${x.answer_pages} pages.</p>`;
-      const imports = `<p>Replace <code>/path/to/archive-copy</code> with a writable copy of your archive and check it. Drop <code>--dry-run</code> to import into that copy (source <code>${K.esc(x.source)}</code>):</p>` +
+      const imports = `<p>Check these tags against your library. Drop <code>--dry-run</code> to import into your library (source <code>${K.esc(x.source)}</code>):</p>` +
         `<pre>${K.esc(`${ROOT} tag --import ${word(x.answers)} --accept-new --dry-run`)}</pre>`;
-      const forgets = `<p>Forget the ${x.forgotten} forgotten page${x.forgotten === 1 ? "" : "s"} in that copy (<code>restore</code> in place of <code>forget</code> brings them back):</p>` +
+      const forgets = `<p>Forget the ${x.forgotten} forgotten page${x.forgotten === 1 ? "" : "s"} in your library (<code>restore</code> in place of <code>forget</code> brings them back):</p>` +
         `<pre>${K.esc(`xargs -0 ${ROOT} forget -- < ${word(x.forget || "")}`)}</pre>`;
       K.$("export-body").innerHTML = x.decided || x.forgotten
         ? (x.decided ? tagged : "") + `<dl>${files}</dl>` + (x.decided ? imports : "") + (x.forgotten ? forgets : "")

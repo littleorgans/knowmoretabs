@@ -69,8 +69,9 @@ Export writes `<data>/app/exports/<UTC time>/answers.jsonl` (a `tag --import` fi
 tags per page, latest decision winning, forgotten pages left out), `decisions.jsonl` (page, tag, answer, the model's
 precheck and session, both null for a direct decision) and, when pages were forgotten, `forget.urls` (their exact
 addresses, each ended by a NUL). Created tags need `tag --import --accept-new`, which creates them in the archive; the
-forgotten pages go through `xargs -0 knowmoretabs --root <archive copy> forget -- < forget.urls` (`restore` in place
-of `forget` brings them back). Pins are not exported. The app never writes an archive.
+forgotten pages go through `xargs -0 knowmoretabs forget -- < forget.urls` (`restore` in place of `forget` brings
+them back). Both dialog commands target your default library, independently of the app's snapshot root.
+Pins are not exported. The app never writes an archive.
 The P1 to P4 review, swipe, tag picker, suggestions and query exclusions (`<data>/app/not-relevant.json`) keep
 their code, API and tests but are not on this screen; their decisions still count as app tags.
 `--smoke` prints load and query timings, then exits.

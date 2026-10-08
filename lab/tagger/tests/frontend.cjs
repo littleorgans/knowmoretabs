@@ -12,6 +12,7 @@ const lit = { nothing, html: (strings, ...values) => ({ strings, values }), repe
   unsafeHTML: String, render(v, el) { el.innerHTML = markup(v); } };
 
 function setup(...files) {
+  const overrides = typeof files[0] === 'object' ? files.shift() : {};
   const nodes = new Map();
   const node = (id) => {
     if (!nodes.has(id)) nodes.set(id, {
@@ -35,7 +36,7 @@ function setup(...files) {
     state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
     lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
     search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
-    views: { render() {}, key: () => false, restore: async () => {} }, strip: { render() {} }, lit,
+    views: { render() {}, key: () => false, restore: async () => {} }, strip: { render() {} }, lit, ...overrides,
   };
   const listeners = {}, keys = {};   // the window's and the document's, by event
   const history = {       // one tab's entries; back() delivers popstate a turn later, as browsers do
@@ -349,7 +350,8 @@ async function exportCommand() {
   K.api = async () => ({ decided: 1, flipped: 0, answer_tags: 1, answer_pages: 1, answers: "/tmp/owner's data/answers.jsonl", decisions: '/tmp/log', source: 'test' });
   await K.exportNow();
   const html = node('export-body').innerHTML;
-  assert.ok(html.includes("--root '/path/to/archive-copy'"), 'import command must select a copy explicitly');
+  assert.ok(html.includes("<pre>knowmoretabs tag --import"), 'import command must target the owner default library');
+  assert.ok(!html.includes('--root'), 'the app snapshot must never be the export target');
   assert.ok(html.includes("--import '/tmp/owner'\\''s data/answers.jsonl'"), 'answer path must be shell quoted');
   assert.ok(html.includes('--accept-new'), 'created tags must validate without an existing archive tag');
   assert.ok(!html.includes('xargs'), 'nothing forgotten, no forget command');
@@ -361,8 +363,8 @@ async function exportForget() {
   K.api = async () => ({ decided: 0, answers: '/a', decisions: '/d', forget: "/data/owner's exports/forget.urls", forgotten: 2, source: 'test' });
   await K.exportNow();
   const html = node('export-body').innerHTML;
-  assert.ok(html.includes("<pre>xargs -0 knowmoretabs --root '/path/to/archive-copy' forget -- < '/data/owner'\\''s exports/forget.urls'</pre>"),
-    'the manifest goes through xargs -0 to forget in the copy, its path one shell word');
+  assert.ok(html.includes("<pre>xargs -0 knowmoretabs forget -- < '/data/owner'\\''s exports/forget.urls'</pre>"),
+    'the manifest goes through xargs -0 to the owner default library, its path one shell word');
   assert.ok(html.includes('Forget the 2 forgotten pages'));
   assert.ok(!html.includes('tag --import'), 'nothing tagged, no import command');
 }
@@ -623,6 +625,61 @@ async function forgetThenNext() {
   assert.equal(requests.length, 0);
 }
 
+/* Undo after navigation ranks the current view again, including the restored page and its count. */
+async function forgetUndoAfterNavigation() {
+  for (const navigation of ['search', 'next']) {
+    const { K, node, requests, click, settle, shown, turnTo } = await pagedFixture();
+    click(10, { '[data-forget]': {} }); await settle();
+    const undo = K.undo;
+    if (navigation === 'next') await turnTo('next', 49, rows(51, 99));
+    else {
+      node('s-q').value = 'another query';
+      const searching = K.views.run();
+      await turn();
+      requests.shift().resolve({ hits: rows(1, 51).filter((p) => p.row !== 10), offset: 0, total: 119 });
+      await searching;
+    }
+    const offset = K.views.view().offset;
+    undo();
+    await turn();
+    requests.shift().resolve({ pages: 9 });
+    await turn(); await turn();
+    assert.equal(requests[0]?.route, '/api/search', 'Undo after navigation must rank the current view again');
+    assert.equal(requests[0].body.offset, offset, 'Undo keeps the current result page');
+    const hits = rows(offset + 1, offset + 50);
+    requests.shift().resolve({ hits, offset, total: 120 });
+    await turn(); await turn();
+    assert.deepEqual(shown(), hits.map((p) => p.row));
+    assert.match(node('v-pos').innerHTML, /of 120 for/, 'the total includes the restored page');
+  }
+}
+
+/* Startup finishing during Next must not replay the submitted search. */
+async function startupDuringPage() {
+  const requests = [];
+  const { K, node } = setup({ api: (route, body) => new Promise((resolve) => requests.push({ route, body, resolve })) },
+    'pages.js', 'views.js', 'strip.js', 'app.js');
+  requests.shift().resolve({ sizes: [20, 50], images: true, pages: 120, app_tags: [], forgotten: [] });
+  await turn();
+  assert.equal(requests[0].route, '/api/selection');
+  node('s-q').value = 'q';
+  const searching = K.views.run();
+  await turn();
+  requests.splice(1, 1)[0].resolve({ hits: rows(1, 50), offset: 0, total: 120 });
+  await searching;
+  node('next').click();
+  await turn();
+  requests.shift().resolve({ pages: [] });
+  await turn();
+  requests.splice(1, 1)[0].resolve({ pages: [] });
+  await turn(); await turn();
+  assert.equal(requests.length, 1, 'startup must not submit a second search that cancels Next');
+  assert.equal(requests[0].body.offset, 50);
+  requests.shift().resolve({ hits: rows(51, 100), offset: 50, total: 120 });
+  await turn(); await turn();
+  assert.equal(K.views.view().offset, 50, 'Next finishes on page two');
+}
+
 /* Pin parks a page without touching the selection; Pinned shows them, and leaving returns to the results */
 async function pinView() {
   const { K, node, requests, click, key, settle, context, history, shown } = await screenFixture();
@@ -858,13 +915,15 @@ async function pages() {
 }
 
 async function restorePage() {
-  const { K, node, requests } = await screenFixture();
+  const requests = [];
+  const { K, node } = setup('pages.js', 'views.js', 'strip.js');
+  K.api = (route, body) => new Promise((resolve) => requests.push({ route, body, resolve }));
   Object.assign(K.state.search, { query: 'q', offset: 50 });
   node('s-q').value = '';
   K.views.restore();
   await turn();
   assert.equal(node('s-q').value, 'q');
-  assert.deepEqual(requests[0].body, { query: 'q', untagged: false, offset: 50, n: 50, images: false }, 'a reload asks for the page it left');
+  assert.deepEqual(plain(requests[0].body), { query: 'q', untagged: false, offset: 50, n: 50, images: false }, 'a reload asks for the page it left');
 }
 
 async function likeBackToPage() {
@@ -923,5 +982,5 @@ async function backDuringPage() {
   assert.equal(K.state.search.offset, 0, 'an abandoned page reply must not change the page saved for reload');
 }
 
-const cases = { chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+const cases = { forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

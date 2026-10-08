@@ -38,6 +38,8 @@ import pytest
         "forgetAndUndo",
         "forgetUndoOrder",
         "forgetThenNext",
+        "forgetUndoAfterNavigation",
+        "startupDuringPage",
         "pinView",
         "exportForget",
         "untagAndOpenDoNotSelect",
