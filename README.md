@@ -17,6 +17,22 @@ Vivaldi, on macOS, Linux and Windows.
 
 ## Install
 
+For the CLI and local tagger, install Rust, Python 3.12, uv and just, then run
+from this repository:
+
+```sh
+just install
+tagger app
+```
+
+Put the installed tools on your `PATH`. The app needs prepared tagger data
+and cached model weights; it refuses missing data instead of rebuilding it.
+Both tools resolve the archive as `--root` > `KMT_ROOT` > `~/.knowmoretabs`
+(the Rust default on Windows is `%LOCALAPPDATA%\knowmoretabs`). Tagger data
+resolves as `--data` > `KMT_TAGGER_DATA` > `<resolved root>/tagger`.
+`tagger app` runs from any folder. See [the tagger guide](lab/tagger/README.md)
+for preparing data and the experiment workflows.
+
 With a Rust toolchain (1.89 or newer), one command builds it from the
 repository and puts it on your `PATH`:
 

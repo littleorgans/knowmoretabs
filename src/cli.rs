@@ -23,7 +23,7 @@ window and tab, and never overwrites an earlier one. With no subcommand, runs `s
 encrypted session files are newer than the cleartext ones it still writes."
 )]
 pub struct Cli {
-    /// Archive directory (default: ~/.knowmoretabs; on Windows %LOCALAPPDATA%\knowmoretabs)
+    /// Archive directory (default: `KMT_ROOT`, else ~/.knowmoretabs; on Windows %LOCALAPPDATA%\knowmoretabs)
     #[arg(long, global = true, value_name = "DIR")]
     pub root: Option<PathBuf>,
 

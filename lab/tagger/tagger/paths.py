@@ -1,4 +1,4 @@
-"""Where every step reads and writes. One data root, set by `--data` or KMT_TAGGER_DATA."""
+"""Archive and data locations shared by the app and experiment steps."""
 
 import json
 import os
@@ -49,11 +49,14 @@ class Paths:
         return self.data / "import-check"
 
 
-def resolve(data: str | None) -> Paths:
-    root = data or os.environ.get("KMT_TAGGER_DATA")
-    if not root:
-        raise SystemExit("set --data or KMT_TAGGER_DATA to the thread data directory")
-    return Paths(Path(root).resolve())
+def resolve_root(flag: str | None, env: str | None, home: Path) -> Path:
+    return Path(flag if flag is not None else env if env is not None else home / ".knowmoretabs").resolve()
+
+
+def resolve(data: str | None, root: Path | None = None) -> Paths:
+    root = root if root is not None else resolve_root(None, os.environ.get("KMT_ROOT"), Path.home())
+    value = data if data is not None else os.environ.get("KMT_TAGGER_DATA")
+    return Paths(Path(value).resolve() if value is not None else root / "tagger")
 
 
 def write_json(path: Path, value) -> None:

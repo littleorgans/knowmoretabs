@@ -9,8 +9,18 @@ weights in the default Hugging Face cache.
 
 ## Run
 
+From the repository root, run `just install` once, then `tagger app` from any
+folder. Archive precedence is `--root` > `KMT_ROOT` > `~/.knowmoretabs`;
+data precedence is `--data` > `KMT_TAGGER_DATA` > `<resolved root>/tagger`.
+The app requires prepared text vectors in that data directory and cached
+model weights. Missing or empty data fails before model loading or writes.
+Web assets ship in the installed package; knowmoretabs is found on `PATH`.
+
+The experiment pipeline still runs from `lab/tagger`. Its data directory
+must hold the snapshot and `zeroshot/descriptions.json`:
+
 ```sh
-export KMT_TAGGER_DATA=<thread home>/data   # holds snapshot-2026-10-07/ and zeroshot/descriptions.json
+export KMT_TAGGER_DATA=<prepared data>     # optional override of <root>/tagger
 ./run.sh                                     # every step below, in order
 ```
 
@@ -43,10 +53,10 @@ The CLI sets umask 077, so every output is private (0600).
 
 ## Search, select and tag app (P1, one screen since P5)
 
-`uv run --locked tagger app --root <archive>` serves the prototype on 127.0.0.1:7879 (`--port 0` picks a free one)
+`tagger app` serves the prototype on 127.0.0.1:7879 (`--port 0` picks a free one)
 and prints its address. Needs `dataset` and `embed --model eg2` done; runs offline (`HF_HUB_OFFLINE`). The dataset
 must be a subset of the archive's known pages (snapshot tabs plus `pages/added.jsonl`, folded as knowmoretabs folds
-it); known pages it lacks are built from `--root` and embedded at startup (`engine.add_pages`, B vector only, no
+it); known pages it lacks are built from the resolved archive and embedded at startup (`engine.add_pages`, B vector only, no
 image vector, unlabelled). With no owner vocabulary the app starts with no owner tags; every tag name `state.json`
 holds (made in the app, or in any decision) loads as a zero shot tag.
 One screen: search (EG2 cosine over B, else A, fused by reciprocal rank with TF-IDF over title, metadata and text;

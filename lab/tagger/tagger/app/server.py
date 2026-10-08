@@ -464,6 +464,7 @@ def smoke(paths: Paths, app: App) -> dict:
 
 
 def run(paths: Paths, root: Path | None, port: int, smoke_only: bool) -> None:
+    engine.require_vectors(paths)
     from ..embed import IMAGE_MODEL, MODELS, embed_image_rows, embed_input, load, load_text, release
     from ..zeroshot import encode_queries
 

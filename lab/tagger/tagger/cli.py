@@ -4,7 +4,7 @@ import argparse
 import os
 from pathlib import Path
 
-from .paths import resolve
+from .paths import resolve, resolve_root
 
 APP_PORT = 7879  # fixed, so a bookmarklet can reach the app; knowmoretabs `serve` keeps 7878
 
@@ -14,7 +14,8 @@ def main() -> None:
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.environ["HF_HUB_DISABLE_TELEMETRY"] = "1"
     parser = argparse.ArgumentParser(prog="tagger")
-    parser.add_argument("--data", help="data directory (default: $KMT_TAGGER_DATA)")
+    parser.add_argument("--data", help="data directory (default: KMT_TAGGER_DATA, else <root>/tagger)")
+    parser.add_argument("--root", help="archive directory (default: KMT_ROOT, else ~/.knowmoretabs)")
     steps = parser.add_subparsers(dest="step", required=True)
     steps.add_parser("dataset", help="build the page records from the snapshot")
     embed = steps.add_parser("embed", help="embed inputs A and B per model, and images")
@@ -36,10 +37,10 @@ def main() -> None:
     compare = steps.add_parser("compare", help="compare metric outputs with another data directory")
     compare.add_argument("other")
     for step in (embed, app):
-        step.add_argument("--root", help="the archive (default: the snapshot under the data directory)")
+        step.add_argument("--root", default=argparse.SUPPRESS, help="archive directory (overrides KMT_ROOT)")
     args = parser.parse_args()
-    root = Path(args.root) if getattr(args, "root", None) else None
-    paths = resolve(args.data)
+    root = resolve_root(args.root, os.environ.get("KMT_ROOT"), Path.home())
+    paths = resolve(args.data, root)
     if args.step == "dataset":
         from . import dataset
 

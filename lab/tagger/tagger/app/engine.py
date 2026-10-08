@@ -31,6 +31,13 @@ TEXT_INPUTS = ("B", "A")  # the first cached one ranks and trains
 RRF_K = 60
 SUGGEST = 8
 
+
+def require_vectors(paths: Paths) -> None:
+    """Refuse an unprepared data directory before startup can rebuild or create it."""
+    if not any(VectorStore(paths.emb / MODEL, name).exists for name in TEXT_INPUTS):
+        raise SystemExit(f"missing tagger data at {paths.data}; set KMT_TAGGER_DATA")
+
+
 Encode = Callable[[list[str]], np.ndarray]
 Embed = Callable[[list[dict], str], np.ndarray]  # page records, text input name -> unit document vectors
 

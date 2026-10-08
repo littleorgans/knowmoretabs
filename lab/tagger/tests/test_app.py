@@ -34,7 +34,11 @@ class CliTests(unittest.TestCase):
             self.assertTrue(kwargs.get("local_files_only"))
             raise SystemExit
 
-        with patch("sentence_transformers.SentenceTransformer", side_effect=cached_only), self.assertRaises(SystemExit):
+        with (
+            patch("tagger.app.engine.require_vectors"),
+            patch("sentence_transformers.SentenceTransformer", side_effect=cached_only),
+            self.assertRaises(SystemExit),
+        ):
             server.run(Paths(Path(tempfile.gettempdir())), None, 0, True)
 
     def test_app_forces_offline_before_loading_the_model(self):

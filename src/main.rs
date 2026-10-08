@@ -93,11 +93,11 @@ fn main() -> ExitCode {
         verbose: cli.verbose,
     };
     let roots = platform::Roots::detect();
-    let Some(root) = cli
-        .root
-        .clone()
-        .or_else(|| roots.as_ref().map(platform::default_root))
-    else {
+    let Some(root) = platform::resolve_root(
+        cli.root.clone(),
+        std::env::var_os("KMT_ROOT").map(std::path::PathBuf::from),
+        roots.as_ref(),
+    ) else {
         return fail(&error::Error::NoHome, &cli);
     };
     // Before any command touches it: a root Windows cannot represent has to

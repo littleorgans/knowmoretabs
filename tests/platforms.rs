@@ -22,6 +22,34 @@ use tempfile::TempDir;
 const CLASSIC_MAX_PATH: usize = 260;
 
 #[test]
+fn root_environment_is_used_unless_the_flag_overrides_it() {
+    for use_flag in [false, true] {
+        let fx = Fixture::new();
+        fx.write_session("Default", 20, &two_tab_session());
+        let env_root = fx.home.path().join("env-root");
+        let flag_root = fx.home.path().join("flag-root");
+        let expected = if use_flag { &flag_root } else { &env_root };
+        let tagger = expected.join("tagger");
+        std::fs::create_dir_all(&tagger).unwrap();
+        std::fs::write(tagger.join("sentinel"), b"preserve me").unwrap();
+        let mut cmd = fx.command_without_root();
+        cmd.env("KMT_ROOT", &env_root).arg("--json");
+        if use_flag {
+            cmd.arg("--root").arg(&flag_root);
+        }
+        let output = cmd.output().expect("run knowmoretabs");
+        assert_success(&output);
+        let value: serde_json::Value = serde_json::from_str(&stdout(&output)).unwrap();
+        assert!(Path::new(value["saved"]["path"].as_str().unwrap()).starts_with(expected));
+        assert_eq!(
+            std::fs::read(tagger.join("sentinel")).unwrap(),
+            b"preserve me"
+        );
+        assert!(!under(fx.home.path(), default_root_names()).exists());
+    }
+}
+
+#[test]
 fn no_root_flag_puts_the_archive_where_the_platform_keeps_per_user_data() {
     let fx = Fixture::new();
     fx.write_session("Default", 20, &two_tab_session());
