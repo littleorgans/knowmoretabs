@@ -33,7 +33,11 @@
     K.save();
     history[push ? "pushState" : "replaceState"]({ base, over, search: { ...S } }, "");
   }
-  addEventListener("scroll", () => { if (!view().loading) remember(); });
+  let settling = 0;   // once scrolling settles: browsers drop history calls past a rate (Chrome 200 in 10 s)
+  addEventListener("scroll", () => {
+    clearTimeout(settling);
+    settling = setTimeout(() => { if (!view().loading) remember(); }, 150);
+  });
 
   /* ---- views over the search: one entry, so again, Esc and Back all leave the entire view ---- */
   function enter(v) {

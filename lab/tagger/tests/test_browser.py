@@ -61,3 +61,6 @@ class BrowserTests(Fixture):
 
     def test_reload_restores_the_page_and_scroll(self):
         self.run_case("reloadScroll")
+
+    def test_back_after_a_long_read_returns_to_the_page_left(self):
+        self.run_case("longScroll")

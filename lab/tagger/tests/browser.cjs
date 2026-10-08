@@ -102,11 +102,24 @@ const cases = {
     await until(() => pos().startsWith('51 to '), 'Forward to page two');
     check(scrollY === 900, 'Forward restores page two scroll');
   },
+  /* reading a page scrolls hundreds of times; the browser caps history calls (Chrome 200 in 10 s) */
+  longScroll: async ({ $, pos, until, check, search }) => {
+    await search('night train');
+    for (let i = 1; i <= 250; i++) {
+      scrollTo(0, 4 * i);
+      await new Promise((r) => requestAnimationFrame(r));
+    }
+    $('#next').click();
+    await until(() => pos().startsWith('51 to '), 'page two');
+    history.back();
+    await until(() => pos().startsWith('1 to '), 'Back to page one');
+    check(scrollY === 1000, 'Back restores where the reading stopped');
+  },
   reloadScroll: async ({ search, page, check }) => {
     await search('night train');
     await page('#next', 51);
     scrollTo(0, 900);
-    await new Promise((r) => setTimeout(r, 100));
+    await new Promise((r) => setTimeout(r, 300));
     check(scrollY === 900, 'scroll before reload');
   },
   /* a selection or tag update reuses the tile's node, its picture and its focus */
