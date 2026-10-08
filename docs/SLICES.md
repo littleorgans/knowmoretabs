@@ -222,21 +222,27 @@ and keyword retrieval over them is the `fulltext` entry, not this slice.
 - Delivers: add-a-page
 - Depends on: library, triage
 
-**Ships.** `knowmoretabs add URL --no-content` puts one page in the library by its
-address, as one line in `pages/added.jsonl`; the library lists every added
-page in one snapshot, `added`, so tagging, forgetting, `content --url`, `serve`
-and `export` take it like any other page. A page already in the library
-writes nothing. An address that is not http or https, one on this machine or
-the private network, and a forgotten page are refused, writing nothing.
-`--title` keeps a title the caller has, and `--json` gives one line per stage
-as it happens, the last saying how it ended. Next, `add` captures the page's
-text and image in the same run, with a line for each step.
+**Ships.** `knowmoretabs add URL` puts one page in the library by its address, as one
+line in `pages/added.jsonl`; the library lists every added page in one
+snapshot, `added`, so tagging, forgetting, `content --url`, `serve` and
+`export` take it like any other page. Then it captures the page's text and
+image in the same run, as `content --url` does for that page: the same routes,
+a browser render when it reads thin, and with `--signed-in` the owner's own
+Chrome. A title the text was kept with joins the page's line when it had none.
+A page already in the library gets no line; its text is read again only after
+an error, and a failed image is retried. An address that is not http or https,
+one on this machine or the private network, and a forgotten page are refused,
+writing nothing. `--no-content` stops after the library. `--title` keeps a
+title the caller has, and `--json` gives one line per step as it happens
+(the tier reading the page, each wait before a retry, how the text and the
+image ended), the last saying how it all ended.
 
 **Intent.** A snapshot is a whole session, copied verbatim and never written again, so a
 single page cannot join one; a log the library folds in keeps that promise and
 needs no schema change. It is the product side of quick add: the tagger lab
-runs `add --json` and shows its lines as a progress bar. No new request leaves
-the machine: `add` reads nothing over the network.
+runs `add --json` and shows its lines as a progress bar. Its requests are
+content's own, made by content's run narrowed to the page, so the page is
+read by the rules every other page is.
 
 ## Prepared for, deliberately not built
 

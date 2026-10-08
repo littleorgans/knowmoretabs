@@ -93,12 +93,13 @@ impl Passing {
 /// Fetches and reads one page, retrying passing failures, and with
 /// `images` the images it names. Never fails: a failure is a capture too.
 pub fn capture(fetcher: &Fetcher, raw: &str, images: bool) -> Capture {
-    retrying(|| once(fetcher, raw, images))
+    retrying(fetcher, || once(fetcher, raw, images))
 }
 
 /// Tries `once` until it captures something or its passing failures have
-/// had their retries; every route, and every image, retries by these rules.
-pub fn retrying<T>(mut once: impl FnMut() -> Result<T, Passing<T>>) -> T {
+/// had their retries, waiting through `fetcher`; every route, and every
+/// image, retries by these rules.
+pub fn retrying<T>(fetcher: &Fetcher, mut once: impl FnMut() -> Result<T, Passing<T>>) -> T {
     let mut retry = 0;
     loop {
         match once() {
@@ -109,7 +110,7 @@ pub fn retrying<T>(mut once: impl FnMut() -> Result<T, Passing<T>>) -> T {
                 let Some(wait) = retry_wait(retry, passing.retry_after, jitter) else {
                     return *passing.failed;
                 };
-                std::thread::sleep(wait);
+                fetcher.wait(wait);
             }
         }
     }

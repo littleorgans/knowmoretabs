@@ -90,23 +90,16 @@ pub enum Command {
     #[command(
         long_about = "Adds one page to the library by its address, with no session file and no new \
 snapshot: one line in <root>/pages/added.jsonl, which the library lists as one snapshot of added pages. \
-A page already in the library writes nothing. Refused, writing nothing: an address that is not http or \
+A page already in the library gets no line. Refused, writing nothing: an address that is not http or \
 https, one on this machine or the private network, and a page you forgot (knowmoretabs restore brings \
-it back). With --json, one line per stage as it happens, the last saying how it ended. Exits 0 when the \
-page is in the library at the end. --no-content is required for now: add does not capture the page's \
-text or image yet."
+it back). Then, unless --no-content, the page's text and image are captured as content --url does for \
+that one page, sending its address to its own site: rendered in the --browser binary when it reads thin, \
+and with --signed-in opened in your running Chrome as content --signed-in does. A title the text was \
+kept with joins the page's line when it had none. Run again, it captures the text again only when the \
+last attempt was an error, and retries an image that failed. With --json, one line per stage as it happens, the last saying how it ended. Exits 0 when \
+the page is in the library at the end, however its text and image ended."
     )]
-    Add {
-        /// The page's address, as it should be kept: http or https
-        #[arg(value_name = "URL")]
-        url: String,
-        /// The page's title, when you have it
-        #[arg(long, value_name = "TITLE")]
-        title: Option<String>,
-        /// Add the page without capturing its text or image (required for now)
-        #[arg(long, required = true)]
-        no_content: bool,
-    },
+    Add(AddArgs),
     /// Hide pages from the library; the snapshots keep them
     Forget {
         /// Page URLs to hide, each exactly as the library shows it
@@ -248,6 +241,23 @@ impl From<FetchArgs> for crate::targets::Options {
             refetch: args.refetch,
         }
     }
+}
+
+/// One page to add, and how far to capture it.
+#[derive(Debug, Args)]
+pub struct AddArgs {
+    /// The page's address, as it should be kept: http or https
+    #[arg(value_name = "URL")]
+    pub url: String,
+    /// The page's title, when you have it
+    #[arg(long, value_name = "TITLE")]
+    pub title: Option<String>,
+    /// Open the page in your running Chrome, signed in, as content --signed-in does
+    #[arg(long, conflicts_with = "no_content")]
+    pub signed_in: bool,
+    /// Add the page without capturing its text or image
+    #[arg(long)]
+    pub no_content: bool,
 }
 
 /// `tag` has three forms: tag pages yourself, write a prompt for an agent,
@@ -723,7 +733,7 @@ mod tests {
     }
 
     #[test]
-    fn add_takes_one_url_a_title_and_needs_no_content_for_now() {
+    fn add_takes_one_url_a_title_and_how_far_to_capture() {
         let cli = Cli::try_parse_from([
             "knowmoretabs",
             "add",
@@ -737,11 +747,20 @@ mod tests {
         assert!(cli.json);
         assert!(matches!(
             &cli.command,
-            Some(Command::Add { url, title: Some(title), no_content: true })
+            Some(Command::Add(AddArgs { url, title: Some(title), signed_in: false, no_content: true }))
                 if url == "https://a.test/" && title == "A"
         ));
-        let err = Cli::try_parse_from(["knowmoretabs", "add", "https://a.test/"]).unwrap_err();
-        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        let cli =
+            Cli::try_parse_from(["knowmoretabs", "add", "https://a.test/", "--signed-in"]).unwrap();
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Add(AddArgs {
+                title: None,
+                signed_in: true,
+                no_content: false,
+                ..
+            }))
+        ));
         for bad in [
             &["add", "--no-content"][..],
             &["add", "https://a.test/", "https://b.test/", "--no-content"],

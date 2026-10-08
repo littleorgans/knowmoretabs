@@ -9,26 +9,15 @@
 mod common;
 
 use std::collections::HashMap;
-use std::fmt::Write as _;
 use std::fs;
-use std::io::{BufRead, BufReader, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::process::{Child, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use common::site::{Reply, Site};
 use common::{Fixture, assert_success, stderr, stdout, write_snapshot};
 use serde_json::Value;
-
-/// One request as the server saw it.
-#[derive(Debug, Clone)]
-struct Seen {
-    at: Instant,
-    host: String,
-    path: String,
-    headers: HashMap<String, String>,
-}
 
 /// The least time apart this server may see two requests to one host. The
 /// pacer releases them at least a second apart, but `Seen::at` is stamped
@@ -39,129 +28,6 @@ struct Seen {
 /// that receive side jitter and still fails requests sent back to back, or
 /// even at three quarters of the pace.
 const PACED_GAP: Duration = Duration::from_millis(750);
-
-struct Reply {
-    status: u16,
-    headers: Vec<(&'static str, String)>,
-    body: Vec<u8>,
-    /// Wait this long before answering at all.
-    stall: Option<Duration>,
-}
-
-impl Reply {
-    fn html(body: impl Into<Vec<u8>>) -> Self {
-        Self {
-            status: 200,
-            headers: vec![("Content-Type", "text/html; charset=utf-8".into())],
-            body: body.into(),
-            stall: None,
-        }
-    }
-
-    fn redirect(status: u16, location: &str) -> Self {
-        Self {
-            status,
-            headers: vec![
-                ("Location", location.to_owned()),
-                ("Set-Cookie", "session=abc; Path=/".to_owned()),
-            ],
-            body: Vec::new(),
-            stall: None,
-        }
-    }
-
-    fn status(status: u16) -> Self {
-        Self {
-            status,
-            headers: vec![("Content-Type", "text/html".into())],
-            body: b"<title>nope</title>".to_vec(),
-            stall: None,
-        }
-    }
-}
-
-type Route = dyn Fn(&str, &str, u16) -> Reply + Send + Sync;
-
-/// A server on an ephemeral loopback port that answers for every host name,
-/// one request per connection, and remembers each request.
-struct Site {
-    address: SocketAddr,
-    seen: Arc<Mutex<Vec<Seen>>>,
-}
-
-impl Site {
-    fn start(route: impl Fn(&str, &str, u16) -> Reply + Send + Sync + 'static) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let route: Arc<Route> = Arc::new(route);
-        let log = Arc::clone(&seen);
-        std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let (route, log) = (Arc::clone(&route), Arc::clone(&log));
-                std::thread::spawn(move || serve(stream, &*route, &log, address.port()));
-            }
-        });
-        Self { address, seen }
-    }
-
-    fn seen(&self) -> Vec<Seen> {
-        self.seen.lock().unwrap().clone()
-    }
-
-    fn paths(&self) -> Vec<String> {
-        self.seen()
-            .iter()
-            .map(|s| format!("{}{}", s.host, s.path))
-            .collect()
-    }
-}
-
-fn serve(stream: TcpStream, route: &Route, log: &Mutex<Vec<Seen>>, port: u16) {
-    let mut reader = BufReader::new(stream.try_clone().unwrap());
-    let mut first = String::new();
-    if reader.read_line(&mut first).is_err() {
-        return;
-    }
-    let path = first.split_whitespace().nth(1).unwrap_or("").to_owned();
-    let mut headers = HashMap::new();
-    loop {
-        let mut line = String::new();
-        if reader.read_line(&mut line).unwrap_or(0) == 0 || line.trim().is_empty() {
-            break;
-        }
-        if let Some((name, value)) = line.split_once(':') {
-            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_owned());
-        }
-    }
-    let host = headers
-        .get("host")
-        .map(|h| h.split(':').next().unwrap_or("").to_owned())
-        .unwrap_or_default();
-    log.lock().unwrap().push(Seen {
-        at: Instant::now(),
-        host: host.clone(),
-        path: path.clone(),
-        headers,
-    });
-    let reply = route(&host, &path, port);
-    if let Some(stall) = reply.stall {
-        std::thread::sleep(stall);
-    }
-    let mut out = stream;
-    let mut head = format!(
-        "HTTP/1.1 {} X\r\nContent-Length: {}\r\nConnection: close\r\n",
-        reply.status,
-        reply.body.len()
-    );
-    for (name, value) in &reply.headers {
-        let _ = write!(head, "{name}: {value}\r\n");
-    }
-    head.push_str("\r\n");
-    // The client may stop reading once it has the head; that is the point.
-    let _ = out.write_all(head.as_bytes());
-    let _ = out.write_all(&reply.body);
-}
 
 fn page(title: &str) -> String {
     format!("<html><head><title>{title}</title></head><body>body</body></html>")

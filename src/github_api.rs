@@ -21,6 +21,7 @@ use serde::Deserialize;
 
 use crate::content_fetch::{self, BODY_CAP, Capture, Passing};
 use crate::content_store::{Line, Page, Status, Tier};
+use crate::fetch::Fetcher;
 use crate::github::{Repo, Target};
 use crate::github_page::{self, Graph, GraphError, GraphRepo, RepoInfo, ThreadKind};
 use crate::image_pick::Found;
@@ -122,11 +123,11 @@ fn found(probe: &impl Probe) -> Option<Gh> {
 }
 
 /// Reads `target` for library page `raw`, retrying passing failures as
-/// every route does, and with `images` asks a repository for its social
+/// every route does, waiting through `fetcher`, and with `images` asks a repository for its social
 /// preview. Never fails: a failure is a capture too.
-pub fn capture(gh: &Gh, raw: &str, target: &Target, images: bool) -> Capture {
+pub fn capture(gh: &Gh, fetcher: &Fetcher, raw: &str, target: &Target, images: bool) -> Capture {
     let attempt = Attempt { gh, raw, images };
-    content_fetch::retrying(|| match target {
+    content_fetch::retrying(fetcher, || match target {
         Target::Repo(repo) => attempt.repo(repo),
         Target::Issue(repo, n) | Target::Pull(repo, n) => {
             attempt.thread(repo, *n, ThreadKind::IssueOrPull)

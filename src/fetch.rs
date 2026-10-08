@@ -21,7 +21,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::io::{self, Read};
 use std::net::{Ipv6Addr, SocketAddr, TcpStream, ToSocketAddrs};
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 use ureq::config::Config;
@@ -71,7 +71,12 @@ pub struct Fetcher {
     /// For a signed in run: personal apps are refused, and where a name
     /// resolves is checked before the owner's browser is sent to it.
     signed_in: bool,
+    /// Told of each wait before a retry, for a caller following the run.
+    on_wait: Option<OnWait>,
 }
+
+/// What [`Fetcher::wait`] tells before it sleeps.
+pub type OnWait = Arc<dyn Fn(Duration) + Send + Sync>;
 
 /// Why a GET ended without a response to read: a hop the rules refuse, or
 /// a request that did not complete.
@@ -187,7 +192,30 @@ impl Fetcher {
             timeout,
             test_address,
             signed_in: false,
+            on_wait: None,
         }
+    }
+
+    /// A fetcher whose every name resolves to `address`, as a debug build's
+    /// does under `KNOWMORETABS_TEST_RESOLVE`, for unit tests.
+    #[cfg(test)]
+    pub fn resolving_to(address: SocketAddr, timeout: Duration) -> Self {
+        Self::with(timeout, Some(address), PACE)
+    }
+
+    /// This fetcher, telling `on_wait` of each wait before a retry.
+    #[must_use]
+    pub fn telling(mut self, on_wait: OnWait) -> Self {
+        self.on_wait = Some(on_wait);
+        self
+    }
+
+    /// Sleeps `wait` before a retry, saying so first.
+    pub fn wait(&self, wait: Duration) {
+        if let Some(on_wait) = &self.on_wait {
+            on_wait(wait);
+        }
+        std::thread::sleep(wait);
     }
 
     /// Requests one page, following redirects itself so that every hop is

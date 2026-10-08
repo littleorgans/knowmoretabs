@@ -1,13 +1,49 @@
 //! `knowmoretabs add` through the real binary: the lines `--json` streams,
 //! the exit status a caller branches on, and the snapshots it never touches.
+//! Pages are read from a local server that stands in for every site: a
+//! debug build resolves every name to it, so nothing reaches the internet.
 
 mod common;
 
+use std::process::Output;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
+
+use common::site::{Reply, Site};
 use common::{Fixture, assert_success, fingerprint, stderr, stdout, write_snapshot};
 use serde_json::{Value, json};
 
-const A: &str = "https://a.test/one";
+const A: &str = "http://a.test/one";
 const SAVED: &str = "https://saved.test/page";
+
+/// An article with enough text to keep, and no image.
+fn article(title: &str) -> String {
+    format!(
+        "<html><head><title>{title}</title></head><body><main><h1>{title}</h1><p>{}</p></main></body></html>",
+        "Words the page says about itself. ".repeat(150)
+    )
+}
+
+/// `add` with every name resolved to `site`.
+fn add(fx: &Fixture, site: &Site, args: &[&str]) -> Output {
+    fx.command()
+        .arg("add")
+        .args(args)
+        .env("KNOWMORETABS_TEST_RESOLVE", site.address.to_string())
+        .env("KNOWMORETABS_TEST_TIMEOUT_MS", "400")
+        .output()
+        .unwrap()
+}
+
+/// The intake log's lines.
+fn intake(fx: &Fixture) -> Vec<Value> {
+    std::fs::read_to_string(fx.root.join("pages").join("added.jsonl"))
+        .unwrap_or_default()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
 
 fn lines(output: &std::process::Output) -> Vec<Value> {
     stdout(output)
@@ -71,10 +107,251 @@ fn refusals_exit_non_zero_with_their_reason() {
 }
 
 #[test]
-fn content_capture_is_not_implied_yet() {
+fn signed_in_needs_content() {
     let fx = Fixture::new();
-    let output = fx.run(&["add", A]);
+    let output = fx.run(&["add", A, "--no-content", "--signed-in"]);
     assert_eq!(output.status.code(), Some(2), "a usage error");
-    assert!(stderr(&output).contains("--no-content"));
+    assert_eq!(stdout(&output), "");
     assert!(!fx.root.exists());
+}
+
+#[test]
+fn json_follows_the_text_and_the_image_and_titles_the_page() {
+    let fx = Fixture::new();
+    let site = Site::start(|_, path, _| match path {
+        "/one" => Reply::html(article("One note")),
+        _ => Reply::status(404),
+    });
+    let output = add(&fx, &site, &[A, "--json"]);
+    assert_success(&output);
+    assert_eq!(
+        lines(&output),
+        [
+            json!({"stage": "library", "state": "running"}),
+            json!({"stage": "library", "state": "done", "value": "added"}),
+            json!({"stage": "content", "state": "running", "tier": "web"}),
+            json!({"stage": "content", "state": "done", "status": "ok", "tier": "web",
+                "http_status": 200, "title": "One note"}),
+            json!({"stage": "image", "state": "running"}),
+            json!({"stage": "image", "state": "done", "status": "none"}),
+            json!({"stage": "done", "state": "done", "url": A, "value": "added",
+                "content": "ok", "image": "none"}),
+        ]
+    );
+    let intake = intake(&fx);
+    assert_eq!(intake.len(), 2, "the page's line, then its title");
+    assert_eq!(intake[0].get("title"), None);
+    assert_eq!(intake[1]["title"], "One note");
+    assert_eq!(intake[1]["added_at"], intake[0]["added_at"]);
+
+    // Run again: nothing is fetched or written, and how it stands is said.
+    let asked = site.seen().len();
+    let output = add(&fx, &site, &[A, "--json"]);
+    assert_success(&output);
+    assert_eq!(
+        lines(&output)[1..],
+        [
+            json!({"stage": "library", "state": "done", "value": "known"}),
+            json!({"stage": "content", "state": "done", "status": "ok", "tier": "web",
+                "http_status": 200, "title": "One note"}),
+            json!({"stage": "image", "state": "done", "status": "none"}),
+            json!({"stage": "done", "state": "done", "url": A, "value": "known",
+                "content": "ok", "image": "none"}),
+        ]
+    );
+    assert_eq!(site.seen().len(), asked, "no request");
+    assert_eq!(self::intake(&fx).len(), 2);
+}
+
+#[test]
+fn a_page_known_from_a_snapshot_gets_text_and_never_a_line() {
+    let fx = Fixture::new();
+    write_snapshot(
+        &fx.root,
+        "2026-01-01-000000Z",
+        "2026-01-01T00:00:00Z",
+        &[(1, "http://saved.test/page", "Saved")],
+    );
+    let site = Site::start(|_, _, _| Reply::html(article("Saved page")));
+    let output = add(&fx, &site, &["http://saved.test/page", "--json"]);
+    assert_success(&output);
+    let lines = lines(&output);
+    assert_eq!(lines[1]["value"], "known");
+    assert_eq!(lines.last().unwrap()["content"], "ok");
+    assert_eq!(intake(&fx), Vec::<Value>::new());
+}
+
+#[test]
+fn a_failed_read_exits_zero_and_only_an_error_is_read_again() {
+    let fx = Fixture::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let site = Site::start({
+        let calls = Arc::clone(&calls);
+        move |_, path, _| match path {
+            "/one" if calls.fetch_add(1, Ordering::SeqCst) == 0 => Reply::status(500),
+            "/one" => Reply::html(article("One note")),
+            "/blocked" => Reply::status(403),
+            _ => Reply::status(404),
+        }
+    });
+    let output = add(&fx, &site, &[A, "--json"]);
+    assert_success(&output);
+    let first = lines(&output);
+    assert_eq!(
+        first[3],
+        json!({"stage": "content", "state": "done", "status": "error", "tier": "web",
+            "http_status": 500, "reason": "HTTP 500"})
+    );
+    assert_eq!(
+        first.last().unwrap(),
+        &json!({"stage": "done", "state": "done", "url": A, "value": "added",
+            "content": "error", "image": null}),
+        "a failed text waits for its text before an image"
+    );
+    let output = add(&fx, &site, &[A, "--json"]);
+    assert_success(&output);
+    let second = lines(&output);
+    assert_eq!(second[2]["state"], "running", "read again");
+    assert_eq!(second[3]["status"], "ok");
+
+    for (url, status, http) in [
+        ("http://a.test/blocked", "blocked", 403),
+        ("http://a.test/gone", "not_found", 404),
+    ] {
+        let output = add(&fx, &site, &[url, "--json"]);
+        assert_success(&output);
+        let lines = lines(&output);
+        assert_eq!(
+            (&lines[3]["status"], &lines[3]["http_status"]),
+            (&status.into(), &http.into()),
+            "{url}"
+        );
+        assert_eq!(lines.last().unwrap()["content"], status);
+    }
+
+    // A blocked page opened signed in, with remote debugging off in the
+    // fixture's Chrome: said as the content stage's outcome, exit 0.
+    let output = add(
+        &fx,
+        &site,
+        &["http://a.test/blocked", "--signed-in", "--json"],
+    );
+    assert_success(&output);
+    assert_eq!(
+        lines(&output)[2..],
+        [
+            json!({"stage": "content", "state": "running", "tier": "signed_in"}),
+            json!({"stage": "content", "state": "done", "status": "off", "tier": "signed_in"}),
+            json!({"stage": "image", "state": "done", "status": "none"}),
+            json!({"stage": "done", "state": "done", "url": "http://a.test/blocked",
+                "value": "known", "content": "off", "image": "none"}),
+        ]
+    );
+}
+
+#[test]
+fn a_timeout_is_said_as_a_wait_before_the_retry() {
+    let fx = Fixture::new();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let site = Site::start({
+        let calls = Arc::clone(&calls);
+        move |_, path, _| {
+            let mut reply = Reply::html(article("Slow"));
+            if path == "/one" && calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                reply.stall = Some(Duration::from_secs(2));
+            } else if path != "/one" {
+                reply = Reply::status(404);
+            }
+            reply
+        }
+    });
+    let output = add(&fx, &site, &[A, "--json"]);
+    assert_success(&output);
+    let lines = lines(&output);
+    let states: Vec<(&str, &str)> = lines
+        .iter()
+        .map(|l| (l["stage"].as_str().unwrap(), l["state"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        states[2..5],
+        [
+            ("content", "running"),
+            ("content", "retrying"),
+            ("content", "done")
+        ]
+    );
+    let after = lines[3]["after_s"].as_f64().unwrap();
+    assert!((2.0..=3.0).contains(&after), "{after}");
+    assert_eq!(lines[4]["status"], "ok");
+}
+
+#[test]
+fn without_json_each_stage_is_one_line() {
+    let fx = Fixture::new();
+    let site = Site::start(|_, path, _| match path {
+        "/one" => Reply::html(article("One note")),
+        _ => Reply::status(404),
+    });
+    let output = add(&fx, &site, &[A]);
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        format!("added {A} to your library\ncontent ok by web\nimage none (no_candidate)\n")
+    );
+    let output = add(&fx, &site, &[A, "--no-content"]);
+    assert_eq!(
+        stdout(&output),
+        format!("already in your library: {A}; nothing changed\n")
+    );
+}
+
+#[test]
+fn batch_content_json_is_one_end_document_as_before() {
+    let fx = Fixture::new();
+    write_snapshot(
+        &fx.root,
+        "2026-01-01-000000Z",
+        "2026-01-01T00:00:00Z",
+        &[(1, A, "One")],
+    );
+    let site = Site::start(|_, path, _| match path {
+        "/one" => Reply::html(article("One note")),
+        _ => Reply::status(404),
+    });
+    let output = fx
+        .command()
+        .args(["--json", "content", "--no-browser"])
+        .env("KNOWMORETABS_TEST_RESOLVE", site.address.to_string())
+        .output()
+        .unwrap();
+    assert_success(&output);
+    let lines = lines(&output);
+    assert_eq!(lines.len(), 1, "one document, no stage lines");
+    let mut keys: Vec<&str> = lines[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "deferred",
+            "dir",
+            "fetch_seconds",
+            "fetched",
+            "headless",
+            "images",
+            "log",
+            "more",
+            "not_fetched",
+            "notes",
+            "reasons",
+            "recorded",
+            "seconds",
+            "statuses",
+        ]
+    );
+    assert_eq!(lines[0]["statuses"], json!({"ok": 1}));
 }

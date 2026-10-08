@@ -10,7 +10,9 @@
 //!      tabs, so "not in your library" and "not shown" keep agreeing by
 //!      construction, and nothing on disk changes schema. The snapshot is
 //!      dated by the first add. The frontend excludes this snapshot when
-//!      deciding what is open now.
+//!      deciding what is open now. A title captured later joins as one more
+//!      line, only for a page whose latest line has none, dated as the page
+//!      was added.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -18,8 +20,9 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
+use crate::archive::Archive;
 use crate::error::Error;
-use crate::jsonl::{self, Keyed};
+use crate::jsonl::{self, Appender, Keyed};
 use crate::metadata;
 use crate::model::{self, Snapshot, Source, Stats, Tab, Window};
 
@@ -64,6 +67,27 @@ impl Line {
                 .map(ToOwned::to_owned),
         }
     }
+}
+
+/// Gives page `url` the title `title` when its latest line has none, as
+/// one more line dated as the page was added; writes nothing for a page
+/// the log does not hold or one already titled. The check and the line are
+/// one hold of the archive lock; `waiting` is called once if another run
+/// holds it. Whether a line was written.
+pub fn retitle(root: &Path, url: &str, title: &str, waiting: impl FnOnce()) -> Result<bool, Error> {
+    let archive = Archive::open(root)?;
+    let lock = archive.lock(waiting)?;
+    let path = path(root);
+    let (lines, _) = jsonl::records::<Line>(&jsonl::text(&path, "read the intake log")?);
+    let Some(latest) = lines.into_iter().rev().find(|line| line.url == url) else {
+        return Ok(false);
+    };
+    let line = Line::new(url, latest.added_at, Some(title));
+    if latest.title.is_some() || line.title.is_none() {
+        return Ok(false);
+    }
+    Appender::open_locked(root, path, &lock)?.append_locked(&line, &lock)?;
+    Ok(true)
 }
 
 /// The added pages as one snapshot; `None` when nothing was ever added.

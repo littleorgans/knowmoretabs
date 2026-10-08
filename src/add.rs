@@ -10,9 +10,11 @@
 //!      network, what the library would not list) is refused before the
 //!      archive is touched, and a forgotten page stays forgotten until
 //!      `restore`. The check and the line are one hold of the archive lock,
-//!      so two adds of one page write it once. Under `--json` each stage is
-//!      one line as it happens, so a caller can show progress, and the last
-//!      line says how it ended.
+//!      so two adds of one page write it once. A page in the library then
+//!      gets its text and image (`add_content`), unless `--no-content`, and
+//!      a title its text was kept with when its line had none. Under
+//!      `--json` each stage is one line as it happens, so a caller can show
+//!      progress, and the last line says how it ended.
 
 use std::path::Path;
 use std::process::ExitCode;
@@ -20,6 +22,7 @@ use std::process::ExitCode;
 use serde_json::{Value, json};
 use url::Url;
 
+use crate::add_content::{self, Ask, Ended};
 use crate::archive::{self, Archive};
 use crate::capture::Log;
 use crate::error::Error;
@@ -131,10 +134,13 @@ pub fn apply(
 pub struct Args<'a> {
     pub url: &'a str,
     pub title: Option<&'a str>,
+    /// How to capture the page's text and image; `None` for none.
+    pub content: Option<Ask<'a>>,
 }
 
 /// `knowmoretabs add`. The exit status is the run's: success when the page
-/// is in the library at the end, failure when it was refused.
+/// is in the library at the end, however its text and image ended, failure
+/// when it was refused.
 pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<ExitCode, Error> {
     // Surrounding whitespace is what a paste brings, never part of an address.
     let url = args.url.trim();
@@ -150,9 +156,22 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
     })?;
     if json {
         out::json(&library_done(outcome));
-        out::json(&done_line(url, outcome));
     } else {
-        report(url, outcome, log);
+        report(url, outcome, args.content.is_some(), log);
+    }
+    let ended = match args.content {
+        Some(ask) if outcome.in_library() => add_content::capture(root, url, ask, json, log),
+        _ => Ended::default(),
+    };
+    if let Some(title) = &ended.title {
+        intake::retitle(root, url, title, || {
+            if !json {
+                log.warn(archive::WAITING);
+            }
+        })?;
+    }
+    if json {
+        out::json(&done_line(url, outcome, &ended));
     }
     Ok(if outcome.in_library() {
         ExitCode::SUCCESS
@@ -174,17 +193,22 @@ fn library_done(outcome: Outcome) -> Value {
     line
 }
 
-/// The last line. Content and image are not captured by `add` yet.
-fn done_line(url: &str, outcome: Outcome) -> Value {
+/// The last line: how the library stage ended, and the text's and the
+/// image's status names, null when there is none.
+fn done_line(url: &str, outcome: Outcome, ended: &Ended) -> Value {
     json!({"stage": "done", "state": "done", "url": url, "value": outcome.value(),
-        "content": null, "image": null})
+        "content": ended.content, "image": ended.image})
 }
 
 /// A page in the library is news on stdout; a refusal is the error the run
-/// exits on, on stderr whatever `-q` says, as every command's is.
-fn report(url: &str, outcome: Outcome, log: Log) {
+/// exits on, on stderr whatever `-q` says, as every command's is. A known
+/// page is left as it was only when nothing more is captured.
+fn report(url: &str, outcome: Outcome, capturing: bool, log: Log) {
     match outcome {
         Outcome::Added if !log.quiet => out::line(&format!("added {url} to your library")),
+        Outcome::Known if !log.quiet && capturing => {
+            out::line(&format!("already in your library: {url}"));
+        }
         Outcome::Known if !log.quiet => {
             out::line(&format!("already in your library: {url}; nothing changed"));
         }

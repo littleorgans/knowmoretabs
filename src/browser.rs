@@ -289,7 +289,7 @@ impl Browser {
     /// pass are tried again; a failure of the browser itself is returned
     /// at once.
     pub fn render(&self, fetcher: &Fetcher, raw: &str, url: &Url, images: bool) -> Rendered {
-        content_fetch::retrying(|| self.once(fetcher, raw, url, images))
+        content_fetch::retrying(fetcher, || self.once(fetcher, raw, url, images))
     }
 
     fn once(

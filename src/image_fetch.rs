@@ -102,7 +102,7 @@ pub fn capture(fetcher: &Fetcher, candidates: &[Candidate]) -> Captured {
     }
     let mut first_rejection = None;
     for candidate in candidates.iter().take(FETCHES) {
-        match content_fetch::retrying(|| once(fetcher, &candidate.url)) {
+        match content_fetch::retrying(fetcher, || once(fetcher, &candidate.url)) {
             Ok(image) => return kept(candidate, image),
             Err(Failure::Rejected(why)) => {
                 first_rejection.get_or_insert(why);

@@ -11,6 +11,7 @@
 //!      each of them.
 
 mod add;
+mod add_content;
 mod archive;
 mod assets;
 mod browser;
@@ -18,6 +19,7 @@ mod capture;
 mod cdp;
 mod cli;
 mod content;
+mod content_events;
 mod content_fetch;
 mod content_headless;
 mod content_image;
@@ -121,16 +123,10 @@ fn main() -> ExitCode {
             json: cli.json,
             log,
         }),
-        Some(Command::Add { url, title, .. }) => {
-            let args = add::Args {
-                url,
-                title: title.as_deref(),
-            };
-            match add::command(&root, args, cli.json, log) {
-                Ok(code) => return code,
-                Err(err) => Err(err),
-            }
-        }
+        Some(Command::Add(args)) => match add(&root, args, &cli, log) {
+            Ok(code) => return code,
+            Err(err) => Err(err),
+        },
         Some(Command::Forget { urls }) => {
             triage::command(&root, urls, triage::Action::Forget, cli.json, log)
         }
@@ -167,6 +163,7 @@ fn main() -> ExitCode {
                 browser: cli.browser.as_deref().unwrap_or(platform::CHROME),
                 no_browser: *no_browser,
                 signed_in: *signed_in,
+                events: None,
             },
             cli.json,
             log,
@@ -186,6 +183,25 @@ fn main() -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => fail(&err, &cli),
     }
+}
+
+/// `add`, whose exit status is its own.
+fn add(
+    root: &std::path::Path,
+    args: &cli::AddArgs,
+    cli: &Cli,
+    log: Log,
+) -> Result<ExitCode, error::Error> {
+    let ask = add_content::Ask {
+        browser: cli.browser.as_deref().unwrap_or(platform::CHROME),
+        signed_in: args.signed_in,
+    };
+    let args = add::Args {
+        url: &args.url,
+        title: args.title.as_deref(),
+        content: (!args.no_content).then_some(ask),
+    };
+    add::command(root, args, cli.json, log)
 }
 
 /// The three forms of `tag`, which clap has already kept apart.
