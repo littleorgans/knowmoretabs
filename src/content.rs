@@ -23,7 +23,6 @@
 //!      (`add --retry`) runs one stage: the text, with an image only for a
 //!      page that has none, so a kept image is never fetched again; or only
 //!      the retry of a failed image, on the public fetcher, never signed in.
-//!      Image Retry neither reads the text log nor opens its file store.
 //!      The batch report is `content_report`'s.
 
 use std::borrow::Cow;
@@ -110,8 +109,6 @@ struct Reach<'a> {
     /// How renders get their browser; none renders nothing.
     start: Option<Start>,
     events: &'a dyn Events,
-    /// A selected retry stage; image Retry never opens text storage.
-    retry: Option<Stage>,
 }
 
 /// How a run's renders get their browser.
@@ -124,20 +121,25 @@ pub enum Start {
 }
 
 pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), Error> {
-    let (options, retry) = (args.options, args.retry);
+    let Args {
+        options,
+        urls,
+        no_images,
+        browser,
+        no_browser,
+        signed_in,
+        events,
+        retry,
+    } = args;
     let archive = Archive::at(root);
     let loaded = library::load(&archive)?;
     let state = State::read(root)?;
-    let known = if retry == Some(Stage::Image) {
-        content_store::Log::default()
-    } else {
-        content_store::read(root)?
-    };
+    let known = content_store::read(root)?;
     if let Some(note) = known.unreadable_note(&content_store::log_path(root)) {
         log.warn(&note);
     }
-    let snapshots = only(&loaded.snapshots, args.urls)?;
-    if args.signed_in && retry != Some(Stage::Image) {
+    let snapshots = only(&loaded.snapshots, urls)?;
+    if signed_in && retry != Some(Stage::Image) {
         return self::signed_in(root, &snapshots, &state, &known, args, json, log);
     }
     // A dry run sends nothing, so it does not let `gh` ask GitHub whether
@@ -157,7 +159,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
         }
     };
     // Looked for on disk, never run, so a dry run asks the same.
-    let rendering = || browser::Readiness::check(&System, args.browser, args.no_browser);
+    let rendering = || browser::Readiness::check(&System, browser, no_browser);
     let (plan, work) = if retry == Some(Stage::Image) {
         (Plan::default(), Work::default())
     } else {
@@ -166,7 +168,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
         )
     };
     content_events::kept_home(&plan, args.follower());
-    let images = if args.no_images {
+    let images = if no_images {
         None
     } else {
         Some(args.images(content_image::Plan::new(
@@ -209,17 +211,16 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<(), 
             .as_ref()
             .and_then(browser::Readiness::path)
             .map(|path| Start::Launch(path.to_owned()));
-        let fetcher = content_events::following(Fetcher::new(&state.forgotten), args.events);
+        let fetcher = content_events::following(Fetcher::new(&state.forgotten), events);
         let reach = Reach {
             fetcher: &fetcher,
             start,
             events: args.follower(),
-            retry,
         };
         run(root, work, images, headless, reach, log)?
     };
     tally.waiting = waiting;
-    if args.events.is_none() {
+    if events.is_none() {
         report(&plan, &tally, &notes, started.elapsed(), root, json, log);
     }
     Ok(())
@@ -289,7 +290,6 @@ fn signed_in(
             fetcher: &fetcher,
             start: Some(Start::Attached(Box::new(browser))),
             events: args.follower(),
-            retry: args.retry,
         };
         run(root, work, images, headless, reach, log)?
     };
@@ -344,18 +344,13 @@ fn run(
     log: Log,
 ) -> Result<Tally, Error> {
     let (fetcher, events) = (reach.fetcher, reach.events);
-    let store = (reach.retry != Some(Stage::Image))
-        .then(|| Store::open(root))
-        .transpose()?
-        .map(Mutex::new);
+    let store = Mutex::new(Store::open(root)?);
     let images = images
         .map(|plan| Images::open(root, plan, events, log))
         .transpose()?;
     let tally = Mutex::new(Tally::default());
     let write = |line: Line, page: Option<&content_store::Page>| -> Result<Line, Error> {
         let line = store
-            .as_ref()
-            .expect("text work opens the content store")
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .record(line, page)?;
@@ -516,7 +511,6 @@ mod tests {
             fetcher: &Fetcher::new(&state.forgotten),
             start: None,
             events: &NoOne,
-            retry: None,
         };
         run(
             root.path(),

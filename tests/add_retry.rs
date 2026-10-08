@@ -267,53 +267,6 @@ fn an_image_retry_ignores_signed_in_and_the_text() {
 }
 
 #[test]
-fn an_image_retry_does_not_need_a_readable_content_log() {
-    let (fx, stub) = (Fixture::new(), Stub::start());
-    stub.image(500);
-    assert_success(&add(&fx, &stub.site, &[A, "--json"]));
-    let content = log(&fx, "content.jsonl");
-    let lock = std::fs::File::open(fx.root.join("lock")).unwrap();
-    lock.lock().unwrap();
-    std::fs::rename(&content, log(&fx, "saved-content.jsonl")).unwrap();
-    std::fs::create_dir(&content).unwrap();
-    drop(lock);
-    stub.image(200);
-    let asked = stub.asked();
-    let output = retry(&fx, &stub, A, &["image"]);
-    assert_success(&output);
-    assert_eq!(done(&lines(&output))["image"], "ok");
-    assert_eq!(stub.asked(), (asked.0, asked.1 + 1));
-    assert!(content.is_dir());
-}
-
-#[test]
-fn an_image_retry_does_not_open_the_content_file_store() {
-    let (fx, stub) = (Fixture::new(), Stub::start());
-    stub.image(500);
-    assert_success(&add(&fx, &stub.site, &[A, "--json"]));
-    let content = fx.root.join("pages").join("content");
-    let lock = std::fs::File::open(fx.root.join("lock")).unwrap();
-    lock.lock().unwrap();
-    std::fs::rename(&content, fx.root.join("saved-content")).unwrap();
-    let staged = fx.root.join("offline-content");
-    std::fs::write(&staged, b"content storage is offline").unwrap();
-    std::fs::rename(staged, &content).unwrap();
-    drop(lock);
-    let text = std::fs::read(log(&fx, "content.jsonl")).unwrap();
-    stub.image(200);
-    let asked = stub.asked();
-    let output = retry(&fx, &stub, A, &["image"]);
-    assert_success(&output);
-    assert_eq!(done(&lines(&output))["image"], "ok");
-    assert_eq!(stub.asked(), (asked.0, asked.1 + 1));
-    assert_eq!(std::fs::read(log(&fx, "content.jsonl")).unwrap(), text);
-    assert_eq!(
-        std::fs::read(content).unwrap(),
-        b"content storage is offline"
-    );
-}
-
-#[test]
 fn a_retry_does_not_retitle_from_previously_kept_text() {
     for stages in [&["image"][..], &["content"], &["content", "image"]] {
         let (fx, stub) = (Fixture::new(), Stub::start());
