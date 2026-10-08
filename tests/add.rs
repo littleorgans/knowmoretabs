@@ -16,6 +16,7 @@ use serde_json::{Value, json};
 
 const A: &str = "http://a.test/one";
 const SAVED: &str = "https://saved.test/page";
+const TOKEN: &str = "http://a.test/reset?token=abc123";
 
 /// An article with enough text to keep, and no image.
 fn article(title: &str) -> String {
@@ -359,11 +360,27 @@ fn batch_content_json_is_one_end_document_as_before() {
 }
 
 #[test]
+fn a_rule_refused_url_reports_skipped_without_a_request() {
+    let fx = Fixture::new();
+    let site = Site::start(|_, _, _| Reply::status(500));
+    let output = add(&fx, &site, &["--json", "--", TOKEN]);
+    assert_success(&output);
+    let events = lines(&output);
+    let content = events
+        .iter()
+        .find(|event| event["stage"] == "content" && event["state"] == "done")
+        .unwrap();
+    assert_eq!(content["status"], "skipped");
+    assert_eq!(content.get("tier"), Some(&Value::Null));
+    assert!(site.seen().is_empty(), "no request for a rule refused URL");
+}
+
+#[test]
 fn unrecorded_stages_still_complete_once_in_order() {
     let site = Site::start(|_, _, _| Reply::status(500));
     for args in [
         vec![A, "--json"],
-        vec!["http://a.test/reset?token=abc123", "--json"],
+        vec![TOKEN, "--json"],
         vec![A, "--signed-in", "--json"],
     ] {
         let fx = Fixture::new();
