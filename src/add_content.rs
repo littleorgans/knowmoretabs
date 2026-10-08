@@ -17,7 +17,9 @@
 //!      what succeeded stands untouched: the text first, its image only
 //!      when it has none, then a failed image on the public fetcher, which
 //!      a text that fails again or a browser out of reach cannot skip.
-//!      Only text captured by a Retry supplies an intake title update.
+//!      When a content Retry runs and the intake line has no title, the
+//!      title of the page's latest kept text joins it, even if this Retry
+//!      ends `error`.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -49,7 +51,8 @@ pub struct Ask<'a> {
 }
 
 /// How the text and the image ended, by their status names, and the title
-/// the text was kept with: for a Retry, only one captured in this run.
+/// of the latest kept text: for a Retry, only when its content stage runs,
+/// even if it ends `error`.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Ended {
     pub content: Option<String>,
@@ -127,7 +130,7 @@ struct Follow {
     seen: Mutex<Ended>,
     /// The image is being fetched: a wait now is the image's.
     imaging: AtomicBool,
-    /// Only a content capture may update the intake title on a Retry.
+    /// Only a content Retry that runs may supply the latest kept title.
     retry: bool,
 }
 
