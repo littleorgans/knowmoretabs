@@ -25,27 +25,41 @@
   const per = () => (K.lib ? K.lib.sizes[1] : 50);   // hits on a page: the most the server sends
   history.scrollRestoration = "manual";
 
-  /* ---- views over the search: one history entry, so Back leaves them ---- */
+  /* Each search page keeps its view and scroll in this tab's history. Page data lives in K.pages. */
+  function remember(push = false) {
+    const v = view();
+    v.scroll = scrollY;
+    if (!over) { S.offset = base.offset; S.scroll = base.scroll; }
+    K.save();
+    history[push ? "pushState" : "replaceState"]({ base, over, search: { ...S } }, "");
+  }
+  addEventListener("scroll", () => { if (!view().loading) remember(); });
+
+  /* ---- views over the search: one entry, so again, Esc and Back all leave the entire view ---- */
   function enter(v) {
-    if (over) history.replaceState({ over: v.kind }, "");
-    else { base.scroll = scrollY; history.pushState({ over: v.kind }, ""); }
+    const replacing = !!over;
+    remember();
     over = v;
     scrollTo(0, 0);
     K.changed();
+    remember(!replacing);
   }
-  const leave = () => { if (over) history.back(); };
-  addEventListener("popstate", () => {
+  const leave = () => {
     if (!over) return;
-    over = null;
+    remember();
+    history.back();
+  };
+  addEventListener("popstate", async (e) => {
+    if (!e.state || !e.state.base) return;
+    asked.search++; asked.like++;  // replies for the view being left cannot update the restored page
+    ({ base, over } = e.state);
+    Object.assign(S, e.state.search);
+    K.save();
+    const v = view(), scroll = v.scroll;
+    if (v.rows.some((r) => !K.pages.has(r))) await fetchPage(v, v.offset);
     K.changed();
-    scrollTo(0, base.scroll);
+    scrollTo(0, scroll);
   });
-  function drop() {   // a new search replaces whatever view was over the old one
-    if (!over) return;
-    over = null;
-    history.replaceState(null, "");
-  }
-
   /* one page of a search's or ≈'s hits, from rank `offset`; true when they replaced the view's */
   async function fetchPage(v, offset) {
     const mine = ++asked[v.kind];
@@ -54,6 +68,8 @@
     K.changed();
     const at = { offset, n: per(), images: S.images };
     try {
+      await K.writes;  // rankings and tags must include decisions queued before this page was requested
+      if (mine !== asked[v.kind]) return false;
       const out = await (v.kind === "like" ? K.api("/api/like", { tag: v.tag, ...at })
                                            : K.api("/api/search", { query: S.query, untagged: S.untagged, ...at }));
       if (mine !== asked[v.kind]) return false;
@@ -65,14 +81,18 @@
     K.changed();
     return done;
   }
-  function run(offset = 0) {
+  async function run(offset = 0, scroll = 0) {
     const q = K.$("s-q").value;
     if (!q.trim()) { K.$("s-q").focus(); return Promise.resolve(false); }
-    Object.assign(S, { query: q, images: K.$("s-img").checked, untagged: K.$("s-untag").checked });
+    Object.assign(S, { query: q, images: K.$("s-img").checked, untagged: K.$("s-untag").checked, offset, scroll });
     K.save();
-    drop();
+    over = null;  // a new search replaces the view over the old one
     base = blank("search");
-    return fetchPage(base, offset);
+    const v = base;
+    if (!await fetchPage(v, offset) || v !== view()) return false;
+    scrollTo(0, scroll);
+    remember();
+    return true;
   }
   /* Previous (-1) or Next (+1): the neighbouring page replaces this one, shown from the top */
   async function go(step) {
@@ -80,13 +100,18 @@
     if (v.kind === "selection" || v.loading) return;
     const offset = v.offset + step * per();
     if (offset < 0 || offset >= v.total) return;
-    if (await fetchPage(v, offset) && v === view()) scrollTo(0, 0);
+    remember();
+    if (await fetchPage(v, offset) && v === view()) {
+      scrollTo(0, 0);
+      K.$("grid").querySelector(".tile")?.focus({ preventScroll: true });
+      remember(!over);
+    }
   }
   function like(tag) {
     if (over && over.kind === "like" && over.tag === tag) return leave();
     const v = blank("like", { tag });
     enter(v);
-    return fetchPage(v, 0);
+    return fetchPage(v, 0).then((done) => { if (done && v === view()) remember(); return done; });
   }
   function showSelection() {
     if (over && over.kind === "selection") return leave();
@@ -159,7 +184,7 @@
       K.$("s-q").value = S.query;
       K.$("s-img").checked = S.images;
       K.$("s-untag").checked = !!S.untagged;
-      return run(S.offset || 0);
+      return run(S.offset || 0, S.scroll || 0);
     },
     /* Esc leaves ≈ first; with no ≈ open it clears the selection (and leaves Show selection) */
     escape() {

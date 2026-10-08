@@ -41,8 +41,8 @@ function setup(...files) {
   const history = {       // one tab's entries; back() delivers popstate a turn later, as browsers do
     entries: [null], pushes: 0,
     get state() { return this.entries[this.entries.length - 1]; },
-    pushState(state) { this.entries.push(state); this.pushes++; },
-    replaceState(state) { this.entries[this.entries.length - 1] = state; },
+    pushState(state) { this.entries.push(structuredClone(state)); this.pushes++; },
+    replaceState(state) { this.entries[this.entries.length - 1] = structuredClone(state); },
     back() { if (this.entries.length > 1) this.entries.pop(); setImmediate(() => listeners.popstate && listeners.popstate({ state: this.state })); },
   };
   const context = vm.createContext({
@@ -437,6 +437,7 @@ async function screenFixture(...more) {
   K.api = (route, body) => new Promise((resolve, reject) => requests.push({ route, body: plain(body), resolve, reject }));
   node('s-q').value = 'q';
   const searching = K.views.run();
+  await turn();
   requests.shift().resolve({ hits: [page(1, ['A']), page(2), page(3)], offset: 0, total: 3 });
   await searching;
   const tile = (row) => ({ dataset: { row: String(row) }, querySelector: () => f.opened });
@@ -640,6 +641,7 @@ async function likeNaming() {
   assert.match(node('strip').innerHTML, /Find pages like A, not tagged A/);
   chip('A', 'like');
   assert.match(node('v-pos').innerHTML, /Finding pages like <b>A<\/b>, not tagged <b>A<\/b>/);
+  await turn();
   requests.shift().resolve({ tag: 'A', hits: [], offset: 0, total: 0 });
   await turn();
   assert.match(node('v-pos').innerHTML, /Pages like <b>A<\/b>, not tagged <b>A<\/b> · <b>0<\/b>/);
@@ -652,6 +654,7 @@ async function pagedFixture() {
   const f = await screenFixture();
   const { K, node, requests, context } = f;
   K.views.run();
+  await turn();
   requests.shift().resolve({ hits: rows(1, 50), offset: 0, total: 120 });
   await turn(); await turn();
   f.shown = () => [...node('grid').innerHTML.matchAll(/data-row="(\d+)"/g)].map((m) => Number(m[1]));
@@ -701,6 +704,7 @@ async function restorePage() {
   Object.assign(K.state.search, { query: 'q', offset: 50 });
   node('s-q').value = '';
   K.views.restore();
+  await turn();
   assert.equal(node('s-q').value, 'q');
   assert.deepEqual(requests[0].body, { query: 'q', untagged: false, offset: 50, n: 50, images: false }, 'a reload asks for the page it left');
 }
@@ -731,5 +735,35 @@ async function likeBackToPage() {
   assert.equal(requests.length, 0, 'going back asks the server for nothing');
 }
 
-const cases = { pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, tagToggle, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+async function likeWaitsForTag() {
+  const { K, requests, click, chip, settle } = await screenFixture();
+  click(2); await settle();
+  chip('A', 'toggle');
+  chip('A', 'like');
+  await turn();
+  assert.equal(requests.length, 1, 'the ranking must wait for the pending tag decision');
+  assert.equal(requests[0].route, '/api/apply');
+  requests.shift().resolve({ pages: [{ row: 2, tags: ['A'] }], app_tags: ['A'] });
+  await turn();
+  assert.equal(requests[0].route, '/api/like');
+  requests.shift().resolve({ hits: [page(3)], offset: 0, total: 1 });
+  await turn();
+  assert.deepEqual(plain(K.views.view().rows), [3], 'the newly tagged page is absent from the ranking');
+  assert.equal(K.has(2, 'A'), true);
+}
+
+async function backDuringPage() {
+  const { K, node, requests, history, shown, turnTo } = await pagedFixture();
+  await turnTo('next', 50, rows(51, 100));
+  node('next').click();
+  await turn();
+  history.back();
+  await turn();
+  assert.deepEqual(shown(), rows(1, 50).map((p) => p.row));
+  requests.shift().resolve({ hits: rows(101, 120), offset: 100, total: 120 });
+  await turn();
+  assert.equal(K.state.search.offset, 0, 'an abandoned page reply must not change the page saved for reload');
+}
+
+const cases = { backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, tagToggle, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; });

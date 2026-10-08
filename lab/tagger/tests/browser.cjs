@@ -58,12 +58,57 @@ function inPage() {
     scrollTo(0, 1500);
     check(scrollY > 0, 'the grid scrolls');
     $(button).click();
-    await until(() => pos().startsWith(`${first} to `), `the page from ${first}`);
+    await until(() => new RegExp(`(?:^| · )${first} to `).test(pos()), `the page from ${first}`);
   };
   return { $, tiles, tileOf, pos, until, check, search, page };
 }
 
 const cases = {
+  newSearch: async ({ $, pos, check, search, page }) => {
+    await search('night train');
+    await page('#next', 51);
+    scrollTo(0, 900);
+    await search('espresso');
+    check(pos().startsWith('1 to 50 of'), 'a new search starts on page one');
+    check(scrollY === 0, 'a new search shows the top');
+  },
+  pageFocus: async ({ $, tiles, check, search, page }) => {
+    await search('night train');
+    $('#next').focus();
+    await page('#next', 51);
+    check(document.activeElement === tiles()[0], 'Next focuses the first replacement tile');
+    $('#next').focus();
+    await page('#next', 101);
+    check($('#next').disabled && document.activeElement === tiles()[0], 'last page retains useful keyboard focus');
+    $('#prev').focus();
+    await page('#prev', 51);
+    check(document.activeElement === tiles()[0], 'Previous focuses the first replacement tile');
+  },
+  pageHistory: async ({ $, tiles, pos, until, check, search, page }) => {
+    await search('night train');
+    scrollTo(0, 700);
+    $('#next').click();
+    await until(() => pos().startsWith('51 to '), 'page two');
+    scrollTo(0, 900);
+    $('#next').click();
+    await until(() => pos().startsWith('101 to '), 'page three');
+    history.back();
+    await until(() => pos().startsWith('51 to '), 'Back to page two');
+    check(scrollY === 900, 'Back restores page two scroll');
+    history.back();
+    await until(() => pos().startsWith('1 to '), 'Back to page one');
+    check(scrollY === 700, 'Back restores page one scroll');
+    history.forward();
+    await until(() => pos().startsWith('51 to '), 'Forward to page two');
+    check(scrollY === 900, 'Forward restores page two scroll');
+  },
+  reloadScroll: async ({ search, page, check }) => {
+    await search('night train');
+    await page('#next', 51);
+    scrollTo(0, 900);
+    await new Promise((r) => setTimeout(r, 100));
+    check(scrollY === 900, 'scroll before reload');
+  },
   /* a selection or tag update reuses the tile's node, its picture and its focus */
   identity: async ({ $, tiles, tileOf, until, check, search }) => {
     await search('night train');
@@ -130,11 +175,12 @@ const cases = {
       Esc: () => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
       Back: () => history.back(),
     };
-    for (const [how, leave] of Object.entries(ways)) {
+    for (const [how, leave] of Object.entries(ways)) for (const offset of [0, 50]) {
       scrollTo(0, 900);
       $('#strip [data-tag="Sleeper cars"] [data-act=like]').click();
       await until(() => pos().startsWith('Pages like') && /1 to 50 of/.test(pos()), 'the ≈ view');
       check(scrollY === 0, '≈ starts at the top');
+      if (offset) await page('#next', 51);
       leave();
       await until(() => pos() === at, `${how} back`);
       check(tiles().map((t) => t.dataset.row).join() === here, `${how} returns to the same page`);
@@ -157,6 +203,17 @@ async function main() {
     const expression = `(${run})((${inPage})())`;
     const out = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
     if (out.exceptionDetails) throw new Error(`${out.exceptionDetails.exception?.description || out.exceptionDetails.text}\n${errors.join('\n')}`);
+    if (name === 'reloadScroll') {
+      const reloaded = load();
+      await send('Page.reload', {}, sessionId);
+      await reloaded;
+      const restored = await send('Runtime.evaluate', { expression: `(async () => {
+        const { pos, until, check } = (${inPage})();
+        await until(() => pos().startsWith('51 to '), 'the saved page after reload');
+        check(scrollY === 900, 'reload restores the saved scroll');
+      })()`, awaitPromise: true, returnByValue: true }, sessionId);
+      if (restored.exceptionDetails) throw new Error(restored.exceptionDetails.exception?.description || restored.exceptionDetails.text);
+    }
     assert.deepEqual(errors, [], `no console error, exception or CSP report: ${errors.join(' | ')}`);
   } finally {
     proc.kill();

@@ -9,6 +9,7 @@ import stat
 import tempfile
 import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -390,7 +391,8 @@ class ServerTests(Fixture):
     def setUp(self):
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
-        self.server = server.serve(server.App(self.lib, Store(self.data), fake_encode), 0)
+        self.app = server.App(self.lib, Store(self.data), fake_encode)
+        self.server = server.serve(self.app, 0)
         self.port = self.server.server_address[1]
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
@@ -409,6 +411,68 @@ class ServerTests(Fixture):
         conn.close()
         kind = r.getheader("Content-Type", "")
         return r.status, json.loads(data) if kind.startswith("application/json") else data, r
+
+    def test_api_finishes_while_an_image_transfer_is_blocked(self):
+        started, release, answered = threading.Event(), threading.Event(), threading.Event()
+        handler = self.server.RequestHandlerClass
+        send = handler.send
+
+        def blocked_image(request, status, body, kind, cache=False):
+            if kind == "image/jpeg":
+                started.set()
+                release.wait(5)
+            return send(request, status, body, kind, cache)
+
+        row = next(i for i, r in enumerate(self.lib.records) if r["image_ok"])
+        with patch.object(handler, "send", blocked_image), ThreadPoolExecutor(max_workers=2) as pool:
+            image = pool.submit(self.call, "GET", f"/img/{row}")
+            try:
+                self.assertTrue(started.wait(2), "image request reached the transfer")
+                api = pool.submit(self.call, "GET", "/api/library")
+                api.add_done_callback(lambda _: answered.set())
+                self.assertTrue(answered.wait(2), "API must complete before the image transfer is released")
+                self.assertEqual(200, api.result(timeout=2)[0])
+            finally:
+                release.set()
+            self.assertEqual(200, image.result(timeout=2)[0])
+
+    def test_concurrent_requests_serialize_model_and_store_access(self):
+        started, release = threading.Event(), threading.Event()
+        dispatched, encoded = threading.Event(), threading.Event()
+        handler = self.server.RequestHandlerClass
+        api, library = handler.api, self.app.library
+
+        def blocked_library():
+            started.set()
+            release.wait(5)
+            return library()
+
+        def tracked_api(request, method, path, body):
+            if path == "/api/search":
+                dispatched.set()
+            return api(request, method, path, body)
+
+        def encode(texts):
+            encoded.set()
+            return fake_encode(texts)
+
+        with (
+            patch.object(self.app, "library", blocked_library),
+            patch.object(self.app, "encode", encode),
+            patch.object(handler, "api", tracked_api),
+            ThreadPoolExecutor(max_workers=2) as pool,
+        ):
+            first = pool.submit(self.call, "GET", "/api/library")
+            try:
+                self.assertTrue(started.wait(2))
+                second = pool.submit(self.call, "POST", "/api/search", {"query": "night train"})
+                self.assertTrue(dispatched.wait(2), "second request reached the API")
+                self.assertFalse(encoded.wait(0.2), "model waits for the earlier API operation")
+            finally:
+                release.set()
+            self.assertEqual(200, first.result(timeout=2)[0])
+            self.assertEqual(200, second.result(timeout=2)[0])
+        self.assertTrue(encoded.is_set())
 
     def test_guards(self):
         self.assertEqual(421, self.call("GET", "/api/library", headers={"Host": "attacker.example"})[0])

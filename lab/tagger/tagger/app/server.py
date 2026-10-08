@@ -1,7 +1,7 @@
 """`tagger app`: search, select and tag on one screen, as a local web app on 127.0.0.1.
 
 Static files come from `static/`; page images are served by row from the archive given with `--root`; the
-JSON API runs the engine and the store. One request at a time (the model is not shared across threads).
+JSON API runs the engine and the store. API work is serialized; static and image transfers run independently.
 Requests must name this server as Host (no DNS rebinding) and POSTs must be same origin JSON. The process
 prints counts and timings only; the request log is off, since nothing about a page belongs in a terminal.
 `--smoke` loads everything, times searches with the owner's tag descriptions as queries, prints numbers, exits.
@@ -12,8 +12,9 @@ import mimetypes
 import re
 import time
 from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 
 import numpy as np
 
@@ -284,6 +285,7 @@ def _found(value, view):
 
 
 def handler(app: App, port: int):
+    api_lock = Lock()  # the model and mutable app state have one caller at a time
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
     class Handler(BaseHTTPRequestHandler):
@@ -346,7 +348,9 @@ def handler(app: App, port: int):
             for verb, pattern, run in ROUTES:
                 if verb == method and (m := pattern.fullmatch(path)):
                     try:
-                        return self.json(HTTPStatus.OK, run(app, m, body))
+                        with api_lock:
+                            result = run(app, m, body)
+                        return self.json(HTTPStatus.OK, result)
                     except LookupError:
                         return self.json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                     except (ValueError, TypeError) as err:
@@ -361,9 +365,8 @@ def handler(app: App, port: int):
     return Handler
 
 
-class Server(HTTPServer):
-    # One request at a time, so a page of tiles queues its pictures: the default backlog of 5 resets the rest,
-    # and with them any API call made meanwhile.
+class Server(ThreadingHTTPServer):
+    # Accept a page of picture requests without resets; their transfers never hold up the API.
     request_queue_size = 128
 
 

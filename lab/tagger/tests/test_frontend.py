@@ -43,6 +43,8 @@ import pytest
         "pages",
         "restorePage",
         "likeBackToPage",
+        "likeWaitsForTag",
+        "backDuringPage",
     ],
 )
 def test_frontend_round_trips(case):

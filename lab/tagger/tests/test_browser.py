@@ -49,3 +49,15 @@ class BrowserTests(Fixture):
 
     def test_leaving_more_like_this_returns_to_the_same_page_and_scroll(self):
         self.run_case("likeBack")
+
+    def test_a_new_search_returns_to_page_one_and_the_top(self):
+        self.run_case("newSearch")
+
+    def test_pagination_focuses_the_first_replacement_tile(self):
+        self.run_case("pageFocus")
+
+    def test_back_and_forward_restore_result_pages_and_scroll(self):
+        self.run_case("pageHistory")
+
+    def test_reload_restores_the_page_and_scroll(self):
+        self.run_case("reloadScroll")
