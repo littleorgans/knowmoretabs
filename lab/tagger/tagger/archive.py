@@ -1,7 +1,9 @@
 """Read only view of a knowmoretabs archive copy, following the Rust code's rules.
 
-Known pages: public tab URLs across readable snapshots (`library::known_urls`, `public_domain`).
-Title: the most recent non blank tab title, snapshots ascending (`library::build`).
+Known pages: public tab URLs across readable snapshots (`library::known_urls`, `public_domain`), and the pages
+added one at a time (`pages/added.jsonl`, folded by `intake::snapshot` as one more snapshot after the dated ones).
+Title: the most recent non blank tab title, snapshots ascending (`library::build`); an added page's comes from the
+latest intake line for its URL.
 Owner labels: `library.json` tags[url].add resolved through active vocabulary (`State::page_tags`).
 Capture ok: the latest valid schema 1 log line is `ok` and its hash named file exists
 (`content_store::file_name`, `image_store::read_kept`). Latest follows file order (`jsonl::parse`).
@@ -95,6 +97,14 @@ class Archive:
                 titles.setdefault(tab["url"], "")
                 if tab.get("title", "").strip():
                     titles[tab["url"]] = tab["title"]
+        for url, row in latest_log(root / "pages/added.jsonl", ("url", "added_at")).items():
+            if not public(url):
+                continue
+            known.add(url)
+            titles.setdefault(url, "")
+            title = row.get("title")
+            if isinstance(title, str) and title.strip():
+                titles[url] = title
         owner_tags = {}
         for url, page in state.get("tags", {}).items():
             if url not in known:

@@ -41,7 +41,7 @@
   /* ---- a page's picture: the captured image, or the host's initial; `inner` goes on top ---- */
   K.thumb = (p, cls, inner = "") => {
     const initial = K.esc((p.host.replace(/^www\./, "")[0] || "?").toUpperCase());
-    return p.image ? `<div class="${cls}"><img src="/img/${p.row}" alt="" loading="lazy" decoding="async">${inner}</div>`
+    return p.image ? `<div class="${cls}"><img src="/img/${p.image}" alt="" loading="lazy" decoding="async">${inner}</div>`
                    : `<div class="${cls} none" aria-label="No image captured"><b aria-hidden="true">${initial}</b>${inner}</div>`;
   };
   K.own = (p) => (p.own.length ? p.own.map((t) => `<li class="tag">${K.esc(t)}</li>`).join("") : `<li class="none">None yet</li>`);

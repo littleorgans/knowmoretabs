@@ -1,6 +1,6 @@
 """`tagger app`: search, select and tag on one screen, as a local web app on 127.0.0.1.
 
-Static files come from `static/`; page images are served by row from the archive given with `--root`; the
+Static files come from `static/`; page images are served by their hashed name from the archive given with `--root`; the
 JSON API runs the engine and the store. API work is serialized; static and image transfers run independently.
 Requests must name this server as Host (no DNS rebinding) and POSTs must be same origin JSON. The process
 prints counts and timings only; the request log is off, since nothing about a page belongs in a terminal.
@@ -9,6 +9,7 @@ prints counts and timings only; the request log is off, since nothing about a pa
 
 import json
 import mimetypes
+from contextlib import nullcontext
 import re
 import time
 from http import HTTPStatus
@@ -20,7 +21,7 @@ import numpy as np
 
 from ..paths import Paths, read_json
 from ..zeroshot import prototype, query_variants
-from . import engine
+from . import add, engine
 from .store import Exclusions, Keys, Store, tag_name
 
 STATIC = Path(__file__).with_name("static")
@@ -32,8 +33,12 @@ CSP = (
 
 
 class App:
-    def __init__(self, lib: engine.Library, store: Store, encode: engine.Encode):
-        self.lib, self.store, self.encode = engine.add_tags(lib, store.tags(), encode), store, encode
+    def __init__(self, lib: engine.Library, store: Store, encode: engine.Encode, embed: engine.Embed):
+        # every tag name the store holds: made here, or decided (a name the archive since retired included)
+        names = [*store.tags(), *dict.fromkeys(tag for _, tag in store.decisions())]
+        self.lib, self.store, self.encode, self.embed = engine.add_tags(lib, names, encode), store, encode, embed
+        self.lock = Lock()  # the model and mutable app state have one caller at a time
+        self.adds = add.Jobs(self)
         self.exclusions = Exclusions(store.root)
         self.selection = Keys(store.root, "selection.json")
         self.pins = Keys(store.root, "pinned.json")
@@ -48,6 +53,13 @@ class App:
     def own(self, row: int) -> list[str]:
         return [t for j, t in enumerate(self.lib.tags) if self.lib.Y[row, j]]
 
+    def sync(self, url: str, archive) -> dict | None:
+        """After knowmoretabs changed one page: the library in line with the archive for it, and the page as the
+        screen shows it, or None when the screen does not show it. Hold the lock."""
+        self.lib = engine.sync(self.lib, archive, url, self.embed)
+        row = self.lib.rows.get(url)
+        return self.page(row) if row is not None and self.live()[row] else None
+
     def page(self, row: int) -> dict:
         """A page as the views show it: `tags` are its app tags; `own`, its archive tags, only the review shows."""
         r = self.lib.records[row]
@@ -56,7 +68,7 @@ class App:
             "title": r["title"],
             "host": r["host"],
             "url": r["key"],
-            "image": r["image_ok"],
+            "image": Path(r["image_path"]).stem if r["image_ok"] else None,  # its address: `/img/<hashed name>`
             "own": self.own(row),
             "tags": self.store.app_tags().get(r["key"], []),
         }
@@ -314,6 +326,13 @@ ROUTES = [
 ]
 
 
+# Add link jobs keep their own state, so starting one or polling it never waits on the model
+JOB_ROUTES = [
+    ("POST", re.compile(r"/api/add"), lambda app, m, b: app.adds.start(b)),
+    ("GET", re.compile(r"/api/add/(\d+)"), lambda app, m, b: app.adds.view(int(m[1]))),
+]
+
+
 def _size(body: dict) -> int:
     return min(max(int(body.get("n", 20)), 1), MAX_RESULTS)
 
@@ -329,7 +348,6 @@ def _found(value, view):
 
 
 def handler(app: App, port: int):
-    api_lock = Lock()  # the model and mutable app state have one caller at a time
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
 
     class Handler(BaseHTTPRequestHandler):
@@ -365,8 +383,8 @@ def handler(app: App, port: int):
             path = self.path.split("?", 1)[0]
             if path.startswith("/api/"):
                 return self.api("GET", path, None)
-            if m := re.fullmatch(r"/img/(\d+)", path):
-                return self.image(int(m[1]))
+            if m := re.fullmatch(r"/img/([0-9a-f]{64})", path):
+                return self.image(m[1])
             name = "index.html" if path == "/" else path.lstrip("/")
             file = STATIC / name
             if "/" in name or not file.is_file():
@@ -389,22 +407,25 @@ def handler(app: App, port: int):
             self.api("POST", self.path, body if isinstance(body, dict) else {})
 
         def api(self, method: str, path: str, body) -> None:
-            for verb, pattern, run in ROUTES:
-                if verb == method and (m := pattern.fullmatch(path)):
-                    try:
-                        with api_lock:
-                            result = run(app, m, body)
-                        return self.json(HTTPStatus.OK, result)
-                    except LookupError:
-                        return self.json(HTTPStatus.NOT_FOUND, {"error": "not found"})
-                    except (ValueError, TypeError) as err:
-                        return self.json(HTTPStatus.BAD_REQUEST, {"error": str(err)})
+            for routes, lock in ((ROUTES, app.lock), (JOB_ROUTES, nullcontext())):
+                for verb, pattern, run in routes:
+                    if verb == method and (m := pattern.fullmatch(path)):
+                        try:
+                            with lock:
+                                result = run(app, m, body)
+                            return self.json(HTTPStatus.OK, result)
+                        except LookupError:
+                            return self.json(HTTPStatus.NOT_FOUND, {"error": "not found"})
+                        except (ValueError, TypeError) as err:
+                            return self.json(HTTPStatus.BAD_REQUEST, {"error": str(err)})
             self.json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
-        def image(self, row: int) -> None:
-            if row >= len(app.lib.records) or not app.lib.records[row]["image_ok"]:
+        def image(self, name: str) -> None:
+            """A page's image by its hashed name, so a cached image stays with its page whatever its row."""
+            record = next((r for r in app.lib.records if r["image_ok"] and Path(r["image_path"]).stem == name), None)
+            if record is None:
                 return self.json(HTTPStatus.NOT_FOUND, {"error": "no image"})
-            self.send(HTTPStatus.OK, Path(app.lib.records[row]["image_path"]).read_bytes(), "image/jpeg", cache=True)
+            self.send(HTTPStatus.OK, Path(record["image_path"]).read_bytes(), "image/jpeg", cache=True)
 
     return Handler
 
@@ -443,7 +464,7 @@ def smoke(paths: Paths, app: App) -> dict:
 
 
 def run(paths: Paths, root: Path | None, port: int, smoke_only: bool) -> None:
-    from ..embed import MODELS, load_text
+    from ..embed import MODELS, embed_input, load_text
     from ..zeroshot import encode_queries
 
     start = time.perf_counter()
@@ -452,8 +473,11 @@ def run(paths: Paths, root: Path | None, port: int, smoke_only: bool) -> None:
     def encode(texts: list[str]) -> np.ndarray:
         return encode_queries(st, texts)
 
-    lib, stats = engine.load(paths, (root or paths.snapshot).resolve(), encode)
-    app = App(lib, Store(paths.data / "app"), encode)
+    def embed(records: list[dict], name: str) -> np.ndarray:
+        return embed_input(st, MODELS[engine.MODEL], records, name)[0]
+
+    lib, stats = engine.load(paths, (root or paths.snapshot).resolve(), encode, embed)
+    app = App(lib, Store(paths.data / "app"), encode, embed)
     stats |= {"model_load_s": model["load_s"], "startup_s": round(time.perf_counter() - start, 2)}
     print(json.dumps(stats))
     if smoke_only:

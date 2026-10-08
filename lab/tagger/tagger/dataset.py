@@ -61,28 +61,29 @@ def metadata_lines(title: str, record: dict | None) -> list[str]:
     return lines
 
 
+def record(archive: Archive, url: str) -> dict:
+    """One known page's record; content and image paths point under the archive's root."""
+    title = collapse(archive.titles.get(url))
+    tags = archive.owner_tags.get(url, [])
+    return {
+        "key": url,
+        "title": title,
+        "host": (urllib.parse.urlsplit(url).hostname or "").removeprefix("www."),
+        "a_text": "\n".join([host_path(url), *metadata_lines(title, archive.metadata.get(url))]),
+        "has_metadata": url in archive.metadata,
+        "tags": tags,
+        "labelled": bool(tags),
+        "forgotten": url in archive.forgotten,
+        "text_ok": url in archive.text_ok,
+        "content_path": str(archive.text_ok[url]) if url in archive.text_ok else None,
+        "image_ok": url in archive.image_ok,
+        "image_path": str(archive.image_ok[url]) if url in archive.image_ok else None,
+    }
+
+
 def run(paths: Paths) -> None:
     archive = Archive.load(paths.snapshot)
-    records = []
-    for url in archive.known:
-        title = collapse(archive.titles.get(url))
-        tags = archive.owner_tags.get(url, [])
-        records.append(
-            {
-                "key": url,
-                "title": title,
-                "host": (urllib.parse.urlsplit(url).hostname or "").removeprefix("www."),
-                "a_text": "\n".join([host_path(url), *metadata_lines(title, archive.metadata.get(url))]),
-                "has_metadata": url in archive.metadata,
-                "tags": tags,
-                "labelled": bool(tags),
-                "forgotten": url in archive.forgotten,
-                "text_ok": url in archive.text_ok,
-                "content_path": str(archive.text_ok[url]) if url in archive.text_ok else None,
-                "image_ok": url in archive.image_ok,
-                "image_path": str(archive.image_ok[url]) if url in archive.image_ok else None,
-            }
-        )
+    records = [record(archive, url) for url in archive.known]
     counts = collections.Counter(t for r in records for t in r["tags"])
     order = sorted(archive.active.values(), key=lambda n: (-counts[n], n.lower()))
     trained = [n for n in order if counts[n] >= MIN_POSITIVES]

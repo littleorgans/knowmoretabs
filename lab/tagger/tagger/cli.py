@@ -6,6 +6,8 @@ from pathlib import Path
 
 from .paths import resolve
 
+APP_PORT = 7879  # fixed, so a bookmarklet can reach the app; knowmoretabs `serve` keeps 7878
+
 
 def main() -> None:
     os.umask(0o077)  # per page outputs are private to the owner (0600)
@@ -30,7 +32,7 @@ def main() -> None:
     steps.add_parser("report", help="write out/results.md")
     app = steps.add_parser("app", help="the search then tag prototype, served on 127.0.0.1")
     app.add_argument("--root", help="the archive (default: the snapshot under the data directory)")
-    app.add_argument("--port", type=int, default=0, help="port (default: a free one)")
+    app.add_argument("--port", type=int, default=APP_PORT, help=f"port (default: {APP_PORT}; 0 picks a free one)")
     app.add_argument("--smoke", action="store_true", help="load, time searches, print numbers only, exit")
     compare = steps.add_parser("compare", help="compare metric outputs with another data directory")
     compare.add_argument("other")

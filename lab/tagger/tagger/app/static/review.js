@@ -79,7 +79,7 @@
   function swipeCard(p) {
     const near = p.sugg.filter((s) => Math.abs(s.p - 0.5) < 0.15).length;
     const kick = p.status === "skipped" ? "Skipped before · back for a decision" : near ? `<b>${near} of ${p.sugg.length}</b> near a coin toss` : "The model leans one way";
-    const shot = p.image ? `<div class="shot"><img src="/img/${p.row}" alt=""></div>`
+    const shot = p.image ? `<div class="shot"><img src="/img/${p.image}" alt=""></div>`
                          : `<div class="shot none" aria-label="No image captured"><b aria-hidden="true">${K.esc((p.host[0] || "?").toUpperCase())}</b><span>No image captured</span></div>`;
     return `<div class="page">${K.open(p)}${shot}<div class="cbody"><p class="kick">${kick}</p>` +
       `<h2 class="ptitle">${p.title ? K.esc(p.title) : "<i>Untitled page</i>"}</h2><p class="host">${K.esc(p.host)}</p>` +

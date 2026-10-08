@@ -19,6 +19,7 @@ import synthetic_archive
 from tagger import cli, dataset
 from tagger.app import engine, server
 from tagger.app.store import SOURCE, Exclusions, Store, tag_name
+from tagger.archive import sha256_hex
 from tagger.heads import unit
 from tagger.paths import Paths
 
@@ -65,6 +66,11 @@ def fake_encode(texts: list[str]) -> np.ndarray:
     return unit(out)
 
 
+def fake_embed(records: list[dict], name: str) -> np.ndarray:
+    """Page vectors on the same topic axes, from each page's title and input A text."""
+    return fake_encode([f"{r['title']}\n{r['a_text']}" for r in records])
+
+
 def build(root: Path) -> Paths:
     """Archive, dataset and fake cached vectors (topic axis plus noise; images on the same axes)."""
     archive, paths = root / "archive", Paths(root / "data")
@@ -92,7 +98,7 @@ class Fixture(unittest.TestCase):
         cls.tmp = Path(tempfile.mkdtemp())
         cls.paths = build(cls.tmp)
         with patch("builtins.print"):
-            cls.lib, cls.stats = engine.load(cls.paths, cls.tmp / "archive", fake_encode)
+            cls.lib, cls.stats = engine.load(cls.paths, cls.tmp / "archive", fake_encode, fake_embed)
 
     @classmethod
     def tearDownClass(cls):
@@ -183,7 +189,7 @@ class EngineTests(Fixture):
         shutil.rmtree(other / "snapshots")
         (other / "snapshots").mkdir()
         with self.assertRaises(SystemExit):
-            engine.load(self.paths, other, fake_encode)
+            engine.load(self.paths, other, fake_encode, fake_embed)
 
 
 class StoreTests(unittest.TestCase):
@@ -424,7 +430,7 @@ class ServerTests(Fixture):
     def setUp(self):
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
-        self.app = server.App(self.lib, Store(self.data), fake_encode)
+        self.app = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
         self.server = server.serve(self.app, 0)
         self.port = self.server.server_address[1]
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -458,7 +464,7 @@ class ServerTests(Fixture):
 
         row = next(i for i, r in enumerate(self.lib.records) if r["image_ok"])
         with patch.object(handler, "send", blocked_image), ThreadPoolExecutor(max_workers=2) as pool:
-            image = pool.submit(self.call, "GET", f"/img/{row}")
+            image = pool.submit(self.call, "GET", f"/img/{self.app.page(row)['image']}")
             try:
                 self.assertTrue(started.wait(2), "image request reached the transfer")
                 api = pool.submit(self.call, "GET", "/api/library")
@@ -518,9 +524,11 @@ class ServerTests(Fixture):
         self.assertIn(b"knowmoretabs", body)
         self.assertIn("default-src 'none'", r.getheader("Content-Security-Policy"))
         missing = next(i for i, r in enumerate(self.lib.records) if not r["image_ok"])
-        self.assertEqual(404, self.call("GET", f"/img/{missing}")[0])
+        self.assertIsNone(self.app.page(missing)["image"])
+        self.assertEqual(404, self.call("GET", f"/img/{sha256_hex(self.lib.records[missing]['key'])}")[0])
         shown = next(i for i, r in enumerate(self.lib.records) if r["image_ok"])
-        status, body, r = self.call("GET", f"/img/{shown}")
+        self.assertEqual(404, self.call("GET", f"/img/{shown}")[0], "images are addressed by page, not by row")
+        status, body, r = self.call("GET", f"/img/{self.app.page(shown)['image']}")
         self.assertEqual((200, "image/jpeg"), (status, r.getheader("Content-Type")))
 
     def test_search_pick_review_export(self):
@@ -565,7 +573,7 @@ class ServerTests(Fixture):
         out = self.call("POST", "/api/export", {})[1]
         answers = [json.loads(line) for line in Path(out["answers"]).read_text().splitlines()]
         self.assertEqual([{"url": page["url"], "tags": ["Sleeper cars"], "source": SOURCE}], answers)
-        restarted = server.App(self.lib, Store(self.data), fake_encode)
+        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
         self.assertEqual(made["tags"], restarted.library()["tags"])
 
     def test_excluded_results_stay_out_of_suggestions_review_and_export(self):
@@ -645,7 +653,7 @@ class ServerTests(Fixture):
         self.assertEqual([rows[1]], self.call("POST", "/api/search", {"query": padded})[1]["excluded"])
 
     def test_refine_applies_the_cut_before_using_new_results_as_positives(self):
-        app = server.App(self.lib, Store(self.data), fake_encode)
+        app = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
         query = "night train"
         q = fake_encode([query])[0]
         hits = engine.search(self.lib, q, query, 50)
@@ -678,13 +686,13 @@ class ServerTests(Fixture):
         rows = self.rows_for("espresso")[:2] + self.rows_for("night train")[:2]
         picked = [rows[3], rows[0], rows[2]]
         self.assertEqual(200, self.call("POST", "/api/selection", {"rows": picked})[0])
-        restarted = server.App(self.lib, Store(self.data), fake_encode)
+        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
         self.assertEqual(picked, [p["row"] for p in restarted.listed(restarted.selection)["pages"]])
         self.assertEqual(0o600, stat.S_IMODE((self.data / "selection.json").stat().st_mode))
         self.assertEqual(400, self.call("POST", "/api/selection", {"rows": [-1]})[0])
         self.assertEqual(picked, [p["row"] for p in self.call("GET", "/api/selection")[1]["pages"]])
         self.call("POST", "/api/selection", {"rows": []})
-        restarted = server.App(self.lib, Store(self.data), fake_encode)
+        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
         self.assertEqual([], restarted.listed(restarted.selection)["pages"])
 
     def test_forget_takes_a_page_out_of_every_view_the_selection_pins_and_counts_until_restored(self):
@@ -717,7 +725,7 @@ class ServerTests(Fixture):
             self.assertEqual(
                 400, self.call("POST", path, {"rows": [gone], **body})[0]
             )  # a forgotten page takes nothing
-        restarted = server.App(self.lib, Store(self.data), fake_encode)
+        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
         self.assertEqual(live - 1, int(restarted.live().sum()))  # it stays forgotten over a restart
         self.assertEqual(0o600, stat.S_IMODE((self.data / "forgotten.json").stat().st_mode))
         self.assertNotIn("forgotten", json.loads((self.data / "state.json").read_text()))  # apart from decisions
@@ -763,7 +771,7 @@ class ServerTests(Fixture):
         rows = self.rows_for("espresso")[:3]
         self.call("POST", "/api/selection", {"rows": rows[:1]})
         self.assertEqual(200, self.call("POST", "/api/pins", {"rows": [rows[2], rows[1]]})[0])
-        restarted = server.App(self.lib, Store(self.data), fake_encode)
+        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
         self.assertEqual([rows[2], rows[1]], [p["row"] for p in restarted.listed(restarted.pins)["pages"]])
         self.assertEqual([rows[0]], [p["row"] for p in restarted.listed(restarted.selection)["pages"]])
         self.assertEqual(0o600, stat.S_IMODE((self.data / "pinned.json").stat().st_mode))
@@ -833,7 +841,7 @@ class ServerTests(Fixture):
         self.call("POST", "/api/exclusions", judge | {"action": "exclude", "row": rows[1]})
         self.call("POST", "/api/exclusions", judge | {"action": "cut", "row": rows[9]})
         first = self.call("POST", "/api/search", body | {"refine": True})[1]
-        again = server.App(self.lib, Store(self.data), fake_encode).search(body | {"refine": True})
+        again = server.App(self.lib, Store(self.data), fake_encode, fake_embed).search(body | {"refine": True})
         self.assertEqual([h["row"] for h in first["hits"]], [h["row"] for h in again["hits"]])
         self.assertEqual(first["excluded"], again["excluded"])
         self.assertEqual(first["suggested"], again["suggested"])

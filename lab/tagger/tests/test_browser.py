@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from test_app import Fixture, fake_encode
+from test_app import Fixture, fake_embed, fake_encode
 
 from tagger.app import server
 from tagger.app.store import Store
@@ -27,7 +27,7 @@ class BrowserTests(Fixture):
             pytest.skip("Node and Chrome are needed to run the screen in a browser")
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
-        self.server = server.serve(server.App(self.lib, Store(self.data), fake_encode), 0)
+        self.server = server.serve(server.App(self.lib, Store(self.data), fake_encode, fake_embed), 0)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
