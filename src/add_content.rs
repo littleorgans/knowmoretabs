@@ -17,6 +17,7 @@
 //!      what succeeded stands untouched: the text first, its image only
 //!      when it has none, then a failed image on the public fetcher, which
 //!      a text that fails again or a browser out of reach cannot skip.
+//!      Only text captured by a Retry supplies an intake title update.
 
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -48,7 +49,7 @@ pub struct Ask<'a> {
 }
 
 /// How the text and the image ended, by their status names, and the title
-/// the text was kept with.
+/// the text was kept with: for a Retry, only one captured in this run.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Ended {
     pub content: Option<String>,
@@ -68,6 +69,7 @@ pub fn capture(root: &Path, url: &str, ask: Ask<'_>, json: bool, log: Log) -> En
         log,
         seen: Mutex::new(Ended::default()),
         imaging: AtomicBool::new(false),
+        retry: !ask.retry.is_empty(),
     });
     let events: Arc<dyn Events> = follow.clone();
     let urls = [url.to_owned()];
@@ -125,6 +127,8 @@ struct Follow {
     seen: Mutex<Ended>,
     /// The image is being fetched: a wait now is the image's.
     imaging: AtomicBool,
+    /// Only a content capture may update the intake title on a Retry.
+    retry: bool,
 }
 
 impl Follow {
@@ -148,13 +152,15 @@ impl Follow {
     }
 
     /// The text settled as `line` says.
-    fn content_line(&self, line: &Line) {
+    fn content_line(&self, line: &Line, captured: bool) {
         let title = kept_title(&self.root, &line.url);
         let status = line.status.word();
         self.tell(&content_done(line, title.as_deref()), &content_text(line));
         let mut seen = self.seen();
         seen.content = Some(status.to_owned());
-        seen.title = title;
+        if captured || !self.retry {
+            seen.title = title;
+        }
     }
 
     /// The owner's browser could not be reached: nothing was read.
@@ -176,7 +182,7 @@ impl Follow {
         let line = latest.unwrap_or_else(|| {
             Line::new(&self.url, content_store::Status::Unknown).with_reason("not_recorded")
         });
-        self.content_line(&line);
+        self.content_line(&line, false);
     }
 
     /// Says how the image stands by the image log, unless the run said it.
@@ -226,7 +232,7 @@ impl Events for Follow {
     }
 
     fn content(&self, line: &Line) {
-        self.content_line(line);
+        self.content_line(line, true);
     }
 
     /// The text is settled before its image is fetched, by the log when

@@ -91,6 +91,7 @@ fn follow(root: &Path, site: SocketAddr, start: Option<Start>) -> Vec<String> {
         fetcher: &fetcher,
         start,
         events: &*heard,
+        retry: None,
     };
     let quiet = Log {
         quiet: true,
