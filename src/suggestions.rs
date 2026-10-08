@@ -453,7 +453,7 @@ pub fn import(root: &Path, options: &ImportOptions, log: Log) -> Result<Report, 
     let _lock = if options.dry_run {
         None
     } else {
-        Some(archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?)
+        Some(archive.lock(|| log.warn(archive::WAITING))?)
     };
     let loaded = library::load(&archive)?;
     let known = library::known_urls(&loaded.snapshots);
@@ -489,7 +489,7 @@ pub fn import(root: &Path, options: &ImportOptions, log: Log) -> Result<Report, 
     // New names join the vocabulary before the answers are spelled through
     // it, so a name just created or brought back is kept. In a dry run the
     // state is not written.
-    let now = tags::now();
+    let now = archive::now();
     for (name, _) in parsed.unknown.values() {
         match tags::admit(&mut state, name, now) {
             (_, tags::Admitted::Known) => {}

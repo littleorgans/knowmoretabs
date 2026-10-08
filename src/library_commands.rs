@@ -8,10 +8,10 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use crate::archive::Archive;
+use crate::archive::{self, Archive};
 use crate::capture::Log;
 use crate::error::Error;
-use crate::{export, library, library_history, out, suggestions};
+use crate::{export, intake, library, library_history, out, suggestions};
 
 pub fn list(root: &Path, json: bool, log: Log) -> Result<(), Error> {
     let loaded = library::load(&Archive::at(root))?;
@@ -39,19 +39,14 @@ pub fn list(root: &Path, json: bool, log: Log) -> Result<(), Error> {
         }
         for snapshot in loaded.snapshots.iter().rev() {
             out::line(&format!(
-                "{}  {}  {} / {}  {} tabs across {} windows, {} groups{}",
+                "{}  {}  {}  {} tabs across {} windows, {} groups{}",
                 snapshot.id,
                 snapshot.captured_at,
-                snapshot
-                    .source
-                    .browser
-                    .as_deref()
-                    .unwrap_or("unknown browser"),
-                snapshot
-                    .source
-                    .profile
-                    .as_deref()
-                    .unwrap_or("unknown profile"),
+                list_source(
+                    &snapshot.id,
+                    snapshot.source.browser.as_deref(),
+                    snapshot.source.profile.as_deref(),
+                ),
                 snapshot.tabs.len(),
                 snapshot.windows.len(),
                 snapshot.groups.len(),
@@ -64,6 +59,17 @@ pub fn list(root: &Path, json: bool, log: Log) -> Result<(), Error> {
         }
     }
     Ok(())
+}
+
+fn list_source(id: &str, browser: Option<&str>, profile: Option<&str>) -> String {
+    if id == intake::SNAPSHOT_ID {
+        return "Added".to_owned();
+    }
+    format!(
+        "{} / {}",
+        browser.unwrap_or("unknown browser"),
+        profile.unwrap_or("unknown profile"),
+    )
 }
 
 #[derive(Serialize)]
@@ -81,7 +87,7 @@ pub fn export(
     log: Log,
 ) -> Result<(), Error> {
     let archive = Archive::open(root)?;
-    let _lock = archive.lock(|| log.warn("another knowmoretabs run holds the archive; waiting"))?;
+    let _lock = archive.lock(|| log.warn(archive::WAITING))?;
     let loaded = library::load(&archive)?;
     report_skipped(&loaded, log);
     let state = library::State::read(root)?;
@@ -123,5 +129,23 @@ fn report_skipped(loaded: &library::Loaded, log: Log) {
         for path in &loaded.unreadable {
             log.note(&format!("skipped {}", path.display()));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn list_labels_added_and_preserves_capture_sources() {
+        assert_eq!(list_source(intake::SNAPSHOT_ID, None, None), "Added");
+        assert_eq!(
+            list_source("capture", None, None),
+            "unknown browser / unknown profile",
+        );
+        assert_eq!(
+            list_source("capture", Some("chrome"), Some("Default")),
+            "chrome / Default",
+        );
     }
 }

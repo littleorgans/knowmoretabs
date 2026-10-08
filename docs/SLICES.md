@@ -23,6 +23,7 @@
 | `how-i-found-it` | See how I found a page and how much I used it | 7 `history` |
 | `what-a-page-is` | Know what a page is about without opening it | 7 `enrich` |
 | `keep-page-text` | Keep what a page says, not just what it is called | 8 `content` |
+| `add-a-page` | Add the page I am reading without saving every tab | 9 `add` |
 
 ## Build order
 
@@ -215,6 +216,27 @@ follows `enrich`'s rules for what never leaves the machine, through the
 same guard, fetcher, planner and log writer, rather than a second copy of
 them. Capture only: the markdown files are the store,
 and keyword retrieval over them is the `fulltext` entry, not this slice.
+
+### 9. Add one page (`add`) — done
+
+- Delivers: add-a-page
+- Depends on: library, triage
+
+**Ships.** `knowmoretabs add URL --no-content` puts one page in the library by its
+address, as one line in `pages/added.jsonl`; the library lists every added
+page in one snapshot, `added`, so tagging, forgetting, `content --url`, `serve`
+and `export` take it like any other page. A page already in the library
+writes nothing. An address that is not http or https, one on this machine or
+the private network, and a forgotten page are refused, writing nothing.
+`--title` keeps a title the caller has, and `--json` gives one line per stage
+as it happens, the last saying how it ended. Next, `add` captures the page's
+text and image in the same run, with a line for each step.
+
+**Intent.** A snapshot is a whole session, copied verbatim and never written again, so a
+single page cannot join one; a log the library folds in keeps that promise and
+needs no schema change. It is the product side of quick add: the tagger lab
+runs `add --json` and shows its lines as a progress bar. No new request leaves
+the machine: `add` reads nothing over the network.
 
 ## Prepared for, deliberately not built
 

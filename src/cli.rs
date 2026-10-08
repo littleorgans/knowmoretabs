@@ -1,6 +1,6 @@
 //! The command line: clap types for `knowmoretabs` and its subcommands.
 //!
-//! slice: capture, library, triage, browsers, tags, history, enrich, content
+//! slice: capture, library, triage, browsers, tags, history, enrich, content, add
 //! why: The whole CLI surface is visible in one file, so "what flags exist
 //!      and where are they allowed" is a question answered by reading forty
 //!      lines rather than grepping. Global options are global so that
@@ -85,6 +85,27 @@ pub enum Command {
         /// Open the page in your browser once the server is listening
         #[arg(long)]
         open: bool,
+    },
+    /// Add one page to the library by its address
+    #[command(
+        long_about = "Adds one page to the library by its address, with no session file and no new \
+snapshot: one line in <root>/pages/added.jsonl, which the library lists as one snapshot of added pages. \
+A page already in the library writes nothing. Refused, writing nothing: an address that is not http or \
+https, one on this machine or the private network, and a page you forgot (knowmoretabs restore brings \
+it back). With --json, one line per stage as it happens, the last saying how it ended. Exits 0 when the \
+page is in the library at the end. --no-content is required for now: add does not capture the page's \
+text or image yet."
+    )]
+    Add {
+        /// The page's address, as it should be kept: http or https
+        #[arg(value_name = "URL")]
+        url: String,
+        /// The page's title, when you have it
+        #[arg(long, value_name = "TITLE")]
+        title: Option<String>,
+        /// Add the page without capturing its text or image (required for now)
+        #[arg(long, required = true)]
+        no_content: bool,
     },
     /// Hide pages from the library; the snapshots keep them
     Forget {
@@ -699,6 +720,37 @@ mod tests {
         ));
         assert_eq!(cli.profile.as_deref(), Some("Work"));
         assert!(Cli::try_parse_from(["knowmoretabs", "history", "--no-history"]).is_err());
+    }
+
+    #[test]
+    fn add_takes_one_url_a_title_and_needs_no_content_for_now() {
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "add",
+            "https://a.test/",
+            "--title",
+            "A",
+            "--no-content",
+            "--json",
+        ])
+        .unwrap();
+        assert!(cli.json);
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Add { url, title: Some(title), no_content: true })
+                if url == "https://a.test/" && title == "A"
+        ));
+        let err = Cli::try_parse_from(["knowmoretabs", "add", "https://a.test/"]).unwrap_err();
+        assert_eq!(err.kind(), clap::error::ErrorKind::MissingRequiredArgument);
+        for bad in [
+            &["add", "--no-content"][..],
+            &["add", "https://a.test/", "https://b.test/", "--no-content"],
+            &["add", "https://a.test/", "--no-content", "--signed-in"],
+        ] {
+            let mut args = vec!["knowmoretabs"];
+            args.extend_from_slice(bad);
+            assert!(Cli::try_parse_from(args).is_err(), "{bad:?}");
+        }
     }
 
     #[test]

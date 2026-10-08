@@ -1,7 +1,7 @@
 //! Entry point: parses the command line, runs the chosen command, and turns
 //! the outcome into stdout lines or JSON and an exit status.
 //!
-//! slice: capture, library, triage, tags, history, enrich, content
+//! slice: capture, library, triage, tags, history, enrich, content, add
 //! why: Presentation lives here and nowhere else. The capture code returns
 //!      typed outcomes and typed errors; this file decides what a person
 //!      sees on a terminal, what a script sees under `--json`, and which
@@ -10,6 +10,7 @@
 //!      added a command added its presentation here, so this file claims
 //!      each of them.
 
+mod add;
 mod archive;
 mod assets;
 mod browser;
@@ -43,6 +44,7 @@ mod image_fetch;
 mod image_page;
 mod image_pick;
 mod image_store;
+mod intake;
 mod jsonl;
 mod jsonld;
 mod library;
@@ -119,6 +121,16 @@ fn main() -> ExitCode {
             json: cli.json,
             log,
         }),
+        Some(Command::Add { url, title, .. }) => {
+            let args = add::Args {
+                url,
+                title: title.as_deref(),
+            };
+            match add::command(&root, args, cli.json, log) {
+                Ok(code) => return code,
+                Err(err) => Err(err),
+            }
+        }
         Some(Command::Forget { urls }) => {
             triage::command(&root, urls, triage::Action::Forget, cli.json, log)
         }

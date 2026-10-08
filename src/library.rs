@@ -1,6 +1,6 @@
 //! Derives the compact frontend contract from immutable capture snapshots.
 //!
-//! slice: library, tags, history
+//! slice: library, tags, history, add
 //! why: One bad snapshot must not hide a whole archive; one repeated URL must
 //!      retain every tab sighting without repeating page metadata in the payload.
 
@@ -15,6 +15,7 @@ use url::Url;
 use crate::archive::{self, Archive, SNAPSHOT_JSON};
 use crate::error::Error;
 use crate::history::database_url;
+use crate::intake;
 use crate::library_history::Entry;
 use crate::local;
 use crate::model::{self, Snapshot};
@@ -26,7 +27,9 @@ pub struct Loaded {
     pub unreadable: Vec<PathBuf>,
 }
 
-/// Directory ordering resolves same-time collisions before the stable time sort.
+/// Directory ordering resolves same-time collisions before the stable time
+/// sort. Pages added one at a time join as one more snapshot, [`intake`]'s,
+/// so every reader of `snapshots` lists them with no change of its own.
 pub fn load(archive: &Archive) -> Result<Loaded, Error> {
     let mut loaded = Loaded::default();
     for id in archive.snapshot_ids()? {
@@ -40,6 +43,7 @@ pub fn load(archive: &Archive) -> Result<Loaded, Error> {
             _ => loaded.unreadable.push(path),
         }
     }
+    loaded.snapshots.extend(intake::snapshot(archive.root())?);
     loaded.snapshots.sort_by_key(|s| s.captured_at);
     Ok(loaded)
 }
@@ -267,9 +271,15 @@ pub fn known_urls(snapshots: &[Snapshot]) -> HashSet<&str> {
     snapshots
         .iter()
         .flat_map(|snapshot| snapshot.tabs.iter())
-        .filter(|tab| public_domain(&tab.url).is_some())
+        .filter(|tab| is_listed(&tab.url))
         .map(|tab| tab.url.as_str())
         .collect()
+}
+
+/// Whether the library would list `raw` at all: never a file, nor a page on
+/// this machine.
+pub fn is_listed(raw: &str) -> bool {
+    public_domain(raw).is_some()
 }
 
 /// The pages whose History signals a refresh looks up: those the library
@@ -283,7 +293,7 @@ pub fn history_urls<'a>(
         .map(|tab| tab.url.as_str())
         .filter(|url| {
             Url::parse(url).is_ok_and(|parsed| matches!(parsed.scheme(), "http" | "https"))
-                && public_domain(url).is_some()
+                && is_listed(url)
                 && !forgotten.contains(*url)
         })
         .map(ToOwned::to_owned)

@@ -140,7 +140,8 @@ function derive(lib) {
   // stacked bars. Past COLS × SROWS marks each one stands for an equal run of
   // snapshots and a mark the page only part-fills is drawn faint, so the block
   // never outgrows the row however long the archive runs.
-  const latest = S.snaps.length - 1, n = S.snaps.length;
+  // Intake keeps pages in the library without saying they are open in a browser.
+  const latest = S.snaps.findLastIndex((s) => s.id !== 'added'), n = S.snaps.length;
   const cells = Math.min(n, COLS * SROWS) || 1;
   const cols = Math.min(cells, COLS), lines = Math.ceil(cells / COLS);
   const bar = lines > 1 ? 4 : 8, pitch = lines > 1 ? 6 : 8;
@@ -152,7 +153,7 @@ function derive(lib) {
   for (const p of S.pages) {
     if (!p.seen.length) { p.n = 0; continue; }      // allowed by the contract, never shown
     const ks = [...new Set(p.seen.map((x) => x[0]))];
-    p.n = ks.length; p.first = ks[0]; p.last = ks.at(-1); p.open = p.last === latest;
+    p.n = ks.length; p.first = ks[0]; p.last = ks.at(-1); p.open = ks.includes(latest);
     const l = p.seen.at(-1); p.lw = l[1]; p.lp = l[3];
     p.grp = (p.seen.find((x) => x[0] === p.last && x[4]) || l)[4];   // the group it sat in when last seen
     p.gs = [...new Set(p.seen.map((x) => x[4] && x[4].title.toLowerCase()).filter(Boolean))];
