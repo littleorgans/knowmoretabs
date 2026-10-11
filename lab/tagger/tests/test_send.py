@@ -3,6 +3,7 @@ the app's tags on as the owner's own and forgets the app's forgotten pages, a re
 is kept, a failed call stops the send with the error on screen, and a snapshot root is never written."""
 
 import json
+import errno
 import os
 import subprocess
 import threading
@@ -15,6 +16,7 @@ import numpy as np
 from test_add import Served, fake_binary
 
 from tagger.app import send
+from tagger.app.store import Keys, Store
 
 
 class SendTests(Served):
@@ -252,3 +254,55 @@ class SendTests(Served):
                 release.set()
             self.assertTrue(future.result()[1]["ok"])
         self.assertEqual(1, self.post("/api/send/preview")["tags_on"])
+
+    def test_failed_sent_replace_keeps_memory_and_disk_in_agreement(self):
+        self.tag(self.rows[:1], "Trains")
+        store = self.app.store
+        before = store.path.read_bytes()
+        with patch("tagger.app.store.os.replace", side_effect=OSError(errno.ENOSPC, "synthetic full disk")):
+            with self.assertRaises(OSError):
+                store.mark_sent([(self.keys[0], "Trains", True)])
+        self.assertEqual(before, store.path.read_bytes())
+        self.assertEqual(Store(store.root).sent(), store.sent(), "unpublished sent marks must not survive in memory")
+
+    def test_sent_save_failure_returns_a_result_and_can_be_retried(self):
+        self.tag(self.rows[:1], "Trains")
+        self.post("/api/send/preview")
+        with patch.object(self.app.store, "_save", side_effect=OSError(errno.ENOSPC, "synthetic full disk")):
+            out = self.post("/api/send")
+        self.assertFalse(out["ok"])
+        self.assertEqual([True], [step["ok"] for step in out["steps"]], "the library call succeeded")
+        self.assertEqual({}, self.app.store.sent())
+        self.assertEqual(["Trains"], self.tags(self.keys[0])["add"])
+        self.assertIn("could not save send progress", out["error"])
+        self.assertTrue(self.send()["ok"])
+        self.assertTrue(Store(self.app.store.root).sent()[(self.keys[0], "Trains")])
+
+    def test_export_failure_returns_a_result_without_running_the_cli(self):
+        self.tag(self.rows[:1], "Trains")
+        self.post("/api/send/preview")
+        with patch.object(self.app.store, "export", side_effect=OSError(errno.ENOSPC, "synthetic full disk")):
+            out = self.post("/api/send")
+        self.assertFalse(out["ok"])
+        self.assertEqual([], out["steps"])
+        self.assertEqual([], self.runs())
+        self.assertTrue(self.send()["ok"])
+
+    def test_failed_forget_progress_keeps_pending_keys_for_retry(self):
+        self.post("/api/forget", {"rows": self.rows[:1], "value": True})
+        self.post("/api/send/preview")
+        original = os.replace
+
+        def fail_keys(source, target):
+            if target == self.app.forgotten.path:
+                raise OSError(errno.ENOSPC, "synthetic full disk")
+            return original(source, target)
+
+        with patch("tagger.app.store.os.replace", side_effect=fail_keys):
+            out = self.post("/api/send")
+        self.assertFalse(out["ok"])
+        self.assertIn(self.keys[0], self.state()["forgotten"])
+        self.assertEqual([self.keys[0]], self.app.forgotten.keys)
+        self.assertEqual(self.app.forgotten.keys, Keys(self.app.store.root, "forgotten.json").keys)
+        self.assertTrue(self.send()["ok"])
+        self.assertEqual([], self.app.forgotten.keys)

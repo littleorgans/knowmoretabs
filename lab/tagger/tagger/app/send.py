@@ -172,24 +172,27 @@ class Send:
             p = self.pending
             if p is None:
                 raise ValueError("nothing previewed to send")
-            archive = Archive.load(self.app.lib.root)
-            with self.app.lock:
-                if preview != self.preview_id:
-                    raise ValueError("preview replaced; preview again")
-                if p != plan(self.app.store, self.app.forgotten.keys, archive):
-                    raise ValueError("decisions or library changed; preview again")
-                self.pending = None
-                record = self.app.store.export(self.app.forgotten.keys)
-                self.app.store.mark_sent(p.held)
-            steps, error = [], None
-            for call in p.calls():
-                error = run(self.app, call)
-                steps.append({"command": call.command(self.app), "ok": error is None})
-                if error is not None:
-                    break
-                self._settle(call)
-            if error is None and p.settled:
-                self._forgotten(p.settled)
+            steps, error, record = [], None, None
+            try:
+                archive = Archive.load(self.app.lib.root)
+                with self.app.lock:
+                    if preview != self.preview_id:
+                        raise ValueError("preview replaced; preview again")
+                    if p != plan(self.app.store, self.app.forgotten.keys, archive):
+                        raise ValueError("decisions or library changed; preview again")
+                    self.pending = None
+                    record = self.app.store.export(self.app.forgotten.keys)
+                    self.app.store.mark_sent(p.held)
+                for call in p.calls():
+                    error = run(self.app, call)
+                    steps.append({"command": call.command(self.app), "ok": error is None})
+                    if error is not None:
+                        break
+                    self._settle(call)
+                if error is None and p.settled:
+                    self._forgotten(p.settled)
+            except OSError as err:
+                error = f"could not save send progress: {err.strerror or err}. Preview again to retry."
             return {**p.summary(), "ok": error is None, "error": error, "steps": steps, "record": record}
 
     def _settle(self, call: Call) -> None:

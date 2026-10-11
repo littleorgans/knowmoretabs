@@ -59,9 +59,11 @@ class Store:
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {"version": 1, "sessions": []}
         self._app_tags: dict[str, list[str]] | None = None
 
-    def _save(self) -> None:
+    def _save(self, state: dict | None = None) -> None:
+        state = self.state if state is None else state
+        _write(self.path, json.dumps(state, indent=1, ensure_ascii=False) + "\n")
+        self.state = state
         self._app_tags = None
-        _write(self.path, json.dumps(self.state, indent=1, ensure_ascii=False) + "\n")
 
     def sessions(self) -> list[dict]:
         return self.state["sessions"]
@@ -180,9 +182,10 @@ class Store:
 
     def mark_sent(self, pairs: list[tuple[str, str, bool]]) -> None:
         if pairs:
+            sent = {key: tags.copy() for key, tags in self.state.get("sent", {}).items()}
             for key, tag, value in pairs:
-                self.state.setdefault("sent", {}).setdefault(key, {})[tag] = value
-            self._save()
+                sent.setdefault(key, {})[tag] = value
+            self._save({**self.state, "sent": sent})
 
     def app_tags(self) -> dict[str, list[str]]:
         """Page key -> the tags its latest decisions keep (made in the app, direct or reviewed), by name."""
@@ -256,8 +259,9 @@ class Keys:
         self.keys: list[str] = json.loads(self.path.read_text())["keys"] if self.path.exists() else []
 
     def set(self, keys: list[str]) -> None:
-        self.keys = list(dict.fromkeys(keys))
-        _write(self.path, json.dumps({"version": 1, "keys": self.keys}, ensure_ascii=False) + "\n")
+        keys = list(dict.fromkeys(keys))
+        _write(self.path, json.dumps({"version": 1, "keys": keys}, ensure_ascii=False) + "\n")
+        self.keys = keys
 
 
 class Exclusions:
