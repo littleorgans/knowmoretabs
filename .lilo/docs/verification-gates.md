@@ -1,7 +1,7 @@
 # Verification gates
 <!-- lilo-page kind=gates schema=1 -->
-<!-- lilo-covers .github/workflows/ci.yml .github/workflows/release.yml .cargo/config.toml Cargo.toml xtask/src/main.rs tests/serve_frontend.cjs -->
-<!-- lilo-verified digest=5ec43ceb7ac5a40f commit=959c169c6354 date=2026-10-06 -->
+<!-- lilo-covers .github/workflows/ci.yml .github/workflows/release.yml .cargo/config.toml Cargo.toml xtask/src/main.rs tests/serve_frontend.cjs justfile scripts/clippy.py lab/tagger/pyproject.toml -->
+<!-- lilo-verified digest=0e774807df454ac3 commit=6dba24657080 date=2026-10-12 -->
 
 Up: [knowmoretabs system map](index.md)
 
@@ -19,12 +19,14 @@ Scoped: `<file>` is an integration test in `tests/` (`code:tests/tags.rs` is one
 
 Frontend: Cargo does not run JavaScript, so `code:tests/serve_frontend.cjs` runs the shipped `web/app.js` renderer in Node's `vm` with its DOM startup cut off, using Node's own test runner and no packages. CI uses the Node that comes with the `ubuntu-24.04` image; the test passes on Node 20 and 25.
 
-Toolchains: on the owner's machine Homebrew's rust comes before rustup on `PATH`, so plain `cargo` is Homebrew's, newer than CI's 1.89.0, and `rustup run 1.89.0` alone still finds Homebrew's `cargo-clippy`. That order is the owner's setup; leave the shell config alone. To run a gate on 1.89.0, prefix it with `PATH="$HOME/.rustup/toolchains/1.89.0-aarch64-apple-darwin/bin:$PATH"` and check that `cargo clippy --version` reports 0.1.89. Clippy must pass on both: CI runs 1.89.0, and a newer clippy adds lints.
+Toolchains: on the owner's machine Homebrew's rust comes before rustup on `PATH`, so plain `cargo` is Homebrew's, newer than CI's 1.89.0, and `rustup run 1.89.0` alone still finds Homebrew's `cargo-clippy`. That order is the owner's setup; leave the shell config alone. To run a gate on 1.89.0, prefix it with `PATH="$HOME/.rustup/toolchains/1.89.0-aarch64-apple-darwin/bin:$PATH"` and check that `cargo clippy --version` reports 0.1.89, or run `python3 scripts/clippy.py`, which reads the pin from `ci.yml` and puts that rustup toolchain's clippy first. Clippy must pass on both: CI runs 1.89.0, and a newer clippy adds lints.
 
 ## Conditional
 
 - Formatting: `cargo fmt --all -- --check`; exit 0, 2026-10-06.
 - Slice metadata, after touching a `//!` header, `slices.toml` or adding a source file: `cargo run --locked --package xtask -- slices --check`; exit 0, 2026-10-06. Without `--check`, `cargo xtask slices` regenerates the matrix doc (`code:xtask/src/main.rs#run`, `code:.cargo/config.toml`).
+- Local recipes: `just check` runs rustfmt, `scripts/clippy.py`, the slice check and ruff on `lab/tagger`; `just test` runs the Full and Frontend gates and the tagger tests (`code:justfile`). Both exit 0, 2026-10-12, on Homebrew rustc 1.99.0, Node 25.9.0 and uv 0.12.5.
+- Tagger lab, after touching `lab/tagger`: `uv run --locked --project lab/tagger pytest -q lab/tagger/tests`; exit 0, 2026-10-12. CI does not run it.
 - Release machinery: `.github/workflows/release.yml` runs on a `v*` tag or by hand; on a tag it fails unless the tag matches the `Cargo.toml` version and the changelog has a dated heading for it (`code:.github/workflows/release.yml`). Not executed.
 
 ## Hooks
