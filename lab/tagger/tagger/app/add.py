@@ -17,6 +17,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 
 from ..archive import Archive
+from . import kmt
 
 STAGES = ("library", "content", "image", "search")
 LISTED = ("added", "known")  # `library` done values after which the library lists the page
@@ -85,8 +86,8 @@ class Job:
 
 
 class Jobs:
-    def __init__(self, app, binary: str = "knowmoretabs"):
-        self.app, self.binary = app, binary  # the binary: a name found on PATH, or a path
+    def __init__(self, app):
+        self.app = app
         self.lock = threading.Lock()  # the job table and job state only
         self.jobs: dict[int, Job] = {}
         self.ids = itertools.count(1)
@@ -107,8 +108,7 @@ class Jobs:
         retry, title = tuple(s for s in RETRY if s in retry), (title or "").strip() or None
         with self.lock:
             job = Job(next(self.ids), url, action, retry, signed_in, title)
-            # The store lives at <data>/app. Resolve both paths so an alias cannot write into a snapshot copy.
-            if self.app.lib.root.resolve().is_relative_to(self.app.store.root.parent.resolve()):
+            if kmt.snapshot(self.app):
                 job.stages["library"] = {"stage": "library", "state": "done", "value": "refused", "reason": "snapshot"}
                 job.ended = time.monotonic()
             elif action == "index":
@@ -168,7 +168,7 @@ class Jobs:
         is a refusal the events report (forgotten, not a web page) or a failure the job reports."""
         try:
             proc = subprocess.Popen(
-                [self.binary, "--root", str(self.app.lib.root), *args],
+                kmt.argv(self.app, args),
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,

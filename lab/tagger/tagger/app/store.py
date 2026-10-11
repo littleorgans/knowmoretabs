@@ -3,8 +3,9 @@
 A session is one search and its picked tags: the result pages, by key, each with the model's prechecks, the
 user's marks and a status (open, skipped, decided). A direct decision tags or untags one page outside any
 session (the one screen flow); the direct decisions of one action share a batch, so undoing it retracts them.
-Export folds every decided page over all sessions and every direct decision, latest decision per page and tag,
-into a `tag --import` answers file and a decision log; a page's app tags are the tags its latest decisions keep.
+Export, the record each Send to library writes, folds every decided page over all sessions and every direct
+decision, latest decision per page and tag, into an answers file and a decision log; a page's app tags are the tags
+its latest decisions keep. The sent marks hold, per page and tag, what the last send left in the library.
 Results marked not relevant to a query live apart, in `Exclusions`, and are never exported; the selected, pinned
 and forgotten pages live in their own `Keys` files. Forgotten pages leave the answers and go to a forget
 manifest beside them. Tags the owner makes in the app are kept in the same file, by the spelling `tag --import`
@@ -173,6 +174,16 @@ class Store:
             keep((d["key"], d["tag"]), {"value": d["value"], "model": None, "session": None, "at": d["at"]})
         return latest
 
+    def sent(self) -> dict[tuple[str, str], bool]:
+        """(page key, tag) -> the value the last Send to library left in the library for it."""
+        return {(k, t): v for k, tags in self.state.get("sent", {}).items() for t, v in tags.items()}
+
+    def mark_sent(self, pairs: list[tuple[str, str, bool]]) -> None:
+        if pairs:
+            for key, tag, value in pairs:
+                self.state.setdefault("sent", {}).setdefault(key, {})[tag] = value
+            self._save()
+
     def app_tags(self) -> dict[str, list[str]]:
         """Page key -> the tags its latest decisions keep (made in the app, direct or reviewed), by name."""
         if self._app_tags is None:
@@ -186,8 +197,7 @@ class Store:
     def export(self, forgotten: list[str] = ()) -> dict:
         """answers.jsonl (pages with a kept tag, the kept tags; forgotten pages left out) and decisions.jsonl
         (every page, tag and answer) in a fresh folder under exports/, with forget.urls beside them when pages
-        were forgotten: their exact addresses, each ended by a NUL, for `xargs -0 knowmoretabs forget`. No
-        prompt sits there, so `tag --import` finds none to check coverage against."""
+        were forgotten: their exact addresses, each ended by a NUL. Send to library's record of a send."""
         latest = self.decisions()
         gone = set(forgotten)
         kept: dict[str, list[str]] = {}

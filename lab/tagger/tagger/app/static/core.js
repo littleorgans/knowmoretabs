@@ -10,6 +10,7 @@
   K.$ = (id) => document.getElementById(id);
   K.esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   K.pct = (p) => Math.round(p * 100) + "%";
+  K.plural = (n, word) => `<b>${n}</b> ${word}${n === 1 ? "" : "s"}`;
   K.short = (t) => (t.length > 44 ? t.slice(0, 42).trimEnd() + "…" : t);
   K.title = (p) => p.title || "Untitled page";
 

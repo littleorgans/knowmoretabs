@@ -64,7 +64,7 @@
   }
   async function confirmAll() {
     const todo = decidable().filter(open);
-    await Promise.all(todo.map((p) => put(p, { status: "decided" })));  // queued at once, so export waits for all
+    await Promise.all(todo.map((p) => put(p, { status: "decided" })));  // queued at once, so a send waits for all
     K.toast(`Confirmed ${todo.length} page${todo.length === 1 ? "" : "s"}`);
     K.changed();
   }
@@ -149,8 +149,8 @@
       c.querySelectorAll(".sg").forEach((b) => b.addEventListener("click", () => flip(cur, b.dataset.tag).catch(K.fail)));
     } else {
       const n = ps.filter((p) => p.status === "decided").length;
-      deck.innerHTML = `<div class="card static"><div class="done"><h2>All decided.</h2><p>${n} pages decided in this set. Undo brings the last one back; export writes the answers file.</p>` +
-        `<p class="row-btns"><button type="button" data-go="undo">Undo the last one</button><button type="button" data-go="export">Export</button><button type="button" data-go="search">New search</button></p></div></div>`;
+      deck.innerHTML = `<div class="card static"><div class="done"><h2>All decided.</h2><p>${n} pages decided in this set. Undo brings the last one back; Send to library puts the tags in your library.</p>` +
+        `<p class="row-btns"><button type="button" data-go="undo">Undo the last one</button><button type="button" data-go="send">Send to library</button><button type="button" data-go="search">New search</button></p></div></div>`;
     }
     K.$("r-accept").textContent = cur ? acceptLabel(cur) : "Accept";
     K.$("r-acts").querySelectorAll("button").forEach((b) => {
@@ -241,7 +241,7 @@
     const g = e.target.closest("[data-go]");
     if (!g) return;
     if (g.dataset.go === "undo") undo().catch(K.fail);
-    else if (g.dataset.go === "export") K.exportNow();
+    else if (g.dataset.go === "send") K.sendNow();
     else location.hash = g.dataset.go;
   });
 })();

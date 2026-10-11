@@ -323,50 +323,83 @@ async function confirmAllPending() {
     return selector === '[data-act]' ? { dataset: { act: 'confirm-all' }, disabled: false } : null;
   } } });
   let settled = false;
-  K.review.pending.then(() => { settled = true; }); // what an export pressed now waits for
+  K.review.pending.then(() => { settled = true; }); // what a send pressed now waits for
   await turn(); requests.shift()(); await turn(); await turn();
-  assert.equal(settled, false, 'export must wait for every page Confirm all is saving');
+  assert.equal(settled, false, 'a send must wait for every page Confirm all is saving');
   requests.shift()(); await turn(); await turn();
   assert.deepEqual(K.set.pages.map((p) => p.status), ['decided', 'decided']);
 }
 
-async function exportWait() {
+async function sendWait() {
   const { K } = setup('app.js');
   await turn();
-  let finish, exports = 0;
+  let finish, previews = 0;
   K.writes = new Promise((resolve) => { finish = resolve; });
-  K.api = async () => { exports++; return { decided: 0, answers: '' }; };
-  const exporting = K.exportNow();
+  K.api = async () => { previews++; return { commands: [] }; };
+  const sending = K.sendNow();
   await turn();
-  assert.equal(exports, 0, 'export must wait for pending saves');
-  finish(); await exporting;
-  assert.equal(exports, 1);
+  assert.equal(previews, 0, 'a send must wait for pending saves');
+  finish(); await sending;
+  assert.equal(previews, 1);
 }
 
-async function exportCommand() {
+const PLAN = { tags_on: 3, pages_on: 2, tags_off: 0, pages_off: 0, new: ['<Night> trains'], revived: [], forget: 1, skipped: 0,
+  commands: ["knowmoretabs --root /r tag '--add=<Night> trains' -- https://a.example/", 'knowmoretabs --root /r forget -- https://b.example/'] };
+
+async function sendPreview() {
   const { K, node } = setup('app.js');
-  // Startup's API is intentionally absent; its error is observed before export.
   await turn();
-  K.api = async () => ({ decided: 1, flipped: 0, answer_tags: 1, answer_pages: 1, answers: "/tmp/owner's data/answers.jsonl", decisions: '/tmp/log', source: 'test' });
-  await K.exportNow();
-  const html = node('export-body').innerHTML;
-  assert.ok(html.includes("<pre>knowmoretabs tag --import"), 'import command must target the owner default library');
-  assert.ok(!html.includes('--root'), 'the app snapshot must never be the export target');
-  assert.ok(html.includes("--import '/tmp/owner'\\''s data/answers.jsonl'"), 'answer path must be shell quoted');
-  assert.ok(html.includes('--accept-new'), 'created tags must validate without an existing archive tag');
-  assert.ok(!html.includes('xargs'), 'nothing forgotten, no forget command');
+  const asked = [];
+  K.api = async (route, body) => { asked.push(route); return PLAN; };
+  K.esc = (s) => String(s).replace(/</g, '&lt;');
+  await K.sendNow();
+  const html = node('send-body').innerHTML;
+  assert.deepEqual(asked, ['/api/send/preview']);
+  assert.ok(html.includes('<dt>Tags on</dt><dd><b>3</b> tags on <b>2</b> pages</dd>'), html);
+  assert.ok(html.includes('<dt>New tags</dt><dd>&lt;Night> trains</dd>'), 'names are escaped');
+  assert.ok(html.includes('<dt>Forget</dt><dd><b>1</b> page</dd>'));
+  assert.ok(!html.includes('Tags off') && !html.includes('Not in library'), 'empty rows are left out');
+  assert.ok(html.includes('<details><summary>Details</summary><pre>knowmoretabs --root /r tag'), 'commands sit under Details');
+  assert.equal(node('send-go').hidden, false);
+  assert.equal(node('send-close').textContent, 'Cancel');
 }
 
-async function exportForget() {
+async function sendNothing() {
   const { K, node } = setup('app.js');
   await turn();
-  K.api = async () => ({ decided: 0, answers: '/a', decisions: '/d', forget: "/data/owner's exports/forget.urls", forgotten: 2, source: 'test' });
-  await K.exportNow();
-  const html = node('export-body').innerHTML;
-  assert.ok(html.includes("<pre>xargs -0 knowmoretabs forget -- < '/data/owner'\\''s exports/forget.urls'</pre>"),
-    'the manifest goes through xargs -0 to the owner default library, its path one shell word');
-  assert.ok(html.includes('Forget the 2 forgotten pages'));
-  assert.ok(!html.includes('tag --import'), 'nothing tagged, no import command');
+  K.api = async () => ({ ...PLAN, tags_on: 0, pages_on: 0, new: [], forget: 0, commands: [] });
+  await K.sendNow();
+  assert.equal(node('send-body').innerHTML, '<p class="lede">Nothing to send.</p>');
+  assert.equal(node('send-go').hidden, true);
+  assert.equal(node('send-close').textContent, 'Done');
+}
+
+async function sendResult() {
+  const { K, node } = setup('app.js');
+  await turn();
+  const record = { answers: '/d/answers.jsonl', decisions: '/d/decisions.jsonl', forget: '/d/forget.urls' };
+  const steps = PLAN.commands.map((command) => ({ command, ok: true }));
+  K.api = async (route) => (route === '/api/send' ? { ...PLAN, ok: true, error: null, steps, record } : PLAN);
+  await K.sendNow();
+  await node('send-go').click();
+  let html = node('send-body').innerHTML;
+  assert.ok(html.startsWith('<p class="lede">Sent.</p><dl>'), html);
+  assert.ok(html.includes('<dt>Answers</dt><dd><code>/d/answers.jsonl</code></dd>') && html.includes('<dt>Forget</dt><dd><code>/d/forget.urls</code></dd>'));
+  assert.equal(node('send-go').hidden, true);
+
+  K.api = async (route) => (route === '/api/send'
+    ? { ...PLAN, ok: false, error: 'error: not in your library: https://b.example/', steps: [{ command: PLAN.commands[0], ok: true }, { command: PLAN.commands[1], ok: false }], record }
+    : PLAN);
+  await K.sendNow();
+  await node('send-go').click();
+  html = node('send-body').innerHTML;
+  assert.ok(html.startsWith('<p class="lede">Stopped. The commands under Details went in; the rest did not.</p><pre>error: not in your library: https://b.example/</pre>'), html);
+  assert.ok(html.includes(PLAN.commands[0]) && !html.includes(PLAN.commands[1]), 'Details lists what went in');
+
+  K.api = async (route) => (route === '/api/send' ? { ...PLAN, ok: false, error: 'boom', steps: [{ command: PLAN.commands[0], ok: false }], record } : PLAN);
+  await K.sendNow();
+  await node('send-go').click();
+  assert.ok(node('send-body').innerHTML.startsWith('<p class="lede">Stopped. Your library is unchanged.</p><pre>boom</pre>'));
 }
 
 /* ---- open the page: a control on http(s) pages whose click and key change nothing ---- */
@@ -1255,6 +1288,6 @@ async function startupListsKeepChanges() {
   }
 }
 
-const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, exportForget, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, exportWait, exportCommand };
+const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendResult };
 const timeout = setTimeout(() => { console.error('frontend round trip did not settle'); process.exit(1); }, 5000);
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; }).finally(() => clearTimeout(timeout));

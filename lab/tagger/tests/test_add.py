@@ -266,7 +266,7 @@ class AddJobTests(Served):
         super().setUp()
         self.lib, _ = self.load()
         self.app, self.port = self.serve(self.lib)
-        self.app.adds.binary = fake_binary(self.work)
+        self.app.binary = fake_binary(self.work)
         self.log = self.work / "argv.jsonl"
         env = patch.dict(os.environ, {"FAKE_KMT_LOG": str(self.log)})
         env.start()
@@ -531,7 +531,7 @@ class AddJobTests(Served):
         self.assertEqual(commands, self.log.read_bytes())
 
     def test_a_missing_binary_fails_the_job(self):
-        self.app.adds.binary = str(self.work / "absent")
+        self.app.binary = str(self.work / "absent")
         job = self.add(NEW)
         self.assertTrue(job["failed"])
         self.assertEqual({"library": "running"}, self.values(job))

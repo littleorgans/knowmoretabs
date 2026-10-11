@@ -21,7 +21,7 @@ import numpy as np
 
 from ..paths import Paths, read_json
 from ..zeroshot import prototype, query_variants
-from . import add, engine
+from . import add, engine, kmt, send
 from .store import Exclusions, Keys, Store, tag_name
 
 STATIC = Path(__file__).with_name("static")
@@ -38,7 +38,9 @@ class App:
         names = [*store.tags(), *dict.fromkeys(tag for _, tag in store.decisions())]
         self.lib, self.store, self.encode, self.embed = engine.add_tags(lib, names, encode), store, encode, embed
         self.lock = Lock()  # the model and mutable app state have one caller at a time
+        self.binary = kmt.BINARY
         self.adds = add.Jobs(self)
+        self.sends = send.Send(self)
         self.exclusions = Exclusions(store.root)
         self.selection = Keys(store.root, "selection.json")
         self.pins = Keys(store.root, "pinned.json")
@@ -223,8 +225,9 @@ class App:
         return {"rows": rows}
 
     def forget(self, body: dict) -> dict:
-        """Forget the given pages (`value` true): they leave every search, ≈, the selection and the pins, and go
-        to the export's forget manifest. `value` false brings them back (Undo puts back the selection and pins)."""
+        """Forget the given pages (`value` true): they leave every search, ≈, the selection and the pins, and the
+        next Send to library forgets them in the library. `value` false brings them back (Undo puts back the
+        selection and pins)."""
         value = body.get("value")
         if not isinstance(value, bool):
             raise ValueError("name pages, and true or false")
@@ -240,9 +243,6 @@ class App:
         else:
             self.forgotten.set([k for k in self.forgotten.keys if k not in keys])
         return {"pages": int(self.live().sum())}
-
-    def export(self) -> dict:
-        return self.store.export(self.forgotten.keys)
 
     def create(self, body: dict) -> dict:
         """A result set of the given rows less any excluded for the query, so excluded pages never reach review."""
@@ -322,14 +322,16 @@ ROUTES = [
     ("POST", re.compile(r"/api/like"), lambda app, m, b: app.like(b)),
     ("POST", re.compile(r"/api/sessions"), lambda app, m, b: app.create(b)),
     ("POST", re.compile(r"/api/sessions/(\d+)/pages/(\d+)"), lambda app, m, b: app.update(int(m[1]), int(m[2]), b)),
-    ("POST", re.compile(r"/api/export"), lambda app, m, b: app.export()),
 ]
 
 
-# Add link jobs keep their own state, so starting one or polling it never waits on the model
+# Add link jobs and sends run knowmoretabs; they take the app's lock only around its state, so the screen never
+# waits on a run
 JOB_ROUTES = [
     ("POST", re.compile(r"/api/add"), lambda app, m, b: app.adds.start(b)),
     ("GET", re.compile(r"/api/add/(\d+)"), lambda app, m, b: app.adds.view(int(m[1]))),
+    ("POST", re.compile(r"/api/send/preview"), lambda app, m, b: app.sends.preview()),
+    ("POST", re.compile(r"/api/send"), lambda app, m, b: app.sends.apply()),
 ]
 
 

@@ -109,7 +109,7 @@ class AddBrowserTests(Browser, Synthetic):
     def setUp(self):
         super().setUp()
         self.app = self.start(self.load()[0])
-        self.app.adds.binary = fake_binary(self.work)
+        self.app.binary = fake_binary(self.work)
 
     def paced(self, seconds: float) -> None:
         """Each stage line this long after the last; a state shorter than a poll may never show."""

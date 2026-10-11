@@ -67,6 +67,7 @@ class Archive:
     titles: dict
     forgotten: set
     active: dict  # folded name -> spelling
+    retired: set  # folded names the vocabulary holds retired
     owner_tags: dict  # url -> sorted active tags
     metadata: dict
     text_ok: dict  # url -> content path
@@ -78,6 +79,7 @@ class Archive:
         assert state["schema_version"] == 1
         vocab = state.get("vocabulary", {})
         active = {name.lower(): name for name, term in vocab.items() if term.get("retired_at") is None}
+        retired = {name.lower() for name, term in vocab.items() if term.get("retired_at") is not None}
         titles: dict = {}
         known: set = set()
         for directory in sorted((root / "snapshots").iterdir(), key=lambda p: p.name):
@@ -134,6 +136,7 @@ class Archive:
             titles=titles,
             forgotten=set(state.get("forgotten", [])),
             active=active,
+            retired=retired,
             owner_tags=owner_tags,
             metadata=metadata,
             text_ok=text_ok,

@@ -371,6 +371,11 @@ dialog p { margin: 1.25rem 0 0; }
 dialog .lede { margin: -0.5rem 0 1rem; color: var(--ink-2); text-wrap: pretty; }
 dialog .pref { padding-top: 1rem; border-top: 1px solid var(--line); color: var(--ink-2); }
 dialog .pref input { margin: 0 0.5rem 0 0; accent-color: var(--ink); vertical-align: -1px; }
+dialog details { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--line); }
+dialog summary { cursor: pointer; color: var(--ink-2); }
+dialog details dl, dialog details pre { margin-top: 0.75rem; }
+dialog details pre { max-height: 12rem; overflow-y: auto; }
+#send-body > pre { margin: 0; }
 .row-btns { display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: flex-end; }
 .dlist { margin: 0; padding: 0; list-style: none; max-height: 55vh; overflow-y: auto; border-top: 1px solid var(--line); }
 .dlist li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.15rem 1rem; align-items: center; padding: 0.6rem 0; border-bottom: 1px solid var(--line); }
