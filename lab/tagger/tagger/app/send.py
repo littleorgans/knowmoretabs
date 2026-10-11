@@ -82,6 +82,11 @@ def plan(store, forgotten: list[str], archive: Archive) -> Plan:
     sent = store.sent()
     for pair in sent:
         wanted.setdefault(pair, False)
+    adding = {
+        tag.lower()
+        for (key, tag), value in wanted.items()
+        if value and sent.get((key, tag)) != value and key in known and key not in gone
+    }
     skipped = set()
     for (key, tag), value in sorted(wanted.items()):
         if sent.get((key, tag)) == value or key in gone:
@@ -89,7 +94,18 @@ def plan(store, forgotten: list[str], archive: Archive) -> Plan:
         if key not in known:
             skipped.add(key)
             continue
-        if (tag.lower() in {t.lower() for t in archive.owner_tags.get(key, ())}) == value:
+        folded = tag.lower()
+        held = (
+            folded in {t.lower() for t in archive.owner_tags.get(key, ())}
+            if value
+            else (
+                folded in {t.lower() for t in archive.tag_removals.get(key, ())}
+                or folded not in archive.active
+                and folded not in archive.retired
+                and folded not in adding
+            )
+        )
+        if held:
             p.held.append((key, tag, value))
             continue
         (p.on if value else p.off).setdefault(tag, []).append(key)

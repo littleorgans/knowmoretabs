@@ -69,6 +69,7 @@ class Archive:
     active: dict  # folded name -> spelling
     retired: set  # folded names the vocabulary holds retired
     owner_tags: dict  # url -> sorted active tags
+    tag_removals: dict  # url -> dismissed names, retired names included
     metadata: dict
     text_ok: dict  # url -> content path
     image_ok: dict  # url -> image path
@@ -138,6 +139,7 @@ class Archive:
             active=active,
             retired=retired,
             owner_tags=owner_tags,
+            tag_removals={url: page.get("remove", []) for url, page in state.get("tags", {}).items()},
             metadata=metadata,
             text_ok=text_ok,
             image_ok=image_ok,

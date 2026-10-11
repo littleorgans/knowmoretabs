@@ -152,3 +152,19 @@ class SendTests(Served):
             self.post("/api/send", ok=400)
         self.assertEqual("this app runs on a snapshot copy, which Send never writes", out["error"])
         run.assert_not_called()
+
+    def test_an_unsent_off_decision_records_the_owners_dismissal(self):
+        self.tag(self.rows[:1], "Trains")
+        self.tag(self.rows[:1], "Trains", False)
+        out = self.post("/api/send/preview")
+        self.assertEqual(1, out["tags_off"])
+        self.post("/api/send")
+        self.assertEqual(["Trains"], self.tags(self.keys[0])["remove"])
+
+    def test_a_new_name_added_elsewhere_in_the_send_can_be_dismissed(self):
+        self.tag(self.rows[:2], "Sleeper cars")
+        self.tag(self.rows[:1], "Sleeper cars", False)
+        out = self.post("/api/send/preview")
+        self.assertEqual((1, 1), (out["tags_on"], out["tags_off"]))
+        self.post("/api/send")
+        self.assertEqual(["Sleeper cars"], self.tags(self.keys[0])["remove"])
