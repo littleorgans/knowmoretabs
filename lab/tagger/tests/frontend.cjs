@@ -343,7 +343,7 @@ async function sendWait() {
   assert.equal(previews, 1);
 }
 
-const PLAN = { tags_on: 3, pages_on: 2, tags_off: 0, pages_off: 0, new: ['<Night> trains'], revived: [], forget: 1, skipped: 0, ready: true,
+const PLAN = { tags_on: 3, pages_on: 2, tags_off: 0, pages_off: 0, new: ['<Night> trains'], revived: [], forget: 1, skipped: 0, ready: true, preview: 7,
   commands: ["knowmoretabs --root /r tag '--add=<Night> trains' -- https://a.example/", 'knowmoretabs --root /r forget -- https://b.example/'] };
 
 async function sendPreview() {
@@ -394,7 +394,10 @@ async function sendResult() {
   await turn();
   const record = { answers: '/d/answers.jsonl', decisions: '/d/decisions.jsonl', forget: '/d/forget.urls' };
   const steps = PLAN.commands.map((command) => ({ command, ok: true }));
-  K.api = async (route) => (route === '/api/send' ? { ...PLAN, ok: true, error: null, steps, record } : PLAN);
+  K.api = async (route, body) => {
+    if (route === '/api/send') assert.equal(body.preview, PLAN.preview, 'confirm identifies the displayed preview');
+    return route === '/api/send' ? { ...PLAN, ok: true, error: null, steps, record } : PLAN;
+  };
   await K.sendNow();
   await node('send-go').click();
   let html = node('send-body').innerHTML;

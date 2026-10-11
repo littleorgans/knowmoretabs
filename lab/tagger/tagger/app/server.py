@@ -331,7 +331,7 @@ JOB_ROUTES = [
     ("POST", re.compile(r"/api/add"), lambda app, m, b: app.adds.start(b)),
     ("GET", re.compile(r"/api/add/(\d+)"), lambda app, m, b: app.adds.view(int(m[1]))),
     ("POST", re.compile(r"/api/send/preview"), lambda app, m, b: app.sends.preview()),
-    ("POST", re.compile(r"/api/send"), lambda app, m, b: app.sends.apply()),
+    ("POST", re.compile(r"/api/send"), lambda app, m, b: app.sends.apply(b.get("preview"))),
 ]
 
 

@@ -5,6 +5,8 @@ is kept, a failed call stops the send with the error on screen, and a snapshot r
 import json
 import os
 import subprocess
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -30,8 +32,12 @@ class SendTests(Served):
         self.keys = [self.lib.records[r]["key"] for r in self.rows]
 
     def post(self, path: str, body: dict | None = None, ok: int = 200) -> dict:
+        if path == "/api/send" and body is None:
+            body = {"preview": getattr(self, "preview_id", None)}
         status, out = self.call(self.port, "POST", path, body or {})
         self.assertEqual(ok, status, out)
+        if path == "/api/send/preview" and status == 200:
+            self.preview_id = out.get("preview")
         return out
 
     def state(self) -> dict:
@@ -189,3 +195,60 @@ class SendTests(Served):
             [self.app.binary, "--root", str(self.root), "tag", "--remove=Trains", "--", self.keys[0]], check=True
         )
         self.assertFalse(self.post("/api/send/preview")["ready"], "a later Library removal stays removed")
+
+    def test_changed_decisions_require_a_new_preview_before_any_write(self):
+        batch = self.tag(self.rows[:1], "Sleeper cars")["batch"]
+        first = self.post("/api/send/preview")
+        self.post("/api/undo", {"batch": batch})
+        status, _ = self.call(self.port, "POST", "/api/send", {"preview": first.get("preview")})
+        self.assertEqual(400, status)
+        self.assertEqual([], self.runs())
+        self.assertFalse((self.app.store.root / "exports").exists())
+
+    def test_another_clients_preview_cannot_replace_the_confirmed_plan(self):
+        self.tag(self.rows[:1], "Sleeper cars")
+        first = self.post("/api/send/preview")
+        self.tag(self.rows[1:2], "Trains")
+        self.post("/api/send/preview")
+        status, _ = self.call(self.port, "POST", "/api/send", {"preview": first.get("preview")})
+        self.assertEqual(400, status)
+        self.assertEqual([], self.runs())
+
+    def test_a_library_change_after_preview_requires_another_preview(self):
+        self.tag(self.rows[:1], "Trains")
+        first = self.post("/api/send/preview")
+        subprocess.run(
+            [self.app.binary, "--root", str(self.root), "tag", "--add=Trains", "--", self.keys[0]], check=True
+        )
+        count = len(self.runs())
+        status, _ = self.call(self.port, "POST", "/api/send", {"preview": first.get("preview")})
+        self.assertEqual(400, status)
+        self.assertEqual(count, len(self.runs()))
+        self.assertFalse((self.app.store.root / "exports").exists())
+
+    def test_running_send_keeps_cli_outside_app_lock_and_refuses_another_preview(self):
+        self.tag(self.rows[:1], "Sleeper cars")
+        first = self.post("/api/send/preview")
+        entered, release = threading.Event(), threading.Event()
+        original = send.run
+
+        def blocked(app, call):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            return original(app, call)
+
+        with patch.object(send, "run", side_effect=blocked), ThreadPoolExecutor() as pool:
+            future = pool.submit(self.call, self.port, "POST", "/api/send", {"preview": first.get("preview")})
+            try:
+                self.assertTrue(entered.wait(5))
+                self.assertTrue(self.app.lock.acquire(timeout=1), "CLI must not hold the app lock")
+                self.app.lock.release()
+                status, _ = self.call(self.port, "POST", "/api/send/preview", {})
+                self.assertEqual(400, status)
+                status, _ = self.call(self.port, "POST", "/api/send", {"preview": first.get("preview")})
+                self.assertEqual(400, status)
+                self.tag(self.rows[1:2], "Trains")
+            finally:
+                release.set()
+            self.assertTrue(future.result()[1]["ok"])
+        self.assertEqual(1, self.post("/api/send/preview")["tags_on"])

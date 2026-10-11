@@ -13,6 +13,7 @@ later send from undoing what the owner changed in the Library since. A call's st
 import shlex
 import subprocess
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from ..archive import Archive
@@ -144,24 +145,40 @@ class Send:
         self.app = app
         self.running = threading.Lock()  # one send at a time
         self.pending: Plan | None = None  # the plan the owner was shown
+        self.preview_id = 0
 
-    def preview(self) -> dict:
-        if kmt.snapshot(self.app):
-            raise ValueError("this app runs on a snapshot copy, which Send never writes")
-        archive = Archive.load(self.app.lib.root)  # outside the app's lock: file reads only
-        with self.app.lock:
-            p = plan(self.app.store, self.app.forgotten.keys, archive)
-            self.pending = p
-        return {**p.summary(), "commands": [c.command(self.app) for c in p.calls()]}
-
-    def apply(self) -> dict:
+    @contextmanager
+    def _exclusive(self):
         if not self.running.acquire(blocking=False):
             raise ValueError("a send is running")
         try:
+            yield
+        finally:
+            self.running.release()
+
+    def preview(self) -> dict:
+        with self._exclusive():
+            if kmt.snapshot(self.app):
+                raise ValueError("this app runs on a snapshot copy, which Send never writes")
+            archive = Archive.load(self.app.lib.root)  # outside the app's lock: file reads only
             with self.app.lock:
-                p, self.pending = self.pending, None
-                if p is None:
-                    raise ValueError("nothing previewed to send")
+                p = plan(self.app.store, self.app.forgotten.keys, archive)
+                self.pending = p
+                self.preview_id += 1
+            return {**p.summary(), "preview": self.preview_id, "commands": [c.command(self.app) for c in p.calls()]}
+
+    def apply(self, preview: int | None) -> dict:
+        with self._exclusive():
+            p = self.pending
+            if p is None:
+                raise ValueError("nothing previewed to send")
+            archive = Archive.load(self.app.lib.root)
+            with self.app.lock:
+                if preview != self.preview_id:
+                    raise ValueError("preview replaced; preview again")
+                if p != plan(self.app.store, self.app.forgotten.keys, archive):
+                    raise ValueError("decisions or library changed; preview again")
+                self.pending = None
                 record = self.app.store.export(self.app.forgotten.keys)
                 self.app.store.mark_sent(p.held)
             steps, error = [], None
@@ -174,8 +191,6 @@ class Send:
             if error is None and p.settled:
                 self._forgotten(p.settled)
             return {**p.summary(), "ok": error is None, "error": error, "steps": steps, "record": record}
-        finally:
-            self.running.release()
 
     def _settle(self, call: Call) -> None:
         """What one applied call changed, in the app: a tag call's sent marks, a forget's pages."""

@@ -65,10 +65,12 @@
     K.$("send-go").disabled = false;
     K.$("send-close").textContent = go ? "Cancel" : "Done";
   };
+  let preview;
   K.sendNow = async () => {
     try {
       await K.writes;
       const x = await K.api("/api/send/preview", {});
+      preview = x.preview;
       show((x.ready ? "" : `<p class="lede">Nothing to send.</p>`) + summary(x) + (x.commands.length ? details(x.commands) : ""), x.ready);
     } catch (err) { show(`<p class="lede">${K.esc(err.message)}</p>`, false); }
     K.$("send").showModal();
@@ -77,7 +79,7 @@
   K.$("send-go").addEventListener("click", async () => {
     K.$("send-go").disabled = true;
     try {
-      const x = await K.api("/api/send", {});
+      const x = await K.api("/api/send", { preview });
       const done = x.steps.filter((s) => s.ok).map((s) => s.command);
       show(x.ok
         ? `<p class="lede">Sent.</p>` + summary(x) + details(done, x.record)
