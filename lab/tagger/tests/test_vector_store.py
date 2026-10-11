@@ -117,12 +117,12 @@ def test_sync_changed_content_reembeds(tmp_path):
     root = tmp_path / "archive"
     lib, _ = engine.load(paths, root, fake_encode, fake_embed, embed_image=fake_image, dim=DIM)
     capture(root, NEW)
-    lib = engine.sync(lib, Archive.load(root), NEW, fake_embed)
+    lib = engine.sync(lib, Archive.load(root), [NEW], fake_embed)
     record = lib.records[lib.rows[NEW]]
     with Path(record["content_path"]).open("a") as stream:
         stream.write("\nchanged synthetic body")
     encode = Mock(side_effect=fake_embed)
-    engine.sync(lib, Archive.load(root), NEW, encode)
+    engine.sync(lib, Archive.load(root), [NEW], encode)
     encode.assert_called_once()
 
 
@@ -136,7 +136,7 @@ def test_engine_restart_add_images_forget_restore_and_reorder(tmp_path):
     encode.assert_not_called()
     images.assert_not_called()
     capture(root, NEW)
-    lib = engine.sync(lib, Archive.load(root), NEW, encode)
+    lib = engine.sync(lib, Archive.load(root), [NEW], encode)
     images.assert_called_once()
     encode.assert_called_once()
     row = lib.rows[NEW]
@@ -148,10 +148,10 @@ def test_engine_restart_add_images_forget_restore_and_reorder(tmp_path):
     state_path.write_text(json.dumps(state | {"forgotten": [NEW]}))
     encode.reset_mock()
     images.reset_mock()
-    hidden = engine.sync(lib, Archive.load(root), NEW, encode)
+    hidden = engine.sync(lib, Archive.load(root), [NEW], encode)
     assert not hidden.live[row]
     state_path.write_text(json.dumps(state | {"forgotten": []}))
-    restored = engine.sync(hidden, Archive.load(root), NEW, encode)
+    restored = engine.sync(hidden, Archive.load(root), [NEW], encode)
     assert restored.live[row]
     encode.assert_not_called()
     images.assert_not_called()

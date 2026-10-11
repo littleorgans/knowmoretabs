@@ -443,6 +443,10 @@ class ServerTests(Fixture):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
+    def record(self) -> dict:
+        """The export record a send writes first."""
+        return self.app.store.export(self.app.forgotten.keys)
+
     def call(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port)
         sent = {"Host": f"127.0.0.1:{self.port}"}
@@ -520,8 +524,8 @@ class ServerTests(Fixture):
 
     def test_guards(self):
         self.assertEqual(421, self.call("GET", "/api/library", headers={"Host": "attacker.example"})[0])
-        self.assertEqual(403, self.call("POST", "/api/export", {}, {"Origin": "http://attacker.example"})[0])
-        self.assertEqual(415, self.call("POST", "/api/export", {}, {"Content-Type": "text/plain"})[0])
+        self.assertEqual(403, self.call("POST", "/api/send", {}, {"Origin": "http://attacker.example"})[0])
+        self.assertEqual(415, self.call("POST", "/api/send", {}, {"Content-Type": "text/plain"})[0])
         self.assertEqual(404, self.call("GET", "/..%2Fserver.py")[0])
         self.assertEqual(404, self.call("GET", "/static/../server.py")[0])
         status, body, r = self.call("GET", "/")
@@ -553,8 +557,8 @@ class ServerTests(Fixture):
         self.assertEqual(404, self.call("POST", f"/api/sessions/{s['id']}/pages/999", {"status": "decided"})[0])
         listed = self.call("GET", "/api/sessions")[1]
         self.assertEqual(1, listed[0]["decided"])
-        status, out, _ = self.call("POST", "/api/export", {})
-        self.assertEqual((200, 1, 1), (status, out["decided"], out["flipped"]))
+        out = self.record()
+        self.assertEqual((1, 1), (out["decided"], out["flipped"]))
 
     def test_a_new_tag_is_made_once_then_reviewed_exported_and_kept_over_a_restart(self):
         status, made, _ = self.call("POST", "/api/tags", {"name": "  Sleeper   cars "})
@@ -575,7 +579,7 @@ class ServerTests(Fixture):
         self.assertEqual([("Sleeper cars", "zero shot")], [(x["tag"], x["source"]) for x in page["sugg"]])
         path = f"/api/sessions/{s['id']}/pages/{page['index']}"
         self.call("POST", path, {"marks": {"Sleeper cars": True}, "status": "decided"})
-        out = self.call("POST", "/api/export", {})[1]
+        out = self.record()
         answers = [json.loads(line) for line in Path(out["answers"]).read_text().splitlines()]
         self.assertEqual([{"url": page["url"], "tags": ["Sleeper cars"], "source": SOURCE}], answers)
         restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
@@ -603,7 +607,7 @@ class ServerTests(Fixture):
         for p in s["pages"]:
             if p["sugg"]:
                 self.call("POST", f"/api/sessions/{s['id']}/pages/{p['index']}", {"status": "decided"})
-        out = self.call("POST", "/api/export", {})[1]
+        out = self.record()
         exported = Path(out["answers"]).read_text() + Path(out["decisions"]).read_text()
         self.assertTrue(all(json.loads(line)["url"] in keys for line in exported.splitlines()))
         self.assertTrue((self.data / "not-relevant.json").exists())
@@ -749,7 +753,7 @@ class ServerTests(Fixture):
         rows = self.rows_for("night train")[:3]
         self.call("POST", "/api/apply", {"rows": rows, "tag": "Trains", "value": True})
         self.call("POST", "/api/forget", {"rows": [rows[1]], "value": True})
-        out = self.call("POST", "/api/export", {})[1]
+        out = self.record()
         keys = [self.lib.records[r]["key"] for r in rows]
         answers = [json.loads(line)["url"] for line in Path(out["answers"]).read_text().splitlines()]
         self.assertEqual(sorted([keys[0], keys[2]]), sorted(answers))
@@ -780,7 +784,7 @@ class ServerTests(Fixture):
         self.assertEqual([rows[2], rows[1]], [p["row"] for p in restarted.listed(restarted.pins)["pages"]])
         self.assertEqual([rows[0]], [p["row"] for p in restarted.listed(restarted.selection)["pages"]])
         self.assertEqual(0o600, stat.S_IMODE((self.data / "pinned.json").stat().st_mode))
-        out = self.call("POST", "/api/export", {})[1]
+        out = self.record()
         self.assertEqual({"answers.jsonl", "decisions.jsonl"}, {p.name for p in Path(out["folder"]).iterdir()})
 
     def test_untagged_only_leaves_out_pages_with_an_app_tag_and_ignores_archive_tags(self):

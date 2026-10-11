@@ -228,15 +228,16 @@ def add_tags(lib: Library, names: list[str], encode: Encode) -> Library:
     )
 
 
-def sync(lib: Library, archive: Archive, url: str, embed: Embed) -> Library:
-    """Refresh and persist one known page, preserving all other keyed cache rows."""
-    if url not in set(archive.known):
+def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Library:
+    """Refresh and persist the given known pages, preserving all other keyed cache rows."""
+    known = set(archive.known)
+    urls = [url for url in dict.fromkeys(urls) if url in known]
+    if not urls:
         return lib
-    _, records = dataset.app_records(lib.paths, archive, keys=[url])
-    record = records[0]
+    _, fresh = dataset.app_records(lib.paths, archive, keys=urls)
     vectors, image_rows, mask, counts = _vectors(
         lib.paths,
-        records,
+        fresh,
         lib.input_name,
         embed,
         lib.embed_image,
@@ -245,24 +246,26 @@ def sync(lib: Library, archive: Archive, url: str, embed: Embed) -> Library:
     )
     if counts["failed"]:
         print(json.dumps({"image_failed": counts["failed"]}))
-    row = lib.rows.get(url)
-    records = lib.records.copy()
+    records, rows = lib.records.copy(), dict(lib.rows)
     X, Y, live = lib.X.copy(), lib.Y.copy(), lib.live.copy()
     image = None if lib.image is None else lib.image.copy()
     has_image = lib.has_image.copy()
-    if row is None:
-        records.append(record)
-        X = np.vstack([X, vectors])
-        Y = np.vstack([Y, np.zeros((1, Y.shape[1]), Y.dtype)])
-        live = np.concatenate([live, [not record["forgotten"]]])
-        if image is not None:
-            image = np.vstack([image, image_rows])
-        has_image = np.concatenate([has_image, mask])
-    else:
-        records[row], X[row], live[row] = record, vectors[0], not record["forgotten"]
-        if image is not None:
-            image[row] = image_rows[0]
-        has_image[row] = mask[0]
+    for i, (url, record) in enumerate(zip(urls, fresh, strict=True)):
+        row = rows.get(url)
+        if row is None:
+            rows[url] = len(records)
+            records.append(record)
+            X = np.vstack([X, vectors[i : i + 1]])
+            Y = np.vstack([Y, np.zeros((1, Y.shape[1]), Y.dtype)])
+            live = np.concatenate([live, [not record["forgotten"]]])
+            if image is not None:
+                image = np.vstack([image, image_rows[i : i + 1]])
+            has_image = np.concatenate([has_image, mask[i : i + 1]])
+        else:
+            records[row], X[row], live[row] = record, vectors[i], not record["forgotten"]
+            if image is not None:
+                image[row] = image_rows[i]
+            has_image[row] = mask[i]
     S = np.hstack([lib.rules.scores(X)["supervised"], X @ lib.added_q.T])
     keywords, K = _keyword_index(records)
     return replace(

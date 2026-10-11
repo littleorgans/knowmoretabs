@@ -70,7 +70,7 @@ def test_app_maintains_only_the_variant_it_reads(tmp_path):
     assert lib.input_name == "B"
     assert not (paths.emb / "eg2/A/manifest.json").exists()
     capture(root, NEW)
-    lib = engine.sync(lib, Archive.load(root), NEW, encode)
+    lib = engine.sync(lib, Archive.load(root), [NEW], encode)
     assert encode.call_count == 1
     assert encode.call_args.args[1] == "B"
     assert lib.has_image[lib.rows[NEW]]
@@ -116,7 +116,7 @@ def test_image_failure_preserves_text_and_cached_images(tmp_path, capsys):
     other = NEW + "-second"
     capture(root, other)
     capsys.readouterr()
-    lib = engine.sync(lib, Archive.load(root), other, encode)
+    lib = engine.sync(lib, Archive.load(root), [other], encode)
     assert lib.live[lib.rows[other]] and not lib.has_image[lib.rows[other]]
     assert json.loads(capsys.readouterr().out)["image_failed"] == 1
     assert other not in {r["id"] for r in VectorStore(paths.emb / "image", "eg2-full").read()[0]["rows"]}

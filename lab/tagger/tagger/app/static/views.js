@@ -151,16 +151,15 @@
       <ul class="tags">${p.tags.length ? p.tags.map(chip) : html`<li class="none">Untagged</li>`}</ul></div>${pinned ? html`<span class="pinmark" aria-hidden="true">${PIN}</span>` : nothing}${
       on || pinned ? html`<span class="sr">${[on && "Selected", pinned && "Pinned"].filter(Boolean).join(", ")}</span>` : nothing}</li>`;
   }
-  const plural = (n, word) => `<b>${n}</b> ${word}${n === 1 ? "" : "s"}`;
   const range = (v, rows) => `<b>${v.offset + 1} to ${v.offset + rows.length}</b> of ${total(v, rows)}`;
   function position(v, rows) {
     const n = rows.length;
     if (v.kind === "like") return v.loading && !n ? `Finding pages like <b>${K.esc(v.tag)}</b>, not tagged <b>${K.esc(v.tag)}</b>…`
       : `Pages like <b>${K.esc(v.tag)}</b>, not tagged <b>${K.esc(v.tag)}</b> · ${n ? range(v, rows) : "<b>0</b>"}`;
-    if (v.kind === "selection") return `Your selection · ${plural(n, "page")}`;
-    if (v.kind === "pinned") return `Pinned · ${plural(n, "page")}`;
+    if (v.kind === "selection") return `Your selection · ${K.plural(n, "page")}`;
+    if (v.kind === "pinned") return `Pinned · ${K.plural(n, "page")}`;
     if (v.loading) return "Searching…";
-    if (S.query) return `${n ? range(v, rows) : plural(0, "result")} for “${K.esc(K.short(S.query))}”${S.untagged ? " · untagged only" : ""}`;
+    if (S.query) return `${n ? range(v, rows) : K.plural(0, "result")} for “${K.esc(K.short(S.query))}”${S.untagged ? " · untagged only" : ""}`;
     return K.lib ? `${K.lib.pages} pages in your library` : "";
   }
   function empty(v) {
@@ -194,7 +193,7 @@
       K.$("next").disabled = v.loading || end;
     },
     go,
-    async restored(row) {
+    async refresh(row) {
       const v = view();
       if (listed(v) || (!v.loading && v.rows.includes(row)) || !S.query) return;
       const scroll = scrollY;

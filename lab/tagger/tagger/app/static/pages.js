@@ -13,7 +13,7 @@
   K.sel = [];                      // selected rows, in the order selected
   K.pins = [];                     // pinned rows, in the order pinned
   K.gone = new Set();              // forgotten rows (the server's, then this tab's): out of every view
-  K.writes = Promise.resolve();    // every write, queued; export waits for them
+  K.writes = Promise.resolve();    // every write, queued; a send waits for them
   let tagging = 0;                 // the latest tag change, whose reply wins
 
   K.know = (pages, replace = true) => { for (const p of pages) if (replace || !K.pages.has(p.row)) K.pages.set(p.row, p); return pages.map((p) => p.row); };
@@ -86,7 +86,7 @@
     K.toast("Forgotten", () => {
       if (!K.gone.has(row)) return;
       back();
-      send(false).then(() => K.views.restored(row)).catch((err) => { out(); K.fail(err); });
+      send(false).then(() => K.views.refresh(row)).catch((err) => { out(); K.fail(err); });
       for (const name in was) if (was[name] >= 0) keep(name);
     });
   };

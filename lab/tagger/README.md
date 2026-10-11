@@ -71,7 +71,7 @@ selection only: the name adds the tag to every selected page (filled when all ha
 it (hidden with none selected); ≈ ("pages like this, without this tag") ranks pages without that app tag by refine's
 prototype (the tag's name as the query, toward its pages, away from pages it was taken off) and is a toggle: ≈
 again, Esc or Back returns to the search, page, scroll and selection intact. "+ New tag" applies a tag to the selection,
-picking yours in any case or making one by `tag --import`'s name rules (kept in `state.json`). A tile chip's ×
+picking yours in any case or making one by knowmoretabs' tag name rules (kept in `state.json`). A tile chip's ×
 takes that tag off that page. A tag change offers Undo ("Added Trains to 38 pages"), which retracts that action's
 decisions, so every page is exactly as before. Over a tile's picture (hover, focus, always on touch): Forget (red,
 `f`), Open (`o`, an http or https page in a new tab) and Pin (`p`); none selects. Forget takes the page out of every
@@ -81,14 +81,22 @@ Esc or Back returns to the results). Keys: `/` search, space or `x` select, `o` 
 Ctrl+Z undo while the message shows, Esc leaves ≈ or Pinned (else clears the selection), `?` help.
 Decisions live in `<data>/app/state.json` (review sessions, and direct decisions: page, tag, kept, time, batch); the
 selection, the pins and the forgotten pages in `selection.json`, `pinned.json` and `forgotten.json` beside it.
-Export writes `<data>/app/exports/<UTC time>/answers.jsonl` (a `tag --import` file, source `kmt-tagger-app`, the kept
-tags per page, latest decision winning, forgotten pages left out), `decisions.jsonl` (page, tag, answer, the model's
-precheck and session, both null for a direct decision) and, when pages were forgotten, `forget.urls` (their exact
-addresses, each ended by a NUL). Created tags need `tag --import --accept-new`, which creates them in the archive; the
-forgotten pages go through `xargs -0 knowmoretabs forget -- < forget.urls` (`restore` in place of `forget` brings
-them back). Both dialog commands use the CLI root precedence; the app uses its own resolved archive,
-so an explicit app `--root` must also be passed to those commands to target that archive.
-Pins are not exported. The app never writes an archive itself.
+Send to library (`e`) makes the archive the app runs on match the app, through knowmoretabs
+(`tagger/app/send.py`). The app is the source of truth: every library page ends with exactly the app's tags for it,
+as the owner's own (a page the app holds no tag for ends with none; a Library edit is overwritten), and the
+library's forgotten pages end equal to the app's forgotten list (pages only the library forgot are restored). Pages
+the app holds that the library does not are skipped. Its dialog first shows what will change, computed from the
+archive and writing nothing: tags added, tags removed (and of those, on pages never tagged here), pages cleared, new
+tag names, names back from retirement, pages to forget and to restore, pages not in the library. Send then writes the
+record, `<data>/app/exports/<UTC time>/`: `answers.jsonl` (source `kmt-tagger-app`, kept tags per page, forgotten
+pages left out), `decisions.jsonl` (page, tag, answer, the model's precheck and session, both null for a direct
+decision) and, when pages were forgotten, `forget.urls` (exact addresses, each ended by a NUL). Then it runs
+`knowmoretabs --root <archive> tag --add=<name>|--remove=<name> -- <urls>` per tag, then `forget -- <urls>` and
+`restore -- <urls>`, each call atomic, with a 120 s timeout. A failed call stops the send and shows knowmoretabs'
+error: the calls before it stay applied. Nothing is remembered between sends, so sending again plans afresh and
+converges. The record's paths and the commands sit under Details. Refused on a snapshot copy inside the data
+directory.
+`knowmoretabs serve` reads the archive on every request: reload the Library to see a send. Pins are not sent.
 Add link (`#add`; `#add=<encoded link>&title=<encoded title>` fills the box and focuses Add, which waits for Enter):
 Add, Enter, or a paste of a web address into the empty box starts a job that runs
 `knowmoretabs --root <archive> add --json [--title=<title>] -- <link>` (the binary from PATH; the title only for the

@@ -16,8 +16,9 @@ import pytest
 from test_add import Synthetic, fake_binary
 from test_app import DIM, Fixture, fake_embed, fake_encode, fake_image
 
-from tagger.app import engine, server
+from tagger.app import engine, send, server
 from tagger.app.store import Store
+from tagger.archive import Archive
 
 MAC_CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 
@@ -109,7 +110,7 @@ class AddBrowserTests(Browser, Synthetic):
     def setUp(self):
         super().setUp()
         self.app = self.start(self.load()[0])
-        self.app.adds.binary = fake_binary(self.work)
+        self.app.binary = fake_binary(self.work)
 
     def paced(self, seconds: float) -> None:
         """Each stage line this long after the last; a state shorter than a poll may never show."""
@@ -182,3 +183,28 @@ class AddBrowserTests(Browser, Synthetic):
         with patch.object(self.app.adds, "_command") as command:
             self.run_case("addSnapshot", "#add")
             command.assert_not_called()
+
+
+class SendBrowserTests(Browser, Synthetic):
+    def setUp(self):
+        super().setUp()
+        self.app = self.start(self.load()[0])
+        self.app.binary = fake_binary(self.work)
+
+    def test_send_dialog_applies_once_and_remains_dismissible(self):
+        self.app.tag({"name": "Browser send"})
+        self.run_case("sendFlow")
+        tagged = [key for key, tags in Archive.load(self.root).owner_tags.items() if "Browser send" in tags]
+        self.assertEqual(list(self.app.store.app_tags()), tagged)
+
+    def test_send_refreshes_the_view_after_a_restore_reports_failure(self):
+        original = send.run
+
+        def failed_after_restore(app, call):
+            error = original(app, call)
+            if error is None and call.args[0] == "restore":
+                return "synthetic failure after restore wrote"
+            return error
+
+        with patch.object(send, "run", side_effect=failed_after_restore):
+            self.run_case("sendPartialRestore")

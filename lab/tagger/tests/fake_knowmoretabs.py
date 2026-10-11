@@ -1,4 +1,4 @@
-"""A stand in for `knowmoretabs --root <root> add|forget|restore` on a synthetic archive, for the Add link tests.
+"""A stand in for `knowmoretabs --root <root> add|forget|restore|tag` on a synthetic archive, for the app tests.
 
 `add --json [--title <T>] [--signed-in] [--retry <content|image> …] -- <url>` prints the contract's stage events (one
 JSON object per line, flushed) and writes what the real command would: an intake line, a content file and its log
@@ -12,9 +12,11 @@ its text settles (`none`, without a request, when the text is `unavailable`); wh
 intake line has no title, the kept text's title joins it. A known URL is `known`; a forgotten one
 is refused as `forgotten`, anything but a public http(s) page as `refused`, and under `--retry` an unknown one as
 `refused`, `not_in_library`, all exiting 1. `--title` or `--no-content` with `--retry` is a usage error: exit 2,
-nothing on stdout. `forget` and `restore` edit `library.json`'s forgotten list. `FAKE_KMT_DELAY` (seconds) paces the
-lines; `FAKE_KMT_LOG` names a file that gets each argument list, and with it the add right after a `restore` of a
-`relapse` page fails with the error document. Every page, title and text here is invented.
+nothing on stdout. `forget -- <url>…` and `restore -- <url>…` edit `library.json`'s forgotten list;
+`tag --add=<NAME>|--remove=<NAME> -- <url>…` its tags and vocabulary. Each refuses the whole call, writing nothing,
+when one URL is not in the library (for `restore`, neither known nor forgotten). `FAKE_KMT_DELAY` (seconds) paces
+the lines; `FAKE_KMT_FAIL` names an argument whose calls fail with an error on stderr; `FAKE_KMT_LOG` names a file that gets each argument list, and with it the add right after a `restore`
+of a `relapse` page fails with the error document. Every page, title and text here is invented.
 """
 
 import json
@@ -280,11 +282,41 @@ def main(argv: list[str]) -> int:
             return 2
         assert args["json"] and not args["no_content"], rest
         return add(root, url, args)
+    urls = rest[rest.index("--") + 1 :]
+    if fail := os.environ.get("FAKE_KMT_FAIL"):  # a call whose arguments hold this word fails
+        if fail in (command, *rest):
+            print(f"error: {fail} failed", file=sys.stderr)
+            return 1
     state = library(root)
-    forgotten = [u for u in state.get("forgotten", []) if u != url]
-    state["forgotten"] = forgotten + [url] if command == "forget" else forgotten
+    held = known(root) | (set(state.get("forgotten", [])) if command == "restore" else set())
+    if unknown := [u for u in urls if u not in held]:
+        print(f"error: not in your library: {unknown[0]}", file=sys.stderr)
+        return 1
+    if command == "tag":
+        tag(state, rest[0], urls)
+    else:
+        forgotten = [u for u in state.get("forgotten", []) if u not in urls]
+        state["forgotten"] = forgotten + urls if command == "forget" else forgotten
     (root / "library.json").write_text(json.dumps(state, indent=1) + "\n")
     return 0
+
+
+def tag(state: dict, flag: str, urls: list[str]) -> None:
+    """`--add=NAME` or `--remove=NAME` on every page, as `tags::apply` does: adding admits the name to the
+    vocabulary (created, or brought back from retirement) and takes it off the page's `remove` list."""
+    verb, name = flag.removeprefix("--").split("=", 1)
+    vocab = state.setdefault("vocabulary", {})
+    spelling = next((n for n in vocab if n.lower() == name.lower()), None)
+    if verb == "add":
+        spelling = spelling or name
+        vocab.setdefault(spelling, {"created_at": AT}).pop("retired_at", None)
+    if spelling is None:
+        return
+    for url in urls:
+        page = state.setdefault("tags", {}).setdefault(url, {"add": [], "remove": []})
+        for side in ("add", "remove"):
+            page[side] = [n for n in page.get(side, []) if n.lower() != spelling.lower()]
+        page[verb].append(spelling)
 
 
 if __name__ == "__main__":

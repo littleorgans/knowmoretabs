@@ -156,7 +156,7 @@ class LoadTests(Synthetic):
     def test_pages_added_after_app_tags_are_scored_by_them(self):
         lib = engine.add_tags(self.load()[0], ["Sleeper cars"], fake_encode)
         capture(self.root, NEW)
-        lib = engine.sync(lib, Archive.load(self.root), NEW, fake_embed)
+        lib = engine.sync(lib, Archive.load(self.root), [NEW], fake_embed)
         row, j = lib.rows[NEW], lib.tags.index("Sleeper cars")
         self.assertEqual(len(lib.records), len(lib.S))
         self.assertAlmostEqual(float(lib.X[row] @ fake_encode(["Sleeper cars"])[0]), float(lib.S[row, j]), places=5)
@@ -164,7 +164,7 @@ class LoadTests(Synthetic):
     def test_appended_pages_update_the_spread_used_by_suggestions_and_prechecks(self):
         lib = engine.add_tags(self.load()[0], ["Sleeper cars"], fake_encode)
         capture(self.root, NEW)
-        lib = engine.sync(lib, Archive.load(self.root), NEW, fake_embed)
+        lib = engine.sync(lib, Archive.load(self.root), [NEW], fake_embed)
         expected = np.maximum(lib.S.std(axis=0), 1e-12)
         np.testing.assert_allclose(lib.spread, expected)
         row = lib.rows[NEW]
@@ -176,14 +176,25 @@ class LoadTests(Synthetic):
 
     def test_sync_follows_the_archive_for_one_page(self):
         lib, _ = self.load()
-        self.assertIs(lib, engine.sync(lib, Archive.load(self.root), NEW, fake_embed), "a page the archive lacks")
+        self.assertIs(lib, engine.sync(lib, Archive.load(self.root), [NEW], fake_embed), "a page the archive lacks")
         key = lib.records[5]["key"]
         state = json.loads((self.root / "library.json").read_text())
         (self.root / "library.json").write_text(json.dumps({**state, "forgotten": [key]}))
-        hidden = engine.sync(lib, Archive.load(self.root), key, fake_embed)
+        hidden = engine.sync(lib, Archive.load(self.root), [key], fake_embed)
         self.assertEqual((False, True), (bool(hidden.live[5]), bool(lib.live[5])))
         (self.root / "library.json").write_text(json.dumps({**state, "forgotten": []}))
-        self.assertTrue(engine.sync(hidden, Archive.load(self.root), key, fake_embed).live[5])
+        self.assertTrue(engine.sync(hidden, Archive.load(self.root), [key], fake_embed).live[5])
+
+    def test_one_sync_follows_the_archive_for_several_pages(self):
+        lib, _ = self.load()
+        key = lib.records[5]["key"]
+        state = json.loads((self.root / "library.json").read_text())
+        (self.root / "library.json").write_text(json.dumps({**state, "forgotten": [key]}))
+        capture(self.root, NEW)
+        synced = engine.sync(lib, Archive.load(self.root), [key, NEW, "https://absent.example/", key], fake_embed)
+        self.assertEqual(len(lib.records) + 1, len(synced.records), "the new page appended once")
+        self.assertEqual((False, True), (bool(synced.live[5]), bool(synced.live[synced.rows[NEW]])))
+        self.assertEqual((len(synced.records),) * 3, (len(synced.X), len(synced.S), len(synced.live)))
 
     def test_manifest_startup_ignores_dataset_pages_absent_from_the_archive(self):
         before, _ = self.load()
@@ -266,7 +277,7 @@ class AddJobTests(Served):
         super().setUp()
         self.lib, _ = self.load()
         self.app, self.port = self.serve(self.lib)
-        self.app.adds.binary = fake_binary(self.work)
+        self.app.binary = fake_binary(self.work)
         self.log = self.work / "argv.jsonl"
         env = patch.dict(os.environ, {"FAKE_KMT_LOG": str(self.log)})
         env.start()
@@ -531,7 +542,7 @@ class AddJobTests(Served):
         self.assertEqual(commands, self.log.read_bytes())
 
     def test_a_missing_binary_fails_the_job(self):
-        self.app.adds.binary = str(self.work / "absent")
+        self.app.binary = str(self.work / "absent")
         job = self.add(NEW)
         self.assertTrue(job["failed"])
         self.assertEqual({"library": "running"}, self.values(job))

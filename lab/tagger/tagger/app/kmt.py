@@ -1,0 +1,15 @@
+"""How the app runs knowmoretabs, for Add link and Send to library alike: `App.binary` (a name found on PATH, or a
+path) on the app's own archive, and never on a snapshot copy inside the app's data directory.
+"""
+
+BINARY = "knowmoretabs"
+
+
+def snapshot(app) -> bool:
+    """The app's archive lies inside its data directory (a snapshot copy), so nothing may write it. The store lives
+    at <data>/app; both paths are resolved so an alias cannot write into a snapshot copy."""
+    return app.lib.root.resolve().is_relative_to(app.store.root.parent.resolve())
+
+
+def argv(app, args: list[str]) -> list[str]:
+    return [app.binary, "--root", str(app.lib.root), *args]

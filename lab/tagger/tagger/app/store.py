@@ -3,8 +3,9 @@
 A session is one search and its picked tags: the result pages, by key, each with the model's prechecks, the
 user's marks and a status (open, skipped, decided). A direct decision tags or untags one page outside any
 session (the one screen flow); the direct decisions of one action share a batch, so undoing it retracts them.
-Export folds every decided page over all sessions and every direct decision, latest decision per page and tag,
-into a `tag --import` answers file and a decision log; a page's app tags are the tags its latest decisions keep.
+Export, the record each Send to library writes, folds every decided page over all sessions and every direct
+decision, latest decision per page and tag, into an answers file and a decision log; a page's app tags are the tags
+its latest decisions keep.
 Results marked not relevant to a query live apart, in `Exclusions`, and are never exported; the selected, pinned
 and forgotten pages live in their own `Keys` files. Forgotten pages leave the answers and go to a forget
 manifest beside them. Tags the owner makes in the app are kept in the same file, by the spelling `tag --import`
@@ -56,6 +57,7 @@ class Store:
         self.root = root
         self.path = root / "state.json"
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {"version": 1, "sessions": []}
+        self.state.pop("sent", None)  # an unreleased build's send marks: a send now mirrors, remembering nothing
         self._app_tags: dict[str, list[str]] | None = None
 
     def _save(self) -> None:
@@ -186,8 +188,7 @@ class Store:
     def export(self, forgotten: list[str] = ()) -> dict:
         """answers.jsonl (pages with a kept tag, the kept tags; forgotten pages left out) and decisions.jsonl
         (every page, tag and answer) in a fresh folder under exports/, with forget.urls beside them when pages
-        were forgotten: their exact addresses, each ended by a NUL, for `xargs -0 knowmoretabs forget`. No
-        prompt sits there, so `tag --import` finds none to check coverage against."""
+        were forgotten: their exact addresses, each ended by a NUL. Send to library's record of a send."""
         latest = self.decisions()
         gone = set(forgotten)
         kept: dict[str, list[str]] = {}
