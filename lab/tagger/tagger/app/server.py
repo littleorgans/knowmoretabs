@@ -46,10 +46,14 @@ class App:
         self.pins = Keys(store.root, "pinned.json")
         self.forgotten = Keys(store.root, "forgotten.json")
 
+    def gone(self) -> list[int]:
+        """Rows of the pages forgotten in the app."""
+        return [self.lib.rows[k] for k in self.forgotten.keys if k in self.lib.rows]
+
     def live(self) -> np.ndarray:
         """Rows the screen shows: the library's live pages less those forgotten in the app."""
         mask = self.lib.live.copy()
-        mask[[self.lib.rows[k] for k in self.forgotten.keys if k in self.lib.rows]] = False
+        mask[self.gone()] = False
         return mask
 
     def own(self, row: int) -> list[str]:
@@ -83,7 +87,7 @@ class App:
     def library(self) -> dict:
         return {
             "pages": int(self.live().sum()),
-            "forgotten": [self.lib.rows[k] for k in self.forgotten.keys if k in self.lib.rows],
+            "forgotten": self.gone(),
             "tags": engine.tag_info(self.lib),
             "app_tags": self.app_tags(),
             "images": self.lib.image is not None,
@@ -233,7 +237,7 @@ class App:
             raise ValueError("name pages, and true or false")
         among = self.lib.live.copy()
         if not value:
-            among[[self.lib.rows[k] for k in self.forgotten.keys if k in self.lib.rows]] = True
+            among[self.gone()] = True
         rows = self.rows(body, None if value else among)
         if not rows:
             raise ValueError("name pages, and true or false")
