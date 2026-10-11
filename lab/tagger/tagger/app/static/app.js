@@ -9,6 +9,11 @@
   const root = document.documentElement;
 
   K.changed = () => { K.views.render(); K.strip.render(); K.add.render(); };
+  /* the library's counts and the forgotten rows as the server has them now */
+  const loadLibrary = async () => {
+    K.lib = await K.api("/api/library");
+    K.gone = new Set(K.lib.forgotten);
+  };
 
   /* ---- the screen the fragment names; Tag comes back at the scroll it was left ---- */
   K.screen = null;
@@ -85,8 +90,7 @@
       const done = x.steps.filter((s) => s.ok).map((s) => s.command);
       if (x.forget || x.restore) {
         try {
-          K.lib = await K.api("/api/library");
-          K.gone = new Set(K.lib.forgotten);
+          await loadLibrary();
           K.changed();
           await K.views.refresh();
         } catch (err) { K.fail(err); }
@@ -126,8 +130,7 @@
   route();
   K.ready = (async () => {
     try {
-      K.lib = await K.api("/api/library");
-      K.gone = new Set(K.lib.forgotten);
+      await loadLibrary();
       await K.loadLists();
       K.changed();
       await K.views.restore();
