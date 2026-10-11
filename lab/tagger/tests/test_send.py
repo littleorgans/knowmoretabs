@@ -168,3 +168,24 @@ class SendTests(Served):
         self.assertEqual((1, 1), (out["tags_on"], out["tags_off"]))
         self.post("/api/send")
         self.assertEqual(["Sleeper cars"], self.tags(self.keys[0])["remove"])
+
+    def test_already_matched_work_can_be_confirmed_without_cli_calls(self):
+        self.tag(self.rows[:1], "Trains")
+        subprocess.run(
+            [self.app.binary, "--root", str(self.root), "tag", "--add=Trains", "--", self.keys[0]], check=True
+        )
+        self.post("/api/forget", {"rows": self.rows[1:2], "value": True})
+        subprocess.run([self.app.binary, "--root", str(self.root), "forget", "--", self.keys[1]], check=True)
+        out = self.post("/api/send/preview")
+        self.assertEqual([], out["commands"])
+        self.assertTrue(out["ready"], "matched decisions and forgotten pages still need app bookkeeping")
+        self.assertEqual((1, 1), (out["matched"], out["settled"]))
+        count = len(self.runs())
+        self.post("/api/send")
+        self.assertEqual(count, len(self.runs()))
+        self.assertTrue(self.app.store.sent()[(self.keys[0], "Trains")])
+        self.assertEqual([], self.app.forgotten.keys)
+        subprocess.run(
+            [self.app.binary, "--root", str(self.root), "tag", "--remove=Trains", "--", self.keys[0]], check=True
+        )
+        self.assertFalse(self.post("/api/send/preview")["ready"], "a later Library removal stays removed")

@@ -25,6 +25,7 @@ import pytest
         "sendWait",
         "sendPreview",
         "sendNothing",
+        "sendMatched",
         "sendResult",
         "openControl",
         "openSearch",

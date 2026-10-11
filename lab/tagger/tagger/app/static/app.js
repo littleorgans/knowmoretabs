@@ -50,8 +50,10 @@
       x.revived.length && ["Back from retired", K.esc(x.revived.join(", "))],
       x.forget && ["Forget", K.plural(x.forget, "page")],
       x.skipped && ["Not in library", K.plural(x.skipped, "page")],
+      x.matched && ["Already matched", K.plural(x.matched, "decision")],
+      x.settled && ["Already forgotten", K.plural(x.settled, "page")],
     ].filter(Boolean);
-    return `<dl>${rows.map(([t, d]) => `<dt>${t}</dt><dd>${d}</dd>`).join("")}</dl>`;
+    return rows.length ? `<dl>${rows.map(([t, d]) => `<dt>${t}</dt><dd>${d}</dd>`).join("")}</dl>` : "";
   };
   const details = (commands, record) => `<details><summary>Details</summary>` +
     (record ? `<dl><dt>Answers</dt><dd><code>${K.esc(record.answers)}</code></dd><dt>Log</dt><dd><code>${K.esc(record.decisions)}</code></dd>` +
@@ -67,8 +69,7 @@
     try {
       await K.writes;
       const x = await K.api("/api/send/preview", {});
-      const empty = !x.commands.length;
-      show(empty ? `<p class="lede">Nothing to send.</p>` : summary(x) + details(x.commands), !empty);
+      show((x.ready ? "" : `<p class="lede">Nothing to send.</p>`) + summary(x) + (x.commands.length ? details(x.commands) : ""), x.ready);
     } catch (err) { show(`<p class="lede">${K.esc(err.message)}</p>`, false); }
     K.$("send").showModal();
     K.$(K.$("send-go").hidden ? "send-close" : "send-go").focus();

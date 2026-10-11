@@ -62,6 +62,9 @@ class Plan:
             "revived": self.revived,
             "forget": len(self.forget),
             "skipped": self.skipped,
+            "matched": len(self.held),
+            "settled": len(self.settled),
+            "ready": bool(self.on or self.off or self.forget or self.held or self.settled),
         }
 
 

@@ -343,7 +343,7 @@ async function sendWait() {
   assert.equal(previews, 1);
 }
 
-const PLAN = { tags_on: 3, pages_on: 2, tags_off: 0, pages_off: 0, new: ['<Night> trains'], revived: [], forget: 1, skipped: 0,
+const PLAN = { tags_on: 3, pages_on: 2, tags_off: 0, pages_off: 0, new: ['<Night> trains'], revived: [], forget: 1, skipped: 0, ready: true,
   commands: ["knowmoretabs --root /r tag '--add=<Night> trains' -- https://a.example/", 'knowmoretabs --root /r forget -- https://b.example/'] };
 
 async function sendPreview() {
@@ -367,11 +367,26 @@ async function sendPreview() {
 async function sendNothing() {
   const { K, node } = setup('app.js');
   await turn();
-  K.api = async () => ({ ...PLAN, tags_on: 0, pages_on: 0, new: [], forget: 0, commands: [] });
+  K.api = async () => ({ ...PLAN, tags_on: 0, pages_on: 0, new: [], forget: 0, commands: [], ready: false });
   await K.sendNow();
-  assert.equal(node('send-body').innerHTML, '<p class="lede">Nothing to send.</p>');
+  assert.ok(node('send-body').innerHTML.startsWith('<p class="lede">Nothing to send.</p>'));
   assert.equal(node('send-go').hidden, true);
   assert.equal(node('send-close').textContent, 'Done');
+}
+
+async function sendMatched() {
+  const { K, node } = setup('app.js');
+  await turn();
+  K.api = async () => ({ ...PLAN, tags_on: 0, pages_on: 0, new: [], forget: 0,
+    commands: [], ready: true, matched: 1, settled: 1 });
+  await K.sendNow();
+  assert.equal(node('send-go').hidden, false, 'matching work must still be confirmable');
+  assert.ok(node('send-body').innerHTML.includes('Already matched'));
+  assert.ok(node('send-body').innerHTML.includes('Already forgotten'));
+  K.api = async () => ({ ...PLAN, tags_on: 0, pages_on: 0, new: [], forget: 0,
+    commands: [], ready: false, skipped: 2 });
+  await K.sendNow();
+  assert.ok(node('send-body').innerHTML.includes('Not in library'), 'skipped pages remain visible without commands');
 }
 
 async function sendResult() {
@@ -1288,6 +1303,6 @@ async function startupListsKeepChanges() {
   }
 }
 
-const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendResult };
+const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendMatched, sendResult };
 const timeout = setTimeout(() => { console.error('frontend round trip did not settle'); process.exit(1); }, 5000);
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; }).finally(() => clearTimeout(timeout));
