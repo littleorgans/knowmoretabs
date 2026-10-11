@@ -22,8 +22,15 @@ from this repository, rerunning installation after each pull:
 
 ```sh
 just install
-tagger app
+just up
 ```
+
+Run `just down` to stop both apps and remove their logs. `just up dev` runs
+from this checkout; refresh the browser after editing frontend files. The
+Library uses port 41878 and Tagger 41879; override them with
+`just lib_port=42078 tagger_port=42079 up` (use the same overrides for `down`).
+Logs and pid files live under `<resolved root>/logs`. Startup waits up to
+120 seconds per app. Existing processes on either port are left running.
 
 Put the installed tools on your `PATH`. The app needs prepared tagger data
 and cached model weights; it refuses missing data instead of rebuilding it.
@@ -32,7 +39,7 @@ Both tools resolve the archive as `--root` > `KMT_ROOT` > `~/.knowmoretabs`
 resolves as `--data` > `KMT_TAGGER_DATA` > `<resolved root>/tagger`.
 Empty environment variables mean unset. To prepare vectors for the app,
 run `tagger embed --model eg2`; a `dataset/` directory is unnecessary.
-`tagger app` runs from any folder. See [the tagger guide](lab/tagger/README.md)
+`tagger app --port 41879` runs from any folder. See [the tagger guide](lab/tagger/README.md)
 for preparing data and the experiment workflows.
 
 With a Rust toolchain (1.89 or newer), one command builds it from the
@@ -96,8 +103,8 @@ saved 113 tabs across 12 windows, 3 groups to /Users/you/.knowmoretabs/snapshots
 $ knowmoretabs
 no change since 2026-09-20-084415Z: 113 tabs across 12 windows, 3 groups. Nothing saved; use --force to save anyway.
 
-$ knowmoretabs serve
-Your library is at http://127.0.0.1:7878/
+$ knowmoretabs serve --port 41878
+Your library is at http://127.0.0.1:41878/
 Local only: it answers this machine and nothing else. Press Ctrl-C to stop.
 ```
 
