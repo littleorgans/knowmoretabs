@@ -37,7 +37,7 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 
 - Archive: the root directory: `--root`, then `KMT_ROOT` (empty means unset), then `~/.knowmoretabs`, and `%LOCALAPPDATA%\knowmoretabs` on Windows (`code:src/platform.rs#resolve_root`, `code:src/platform.rs#default_root`).
 - Snapshot: one dated directory under `snapshots/` holding `snapshot.json`, the source of truth, and `session.snss`, a verbatim copy of the browser's file (`code:src/archive.rs#SNAPSHOT_JSON`, `code:src/model.rs#SESSION_FILE_NAME`).
-- Added page: one line in `pages/added.jsonl`, written by `add` only for a page the library does not list; the library reads the log as one in-memory snapshot, id `added` (`code:src/intake.rs#SNAPSHOT_ID`).
+- Added page: a page in `pages/added.jsonl`, written by `add` when new, with a later line if captured text supplies a missing title; the library reads the log as one in-memory snapshot, id `added` (`code:src/intake.rs#retitle`, `code:src/intake.rs#SNAPSHOT_ID`).
 - Page: one URL as the library lists it, derived across snapshots; a sighting is one appearance of a page in a snapshot (`code:src/library.rs#Library`).
 - Library state: `library.json`, per URL user state: forgotten pages, tags and the tag vocabulary (`code:src/library.rs#State`).
 - Forget, restore: hide a page from the library, and bring it back; snapshots are untouched (`code:src/triage.rs`).
@@ -68,7 +68,7 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 - Foreground time sums positive durations only; the search walk stops at `MAX_HOPS` hops (`code:src/history.rs#MAX_HOPS`).
 - Export omits the search and referrer signals unless `--with-history`, and lists no forgotten page (`code:src/library.rs#Shape`).
 - Imported suggestions never change the owner's tags; tag names match without regard to case (`code:src/suggestions.rs`, `code:src/library.rs#fold`).
-- The frontend is hand-written HTML, CSS and JS with no build step, embedded with `include_str!`; a debug build reads `web/` from the source checkout on every request and export, falling back to the embedded copy, so a frontend edit needs a browser refresh, not a rebuild (`code:src/assets.rs#load`); committed files are LF, and Windows CI fails on a checkout that rewrites them (`code:.github/workflows/ci.yml`).
+- The frontend is hand-written HTML, CSS and JS with no build step, embedded with `include_str!`; a debug build reads `web/` from the source checkout on every asset request and export, falling back to the embedded copy, so a frontend edit needs a browser refresh, not a rebuild (`code:src/assets.rs#load`); committed files are LF, and Windows CI fails on a checkout that rewrites them (`code:.github/workflows/ci.yml`).
 - Unsafe code is forbidden; clippy `all` and `pedantic` deny; `print_stdout` and `print_stderr` are denied, so user output goes through `code:src/out.rs` (`code:Cargo.toml`).
 - Committed fixtures are synthetic or redacted, never a real URL or title from a browser; `reference/` is vendored prior art and read-only (claimed by S1, unverified).
 - Every `.rs` file under `src/` and `xtask/src/` carries a `slice:` naming a slice in `slices.toml` and a `why:`; the slice matrix doc is generated from `slices.toml` and never hand-edited (`code:xtask/src/main.rs#lint`).
