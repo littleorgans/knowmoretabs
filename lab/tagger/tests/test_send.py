@@ -197,6 +197,19 @@ class SendTests(Served):
         self.assertEqual({"missing": 2}, self.counts(self.post("/api/send/preview")))
         self.assert_mirrored()
 
+    def test_undo_forget_after_send_restores_the_app_then_the_library(self):
+        row, key = self.rows[0], self.keys[0]
+        self.post("/api/forget", {"rows": [row], "value": True})
+        self.assertTrue(self.send()["ok"])
+        self.assertIn(key, self.state()["forgotten"])
+        before = int(self.app.live().sum())
+        self.post("/api/forget", {"rows": [row], "value": False})
+        self.assertTrue(self.app.live()[row], "Undo shows the page before sending the restore")
+        self.assertEqual(before + 1, self.app.library()["pages"])
+        self.assertEqual({"restore": 1}, self.counts(self.post("/api/send/preview")))
+        self.assertTrue(self.post("/api/send")["ok"])
+        self.assert_mirrored()
+
     def test_a_partial_failure_then_a_resend_converges(self):
         self.tag(self.rows[:2], "Sleeper cars")
         self.post("/api/forget", {"rows": [self.rows[3]], "value": True})

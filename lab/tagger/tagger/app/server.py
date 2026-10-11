@@ -231,7 +231,10 @@ class App:
         value = body.get("value")
         if not isinstance(value, bool):
             raise ValueError("name pages, and true or false")
-        rows = self.rows(body, None if value else self.lib.live)
+        among = self.lib.live.copy()
+        if not value:
+            among[[self.lib.rows[k] for k in self.forgotten.keys if k in self.lib.rows]] = True
+        rows = self.rows(body, None if value else among)
         if not rows:
             raise ValueError("name pages, and true or false")
         keys = {self.lib.records[r]["key"] for r in rows}
@@ -242,6 +245,7 @@ class App:
                     kept.set([k for k in kept.keys if k not in keys])
         else:
             self.forgotten.set([k for k in self.forgotten.keys if k not in keys])
+            self.lib.live[rows] = True  # Undo shows app pages immediately; the next send restores the library.
         return {"pages": int(self.live().sum())}
 
     def create(self, body: dict) -> dict:
