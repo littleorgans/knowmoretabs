@@ -40,27 +40,24 @@ _apps action mode library_port tagging_port:
     set -euo pipefail
     action="$1"; mode="$2"; ports=("$3" "$4")
     [[ "$mode" == "" || "$mode" == dev ]] || { echo 'usage: just up [dev]' >&2; exit 1; }
-    for port in "${ports[@]}"; do
-        [[ "$port" =~ ^[0-9]+$ && ${#port} -le 5 ]] && ((10#$port > 0 && 10#$port < 65536)) || { echo 'ports must be between 1 and 65535' >&2; exit 1; }
-    done
-    command -v lsof > /dev/null || { echo 'lsof is required' >&2; exit 1; }
     logs="${KMT_ROOT:-$HOME/.knowmoretabs}/logs"
     status=0
     listeners() { lsof -nP -t -iTCP:"$1" -sTCP:LISTEN || [[ $? == 1 ]]; }
-    live() { [[ "$1" =~ ^[1-9][0-9]*$ && "$1" != 1 ]] && kill -0 "$1" 2>/dev/null; }
-    ours() {
-        local command
-        command="$(ps -p "$pid" -o command=)" || return 1
-        case "$app" in
-            library) [[ "$command" =~ (^|/)(knowmoretabs[[:space:]]+serve|cargo[[:space:]]+run[[:space:]]+--locked[[:space:]]+--[[:space:]]+serve)[[:space:]] ]] ;;
-            tagger) [[ "$command" =~ (^|/)(tagger[[:space:]]+app|uv[[:space:]]+run[[:space:]]+--locked[[:space:]]+--project[[:space:]]+lab/tagger[[:space:]]+tagger[[:space:]]+app)[[:space:]] ]] ;;
-        esac
-    }
-    # Separate process groups let down stop cargo/uv and their app children together.
+    live() { kill -0 "$1" 2>/dev/null; }
+    # Separate process groups let down stop uv and the app's worker processes together.
     set -m
     for i in 0 1; do
-        app=library; [[ "$i" == 0 ]] || app=tagger
-        port="${ports[$i]}"; file="$logs/$app.pid"; log="$logs/$app.log"
+        port="${ports[$i]}"
+        if [[ "$i" == 0 ]]; then
+            app=library; ours='* serve --port *'
+            command=(knowmoretabs serve --port "$port")
+            [[ "$mode" != dev ]] || command=(cargo run --locked -- serve --port "$port")
+        else
+            app=tagger; ours='*tagger app --port *'
+            command=(tagger app --port "$port")
+            [[ "$mode" != dev ]] || command=(uv run --locked --project lab/tagger tagger app --port "$port")
+        fi
+        file="$logs/$app.pid"; log="$logs/$app.log"
         pid=""; [[ ! -f "$file" ]] || pid="$(cat "$file")"
         if [[ "$action" == up ]]; then
             if live "$pid"; then
@@ -73,13 +70,6 @@ _apps action mode library_port tagging_port:
                 continue
             fi
             mkdir -p "$logs"
-            if [[ "$app" == library ]]; then
-                command=(knowmoretabs serve --port "$port")
-                [[ "$mode" != dev ]] || command=(cargo run --locked -- serve --port "$port")
-            else
-                command=(tagger app --port "$port")
-                [[ "$mode" != dev ]] || command=(uv run --locked --project lab/tagger tagger app --port "$port")
-            fi
             nohup "${command[@]}" > "$log" 2>&1 < /dev/null &
             pid=$!
             echo "$pid" > "$file"
@@ -97,25 +87,22 @@ _apps action mode library_port tagging_port:
                 status=1
             fi
         else
-            if live "$pid"; then
-                if ! ours; then
-                    echo "$app pid $pid belongs to another process; leaving it alone"
-                else
-                    group="$(ps -p "$pid" -o pgid=)"; group="${group//[[:space:]]/}"
-                    if [[ "$group" == "$pid" ]]; then kill -TERM -- "-$pid"; else kill -TERM "$pid"; fi
-                    for ((attempt=0; attempt<50; attempt++)); do
-                        live "$pid" || break
-                        sleep 0.1
-                    done
-                    if live "$pid"; then
-                        echo "$app pid $pid still running; keeping pid and log" >&2
-                        status=1
-                        continue
-                    fi
-                    echo "$app stopped"
-                fi
-            else
+            if ! live "$pid"; then
                 echo "$app nothing to stop"
+            elif [[ "$(ps -p "$pid" -o command=)" != $ours ]]; then
+                echo "$app pid $pid belongs to another process; leaving it alone"
+            else
+                kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid"
+                for ((attempt=0; attempt<50; attempt++)); do
+                    live "$pid" || break
+                    sleep 0.1
+                done
+                if live "$pid"; then
+                    echo "$app pid $pid still running; keeping pid and log" >&2
+                    status=1
+                    continue
+                fi
+                echo "$app stopped"
             fi
             rm -f -- "$file" "$log"
             holders="$(listeners "$port")"
