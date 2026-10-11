@@ -25,7 +25,7 @@ import pytest
         "sendWait",
         "sendPreview",
         "sendNothing",
-        "sendMatched",
+        "sendRestore",
         "sendUncertain",
         "sendResult",
         "openControl",

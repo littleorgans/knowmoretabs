@@ -109,20 +109,6 @@ const cases = {
     $('#send-close').click();
     check(!$('#send').open, 'dialog remains dismissible');
   },
-  sendMatchedFlow: async ({ $, until, check }) => {
-    await window.KMT.ready;
-    $('#send-btn').click();
-    await until(() => $('#send').open, 'matching preview ready');
-    check($('#send-body').textContent.includes('Already matched'), 'matching decisions are visible');
-    check(!$('#send-go').hidden, 'matching decisions can be confirmed');
-    $('#send-go').click();
-    await until(() => $('#send-close').textContent === 'Done', 'matching send finished');
-    check($('#send-body').textContent.startsWith('Sent.'), 'matching send succeeded');
-    $('#send-close').click();
-    $('#send-btn').click();
-    await until(() => $('#send').open, 'matching resend ready');
-    check($('#send-body').textContent.includes('Nothing to send.'), 'matching send saved its progress');
-  },
   startupTags: async ({ tiles, until, check, search }) => {
     await until(() => window.releaseSelection, 'selection reply held');
     await search('night train');

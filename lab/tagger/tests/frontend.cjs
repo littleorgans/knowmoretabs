@@ -343,8 +343,10 @@ async function sendWait() {
   assert.equal(previews, 1);
 }
 
-const PLAN = { tags_on: 3, pages_on: 2, tags_off: 0, pages_off: 0, new: ['<Night> trains'], revived: [], forget: 1, skipped: 0, ready: true, preview: 7,
+const PLAN = { tags_on: 3, pages_on: 2, tags_off: 4, pages_off: 3, never_tags: 2, never_pages: 1, cleared: 1, new: ['<Night> trains'], revived: [],
+  forget: 1, restore: 0, missing: 0, ready: true, preview: 7,
   commands: ["knowmoretabs --root /r tag '--add=<Night> trains' -- https://a.example/", 'knowmoretabs --root /r forget -- https://b.example/'] };
+const NOTHING = { ...PLAN, tags_on: 0, pages_on: 0, tags_off: 0, pages_off: 0, never_tags: 0, never_pages: 0, cleared: 0, new: [], forget: 0, commands: [], ready: false };
 
 async function sendPreview() {
   const { K, node } = setup('app.js');
@@ -355,10 +357,13 @@ async function sendPreview() {
   await K.sendNow();
   const html = node('send-body').innerHTML;
   assert.deepEqual(asked, ['/api/send/preview']);
-  assert.ok(html.includes('<dt>Tags on</dt><dd><b>3</b> tags on <b>2</b> pages</dd>'), html);
+  assert.ok(html.includes('<dt>Tags added</dt><dd><b>3</b> tags on <b>2</b> pages</dd>'), html);
+  assert.ok(html.includes('<dt>Tags removed</dt><dd><b>4</b> tags on <b>3</b> pages</dd>'));
+  assert.ok(html.includes('<dt>Removed, never tagged here</dt><dd><b>2</b> tags on <b>1</b> page</dd>'));
+  assert.ok(html.includes('<dt>Pages cleared</dt><dd><b>1</b> page</dd>'));
   assert.ok(html.includes('<dt>New tags</dt><dd>&lt;Night> trains</dd>'), 'names are escaped');
   assert.ok(html.includes('<dt>Forget</dt><dd><b>1</b> page</dd>'));
-  assert.ok(!html.includes('Tags off') && !html.includes('Not in library'), 'empty rows are left out');
+  assert.ok(!html.includes('Restore') && !html.includes('Not in library') && !html.includes('Back from retired'), 'empty rows are left out');
   assert.ok(html.includes('<details><summary>Details</summary><pre>knowmoretabs --root /r tag'), 'commands sit under Details');
   assert.equal(node('send-go').hidden, false);
   assert.equal(node('send-close').textContent, 'Cancel');
@@ -367,26 +372,25 @@ async function sendPreview() {
 async function sendNothing() {
   const { K, node } = setup('app.js');
   await turn();
-  K.api = async () => ({ ...PLAN, tags_on: 0, pages_on: 0, new: [], forget: 0, commands: [], ready: false });
+  K.api = async () => NOTHING;
   await K.sendNow();
   assert.ok(node('send-body').innerHTML.startsWith('<p class="lede">Nothing to send.</p>'));
   assert.equal(node('send-go').hidden, true);
   assert.equal(node('send-close').textContent, 'Done');
+  K.api = async () => ({ ...NOTHING, missing: 2 });
+  await K.sendNow();
+  assert.ok(node('send-body').innerHTML.includes('<dt>Not in library</dt><dd><b>2</b> pages</dd>'), 'skipped pages show without commands');
+  assert.equal(node('send-go').hidden, true);
 }
 
-async function sendMatched() {
+async function sendRestore() {
   const { K, node } = setup('app.js');
   await turn();
-  K.api = async () => ({ ...PLAN, tags_on: 0, pages_on: 0, new: [], forget: 0,
-    commands: [], ready: true, matched: 1, settled: 1 });
+  K.api = async () => ({ ...NOTHING, restore: 3, revived: ['Trains'], ready: true, commands: ['knowmoretabs --root /r restore -- https://c.example/'] });
   await K.sendNow();
-  assert.equal(node('send-go').hidden, false, 'matching work must still be confirmable');
-  assert.ok(node('send-body').innerHTML.includes('Already matched'));
-  assert.ok(node('send-body').innerHTML.includes('Already forgotten'));
-  K.api = async () => ({ ...PLAN, tags_on: 0, pages_on: 0, new: [], forget: 0,
-    commands: [], ready: false, skipped: 2 });
-  await K.sendNow();
-  assert.ok(node('send-body').innerHTML.includes('Not in library'), 'skipped pages remain visible without commands');
+  const html = node('send-body').innerHTML;
+  assert.ok(html.includes('<dt>Restore</dt><dd><b>3</b> pages</dd>') && html.includes('<dt>Back from retired</dt><dd>Trains</dd>'), html);
+  assert.equal(node('send-go').hidden, false);
 }
 
 async function sendUncertain() {
@@ -1322,6 +1326,6 @@ async function startupListsKeepChanges() {
   }
 }
 
-const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendMatched, sendUncertain, sendResult };
+const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult };
 const timeout = setTimeout(() => { console.error('frontend round trip did not settle'); process.exit(1); }, 5000);
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; }).finally(() => clearTimeout(timeout));

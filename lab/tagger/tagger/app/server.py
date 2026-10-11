@@ -58,7 +58,7 @@ class App:
     def sync(self, url: str, archive) -> dict | None:
         """After knowmoretabs changed one page: the library in line with the archive for it, and the page as the
         screen shows it, or None when the screen does not show it. Hold the lock."""
-        self.lib = engine.sync(self.lib, archive, url, self.embed)
+        self.lib = engine.sync(self.lib, archive, [url], self.embed)
         row = self.lib.rows.get(url)
         return self.page(row) if row is not None and self.live()[row] else None
 

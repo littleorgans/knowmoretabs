@@ -18,6 +18,7 @@ from test_app import DIM, Fixture, fake_embed, fake_encode, fake_image
 
 from tagger.app import engine, server
 from tagger.app.store import Store
+from tagger.archive import Archive
 
 MAC_CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 
@@ -193,12 +194,5 @@ class SendBrowserTests(Browser, Synthetic):
     def test_send_dialog_applies_once_and_remains_dismissible(self):
         self.app.tag({"name": "Browser send"})
         self.run_case("sendFlow")
-        self.assertEqual(1, len(self.app.store.sent()))
-
-    def test_matching_decisions_can_be_confirmed_in_the_rendered_dialog(self):
-        row = next(i for i, live in enumerate(self.app.live()) if live)
-        key = self.app.lib.records[row]["key"]
-        self.app.apply({"rows": [row], "tag": "Trains", "value": True})
-        subprocess.run([self.app.binary, "--root", str(self.root), "tag", "--add=Trains", "--", key], check=True)
-        self.run_case("sendMatchedFlow")
-        self.assertTrue(self.app.store.sent()[(key, "Trains")])
+        tagged = [key for key, tags in Archive.load(self.root).owner_tags.items() if "Browser send" in tags]
+        self.assertEqual(list(self.app.store.app_tags()), tagged)

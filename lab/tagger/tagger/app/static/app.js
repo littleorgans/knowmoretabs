@@ -41,17 +41,19 @@
   K.$("theme").addEventListener("click", flipTheme);
   K.$("motion").addEventListener("change", (e) => { K.state.motion = e.target.checked; K.save(); applyTheme(); });
 
-  /* ---- Send to library: what knowmoretabs would change in the library, then, once confirmed, the change ---- */
+  /* ---- Send to library: what knowmoretabs would change to make the library match, then, once confirmed, the change ---- */
+  const on = (tags, pages) => `${K.plural(tags, "tag")} on ${K.plural(pages, "page")}`;
   const summary = (x) => {
     const rows = [
-      x.tags_on && ["Tags on", `${K.plural(x.tags_on, "tag")} on ${K.plural(x.pages_on, "page")}`],
-      x.tags_off && ["Tags off", `${K.plural(x.tags_off, "tag")} on ${K.plural(x.pages_off, "page")}`],
+      x.tags_on && ["Tags added", on(x.tags_on, x.pages_on)],
+      x.tags_off && ["Tags removed", on(x.tags_off, x.pages_off)],
+      x.never_tags && ["Removed, never tagged here", on(x.never_tags, x.never_pages)],
+      x.cleared && ["Pages cleared", K.plural(x.cleared, "page")],
       x.new.length && ["New tags", K.esc(x.new.join(", "))],
       x.revived.length && ["Back from retired", K.esc(x.revived.join(", "))],
       x.forget && ["Forget", K.plural(x.forget, "page")],
-      x.skipped && ["Not in library", K.plural(x.skipped, "page")],
-      x.matched && ["Already matched", K.plural(x.matched, "decision")],
-      x.settled && ["Already forgotten", K.plural(x.settled, "page")],
+      x.restore && ["Restore", K.plural(x.restore, "page")],
+      x.missing && ["Not in library", K.plural(x.missing, "page")],
     ].filter(Boolean);
     return rows.length ? `<dl>${rows.map(([t, d]) => `<dt>${t}</dt><dd>${d}</dd>`).join("")}</dl>` : "";
   };

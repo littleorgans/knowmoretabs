@@ -12,10 +12,10 @@ its text settles (`none`, without a request, when the text is `unavailable`); wh
 intake line has no title, the kept text's title joins it. A known URL is `known`; a forgotten one
 is refused as `forgotten`, anything but a public http(s) page as `refused`, and under `--retry` an unknown one as
 `refused`, `not_in_library`, all exiting 1. `--title` or `--no-content` with `--retry` is a usage error: exit 2,
-nothing on stdout. `forget -- <url>…` and `restore` edit `library.json`'s forgotten list;
-`tag --add=<NAME>|--remove=<NAME> -- <url>…` its tags and vocabulary. `tag` and `forget` refuse the whole call, writing nothing, when one URL is not in
-the library. `FAKE_KMT_DELAY` (seconds) paces the lines; `FAKE_KMT_FAIL` names an argument whose calls fail with an
-error on stderr; `FAKE_KMT_LOG` names a file that gets each argument list, and with it the add right after a `restore`
+nothing on stdout. `forget -- <url>…` and `restore -- <url>…` edit `library.json`'s forgotten list;
+`tag --add=<NAME>|--remove=<NAME> -- <url>…` its tags and vocabulary. Each refuses the whole call, writing nothing,
+when one URL is not in the library (for `restore`, neither known nor forgotten). `FAKE_KMT_DELAY` (seconds) paces
+the lines; `FAKE_KMT_FAIL` names an argument whose calls fail with an error on stderr; `FAKE_KMT_LOG` names a file that gets each argument list, and with it the add right after a `restore`
 of a `relapse` page fails with the error document. Every page, title and text here is invented.
 """
 
@@ -287,10 +287,11 @@ def main(argv: list[str]) -> int:
         if fail in (command, *rest):
             print(f"error: {fail} failed", file=sys.stderr)
             return 1
-    if command in ("tag", "forget") and (unknown := [u for u in urls if u not in known(root)]):
+    state = library(root)
+    held = known(root) | (set(state.get("forgotten", [])) if command == "restore" else set())
+    if unknown := [u for u in urls if u not in held]:
         print(f"error: not in your library: {unknown[0]}", file=sys.stderr)
         return 1
-    state = library(root)
     if command == "tag":
         tag(state, rest[0], urls)
     else:

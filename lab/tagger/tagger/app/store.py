@@ -5,7 +5,7 @@ user's marks and a status (open, skipped, decided). A direct decision tags or un
 session (the one screen flow); the direct decisions of one action share a batch, so undoing it retracts them.
 Export, the record each Send to library writes, folds every decided page over all sessions and every direct
 decision, latest decision per page and tag, into an answers file and a decision log; a page's app tags are the tags
-its latest decisions keep. The sent marks hold, per page and tag, what the last send left in the library.
+its latest decisions keep.
 Results marked not relevant to a query live apart, in `Exclusions`, and are never exported; the selected, pinned
 and forgotten pages live in their own `Keys` files. Forgotten pages leave the answers and go to a forget
 manifest beside them. Tags the owner makes in the app are kept in the same file, by the spelling `tag --import`
@@ -57,13 +57,12 @@ class Store:
         self.root = root
         self.path = root / "state.json"
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {"version": 1, "sessions": []}
+        self.state.pop("sent", None)  # an unreleased build's send marks: a send now mirrors, remembering nothing
         self._app_tags: dict[str, list[str]] | None = None
 
-    def _save(self, state: dict | None = None) -> None:
-        state = self.state if state is None else state
-        _write(self.path, json.dumps(state, indent=1, ensure_ascii=False) + "\n")
-        self.state = state
+    def _save(self) -> None:
         self._app_tags = None
+        _write(self.path, json.dumps(self.state, indent=1, ensure_ascii=False) + "\n")
 
     def sessions(self) -> list[dict]:
         return self.state["sessions"]
@@ -176,17 +175,6 @@ class Store:
             keep((d["key"], d["tag"]), {"value": d["value"], "model": None, "session": None, "at": d["at"]})
         return latest
 
-    def sent(self) -> dict[tuple[str, str], bool]:
-        """(page key, tag) -> the value the last Send to library left in the library for it."""
-        return {(k, t): v for k, tags in self.state.get("sent", {}).items() for t, v in tags.items()}
-
-    def mark_sent(self, pairs: list[tuple[str, str, bool]]) -> None:
-        if pairs:
-            sent = {key: tags.copy() for key, tags in self.state.get("sent", {}).items()}
-            for key, tag, value in pairs:
-                sent.setdefault(key, {})[tag] = value
-            self._save({**self.state, "sent": sent})
-
     def app_tags(self) -> dict[str, list[str]]:
         """Page key -> the tags its latest decisions keep (made in the app, direct or reviewed), by name."""
         if self._app_tags is None:
@@ -259,9 +247,8 @@ class Keys:
         self.keys: list[str] = json.loads(self.path.read_text())["keys"] if self.path.exists() else []
 
     def set(self, keys: list[str]) -> None:
-        keys = list(dict.fromkeys(keys))
-        _write(self.path, json.dumps({"version": 1, "keys": keys}, ensure_ascii=False) + "\n")
-        self.keys = keys
+        self.keys = list(dict.fromkeys(keys))
+        _write(self.path, json.dumps({"version": 1, "keys": self.keys}, ensure_ascii=False) + "\n")
 
 
 class Exclusions:

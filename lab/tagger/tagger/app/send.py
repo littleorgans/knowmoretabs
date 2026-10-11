@@ -1,35 +1,36 @@
-"""Send to library: the app's tags and forgotten pages, applied to its archive as the owner's own, by knowmoretabs.
+"""Send to library: the library made equal to the app, through knowmoretabs. The app is the source of truth.
 
-`preview` plans against the archive as it stands and writes nothing. Per page and tag, the app's latest decision
-(a decision Undo took back with none before it counts as off) where it differs from what earlier sends left; a page
-forgotten in the app, or one the library does not hold, is left out. A pair the library already holds as wanted
-needs no call. Then the pages forgotten in the app that the library still shows. `apply` runs the plan the owner
-saw: the export record, then `tag <urls> --add NAME` or `--remove NAME` per tag and value, then `forget`. Each call
-is atomic in knowmoretabs (one `library.json` replace under its lock); the send is not. A failed call stops it:
-the calls before it stay applied and marked sent, so sending again runs only the rest. The sent marks also keep a
-later send from undoing what the owner changed in the Library since. A call's stderr goes to the screen only.
+`preview` plans against the archive as it stands and writes nothing. Every page the library holds ends with exactly
+the app's tags for it, as the owner's own (names matched without regard to case, as knowmoretabs matches them); a
+page the app holds no tag for ends with none. A retired name in a page's `add` list counts as on the page once the
+send brings the name back. The library's forgotten pages end equal to the app's forgotten list: pages only the app
+forgot are forgotten, pages only the library forgot are restored. Pages the app holds that the library does not are
+left out and counted. Nothing is remembered between sends: each plans afresh from the archive, so sending again
+after a partial failure converges. `apply` runs the plan the owner saw: the export record, then per tag
+`tag --add=NAME`, then `tag --remove=NAME`, then `forget`, then `restore`. Each call is atomic in knowmoretabs (one
+`library.json` replace under its lock); the send is not. A failed call stops it; the calls before it stay applied.
+A call's stderr goes to the screen only.
 """
 
-import shlex
 import os
+import shlex
 import subprocess
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from ..archive import Archive
-from . import kmt
+from . import engine, kmt
 
 TIMEOUT = 120  # seconds per call; knowmoretabs waits for the archive lock
 ARGS = 100_000  # bytes of addresses per call, well under the system's argument limit
+VISIBILITY = ("forget", "restore")  # the calls that hide or show pages
 
 
 @dataclass
 class Call:
     args: list[str]
     urls: list[str]
-    tag: str | None = None  # a tag call's name and value; None for a forget
-    value: bool = True
 
     def command(self, app) -> str:
         return shlex.join(kmt.argv(app, self.args))
@@ -39,34 +40,43 @@ class Call:
 class Plan:
     on: dict[str, list[str]] = field(default_factory=dict)  # tag -> pages it goes on
     off: dict[str, list[str]] = field(default_factory=dict)  # tag -> pages it comes off
-    held: list[tuple[str, str, bool]] = field(default_factory=list)  # already so in the library
+    never: dict[str, list[str]] = field(default_factory=dict)  # of `off`, on pages the app never tagged
+    cleared: int = 0  # pages showing tags that end with none
     new: list[str] = field(default_factory=list)  # names the vocabulary lacks
     revived: list[str] = field(default_factory=list)  # names it holds retired
     forget: list[str] = field(default_factory=list)
-    settled: list[str] = field(default_factory=list)  # forgotten in the app and in the library already
-    skipped: int = 0  # pages the library does not hold
+    restore: list[str] = field(default_factory=list)
+    missing: int = 0  # pages the app holds and the library does not
 
     def calls(self) -> list[Call]:
         out = []
-        for value, tags in ((True, self.on), (False, self.off)):
+        for verb, tags in (("add", self.on), ("remove", self.off)):
             for tag, urls in sorted(tags.items()):
-                flag = f"--{'add' if value else 'remove'}={tag}"  # `=`: a name may start with a dash
-                out += [Call(["tag", flag, "--", *part], part, tag, value) for part in chunks(urls)]
-        return out + [Call(["forget", "--", *part], part) for part in chunks(self.forget)]
+                flag = f"--{verb}={tag}"  # `=`: a name may start with a dash
+                out += [Call(["tag", flag, "--", *part], part) for part in chunks(urls)]
+        return out + [Call([verb, "--", *part], part) for verb in VISIBILITY for part in chunks(getattr(self, verb))]
 
     def summary(self) -> dict:
+        def count(tags: dict[str, list[str]]) -> tuple[int, int]:
+            return sum(map(len, tags.values())), len({u for urls in tags.values() for u in urls})
+
+        (tags_on, pages_on), (tags_off, pages_off), (never_tags, never_pages) = map(
+            count, (self.on, self.off, self.never)
+        )
         return {
-            "tags_on": sum(map(len, self.on.values())),
-            "pages_on": len({u for urls in self.on.values() for u in urls}),
-            "tags_off": sum(map(len, self.off.values())),
-            "pages_off": len({u for urls in self.off.values() for u in urls}),
+            "tags_on": tags_on,
+            "pages_on": pages_on,
+            "tags_off": tags_off,
+            "pages_off": pages_off,
+            "never_tags": never_tags,
+            "never_pages": never_pages,
+            "cleared": self.cleared,
             "new": self.new,
             "revived": self.revived,
             "forget": len(self.forget),
-            "skipped": self.skipped,
-            "matched": len(self.held),
-            "settled": len(self.settled),
-            "ready": bool(self.on or self.off or self.forget or self.held or self.settled),
+            "restore": len(self.restore),
+            "missing": self.missing,
+            "ready": bool(self.on or self.off or self.forget or self.restore),
         }
 
 
@@ -83,49 +93,30 @@ def chunks(urls: list[str]) -> list[list[str]]:
 
 
 def plan(store, forgotten: list[str], archive: Archive) -> Plan:
-    known, gone, p = set(archive.known), set(forgotten), Plan()
-    wanted = {k: d["value"] for k, d in store.decisions().items()}
-    sent = store.sent()
-    for pair in sent:
-        wanted.setdefault(pair, False)
-    adding = {
-        tag.lower()
-        for (key, tag), value in wanted.items()
-        if value and sent.get((key, tag)) != value and key in known and key not in gone
-    }
-    skipped = set()
-    for (key, tag), value in sorted(wanted.items()):
-        if sent.get((key, tag)) == value or key in gone:
-            continue
-        if key not in known:
-            skipped.add(key)
-            continue
-        folded = tag.lower()
-        held = (
-            folded in {t.lower() for t in archive.owner_tags.get(key, ())}
-            if value
-            else (
-                folded in {t.lower() for t in archive.tag_removals.get(key, ())}
-                or folded not in archive.active
-                and folded not in archive.retired
-                and folded not in adding
-            )
-        )
-        if held:
-            p.held.append((key, tag, value))
-            continue
-        (p.on if value else p.off).setdefault(tag, []).append(key)
-    for tag in sorted(p.on, key=str.lower):
-        if tag.lower() not in archive.active:
-            (p.revived if tag.lower() in archive.retired else p.new).append(tag)
-    for key in forgotten:
-        if key not in known:
-            skipped.add(key)
-        elif key in archive.forgotten:
-            p.settled.append(key)
-        else:
-            p.forget.append(key)
-    p.skipped = len(skipped)
+    known, app_tags, p = set(archive.known), store.app_tags(), Plan()
+    decided = {key for key, _ in store.decisions()}
+    pages = [
+        (key, {t.lower(): t for t in app_tags.get(key, ())}, {n.lower(): n for n in archive.tag_adds.get(key, ())})
+        for key in archive.known
+    ]
+    for key, want, has in pages:
+        for folded in sorted(want.keys() - (has.keys() & archive.active.keys())):
+            p.on.setdefault(want[folded], []).append(key)
+    after = archive.active.keys() | {tag.lower() for tag in p.on}  # names shown once the adds ran
+    for key, want, has in pages:
+        for folded in sorted((has.keys() & after) - want.keys()):
+            p.off.setdefault(has[folded], []).append(key)
+            if key not in decided:
+                p.never.setdefault(has[folded], []).append(key)
+        p.cleared += bool(has.keys() & archive.active.keys() and not want)
+    named = {tag.lower(): tag for tag in sorted(p.on, reverse=True)}  # one spelling per name
+    for folded, tag in sorted(named.items()):
+        if folded not in archive.active:
+            (p.revived if folded in archive.retired else p.new).append(tag)
+    gone = set(forgotten)
+    p.forget = [key for key in forgotten if key in known and key not in archive.forgotten]
+    p.restore = sorted(archive.forgotten - gone)
+    p.missing = len((app_tags.keys() | gone) - known)
     return p
 
 
@@ -174,43 +165,34 @@ class Send:
             p = self.pending
             if p is None:
                 raise ValueError("nothing previewed to send")
-            steps, error, record = [], None, None
-            try:
-                archive = Archive.load(self.app.lib.root)
-                with self.app.lock:
-                    if preview != self.preview_id:
-                        raise ValueError("preview replaced; preview again")
-                    if p != plan(self.app.store, self.app.forgotten.keys, archive):
-                        raise ValueError("decisions or library changed; preview again")
-                    self.pending = None
+            archive = Archive.load(self.app.lib.root)
+            steps, error, record, ran = [], None, None, []
+            with self.app.lock:
+                if preview != self.preview_id:
+                    raise ValueError("preview replaced; preview again")
+                if p != plan(self.app.store, self.app.forgotten.keys, archive):
+                    raise ValueError("decisions or library changed; preview again")
+                self.pending = None
+                try:
                     record = self.app.store.export(self.app.forgotten.keys)
-                    self.app.store.mark_sent(p.held)
-                for call in p.calls():
-                    error = run(self.app, call)
-                    steps.append({"command": call.command(self.app), "ok": error is None})
-                    if error is not None:
-                        break
-                    self._settle(call)
-                if error is None and p.settled:
-                    self._forgotten(p.settled)
-            except OSError as err:
-                error = f"could not save send progress: {err.strerror or err}. Preview again to retry."
+                except OSError as err:
+                    error = f"could not write the send record: {err.strerror or err}"
+            for call in p.calls() if error is None else []:
+                ran.append(call)
+                error = run(self.app, call)
+                steps.append({"command": call.command(self.app), "ok": error is None})
+                if error is not None:
+                    break
+            if shown := [url for call in ran if call.args[0] in VISIBILITY for url in call.urls]:
+                try:
+                    self._show(shown)
+                except Exception as err:  # an embed or index failure: the pages show right at the next start
+                    error = error or f"the app could not show the forgotten and restored pages until a restart: {err}"
             return {**p.summary(), "ok": error is None, "error": error, "steps": steps, "record": record}
 
-    def _settle(self, call: Call) -> None:
-        """What one applied call changed, in the app: a tag call's sent marks, a forget's pages."""
-        if call.tag is not None:
-            with self.app.lock:
-                self.app.store.mark_sent([(url, call.tag, call.value) for url in call.urls])
-        else:
-            self._forgotten(call.urls)
-
-    def _forgotten(self, urls: list[str]) -> None:
-        """Pages the library now hides: in line with the archive in the app, and off its own forget list, so a
-        page the owner brings back in the Library is not forgotten again by the next send."""
-        archive = Archive.load(self.app.lib.root)
+    def _show(self, urls: list[str]) -> None:
+        """Pages a forget or restore touched, hidden or shown in the app as the archive now has them (a failed
+        call too: it may have written before it failed)."""
+        archive = Archive.load(self.app.lib.root)  # outside the app's lock: file reads only
         with self.app.lock:
-            for url in urls:
-                self.app.sync(url, archive)
-            done = set(urls)
-            self.app.forgotten.set([k for k in self.app.forgotten.keys if k not in done])
+            self.app.lib = engine.sync(self.app.lib, archive, urls, self.app.embed)
