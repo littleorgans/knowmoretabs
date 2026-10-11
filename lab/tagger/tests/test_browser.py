@@ -182,3 +182,23 @@ class AddBrowserTests(Browser, Synthetic):
         with patch.object(self.app.adds, "_command") as command:
             self.run_case("addSnapshot", "#add")
             command.assert_not_called()
+
+
+class SendBrowserTests(Browser, Synthetic):
+    def setUp(self):
+        super().setUp()
+        self.app = self.start(self.load()[0])
+        self.app.binary = fake_binary(self.work)
+
+    def test_send_dialog_applies_once_and_remains_dismissible(self):
+        self.app.tag({"name": "Browser send"})
+        self.run_case("sendFlow")
+        self.assertEqual(1, len(self.app.store.sent()))
+
+    def test_matching_decisions_can_be_confirmed_in_the_rendered_dialog(self):
+        row = next(i for i, live in enumerate(self.app.live()) if live)
+        key = self.app.lib.records[row]["key"]
+        self.app.apply({"rows": [row], "tag": "Trains", "value": True})
+        subprocess.run([self.app.binary, "--root", str(self.root), "tag", "--add=Trains", "--", key], check=True)
+        self.run_case("sendMatchedFlow")
+        self.assertTrue(self.app.store.sent()[(key, "Trains")])

@@ -88,6 +88,41 @@ async function startupForgetUndo({ $, tiles, until, check, search }) {
 }
 
 const cases = {
+  sendFlow: async ({ $, tiles, until, check, search }) => {
+    const K = window.KMT;
+    await K.ready;
+    await search('night train');
+    tiles()[0].click();
+    await K.tagSelection('Browser send');
+    $('#send-btn').click();
+    await until(() => $('#send').open && !$('#send-go').hidden, 'send preview ready');
+    check(!$('#send-body details').open, 'commands are collapsed');
+    $('#send-go').click();
+    await until(() => $('#send-close').textContent === 'Done', 'send finished');
+    check($('#send-body').textContent.startsWith('Sent.'), 'send succeeded');
+    check($('#send-go').hidden, 'completed send cannot be submitted twice');
+    $('#send-close').click();
+    $('#send-btn').click();
+    await until(() => $('#send').open, 'resend preview ready');
+    check($('#send-body').textContent.includes('Nothing to send.'), 'resend is settled');
+    check($('#send-go').hidden, 'empty resend has no Send button');
+    $('#send-close').click();
+    check(!$('#send').open, 'dialog remains dismissible');
+  },
+  sendMatchedFlow: async ({ $, until, check }) => {
+    await window.KMT.ready;
+    $('#send-btn').click();
+    await until(() => $('#send').open, 'matching preview ready');
+    check($('#send-body').textContent.includes('Already matched'), 'matching decisions are visible');
+    check(!$('#send-go').hidden, 'matching decisions can be confirmed');
+    $('#send-go').click();
+    await until(() => $('#send-close').textContent === 'Done', 'matching send finished');
+    check($('#send-body').textContent.startsWith('Sent.'), 'matching send succeeded');
+    $('#send-close').click();
+    $('#send-btn').click();
+    await until(() => $('#send').open, 'matching resend ready');
+    check($('#send-body').textContent.includes('Nothing to send.'), 'matching send saved its progress');
+  },
   startupTags: async ({ tiles, until, check, search }) => {
     await until(() => window.releaseSelection, 'selection reply held');
     await search('night train');

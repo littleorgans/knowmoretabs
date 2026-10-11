@@ -26,6 +26,7 @@ import pytest
         "sendPreview",
         "sendNothing",
         "sendMatched",
+        "sendUncertain",
         "sendResult",
         "openControl",
         "openSearch",

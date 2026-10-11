@@ -340,3 +340,39 @@ class SendTests(Served):
         with self.assertRaises(ProcessLookupError):
             os.kill(pid, 0)
         self.assertEqual({}, self.app.store.sent())
+
+    def test_uncertain_failure_after_a_write_is_reconciled_on_retry(self):
+        self.tag(self.rows[:1], "Trains")
+        original = send.run
+
+        def failed_after_write(app, call):
+            self.assertIsNone(original(app, call))
+            return "synthetic timeout after write"
+
+        with patch.object(send, "run", side_effect=failed_after_write):
+            out = self.send()
+        self.assertFalse(out["ok"])
+        self.assertEqual(["Trains"], self.tags(self.keys[0])["add"])
+        self.assertEqual({}, self.app.store.sent())
+        count = len(self.runs())
+        self.assertTrue(self.send()["ok"])
+        self.assertEqual(count, len(self.runs()), "reconcile the completed write without another CLI call")
+        self.assertTrue(Store(self.app.store.root).sent()[(self.keys[0], "Trains")])
+
+    def test_preview_reports_retired_names_and_missing_pages(self):
+        state = self.state()
+        state["vocabulary"]["Sleeper cars"] = {
+            "created_at": "2026-01-01T00:00:00Z",
+            "retired_at": "2026-01-02T00:00:00Z",
+        }
+        (self.root / "library.json").write_text(json.dumps(state))
+        self.tag(self.rows[:1], "Sleeper cars")
+        with self.app.lock:
+            self.app.store.apply(["synthetic-missing"], "Sleeper cars", True)
+        out = self.post("/api/send/preview")
+        self.assertEqual((["Sleeper cars"], [], 1, 1), (out["revived"], out["new"], out["skipped"], out["tags_on"]))
+        self.assertTrue(self.post("/api/send")["ok"])
+        self.assertIsNone(self.state()["vocabulary"]["Sleeper cars"].get("retired_at"))
+        self.assertEqual(["Sleeper cars"], self.tags(self.keys[0])["add"])
+        out = self.post("/api/send/preview")
+        self.assertEqual((False, 1), (out["ready"], out["skipped"]))

@@ -389,6 +389,22 @@ async function sendMatched() {
   assert.ok(node('send-body').innerHTML.includes('Not in library'), 'skipped pages remain visible without commands');
 }
 
+async function sendUncertain() {
+  const { K, node } = setup('app.js');
+  await turn();
+  K.api = async (route) => route === '/api/send'
+    ? { ...PLAN, ok: false, error: 'knowmoretabs did not finish within 120 seconds',
+      steps: [{ command: PLAN.commands[0], ok: false }], record: null }
+    : PLAN;
+  await K.sendNow();
+  await node('send-go').click();
+  const html = node('send-body').innerHTML;
+  assert.ok(!html.includes('unchanged'), 'a timeout can happen after the library write');
+  assert.ok(html.includes('Stopped. No commands completed successfully.'));
+  assert.equal(node('send-go').hidden, true);
+  assert.equal(node('send-close').textContent, 'Done');
+}
+
 async function sendResult() {
   const { K, node } = setup('app.js');
   await turn();
@@ -411,13 +427,13 @@ async function sendResult() {
   await K.sendNow();
   await node('send-go').click();
   html = node('send-body').innerHTML;
-  assert.ok(html.startsWith('<p class="lede">Stopped. The commands under Details went in; the rest did not.</p><pre>error: not in your library: https://b.example/</pre>'), html);
+  assert.ok(html.startsWith('<p class="lede">Stopped. The commands under Details completed successfully.</p><pre>error: not in your library: https://b.example/</pre>'), html);
   assert.ok(html.includes(PLAN.commands[0]) && !html.includes(PLAN.commands[1]), 'Details lists what went in');
 
   K.api = async (route) => (route === '/api/send' ? { ...PLAN, ok: false, error: 'boom', steps: [{ command: PLAN.commands[0], ok: false }], record } : PLAN);
   await K.sendNow();
   await node('send-go').click();
-  assert.ok(node('send-body').innerHTML.startsWith('<p class="lede">Stopped. Your library is unchanged.</p><pre>boom</pre>'));
+  assert.ok(node('send-body').innerHTML.startsWith('<p class="lede">Stopped. No commands completed successfully.</p><pre>boom</pre>'));
 }
 
 /* ---- open the page: a control on http(s) pages whose click and key change nothing ---- */
@@ -1306,6 +1322,6 @@ async function startupListsKeepChanges() {
   }
 }
 
-const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendMatched, sendResult };
+const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendMatched, sendUncertain, sendResult };
 const timeout = setTimeout(() => { console.error('frontend round trip did not settle'); process.exit(1); }, 5000);
 cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; }).finally(() => clearTimeout(timeout));

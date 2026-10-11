@@ -83,7 +83,7 @@
       const done = x.steps.filter((s) => s.ok).map((s) => s.command);
       show(x.ok
         ? `<p class="lede">Sent.</p>` + summary(x) + details(done, x.record)
-        : `<p class="lede">Stopped. ${done.length ? "The commands under Details went in; the rest did not." : "Your library is unchanged."}</p><pre>${K.esc(x.error)}</pre>` + details(done, x.record), false);
+        : `<p class="lede">Stopped. ${done.length ? "The commands under Details completed successfully." : "No commands completed successfully."}</p><pre>${K.esc(x.error)}</pre>` + details(done, x.record), false);
     } catch (err) { show(`<p class="lede">${K.esc(err.message)}</p>`, false); }
     K.$("send-close").focus();
   });
