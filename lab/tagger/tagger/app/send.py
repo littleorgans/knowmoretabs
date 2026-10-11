@@ -11,6 +11,7 @@ later send from undoing what the owner changed in the Library since. A call's st
 """
 
 import shlex
+import os
 import subprocess
 import threading
 from contextlib import contextmanager
@@ -72,11 +73,12 @@ class Plan:
 def chunks(urls: list[str]) -> list[list[str]]:
     out, size = [], ARGS
     for url in urls:
-        if size + len(url) + 1 > ARGS:
+        width = len(os.fsencode(url)) + 1
+        if size + width > ARGS:
             out.append([])
             size = 0
         out[-1].append(url)
-        size += len(url) + 1
+        size += width
     return out
 
 

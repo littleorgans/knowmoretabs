@@ -7,6 +7,8 @@ import errno
 import os
 import subprocess
 import threading
+import shlex
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -306,3 +308,35 @@ class SendTests(Served):
         self.assertEqual(self.app.forgotten.keys, Keys(self.app.store.root, "forgotten.json").keys)
         self.assertTrue(self.send()["ok"])
         self.assertEqual([], self.app.forgotten.keys)
+
+    def test_batches_use_encoded_bytes_and_keep_each_address_intact(self):
+        urls = ["synthetic-" + "\u96ea" * 4, "synthetic-'quoted'", "synthetic-two words"]
+        with patch.object(send, "ARGS", 34):
+            calls = send.Plan(on={"-Owner's tag": urls}).calls()
+        self.assertEqual(urls, [url for call in calls for url in call.urls])
+        for call in calls:
+            self.assertLessEqual(sum(len(os.fsencode(url)) + 1 for url in call.urls), 34)
+            self.assertEqual(call.urls, call.args[3:])
+            self.assertEqual("--add=-Owner's tag", call.args[1])
+            self.assertEqual(
+                [self.app.binary, "--root", str(self.root), *call.args], shlex.split(call.command(self.app))
+            )
+
+    def test_timeout_kills_and_reaps_the_actual_child(self):
+        pidfile = self.work / "sleeping-pid"
+        binary = self.work / "sleeping-kmt"
+        binary.write_text(
+            f"#!{sys.executable}\nimport os, time\nfrom pathlib import Path\n"
+            f"Path({str(pidfile)!r}).write_text(str(os.getpid()))\ntime.sleep(30)\n"
+        )
+        binary.chmod(0o700)
+        self.app.binary = str(binary)
+        self.tag(self.rows[:1], "Trains")
+        with patch.object(send, "TIMEOUT", 1):
+            out = self.send()
+        self.assertFalse(out["ok"])
+        self.assertIn("did not finish", out["error"])
+        pid = int(pidfile.read_text())
+        with self.assertRaises(ProcessLookupError):
+            os.kill(pid, 0)
+        self.assertEqual({}, self.app.store.sent())
