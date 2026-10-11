@@ -1,7 +1,7 @@
 # knowmoretabs system map
 <!-- lilo-page kind=index schema=1 -->
-<!-- lilo-covers Cargo.toml Cargo.lock .cargo/config.toml xtask/Cargo.toml xtask/src/main.rs slices.toml src/*.rs web/index.html web/app.css web/app.js -->
-<!-- lilo-verified digest=15c21cf74a6ec1a0 commit=140f5db7d6a1 date=2026-10-06 -->
+<!-- lilo-covers Cargo.toml Cargo.lock .cargo/config.toml xtask/Cargo.toml xtask/src/main.rs slices.toml src/*.rs web/index.html web/app.css web/app.js justfile scripts/clippy.py lab/tagger/tagger/paths.py lab/tagger/tagger/app/kmt.py -->
+<!-- lilo-verified digest=c80afa26bf810733 commit=6dba24657080 date=2026-10-12 -->
 
 > One Rust binary that snapshots the open tabs of Chromium browsers from their on-disk session files and serves the snapshots as a local, searchable library.
 
@@ -19,12 +19,15 @@ Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (`c
 - Capture: browser and profile discovery, SNSS parsing, the encrypted-sessions preflight, History signals: `code:src/capture.rs`, `code:src/platform.rs`, `code:src/snss.rs`, `code:src/session.rs`, `code:src/staleness.rs`, `code:src/history.rs`, `code:src/model.rs`.
 - Archive: root creation, advisory lock, staged writes: `code:src/archive.rs`.
 - Library: pages derived across snapshots, user state, export, the library's History record: `code:src/library.rs`, `code:src/library_commands.rs`, `code:src/export.rs`, `code:src/library_history.rs`.
-- Serve and triage: the HTTP server and JSON API, forget and restore: `code:src/server.rs`, `code:src/triage.rs`; the frontend `code:web/app.js`, embedded by `code:src/assets.rs`.
+- Serve and triage: the HTTP server and JSON API, forget and restore: `code:src/server.rs`, `code:src/triage.rs`; the frontend `code:web/app.js`, loaded by `code:src/assets.rs#load`.
+- Add, one page by its address: the command and its stage lines `code:src/add.rs`, its content stage `code:src/add_content.rs`, the intake log and its fold into the library `code:src/intake.rs`.
 - Tags and suggestions: `code:src/tags.rs`, `code:src/prompt.rs`, `code:src/suggestions.rs`.
 - Enrich, the opt-in head fetch: `code:src/enrich.rs`, `code:src/metadata_fetch.rs`, `code:src/head.rs`, `code:src/metadata.rs`, `code:src/metadata_writer.rs`; GitHub address parsing and the embedded repository data `code:src/github.rs`, shared with content.
 - Shared by the network commands: the URL refusal rules `code:src/guard.rs`, the guarded GET and pacer `code:src/fetch.rs`, the planner and per-host workers `code:src/targets.rs`, the append-only logs and the log-plus-files store `code:src/jsonl.rs`, the JSON-LD walker `code:src/jsonld.rs`.
 - Content, the opt-in page text capture: `code:src/content.rs`, `code:src/content_plan.rs`, `code:src/content_fetch.rs`, `code:src/content_store.rs`, `code:src/extract.rs`, PDF text `code:src/content_pdf.rs`; the router `code:src/content_route.rs`, the X post route `code:src/xpost.rs`, the GitHub route through `gh api` `code:src/github_api.rs` with its markdown `code:src/github_page.rs`, and the YouTube route through yt-dlp `code:src/ytdlp.rs` with its video addresses `code:src/youtube.rs` and its caption choice, transcript and markdown `code:src/youtube_page.rs`; the headless tier: which pages are rendered, what a render writes and what waits `code:src/content_headless.rs`, the installed browser run headless, or the owner's running browser attached to `code:src/browser.rs`, the one tab a render opens and the only way to its page `code:src/browser_tab.rs`, its `DevTools` protocol `code:src/cdp.rs`, and the loopback relay every rendered page's connections go through `code:src/socks.rs`; the signed in tier: which pages `--signed-in` opens, the personal apps it never opens, and how the owner's browser is found `code:src/content_signed_in.rs`, `code:src/guard.rs#PERSONAL_APPS`; external tool discovery and bounded runs `code:src/tools.rs`, each program in a process group of its own with the registry and signal handler that end it `code:src/process_tree.rs`; the readiness report `code:src/doctor.rs`; classifier parity tool `code:examples/content_parity.rs`. Each page's preview image: which pages get one and the retries `code:src/content_image.rs`, candidates and the ladder `code:src/image_pick.rs`, candidates from HTML and README markup `code:src/image_page.rs`, the guarded fetch, checks, decode and JPEG `code:src/image_fetch.rs`, the image log and files, and the kept images `serve` names in the library and answers on `GET /api/image/<hex>` `code:src/image_store.rs`.
 - Slice lint and matrix generator: `code:xtask/src/main.rs`.
+- Developer recipes: `code:justfile` (`check`, `test`, `install`, `up`, `down`); `code:scripts/clippy.py` runs clippy on the toolchain CI pins.
+- Tagger lab, a Python prototype outside the binary and CI: `lab/tagger`. It resolves the archive as `--root`, then `KMT_ROOT`, then `~/.knowmoretabs`, and its data as `--data`, then `KMT_TAGGER_DATA`, then `<root>/tagger` (`code:lab/tagger/tagger/paths.py`); Add link and Send to library run `knowmoretabs --root <root>` found on `PATH` (`code:lab/tagger/tagger/app/kmt.py`).
 
 ## Reading path
 
@@ -32,8 +35,9 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 
 ## Vocabulary
 
-- Archive: the root directory; default `~/.knowmoretabs`, and `%LOCALAPPDATA%\knowmoretabs` on Windows (`code:src/platform.rs#default_root`).
+- Archive: the root directory: `--root`, then `KMT_ROOT` (empty means unset), then `~/.knowmoretabs`, and `%LOCALAPPDATA%\knowmoretabs` on Windows (`code:src/platform.rs#resolve_root`, `code:src/platform.rs#default_root`).
 - Snapshot: one dated directory under `snapshots/` holding `snapshot.json`, the source of truth, and `session.snss`, a verbatim copy of the browser's file (`code:src/archive.rs#SNAPSHOT_JSON`, `code:src/model.rs#SESSION_FILE_NAME`).
+- Added page: one line in `pages/added.jsonl`, written by `add` only for a page the library does not list; the library reads the log as one in-memory snapshot, id `added` (`code:src/intake.rs#SNAPSHOT_ID`).
 - Page: one URL as the library lists it, derived across snapshots; a sighting is one appearance of a page in a snapshot (`code:src/library.rs#Library`).
 - Library state: `library.json`, per URL user state: forgotten pages, tags and the tag vocabulary (`code:src/library.rs#State`).
 - Forget, restore: hide a page from the library, and bring it back; snapshots are untouched (`code:src/triage.rs`).
@@ -47,14 +51,14 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 - Archive writers hold the archive's advisory lock (`code:src/archive.rs#LOCK_FILE`).
 - A snapshot is staged as a directory and renamed into place once, never over anything, and never written again (`code:src/archive.rs#publish`).
 - State files such as `library.json` are replaced whole: staged beside the target, then renamed (`code:src/archive.rs#replace_file`).
-- `pages/metadata.jsonl`, `pages/content.jsonl` and `pages/images.jsonl` are append only: one whole line per write, under the lock, synced before the next (`code:src/jsonl.rs#Appender`).
+- `pages/added.jsonl`, `pages/metadata.jsonl`, `pages/content.jsonl` and `pages/images.jsonl` are append only: one whole line per write, under the lock, synced before the next (`code:src/jsonl.rs#Appender`).
 - A content file or a page image is replaced whole, then its log line appended, under one hold of the lock, never across a request or a decode; an unchanged body or image leaves the file untouched (`code:src/jsonl.rs#Store`, `code:src/content_store.rs#Store`, `code:src/image_store.rs#Store`).
 - Opening a log repairs its file's Unix permissions, and opening a file store repairs its own directory and files, under the archive lock, including existing images, without rewriting their bytes (`code:src/archive.rs#make_private`, `code:src/jsonl.rs#Appender`, `code:src/jsonl.rs#Store`).
 - On Unix the archive root and its private directories are created mode 0700; on Windows they inherit the parent's ACL (`code:src/archive.rs#create_private_dir`).
 - An unknown session command is skipped and counted, never fatal; a torn tail is reported as truncated bytes (`code:src/session.rs`, `code:src/snss.rs`).
 - The encrypted-sessions preflight refuses a stale save with exit 3; `--force` cannot bypass it (`code:src/staleness.rs#check`, `code:src/error.rs#exit_code`).
 - Tabs on this machine (`localhost`, its subdomains, loopback) are left out of `snapshot.json` and of change detection; `session.snss` stays verbatim and keeps them (`code:src/capture.rs#leave_out_this_machine`, `code:src/local.rs#is_this_machine_url`).
-- Only `enrich` and `content` send page addresses off the machine, and `content` sends a video's id, never its library address, to YouTube through yt-dlp, without cookies or yt-dlp's configuration files (`code:src/ytdlp.rs`); `content` also downloads one preview image per page from the address the page names, which may be on another host, and keeps it in the private archive (`code:src/image_fetch.rs`); `doctor` is offline by default; `--live` lets gh check its own sign in, asks the X post API for one fixed public post and starts the browser once with no page, sending nothing of the owner's. `ureq` appears only in `code:src/fetch.rs`.
+- Only `enrich`, `content` and `add`, whose content stage is `content` narrowed to one page unless `--no-content`, send page addresses off the machine, and `content` sends a video's id, never its library address, to YouTube through yt-dlp, without cookies or yt-dlp's configuration files (`code:src/ytdlp.rs`); `content` also downloads one preview image per page from the address the page names, which may be on another host, and keeps it in the private archive (`code:src/image_fetch.rs`); `doctor` is offline by default; `--live` lets gh check its own sign in, asks the X post API for one fixed public post and starts the browser once with no page, sending nothing of the owner's. `ureq` appears only in `code:src/fetch.rs`.
 - A page `content` renders is loaded in the installed browser, headless, on a scratch profile, and every connection it makes goes through the loopback relay `code:src/socks.rs`, opened by `code:src/fetch.rs#connect_public` under the fetcher's public only rule; WebRTC is kept off UDP. Rendered text replaces kept text only when it is longer, and the headless tier never writes `error` (`code:src/content_headless.rs#settle`).
 - `content --signed-in` reads only the remote debugging switch in `Local State` and `DevToolsActivePort` to find the owner's running Chrome, connects once per run, and only after the owner allows it; it creates hidden tabs of its own with a session each, never lists, attaches to or closes another tab and never sends `Browser.close` (`code:src/browser_tab.rs`, `code:src/cdp.rs#Command`). It opens only lines a public tier wrote as behind a login, paywalled or blocked, or rendered thin or empty after a 403 (`code:src/content_signed_in.rs#eligible`), never a personal app, and every line it writes says `signed_in` for tier and access. Names are checked before navigation and where a page ends (`code:src/fetch.rs#Fetcher`); Chrome's own redirects, name resolution and subresources are not guarded. `doctor` reads the same two files and never connects.
 - Content's external tools run only through `code:src/tools.rs`, the browser only through `code:src/browser.rs`: `run` uses an argument vector, no shell, no input, a timeout, capped output and stderr cut to one line, its first `ERROR:` line when there is one; `System::exit_code` runs `gh auth status` with only its exit code read (`code:src/github_api.rs#Readiness`).
@@ -64,7 +68,7 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 - Foreground time sums positive durations only; the search walk stops at `MAX_HOPS` hops (`code:src/history.rs#MAX_HOPS`).
 - Export omits the search and referrer signals unless `--with-history`, and lists no forgotten page (`code:src/library.rs#Shape`).
 - Imported suggestions never change the owner's tags; tag names match without regard to case (`code:src/suggestions.rs`, `code:src/library.rs#fold`).
-- The frontend is hand-written HTML, CSS and JS with no build step, embedded with `include_str!` (`code:src/assets.rs`); committed files are LF, and Windows CI fails on a checkout that rewrites them (`code:.github/workflows/ci.yml`).
+- The frontend is hand-written HTML, CSS and JS with no build step, embedded with `include_str!`; a debug build reads `web/` from the source checkout on every request and export, falling back to the embedded copy, so a frontend edit needs a browser refresh, not a rebuild (`code:src/assets.rs#load`); committed files are LF, and Windows CI fails on a checkout that rewrites them (`code:.github/workflows/ci.yml`).
 - Unsafe code is forbidden; clippy `all` and `pedantic` deny; `print_stdout` and `print_stderr` are denied, so user output goes through `code:src/out.rs` (`code:Cargo.toml`).
 - Committed fixtures are synthetic or redacted, never a real URL or title from a browser; `reference/` is vendored prior art and read-only (claimed by S1, unverified).
 - Every `.rs` file under `src/` and `xtask/src/` carries a `slice:` naming a slice in `slices.toml` and a `why:`; the slice matrix doc is generated from `slices.toml` and never hand-edited (`code:xtask/src/main.rs#lint`).
@@ -88,7 +92,7 @@ none yet
 ## Gaps
 
 - Quick look map: no component, interaction or decision pages yet.
-- Unmapped: SNSS command tables and pruning, the `serve` JSON API, the frontend state model, `enrich` fetch safety (private address refusal), the release pipeline in `.github/workflows/release.yml`.
+- Unmapped: SNSS command tables and pruning, the `serve` JSON API, the frontend state model, the tagger lab's internals, the release pipeline in `.github/workflows/release.yml`.
 
 ## Sources
 
