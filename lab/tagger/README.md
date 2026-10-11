@@ -9,7 +9,7 @@ weights in the default Hugging Face cache.
 
 ## Run
 
-From the repository root, run `just install` after each pull, then `tagger app` from any
+From the repository root, run `just install` after each pull, then `tagger app --port 41879` from any
 folder. Archive precedence is `--root` > `KMT_ROOT` > `~/.knowmoretabs`;
 data precedence is `--data` > `KMT_TAGGER_DATA` > `<resolved root>/tagger`.
 The app requires prepared text vectors in that data directory and cached
@@ -56,7 +56,7 @@ The CLI sets umask 077, so every output is private (0600).
 
 ## Search, select and tag app (P1, one screen since P5)
 
-`tagger app` serves the prototype on 127.0.0.1:7879 (`--port 0` picks a free one)
+`just up` serves the prototype on 127.0.0.1:41879 (`tagger app --port 0` picks a free one)
 and prints its address. Needs `tagger embed --model eg2` done; runs offline (`HF_HUB_OFFLINE`). No `dataset/`
 directory is needed. Page records come from the resolved archive; matching keyed vectors are reused, and
 changed or missing inputs are embedded at startup. With no owner vocabulary the app starts with no owner tags; every tag name `state.json`
@@ -108,7 +108,7 @@ reach or not allowed, `--retry image` after an image error (`--retry` needs know
 stand. Retry after a job that ended without a result asks for the same again, except that a Restore that held is not
 repeated; Retry after Not indexed indexes the page in the lab only. Remove is `forget`, Restore is `restore` then `add`.
 Bookmarklet (Chrome's bookmarks bar):
-`javascript:void(window.open('http://127.0.0.1:7879/#add='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'kmt-tagger'))`.
+`javascript:void(window.open('http://127.0.0.1:41879/#add='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'kmt-tagger'))`.
 The tile is framed once the library lists the page and opens at Indexed with every app tag in the strip, acting on
 that page only. knowmoretabs is the only writer of the archive, so the app must run on the archive `add` should
 change. Page images are addressed by their hashed name (`/img/<sha256>`), so a cached image stays with its page.
