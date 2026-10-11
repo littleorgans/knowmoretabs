@@ -16,7 +16,7 @@ import pytest
 from test_add import Synthetic, fake_binary
 from test_app import DIM, Fixture, fake_embed, fake_encode, fake_image
 
-from tagger.app import engine, server
+from tagger.app import engine, send, server
 from tagger.app.store import Store
 from tagger.archive import Archive
 
@@ -196,3 +196,15 @@ class SendBrowserTests(Browser, Synthetic):
         self.run_case("sendFlow")
         tagged = [key for key, tags in Archive.load(self.root).owner_tags.items() if "Browser send" in tags]
         self.assertEqual(list(self.app.store.app_tags()), tagged)
+
+    def test_send_refreshes_the_view_after_a_restore_reports_failure(self):
+        original = send.run
+
+        def failed_after_restore(app, call):
+            error = original(app, call)
+            if error is None and call.args[0] == "restore":
+                return "synthetic failure after restore wrote"
+            return error
+
+        with patch.object(send, "run", side_effect=failed_after_restore):
+            self.run_case("sendPartialRestore")

@@ -83,6 +83,14 @@
     try {
       const x = await K.api("/api/send", { preview });
       const done = x.steps.filter((s) => s.ok).map((s) => s.command);
+      if (x.forget || x.restore) {
+        try {
+          K.lib = await K.api("/api/library");
+          K.gone = new Set(K.lib.forgotten);
+          K.changed();
+          await K.views.refresh();
+        } catch (err) { K.fail(err); }
+      }
       show(x.ok
         ? `<p class="lede">Sent.</p>` + summary(x) + details(done, x.record)
         : `<p class="lede">Stopped. ${done.length ? "The commands under Details completed successfully." : "No commands completed successfully."}</p><pre>${K.esc(x.error)}</pre>` + details(done, x.record), false);

@@ -36,7 +36,7 @@ function setup(...files) {
     state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
     lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
     search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
-    views: { render() {}, key: () => false, restore: async () => {} }, strip: { render() {} }, add: { render() {}, enter() {} }, lit, ...overrides,
+    views: { render() {}, key: () => false, restore: async () => {}, refresh: async () => {} }, strip: { render() {} }, add: { render() {}, enter() {} }, lit, ...overrides,
   };
   const listeners = {}, keys = {};   // the window's and the document's, by event
   const history = {       // one tab's entries; back() delivers popstate a turn later, as browsers do

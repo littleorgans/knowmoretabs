@@ -193,7 +193,7 @@
       K.$("next").disabled = v.loading || end;
     },
     go,
-    async restored(row) {
+    async refresh(row) {
       const v = view();
       if (listed(v) || (!v.loading && v.rows.includes(row)) || !S.query) return;
       const scroll = scrollY;

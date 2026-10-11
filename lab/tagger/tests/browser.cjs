@@ -88,6 +88,21 @@ async function startupForgetUndo({ $, tiles, until, check, search }) {
 }
 
 const cases = {
+  sendPartialRestore: async ({ $, until, check, search }) => {
+    const K = window.KMT;
+    await K.ready;
+    await search('night train');
+    const before = K.lib.pages;
+    $('#send-btn').click();
+    await until(() => $('#send').open && !$('#send-go').hidden, 'send preview ready');
+    $('#send-go').click();
+    await until(() => $('#send-close').textContent === 'Done', 'partial send finished');
+    check($('#send-body').textContent.startsWith('Stopped.'), 'uncertain restore reports failure');
+    const library = await K.api('/api/library');
+    check(library.pages > before, 'restore wrote before reporting failure');
+    check(K.lib.pages === library.pages, 'failed send refreshes the browser library count');
+    check(K.views.view().total === library.pages, 'failed send refreshes the search count');
+  },
   sendFlow: async ({ $, tiles, until, check, search }) => {
     const K = window.KMT;
     await K.ready;
@@ -101,6 +116,9 @@ const cases = {
     await until(() => $('#send-close').textContent === 'Done', 'send finished');
     check($('#send-body').textContent.startsWith('Sent.'), 'send succeeded');
     check($('#send-go').hidden, 'completed send cannot be submitted twice');
+    const library = await K.api('/api/library');
+    check(K.lib.pages === library.pages, 'send refreshes the browser library count after restore');
+    check(K.views.view().total === library.pages, 'send refreshes the search count after restore');
     $('#send-close').click();
     $('#send-btn').click();
     await until(() => $('#send').open, 'resend preview ready');

@@ -86,7 +86,7 @@
     K.toast("Forgotten", () => {
       if (!K.gone.has(row)) return;
       back();
-      send(false).then(() => K.views.restored(row)).catch((err) => { out(); K.fail(err); });
+      send(false).then(() => K.views.refresh(row)).catch((err) => { out(); K.fail(err); });
       for (const name in was) if (was[name] >= 0) keep(name);
     });
   };
