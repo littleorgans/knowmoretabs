@@ -44,6 +44,8 @@ _apps action mode library_port tagging_port:
     status=0
     listeners() { lsof -nP -t -iTCP:"$1" -sTCP:LISTEN || [[ $? == 1 ]]; }
     live() { kill -0 "$1" 2>/dev/null; }
+    # Build in the foreground so the startup wait below never covers compilation.
+    [[ "$mode" != dev ]] || cargo build --locked
     # Separate process groups let down stop uv and the app's worker processes together.
     set -m
     for i in 0 1; do
