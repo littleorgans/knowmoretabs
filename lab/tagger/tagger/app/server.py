@@ -133,16 +133,17 @@ class App:
 
     def search(self, body: dict) -> dict:
         """One page of ranked results for `query`, from rank `offset`; with `untagged`, among pages without an app
-        tag only. `total` counts the pages ranked."""
+        tag only. `total` counts the pages ranked. An empty query lists every page, newest first."""
         query = str(body.get("query", ""))
-        if not query.strip():
-            raise ValueError("type a search")
         n, offset = _size(body), _offset(body)
+        among = self.untagged() if body.get("untagged") else self.live()
+        if not query.strip():
+            rows = engine.newest(self.lib, among)[offset : offset + n]
+            return {"hits": [self.page(int(r)) for r in rows], "offset": offset, "total": int(among.sum())}
         start = time.perf_counter()
         q = self.encode([query])[0]
         encoded = time.perf_counter()
         images = bool(body.get("images"))
-        among = self.untagged() if body.get("untagged") else self.live()
         plain = engine.search(self.lib, q, query, n, images, among, offset)
         while True:
             hits = plain

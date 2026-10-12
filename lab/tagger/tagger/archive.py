@@ -10,6 +10,8 @@ is no use.
 Capture ok: the latest valid schema 1 log line is `ok` and its hash named file exists
 (`content_store::file_name`, `image_store::read_kept`). Latest follows file order (`jsonl::parse`).
 Page metadata: latest `pages/metadata.jsonl` record, used only when status is ok (`prompt::PageLine::enrich`).
+Added: when a page entered the library, the earliest of its snapshots' `captured_at` and its latest intake line's
+`added_at`. Per page: the Library's First seen dates every intake page by the log's first line.
 """
 
 import hashlib
@@ -76,6 +78,7 @@ def latest_log(path: Path, required=("url",)) -> dict:
 class Archive:
     root: Path
     known: list  # page keys, sorted
+    added: dict  # url -> when it entered the library, epoch seconds
     titles: dict
     forgotten: set
     active: dict  # folded name -> spelling
@@ -102,6 +105,12 @@ class Archive:
         }
         titles: dict = {}
         known: set = set()
+        added: dict = {}
+
+        def seen(url, at):
+            if at is not None:
+                added[url] = min(added.get(url, at), at)
+
         for directory in sorted((root / "snapshots").iterdir(), key=lambda p: p.name):
             if directory.name.startswith(".") or not directory.is_dir():
                 continue
@@ -116,6 +125,7 @@ class Archive:
                 if not public(tab["url"]):
                     continue
                 known.add(tab["url"])
+                seen(tab["url"], instant(record.get("captured_at")))
                 titles.setdefault(tab["url"], "")
                 if tab.get("title", "").strip():
                     titles[tab["url"]] = tab["title"]
@@ -123,6 +133,7 @@ class Archive:
             if not public(url):
                 continue
             known.add(url)
+            seen(url, instant(row["added_at"]))
             titles.setdefault(url, "")
             title = row.get("title")
             if isinstance(title, str) and title.strip():
@@ -153,6 +164,7 @@ class Archive:
         return cls(
             root=root,
             known=sorted(known),
+            added=added,
             titles=titles,
             forgotten=set(state.get("forgotten", [])),
             active=active,

@@ -98,6 +98,15 @@ class IntakeFoldTests(Synthetic):
         self.assertEqual(sorted({*before.known, NEW, "https://added.example/two"}), after.known)
         self.assertEqual(("One note", "Two"), (after.titles[NEW], after.titles["https://added.example/two"]))
 
+    def test_a_page_entered_the_library_at_its_first_sighting(self):
+        seen = Archive.load(self.root).known[0]
+        log = self.root / "pages/added.jsonl"
+        fake_knowmoretabs.append(log, {"schema_version": 1, "url": NEW, "added_at": "2026-10-08T10:00:00Z"})
+        fake_knowmoretabs.append(log, {"schema_version": 1, "url": seen, "added_at": "2026-10-08T10:01:00Z"})
+        archive = Archive.load(self.root)
+        self.assertEqual(datetime(2026, 10, 8, 10, tzinfo=UTC).timestamp(), archive.added[NEW])
+        self.assertEqual(datetime(2026, 10, 1, tzinfo=UTC).timestamp(), archive.added[seen], "its snapshot, earlier")
+
     def test_a_later_line_without_a_title_wins(self):
         log = self.root / "pages/added.jsonl"
         fake_knowmoretabs.append(
@@ -108,6 +117,16 @@ class IntakeFoldTests(Synthetic):
 
 
 class LoadTests(Synthetic):
+    def test_empty_search_breaks_synced_timestamp_ties_by_url(self):
+        lib, _ = self.load()
+        keys = [NEW + "/z", NEW + "/a"]
+        for key in keys:
+            capture(self.root, key, "An invented page")
+        lib = engine.sync(lib, Archive.load(self.root), keys, fake_embed)
+        app = server.App(lib, Store(self.work / "app"), fake_encode, fake_embed)
+        hits = app.search({"query": "", "n": 5})["hits"]
+        self.assertEqual(sorted(keys), [lib.records[h["row"]]["key"] for h in hits[:2]])
+
     def test_a_library_with_no_owner_vocabulary_starts_with_no_tags(self):
         state = json.loads((self.root / "library.json").read_text())
         for term in state["vocabulary"].values():
