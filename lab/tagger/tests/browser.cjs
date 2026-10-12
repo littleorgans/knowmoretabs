@@ -9,7 +9,7 @@ const [chrome, profile, url, name] = process.argv.slice(2);
 
 function launch() {
   const proc = spawn(chrome, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`, '--no-first-run',
-    '--no-default-browser-check', '--window-size=1280,900', 'about:blank'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
+    '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic', '--window-size=1280,900', 'about:blank'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
   const waiting = new Map(), errors = [];
   let id = 0, buffer = '', loaded = null;
   proc.stdio[4].on('data', (chunk) => {
