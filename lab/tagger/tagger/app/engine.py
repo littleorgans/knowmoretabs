@@ -291,6 +291,23 @@ def _ranks(scores: np.ndarray, eligible: np.ndarray) -> np.ndarray:
     return rank
 
 
+def _fused(lib: Library, q: np.ndarray, text: str, images: bool, among: np.ndarray) -> tuple[np.ndarray, dict, dict]:
+    """Reciprocal rank fusion over the rows `among` of EG2 cosine, keyword score and, with `images`, the image
+    cosine: the fused score (-inf outside `among`), each source's scores and its 1 based ranks (0: not ranked)."""
+    sources = {"text": (lib.X @ q, among)}
+    kw = np.asarray((lib.K @ lib.keywords.transform([text]).T).todense()).ravel()
+    sources["keyword"] = (kw, among & (kw > 0))
+    if images and lib.image is not None:
+        sources["image"] = (lib.image @ q, among & lib.has_image)
+    fused = np.zeros(len(lib.records))
+    ranks = {}
+    for name, (scores, eligible) in sources.items():
+        ranks[name] = _ranks(scores, eligible)
+        fused += np.where(ranks[name] > 0, 1 / (RRF_K + ranks[name]), 0)
+    fused[~among] = -np.inf
+    return fused, sources, ranks
+
+
 def search(
     lib: Library,
     q: np.ndarray,
@@ -304,17 +321,7 @@ def search(
     cosine, keyword score and, with `images`, the image cosine. Each hit carries every source's score and rank (0:
     the source did not rank it)."""
     among = lib.live if among is None else among
-    sources = {"text": (lib.X @ q, among)}
-    kw = np.asarray((lib.K @ lib.keywords.transform([text]).T).todense()).ravel()
-    sources["keyword"] = (kw, among & (kw > 0))
-    if images and lib.image is not None:
-        sources["image"] = (lib.image @ q, among & lib.has_image)
-    fused = np.zeros(len(lib.records))
-    ranks = {}
-    for name, (scores, eligible) in sources.items():
-        ranks[name] = _ranks(scores, eligible)
-        fused += np.where(ranks[name] > 0, 1 / (RRF_K + ranks[name]), 0)
-    fused[~among] = -np.inf
+    fused, sources, ranks = _fused(lib, q, text, images, among)
     top = np.argsort(-fused, kind="stable")[offset : min(offset + n, int(among.sum()))]
     return [
         {
@@ -324,6 +331,12 @@ def search(
         }
         for i in top
     ]
+
+
+def order(lib: Library, q: np.ndarray, text: str, among: np.ndarray) -> np.ndarray:
+    """Every row `among`, best first, as `search` ranks text and keywords; ties keep row order."""
+    fused, _, _ = _fused(lib, q, text, False, among)
+    return np.argsort(-fused, kind="stable")[: int(among.sum())]
 
 
 def suggest(lib: Library, rows: list[int], k: int = SUGGEST) -> list[dict]:
