@@ -306,13 +306,15 @@ fn a_service_that_is_not_running_is_unavailable() {
     // Keep an outgoing connection alive: its local port has no listener,
     // and ephemeral binds cannot allocate it to another test. Merely
     // binding without listening times out on macOS instead of refusing.
+    // Windows retries a refused loopback connect for about two seconds
+    // before it reports the refusal, so the check waits longer than that.
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let reserved = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
     let (_peer, _) = listener.accept().unwrap();
     let address = reserved.local_addr().unwrap();
     let port = address.port();
     assert_eq!(
-        TcpStream::connect_timeout(&address, Duration::from_secs(1))
+        TcpStream::connect_timeout(&address, Duration::from_secs(10))
             .unwrap_err()
             .kind(),
         std::io::ErrorKind::ConnectionRefused,

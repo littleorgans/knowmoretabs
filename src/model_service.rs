@@ -8,7 +8,7 @@
 //!      reaches the service, and a reply is used only when it names this
 //!      archive, frames cleanly within its bounds and is JSON.
 
-use std::io::{self, Write as _};
+use std::io::Write as _;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -44,7 +44,8 @@ pub struct ModelService {
 enum Failure {
     /// `serve` was started without `--model-port`.
     Off,
-    /// Nothing listening: not running, or still loading its model.
+    /// Nothing accepting the connection: not running, or still loading its
+    /// model.
     Refused,
     Timeout,
     /// A declared body over `RESPONSE_LIMIT`.
@@ -120,12 +121,11 @@ impl ModelService {
         let archive = archive_identity(root);
         let deadline = Instant::now() + FORWARD_TIMEOUT;
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, self.port));
-        let mut stream = TcpStream::connect_timeout(&address, FORWARD_TIMEOUT).map_err(|err| {
-            match err.kind() {
-                io::ErrorKind::TimedOut => Failure::Timeout,
-                _ => Failure::Refused,
-            }
-        })?;
+        // A loopback connect that does not complete is a service not
+        // accepting, whatever the error: Windows retries a refused connect
+        // for about two seconds, so this deadline can expire first.
+        let mut stream =
+            TcpStream::connect_timeout(&address, FORWARD_TIMEOUT).map_err(|_| Failure::Refused)?;
         let request = format!(
             "POST /{path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\n\
              Content-Length: {}\r\nConnection: close\r\n\r\n",
