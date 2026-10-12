@@ -113,12 +113,14 @@ repeated; Retry after Not indexed indexes the page in the lab only. Remove is `f
 Bookmarklet (Chrome's bookmarks bar):
 `javascript:void(window.open('http://127.0.0.1:41879/#add='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'kmt-tagger'))`.
 From the moment the box holds a web address the page's tile (a placeholder until the library lists the page) and its
-tag panel show (`static/panel.js`): Suggested and Recently used rows of one line each (Recently used empty for now), a box that
+tag panel show (`static/panel.js`): Suggested and Recently used rows of one line each, a box that
 filters the app tags or, on Enter with no match, makes one, and every app tag folded under "All N tags" in letter rows
 (`#` first, letters without tags hidden, case and accents folded) of same width cells. A cell is that page's tag, on or
 off; no stage, pick or write moves a cell. At Indexed, Suggested fills with the app tags the model would put on the
 page (`App.suggested`: `engine.prechecks`, those clearing their threshold, by confidence), less those picked, as many
-as its line holds, and stays put while the page is on screen. Tags picked before the page has a row show striped, go with the link when
+as its line holds, and stays put while the page is on screen. Recently used holds the app tags by last use, latest first, as many as its
+line fits: a use is the app putting the tag on a page, or an add the library records as the term's `used_at`; a name
+the library holds retired is left out, and a write moves its tag to the front. Tags picked before the page has a row show striped, go with the link when
 it is added and are written once Indexed gives it a row, as one change with one Undo; a newer link does not stop an
 older job writing its own. A Library refusal (forgotten, not a web page, a snapshot) clears them; Not indexed keeps
 them for Retry. They live in this tab: a reload before Indexed loses them. knowmoretabs is the only writer of the archive, so the app must run on the archive `add` should
