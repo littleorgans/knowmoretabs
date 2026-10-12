@@ -13,6 +13,7 @@ import threading
 import time
 import unittest
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -221,6 +222,58 @@ class StoreTagNameTests(Synthetic):
         self.assertEqual(
             ["Retired spelling"], app.apply({"rows": [2], "tag": "Retired spelling", "value": True})["pages"][0]["tags"]
         )
+
+
+class RecentTests(Synthetic):
+    """Recently used: the app tags by their latest use, in the app or as the library records it."""
+
+    def vocabulary(self, **terms: dict) -> None:
+        state = json.loads((self.root / "library.json").read_text())
+        for name, fields in terms.items():
+            state["vocabulary"][name].update(fields)
+        (self.root / "library.json").write_text(json.dumps(state))
+
+    @staticmethod
+    def at(seconds: float) -> dict:
+        return {"used_at": datetime.fromtimestamp(seconds, UTC).isoformat().replace("+00:00", "Z")}
+
+    def test_the_latest_use_on_either_side_orders_them_leaving_out_retired_unused_and_unknown(self):
+        self.vocabulary(
+            Coffee=self.at(3000),
+            Rust=self.at(1500),
+            Trains={**self.at(1000), "retired_at": "2026-10-08T00:00:00Z"},
+            Typography={"used_at": "2026-10-08T00:00:00"},  # no offset: not a time
+            Keyboards=self.at(9000),  # not an app tag
+        )
+        lib, _ = self.load()
+        store, key = Store(self.work / "app"), lambda i: lib.records[i]["key"]
+        store.add_tag("Made here")
+        for seconds, page, tag, value in (
+            (1000, 0, "Coffee", True),
+            (2000, 0, "Rust", True),
+            (1200, 0, "Typography", True),
+            (900, 1, "Recipes", True),
+            (2500, 0, "Recipes", True),
+            (2600, 0, "Recipes", False),  # taken off one page later: still used at 2500
+            (4000, 0, "Trains", True),
+        ):
+            with patch("time.time", return_value=seconds):
+                store.apply([key(page)], tag, value)
+        app = server.App(lib, store, fake_encode, fake_embed)
+        before = ["Coffee", "Recipes", "Rust", "Typography"]
+        self.assertEqual(before, app.library()["recent"])
+        self.assertIn("Made here", app.library()["app_tags"])
+        with patch("time.time", return_value=5000):
+            out = app.apply({"rows": [2], "tag": "Typography", "value": True})
+        self.assertEqual(["Typography", "Coffee", "Recipes", "Rust"], out["recent"], "a write moves its tag first")
+        self.assertEqual(before, app.undo({"batch": out["batch"]})["recent"], "an undone write was no use")
+
+    def test_a_sync_takes_the_uses_and_retirements_the_archive_holds_now(self):
+        lib, _ = self.load()
+        self.assertEqual(({}, set()), (lib.used, lib.retired))
+        self.vocabulary(Coffee=self.at(3000), Rust={"retired_at": "2026-10-08T00:00:00Z"})
+        lib = engine.sync(lib, Archive.load(self.root), [], fake_embed)
+        self.assertEqual(({"coffee": 3000.0}, {"rust"}), (lib.used, lib.retired))
 
 
 class PortTests(unittest.TestCase):

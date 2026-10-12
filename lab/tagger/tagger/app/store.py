@@ -175,6 +175,14 @@ class Store:
             keep((d["key"], d["tag"]), {"value": d["value"], "model": None, "session": None, "at": d["at"]})
         return latest
 
+    def used(self) -> dict[str, float]:
+        """Tag -> when a direct decision last put it on a page; an undone one never happened."""
+        used: dict[str, float] = {}
+        for d in self.state.get("direct", []):
+            if d["value"]:
+                used[d["tag"]] = max(d["at"], used.get(d["tag"], 0))
+        return used
+
     def app_tags(self) -> dict[str, list[str]]:
         """Page key -> the tags its latest decisions keep (made in the app, direct or reviewed), by name."""
         if self._app_tags is None:
