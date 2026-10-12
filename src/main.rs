@@ -43,6 +43,7 @@ mod github_page;
 mod guard;
 mod head;
 mod history;
+mod http;
 mod image_fetch;
 mod image_page;
 mod image_pick;
