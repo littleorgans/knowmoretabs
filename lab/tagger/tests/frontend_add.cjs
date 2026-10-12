@@ -344,6 +344,25 @@ async function addPicksFailure() {
   assert.deepEqual(f.applies(), [], 'and never sent again');
 }
 
+/* An Indexed payload captured before a Tag write answers cannot replace that write's confirmed tags. */
+async function addKeepsNewerTags() {
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/one';
+  K.know([addPage(7, url)]);
+  f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
+  await f.reply('api/add', f.job(1, url, STAGES.search));
+  const poll = await f.next('api/add/1');
+  const tagging = K.tagPage(7, ['Trains']);
+  await f.applied(7, ['Trains']);
+  await tagging;
+  await f.reply('api/library', { ...K.lib, forgotten: [] });
+  poll.resolve(f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url) }));
+  for (let i = 0; i < 4; i++) await turn();
+  assert.deepEqual(plain(K.pages.get(7).tags), ['Trains'], 'the library reply still owns the shown tags');
+  assert.equal(f.look('Trains'), 'on', 'Indexed keeps the acknowledged tag');
+  assert.deepEqual(f.applies(), [], 'held picks already acknowledged are never written again');
+  await f.reply('api/library', { ...K.lib, forgotten: [] });
+}
+
 /* a second link does not stop the first job: it writes the first page's picks to the first page's row only */
 async function addPicksBackground() {
   const f = addFixture(), { K, node } = f, one = 'https://added.example/one', two = 'https://added.example/two';
@@ -694,4 +713,4 @@ async function addPollFails() {
   assert.equal(K.lib, lib, 'no reload as if it had finished');
 }
 
-run({ addLibraryWrites, addPicksFailure, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true), addFollowUpStalePoll, addRestoreFollowsTheKey, addPollFails });
+run({ addKeepsNewerTags, addLibraryWrites, addPicksFailure, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true), addFollowUpStalePoll, addRestoreFollowsTheKey, addPollFails });

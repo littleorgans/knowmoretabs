@@ -110,6 +110,7 @@
   /* a job polls while drawn, and after that while it is its link's newest and picks wait for its row */
   async function start(url, ask = { action: "add" }, link = url) {
     const mine = ++asked;
+    const at = K.generation;   // Indexed is captured during this job; a later library reply keeps its tags
     latest.set(url, mine);
     latest.set(link, mine);   // a follow up supersedes the link's job too: that job's late poll drops none of its picks
     try {
@@ -123,7 +124,7 @@
         const drawn = mine === asked;
         if (drawn && link !== url && box.value.trim() === link) box.value = url;   // the box names the key: a forgotten link's Restore is not its draft
         link = url;   // a background follow up owns its picks too, even when it is never shown
-        if (drawn && (j.action !== "forget" || j.finished)) show(j);   // a Remove shows its outcome only
+        if (drawn && (j.action !== "forget" || j.finished)) show(j, at);   // a Remove shows its outcome only
         track(j, drawn);
         if (j.finished) return settle(j);
         await pause(POLL);
@@ -150,7 +151,7 @@
       if (!j.failed) K.toast(`Tags for ${K.short(j.url)} not added: the page is not indexed`);
     }
   }
-  function show(j) {
+  function show(j, at) {
     if (job && job.url !== j.url && job.key !== j.key) {   // another page: the last one's row and, once it is done, its picks go
       row = null;
       if (job.finished) track(job, false);
@@ -159,7 +160,7 @@
       K.gone.add(row);
       row = null;
     } else if (j.page && row === null) {   // indexed: the page is known as Indexed shows
-      row = K.know([j.page])[0];
+      row = K.know([j.page], true, at)[0];
       K.gone.delete(row);
     } else if (j.page) Object.assign(K.pages.get(row), { ...j.page, tags: K.pages.get(row).tags });   // its tags are this tab's
     if (j.page && suggested.url !== j.url) suggested = { url: j.url, tags: j.page.suggested.filter((t) => !waiting(j.url, t)) };

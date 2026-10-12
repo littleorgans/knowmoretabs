@@ -65,6 +65,7 @@ CASES = {
         "addRestoreFollowsTheKey",
         "addPollFails",
         "addPicksFailure",
+        "addKeepsNewerTags",
     ],
 }
 
