@@ -80,7 +80,7 @@ class App:
         """The app tags the page lacks that the model would put on it, best first: each whose score clears its
         threshold (`engine.prechecks`: a head's, or zero shot for a tag with too few positives or made here), by
         confidence; at most `engine.SUGGEST`."""
-        tags = [t for t in self.app_tags() if t not in held]
+        tags = [t for t in self.tag_lists()["app_tags"] if t not in held]
         checked = [s for s in engine.prechecks(self.lib, [row], tags)[0] if s["checked"]]
         return [s["tag"] for s in sorted(checked, key=lambda s: -s["p"])[: engine.SUGGEST]]
 
