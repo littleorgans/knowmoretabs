@@ -50,9 +50,15 @@ pub struct Server {
 
 impl Server {
     pub fn start(fx: &Fixture) -> Self {
+        Self::start_with(fx, &[])
+    }
+
+    /// With more `serve` arguments after the ephemeral port.
+    pub fn start_with(fx: &Fixture, args: &[&str]) -> Self {
         Self::from_child(
             fx.command()
                 .args(["serve", "--port", "0"])
+                .args(args)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()

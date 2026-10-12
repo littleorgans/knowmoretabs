@@ -3,7 +3,8 @@
 //! slice: triage, platforms, tags
 //! why: Routing over the archive: nine routes, one client, each answered
 //!      from the archive on disk and every write through the same locked
-//!      paths the commands use. It binds loopback only; the wire, its
+//!      paths the commands use, plus one prefix forwarded to the model
+//!      service (`model_service`). It binds loopback only; the wire, its
 //!      bounds and the Host and Origin checks are `http`'s. The image
 //!      route's name is checked where the images live
 //!      (`image_store::served`).
@@ -23,12 +24,15 @@ use crate::http::{
     self, BODY_LIMIT, Framing, HEAD_LIMIT, Head, IO_TIMEOUT, Response, Status, json_request,
 };
 use crate::library::{self, Shape};
+use crate::model_service::{self, ModelService};
 use crate::triage::{self, Action};
 use crate::{assets, export, image_store, library_history, out, suggestions, tags};
 
 pub struct Options {
     pub root: PathBuf,
     pub port: u16,
+    /// Where Library search is forwarded; `None` keeps it keyword only.
+    pub model_port: Option<u16>,
     pub open: bool,
     pub json: bool,
     pub log: Log,
@@ -47,6 +51,9 @@ pub fn run(options: &Options) -> Result<(), Error> {
             source,
         })?
         .port();
+    if options.model_port == Some(port) {
+        return Err(Error::ModelPort { port });
+    }
     // A damaged state file is refused here, at the terminal, rather than as
     // a 500 the page can only describe as "HTTP 500".
     library::State::read(&options.root)?;
@@ -74,6 +81,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
     let server = Arc::new(Server {
         root: options.root.clone(),
         port,
+        model: options.model_port.map(|port| ModelService { port }),
         log: options.log,
     });
     for stream in listener.incoming() {
@@ -136,6 +144,7 @@ fn open_browser(url: &str) -> io::Result<()> {
 struct Server {
     root: PathBuf,
     port: u16,
+    model: Option<ModelService>,
     log: Log,
 }
 
@@ -192,6 +201,9 @@ impl Server {
                     Ok(None) => Response::error(Status::NotFound, "no such image"),
                     Err(err) => self.failure(&err),
                 }
+            }
+            _ if path.starts_with(model_service::PREFIX) => {
+                model_service::forward(self.model.as_ref(), &self.root, head, path, body, self.log)
             }
             (_, "/" | "/index.html" | "/app.css" | "/app.js" | "/api/library") => {
                 Response::method_not_allowed("GET")

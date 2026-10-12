@@ -84,6 +84,48 @@ fn head_parses_a_browser_request_and_rejects_garbage() {
     }
 }
 
+/// A client takes a reply's status line as strictly as the server takes a
+/// request line, and its fields by the same rules.
+#[test]
+fn response_heads_parse_a_status_line_and_reject_garbage() {
+    let head = ResponseHead::parse(
+        b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nX-KMT-Archive: 1:2",
+    )
+    .unwrap();
+    assert_eq!(head.code, 200);
+    assert_eq!(head.fields.get("x-kmt-archive"), Some("1:2"));
+    for line in [
+        &b"HTTP/1.0 503 Service Unavailable"[..],
+        b"HTTP/1.1 400 ",
+        b"HTTP/1.1 502",
+    ] {
+        assert!(
+            ResponseHead::parse(line).is_some(),
+            "{}",
+            String::from_utf8_lossy(line)
+        );
+    }
+    for bad in [
+        &b"HTTP/2 200 OK"[..],
+        b"HTTP/1.1 20 OK",
+        b"HTTP/1.1 2000 OK",
+        b"HTTP/1.1 2x0 OK",
+        b"HTTP/1.1  200 OK",
+        b"HTTP/1.1 200 O\x07K",
+        b"200 OK",
+        b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 1",
+        b"HTTP/1.1 200 OK\r\nno colon",
+        b"\xff 200 OK",
+        b"",
+    ] {
+        assert!(
+            ResponseHead::parse(bad).is_none(),
+            "{}",
+            String::from_utf8_lossy(bad)
+        );
+    }
+}
+
 #[test]
 fn json_content_type_ignores_parameters_and_case() {
     assert!(is_json("application/json"));

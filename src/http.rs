@@ -77,22 +77,28 @@ pub(crate) fn respond(stream: &mut TcpStream, response: &Response) {
 
 /// Every POST body: JSON by its declared type, so a form post, which a page
 /// on another origin can send without a preflight, never reaches a handler.
+pub(crate) fn require_json(head: &Head) -> Result<(), Response> {
+    if head.header("content-type").is_some_and(is_json) {
+        Ok(())
+    } else {
+        Err(Response::error(
+            Status::UnsupportedMediaType,
+            "send application/json",
+        ))
+    }
+}
+
 pub(crate) fn json_request<T: DeserializeOwned>(
     head: &Head,
     body: &[u8],
     expected: &str,
 ) -> Result<T, Response> {
-    if !head.header("content-type").is_some_and(is_json) {
-        return Err(Response::error(
-            Status::UnsupportedMediaType,
-            "send application/json",
-        ));
-    }
+    require_json(head)?;
     serde_json::from_slice(body)
         .map_err(|err| Response::error(Status::BadRequest, &format!("expected {expected}: {err}")))
 }
 
-fn is_json(content_type: &str) -> bool {
+pub(crate) fn is_json(content_type: &str) -> bool {
     content_type
         .split(';')
         .next()
@@ -168,6 +174,34 @@ impl Head {
     }
 }
 
+/// A response's status line and fields, as a client reads them.
+pub(crate) struct ResponseHead {
+    pub(crate) code: u16,
+    pub(crate) fields: Fields,
+}
+
+impl ResponseHead {
+    /// `HTTP/1.0` or `HTTP/1.1`, a three digit code and any reason, then
+    /// fields by the same rules as a request's.
+    pub(crate) fn parse(text: &[u8]) -> Option<Self> {
+        let text = std::str::from_utf8(text).ok()?;
+        let mut lines = text.split("\r\n");
+        let (version, rest) = lines.next()?.split_once(' ')?;
+        let (code, reason) = rest.split_once(' ').unwrap_or((rest, ""));
+        if !matches!(version, "HTTP/1.0" | "HTTP/1.1")
+            || code.len() != 3
+            || !code.bytes().all(|b| b.is_ascii_digit())
+            || reason.bytes().any(|b| b.is_ascii_control() && b != b'\t')
+        {
+            return None;
+        }
+        Some(Self {
+            code: code.parse().ok()?,
+            fields: Fields::parse(lines)?,
+        })
+    }
+}
+
 /// The header fields after a request or status line: names lower-cased;
 /// values as sent, trimmed.
 pub(crate) struct Fields(Vec<(String, String)>);
@@ -232,9 +266,9 @@ fn read_before(stream: &mut TcpStream, buf: &mut [u8], deadline: Instant) -> io:
     }
 }
 
-struct DeadlineWriter<'a> {
-    stream: &'a mut TcpStream,
-    deadline: Instant,
+pub(crate) struct DeadlineWriter<'a> {
+    pub(crate) stream: &'a mut TcpStream,
+    pub(crate) deadline: Instant,
 }
 
 impl Write for DeadlineWriter<'_> {
@@ -354,6 +388,9 @@ pub(crate) enum Status {
     UnsupportedMediaType,
     RequestHeaderFieldsTooLarge,
     InternalServerError,
+    BadGateway,
+    ServiceUnavailable,
+    GatewayTimeout,
 }
 
 impl Status {
@@ -369,6 +406,9 @@ impl Status {
             Self::UnsupportedMediaType => 415,
             Self::RequestHeaderFieldsTooLarge => 431,
             Self::InternalServerError => 500,
+            Self::BadGateway => 502,
+            Self::ServiceUnavailable => 503,
+            Self::GatewayTimeout => 504,
         }
     }
 
@@ -384,6 +424,9 @@ impl Status {
             Self::UnsupportedMediaType => "Unsupported Media Type",
             Self::RequestHeaderFieldsTooLarge => "Request Header Fields Too Large",
             Self::InternalServerError => "Internal Server Error",
+            Self::BadGateway => "Bad Gateway",
+            Self::ServiceUnavailable => "Service Unavailable",
+            Self::GatewayTimeout => "Gateway Timeout",
         }
     }
 }
@@ -405,15 +448,23 @@ impl Response {
         }
     }
 
-    pub(crate) fn error(status: Status, message: &str) -> Self {
+    /// A JSON body with any status, such as one a checked service answered.
+    pub(crate) fn json(status: Status, body: Vec<u8>) -> Self {
         Self {
             status,
             content_type: "application/json",
-            body: serde_json::json!({ "error": message })
-                .to_string()
-                .into_bytes(),
+            body,
             allow: None,
         }
+    }
+
+    pub(crate) fn error(status: Status, message: &str) -> Self {
+        Self::json(
+            status,
+            serde_json::json!({ "error": message })
+                .to_string()
+                .into_bytes(),
+        )
     }
 
     pub(crate) fn method_not_allowed(allow: &'static str) -> Self {
