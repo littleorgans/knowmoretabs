@@ -446,4 +446,21 @@ async function addPicksStalePoll() {
   assert.deepEqual(f.applies(), []);
 }
 
-run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll });
+/* Moving to another draft leaves no Retry action for a finished unindexed page. */
+async function addPicksMoveOn() {
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/unindexed';
+  f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
+  await f.reply('/api/add', f.job(1, url, STAGES.added));
+  await f.reply('/api/add/1', f.job(1, url, done('not_indexed'), { finished: true }));
+  await f.reply('/api/library', { ...K.lib });
+  assert.equal(f.look('Trains'), 'pend');
+  f.type('https://added.example/next');
+  assert.match(K.toasted, /not added: the page is not indexed/, 'moving on reports the dropped picks immediately');
+  node('a-fold').click();
+  assert.equal(f.look('Trains'), 'off', 'the new draft starts with no picks');
+  f.type(url); node('a-fold').click();
+  assert.equal(f.look('Trains'), 'off', 'returning to the old address does not revive dropped picks');
+  assert.deepEqual(f.applies(), [], 'dropping a pending pick sends no write');
+}
+
+run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksMoveOn });
