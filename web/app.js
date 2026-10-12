@@ -528,9 +528,13 @@ const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(
 // in an export, the list is today's keyword search at once; the next query
 // asks again. Facets never ask: they reorder what the last reply ranked.
 let asked = 0, askTimer = 0;
-function ask() {
+function cancelAsk() {
   clearTimeout(askTimer);
-  const n = ++asked, q = S.q.trim();
+  S.rank = null;
+  return ++asked;
+}
+function ask() {
+  const n = cancelAsk(), q = S.q.trim();
   if (!q || !host.rank) return schedule();
   if (S.model === false) schedule();
   askTimer = setTimeout(async () => {
@@ -882,7 +886,7 @@ function route() {
   else if (view === 'snapshots') showView('snapshots');
   else { showView('pages'); if (a !== undefined && S.pages[a]?.n) reveal(+a); }
 }
-function clearFilters(status = '') { S.preview = false; S.tags = []; S.q = $('q').value = ''; S.domain = $('domain').value = ''; S.group = $('group').value = ''; setSeg('status', status); }
+function clearFilters(status = '') { cancelAsk(); S.preview = false; S.tags = []; S.q = $('q').value = ''; S.domain = $('domain').value = ''; S.group = $('group').value = ''; setSeg('status', status); }
 function reveal(i) {
   const p = S.pages[i];
   if (!S.shown.includes(p)) { clearFilters(p.forgotten ? 'forgotten' : ''); render(); }

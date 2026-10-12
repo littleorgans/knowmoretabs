@@ -78,6 +78,7 @@ function searchable(pages, { exported = false } = {}) {
   });
   vm.runInContext(renderer, context);
   vm.runInContext(`derive(library); DD.sort = { options: SORT_OPTIONS, set(o) { this.options = o; } };
+    DD.status = { options: [{ value: '', label: 'Everything' }] };
     var renders = []; render = () => { compute(); renders.push(S.shown.map((p) => p.title)); };`, context);
   const run = (code) => vm.runInContext(code, context);
   const flush = () => new Promise((resolve) => setImmediate(resolve));
@@ -186,6 +187,31 @@ test('a burst of typing asks once', () => {
   for (const q of ['n', 'ni', 'nig', 'nigh', 'night']) lib.type(q);
   lib.settle();
   assert.deepEqual(lib.requests.map((r) => r.query), ['night']);
+});
+
+test('reset cancels a query still waiting for the debounce', () => {
+  const lib = searchable([page(0)]);
+  lib.type('night');
+  lib.run('clearFilters(); render();');
+  lib.settle();
+  assert.equal(lib.requests.length, 0);
+  assert.deepEqual(lib.shown(), ['Page 0']);
+});
+
+test('reset drops a reply already in flight, including a failed reply', async () => {
+  for (const ok of [true, false]) {
+    const pages = [page(0), page(1)];
+    const lib = searchable(pages);
+    lib.type('night');
+    lib.settle();
+    lib.run('clearFilters(); render();');
+    const renders = lib.renders();
+    await lib.answer(0, ok ? { keys: urls(pages).reverse() } : { error: 'busy' }, ok);
+    assert.equal(lib.renders(), renders, 'reset made the reply stale');
+    assert.equal(lib.run('S.model'), null);
+    assert.equal(lib.run('S.rank'), null);
+    assert.equal(lib.run('S.sort'), 'last');
+  }
 });
 
 test('a date sort reorders the ranked pages in date bands, and an explicit sort stays', async () => {
