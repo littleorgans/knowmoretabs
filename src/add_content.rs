@@ -210,10 +210,15 @@ impl Follow {
             }
             _ => format!("image {status}"),
         };
-        self.tell(
-            &json!({"stage": "image", "state": "done", "status": status}),
-            &text,
-        );
+        let mut done = json!({"stage": "image", "state": "done", "status": status});
+        // A failure says why, so the screen can say it in place of a bare
+        // "Error".
+        if let (Some(reason), image_store::Status::Error | image_store::Status::Unavailable) =
+            (&line.reason, line.status)
+        {
+            done["reason"] = reason.as_str().into();
+        }
+        self.tell(&done, &text);
         self.seen().image = Some(status.to_owned());
     }
 }
