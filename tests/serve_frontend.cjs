@@ -255,10 +255,11 @@ test('an export never asks the model', () => {
 // ---- The drawer's Content tab -----------------------------------------------
 // The renderer over one synthetic page, served or exported, with `document`
 // just deep enough for the top of the script.
-function drawer({ exported = false } = {}) {
+function drawer({ exported = false, fetch, nodes = {} } = {}) {
   const context = vm.createContext({
+    fetch,
     document: {
-      getElementById: (id) => (id === 'library-data' ? (exported ? { textContent: '{}' } : null) : null),
+      getElementById: (id) => (id === 'library-data' ? (exported ? { textContent: '{}' } : null) : nodes[id] || null),
       documentElement: { style: { setProperty() {} } },
     },
     IntersectionObserver: class {},
@@ -308,4 +309,22 @@ test('the Content tab of a page never fetched, or fetched with no text, says so'
   assert.match(blocked, /No text kept/);
   assert.doesNotMatch(blocked, /Copy text|words/);
   assert.match(run('contentHTML({ error: "HTTP 500" })'), /Could not load the content: HTTP 500/);
+});
+
+test('a reopened Content tab keeps the newest reply when an earlier request settles last', async () => {
+  for (const lateError of [false, true]) {
+    const requests = [];
+    const pane = { innerHTML: 'Loading…' };
+    const run = drawer({ fetch: () => new Promise((resolve) => requests.push(resolve)),
+      nodes: { list: { querySelector: () => ({ querySelector: () => pane }) } } });
+    const earlier = run('loadContent(0)');
+    const latest = run('loadContent(0)');
+    requests[1]({ ok: true, json: async () => ({ content: fetched, text: 'Newest text' }) });
+    await latest;
+    requests[0]({ ok: !lateError, json: async () => lateError ? { error: 'late failure' } : { content: fetched, text: 'Earlier text' } });
+    await earlier;
+    assert.equal(run('S.content.get(0).text'), 'Newest text');
+    assert.match(pane.innerHTML, /Newest text/);
+    assert.doesNotMatch(pane.innerHTML, /Earlier text|late failure/);
+  }
 });

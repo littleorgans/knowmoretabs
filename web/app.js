@@ -647,8 +647,9 @@ function showTab(i, name, focus = false) {
 // Read again each time the tab shows, as a capture may have run since; the
 // pane is repainted only when the answer changed, so focus and scroll stay.
 async function loadContent(i) {
-  const was = S.content.get(i);
-  let got; try { got = await host.content(S.pages[i].url); } catch (e) { got = { error: e.message }; }
+  const p = S.pages[i], request = p.contentRequest = {}, was = S.content.get(i);
+  let got; try { got = await host.content(p.url); } catch (e) { got = { error: e.message }; }
+  if (S.pages[i] !== p || p.contentRequest !== request) return;   // a reopened tab has a newer request
   if (got.error && was && !was.error) return;   // keep what was read before
   S.content.set(i, got);
   const pane = rowOf(i)?.querySelector('[data-pane="content"]');
