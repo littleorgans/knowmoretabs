@@ -115,6 +115,10 @@ repeated; Retry after Not indexed indexes the page in the lab only. Remove is `f
 Bookmarklet (Chrome's bookmarks bar):
 `javascript:void(window.open('http://127.0.0.1:41878/#add='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'kmt-tagger'))`
 (the Library hands the fragment, whole, to Add link).
+Toolbar button (`extension/`, Chrome): in `chrome://extensions` turn on Developer mode, then Load unpacked and pick
+the `extension` folder. A click opens the Library tab already open on port 41878, else a new one, at Add link with the
+tab's address and title filled in; a page that is not on the web (`chrome://`, `file://`) opens Add link empty. It asks
+for `activeTab`, to read the clicked tab, and for `http://127.0.0.1:41878/*`, to find the Library tab, nothing else.
 From the moment the box holds a web address the page's tile (a placeholder until the library lists the page) and its
 tag panel show (`static/panel.js`): Suggested and Recently used rows of one line each, a box that
 filters the app tags or, on Enter with no match, makes one, and every app tag folded under "All N tags" in letter rows

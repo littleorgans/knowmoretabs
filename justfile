@@ -13,7 +13,7 @@ check:
 
 test:
     cargo test --workspace --all-targets --locked
-    node --test tests/serve_frontend.cjs
+    node --test tests/serve_frontend.cjs tests/extension.cjs
     uv run --locked --project lab/tagger pytest -q lab/tagger/tests
 
 install:

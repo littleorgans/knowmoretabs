@@ -172,7 +172,8 @@ jobs:
 
   # The page derives what it shows from the library document, and Cargo
   # cannot run JavaScript. Node comes with the pinned image, so this needs
-  # no toolchain and no third-party action; the test uses Node's own runner.
+  # no toolchain and no third-party action; the tests use Node's own runner.
+  # The toolbar extension's link building runs here too.
   frontend:
     name: frontend
     runs-on: ubuntu-24.04
@@ -180,5 +181,5 @@ jobs:
     steps:
       - name: Check out
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-      - name: Test the renderer
-        run: node --test tests/serve_frontend.cjs
+      - name: Test the renderer and the extension
+        run: node --test tests/serve_frontend.cjs tests/extension.cjs
