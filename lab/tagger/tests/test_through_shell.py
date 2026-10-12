@@ -11,6 +11,7 @@ import unittest
 from pathlib import Path
 
 import shell
+import synthetic_archive
 from test_app import Fixture, fake_embed, fake_encode
 
 from tagger.app import server
@@ -81,6 +82,28 @@ class ThroughShellTests(Fixture):
             ("GET", "/model/api/library", None, {"Host": "attacker.example"}, 403),
         ):
             self.assertEqual(status, self.shell.call(method, path, body, headers)[0], path)
+
+    def test_malformed_vocabulary_is_refused_by_both_readers(self):
+        root = self.app.lib.root
+        good = json.loads((root / "library.json").read_text())
+        shown = self.app.lib
+        for field, value in (
+            ("created_at", "not a time"),
+            ("created_at", "2026-10-01T00:00:00"),
+            ("retired_at", "not a time"),
+            ("retired_at", "2026-10-01T00:00:00"),
+            ("definition", 7),
+        ):
+            with self.subTest(field=field, value=value):
+                damaged = json.loads(json.dumps(good))
+                damaged["vocabulary"]["Coffee"][field] = value
+                synthetic_archive.write_state(root, damaged)
+                self.assertEqual(500, self.shell.call("GET", "/api/library")[0], "Rust refuses the state")
+                self.assertEqual(503, self.shell.call("GET", "/model/api/library")[0], "the service refuses it too")
+                self.assertIs(shown, self.app.lib, "a failed read never publishes a projection")
+        synthetic_archive.write_state(root, good)
+        self.assertEqual(200, self.shell.call("GET", "/api/library")[0])
+        self.assertEqual(200, self.shell.call("GET", "/model/api/library")[0], "a later valid replacement recovers")
 
     def test_when_the_app_stops_tag_and_add_link_say_so_and_the_library_goes_on(self):
         self.shell.stop_service()

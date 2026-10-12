@@ -141,7 +141,12 @@ class LibraryState:
             raise Unreadable("vocabulary is not a map of terms")
         active, retired, used = {}, {}, {}
         for name, term in vocabulary.items():
-            if not isinstance(term.get("created_at"), str) or not isinstance(term.get("retired_at"), str | None):
+            if (
+                instant(term.get("created_at")) is None
+                or term.get("retired_at") is not None
+                and instant(term["retired_at"]) is None
+                or not isinstance(term.get("definition"), str | None)
+            ):
                 raise Unreadable(f"vocabulary term {name!r} is malformed")
             if term.get("retired_at") is not None:
                 retired[name.lower()] = name
