@@ -1,5 +1,7 @@
 /* knowmoretabs · tagger app · the views
    Search, then click pages to select them (space or x on the focused one).
+   An empty search box lists every page, newest first: clearing it or
+   searching for nothing goes back to that list.
    Over a tile's picture: Forget (f), Open (o) and Pin (p); none of them
    selects. A chip's × takes that tag off that page only. Four views share
    the grid: the search's results, ≈ (pages like a tag's without that tag),
@@ -93,9 +95,8 @@
   }
   async function run(offset = 0, scroll = 0) {
     const q = K.$("s-q").value;
-    if (!q.trim()) { K.$("s-q").focus(); return Promise.resolve(false); }
     searched = true;
-    Object.assign(S, { query: q, images: K.$("s-img").checked, untagged: K.$("s-untag").checked, offset, scroll });
+    Object.assign(S, { query: q.trim() ? q : "", images: K.$("s-img").checked, untagged: K.$("s-untag").checked, offset, scroll });
     K.save();
     over = null;  // a new search replaces the view over the old one
     base = blank("search");
@@ -159,15 +160,17 @@
     if (v.kind === "selection") return `Your selection · ${K.plural(n, "page")}`;
     if (v.kind === "pinned") return `Pinned · ${K.plural(n, "page")}`;
     if (v.loading) return "Searching…";
-    if (S.query) return `${n ? range(v, rows) : K.plural(0, "result")} for “${K.esc(K.short(S.query))}”${S.untagged ? " · untagged only" : ""}`;
-    return K.lib ? `${K.lib.pages} pages in your library` : "";
+    const untagged = S.untagged ? " · untagged only" : "";
+    if (S.query) return `${n ? range(v, rows) : K.plural(0, "result")} for “${K.esc(K.short(S.query))}”${untagged}`;
+    if (!searched) return K.lib ? `${K.lib.pages} pages in your library` : "";   // until the startup list comes
+    return `${n ? range(v, rows) : K.plural(0, "page")} in your library · newest first${untagged}`;
   }
   function empty(v) {
     if (v.loading) return "";
     if (v.kind === "like") return `No pages like ${v.tag} without that tag are left.`;
     if (v.kind === "selection") return "Nothing selected.";
     if (v.kind === "pinned") return "Nothing pinned.";
-    return S.query ? `Nothing found${S.untagged ? " among untagged pages" : ""}.` : "";
+    return S.query ? `Nothing found${S.untagged ? " among untagged pages" : ""}.` : S.untagged ? "Every page is tagged." : "";
   }
 
   K.views = {
@@ -195,12 +198,12 @@
     go,
     async refresh(row) {
       const v = view();
-      if (listed(v) || (!v.loading && v.rows.includes(row)) || !S.query) return;
+      if (listed(v) || (!v.loading && v.rows.includes(row)) || !searched) return;
       const scroll = scrollY;
       if (await fetchPage(v, v.offset) && v === view()) { scrollTo(0, scroll); remember(); }
     },
     restore() {   // the form is empty after a reload: fill it from the saved search
-      if (!S.query || searched) return Promise.resolve();
+      if (searched) return Promise.resolve();
       K.$("s-q").value = S.query;
       K.$("s-img").checked = S.images;
       K.$("s-untag").checked = !!S.untagged;
@@ -233,7 +236,8 @@
   };
 
   K.$("s-form").addEventListener("submit", (e) => { e.preventDefault(); run(); K.$("s-q").blur(); });
-  K.$("s-untag").addEventListener("change", () => { if (K.$("s-q").value.trim()) run(); });
+  K.$("s-q").addEventListener("input", () => { if (!K.$("s-q").value && S.query) run(); });   // cleared: every page again
+  K.$("s-untag").addEventListener("change", () => run());
   K.$("s-img").addEventListener("change", () => {
     if (over && over.kind === "like") { S.images = K.$("s-img").checked; K.save(); fetchPage(over, 0); }
     else if (K.$("s-q").value.trim()) run();

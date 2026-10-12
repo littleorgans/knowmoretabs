@@ -76,6 +76,7 @@ def record(archive: Archive, url: str) -> dict:
         "tags": tags,
         "labelled": bool(tags),
         "forgotten": url in archive.forgotten,
+        "added": archive.added.get(url),
         "text_ok": url in archive.text_ok,
         "content_path": str(archive.text_ok[url]) if url in archive.text_ok else None,
         "image_ok": url in archive.image_ok,

@@ -1,6 +1,7 @@
 """The app on the synthetic archive with a fake encoder (no model): load, search fusion, prechecks, the store's
 persistence and export, and the HTTP guards and flow."""
 
+import dataclasses
 import http.client
 import json
 import os
@@ -544,11 +545,29 @@ class ServerTests(Served):
         status, body, r = self.call("GET", f"/img/{self.app.page(shown)['image']}")
         self.assertEqual((200, "image/jpeg"), (status, r.getheader("Content-Type")))
 
+    def test_an_empty_search_lists_every_page_newest_first(self):
+        n = len(self.lib.records)
+        times = [None if i == 3 else float((i * 7) % n) for i in range(n)]  # one page without a time
+        self.app.lib = dataclasses.replace(
+            self.lib, records=[{**r, "added": t} for r, t in zip(self.lib.records, times, strict=True)]
+        )
+        live = np.flatnonzero(self.app.live())
+        expected = sorted(live, key=lambda i: (times[i] is None, -(times[i] or 0), i))
+        first = self.call("POST", "/api/search", {"query": " ", "n": 20})[1]
+        second = self.call("POST", "/api/search", {"query": "", "n": 20, "offset": 20})[1]
+        self.assertEqual((0, 20, len(live)), (first["offset"], second["offset"], first["total"]))
+        self.assertEqual(expected[:40], [h["row"] for h in first["hits"] + second["hits"]])
+        self.assertEqual(3, expected[-1], "a page without a time comes last")
+        tagged = int(expected[0])
+        self.app.store.apply([self.lib.records[tagged]["key"]], "Trains", True)
+        untagged = self.call("POST", "/api/search", {"query": "", "n": 50, "untagged": True})[1]
+        self.assertEqual(len(live) - 1, untagged["total"])
+        self.assertNotIn(tagged, [h["row"] for h in untagged["hits"]])
+
     def test_search_pick_review_export(self):
         status, found, _ = self.call("POST", "/api/search", {"query": "night train", "n": 20})
         self.assertEqual(200, status)
         self.assertEqual(20, len(found["hits"]))
-        self.assertEqual(400, self.call("POST", "/api/search", {"query": " "})[0])
         rows = [h["row"] for h in found["hits"]]
         self.assertEqual(400, self.call("POST", "/api/sessions", {"rows": rows, "picked": ["Nope"]})[0])
         status, s, _ = self.call("POST", "/api/sessions", {"query": "night train", "rows": rows, "picked": ["Trains"]})

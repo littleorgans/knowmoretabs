@@ -346,6 +346,14 @@ def order(lib: Library, q: np.ndarray, text: str, among: np.ndarray) -> np.ndarr
     return np.argsort(-fused, kind="stable")[: int(among.sum())]
 
 
+def newest(lib: Library, among: np.ndarray) -> np.ndarray:
+    """Every row `among`, the latest to enter the library first (`Archive.added`), then those without a time;
+    ties keep row order."""
+    added = np.array([-np.inf if r["added"] is None else r["added"] for r in lib.records])
+    rows = np.flatnonzero(among)
+    return rows[np.argsort(-added[rows], kind="stable")]
+
+
 def suggest(lib: Library, rows: list[int], k: int = SUGGEST) -> list[dict]:
     """Tags ranked by the mean, over the result pages, of the supervised score's z against the library."""
     z = (lib.S[rows] - lib.S.mean(axis=0)) / lib.spread

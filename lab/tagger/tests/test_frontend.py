@@ -57,6 +57,8 @@ CASES = {
         "likeNaming",
         "pages",
         "restorePage",
+        "clearShowsAll",
+        "emptySearchShowsAll",
         "likeBackToPage",
         "likeWaitsForTag",
         "backDuringPage",

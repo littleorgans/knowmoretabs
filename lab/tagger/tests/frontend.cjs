@@ -1063,6 +1063,44 @@ async function pages() {
   assert.equal(K.state.search.offset, 0, 'a reload comes back to this page');
 }
 
+/* Clearing the search box lists every page, newest first, and pages through them as a search does. */
+async function clearShowsAll() {
+  const { K, node, requests, click, settle, shown } = await screenFixture();
+  click(2); await settle();
+  node('s-q').value = '';
+  node('s-q').input();
+  await turn();
+  assert.deepEqual(requests[0].body, { query: '', untagged: false, offset: 0, n: 50, images: false }, 'cleared: every page');
+  requests.shift().resolve({ hits: rows(1, 50), offset: 0, total: 120 });
+  await turn(); await turn();
+  assert.deepEqual(shown(), rows(1, 50).map((p) => p.row));
+  assert.match(node('v-pos').innerHTML, /^<b>1 to 50<\/b> of 120 in your library · newest first$/, 'the heading names no query');
+  assert.equal(node('next').disabled, false);
+  node('next').click();
+  await turn();
+  assert.deepEqual(requests[0].body, { query: '', untagged: false, offset: 50, n: 50, images: false });
+  requests.shift().resolve({ hits: rows(51, 100), offset: 50, total: 120 });
+  await turn(); await turn();
+  assert.match(node('v-pos').innerHTML, /^<b>51 to 100<\/b> of 120 in your library · newest first$/);
+  assert.deepEqual(plain(K.sel), [2], 'the selection stays');
+  node('s-q').input();
+  assert.equal(requests.length, 0, 'clearing an empty box asks again for nothing');
+}
+
+/* Searching for nothing, or only spaces, lists every page too. */
+async function emptySearchShowsAll() {
+  const { K, node, requests } = await screenFixture();
+  node('s-q').value = '  ';
+  node('s-q').blur = () => {};
+  node('s-form').submit({ preventDefault() {} });
+  await turn();
+  assert.deepEqual(requests[0].body, { query: '', untagged: false, offset: 0, n: 50, images: false });
+  requests.shift().resolve({ hits: [page(4), page(5)], offset: 0, total: 2 });
+  await turn(); await turn();
+  assert.equal(K.state.search.query, '');
+  assert.match(node('v-pos').innerHTML, /^<b>1 to 2<\/b> of 2 in your library · newest first$/);
+}
+
 async function restorePage() {
   const requests = [];
   const { K, node } = setup('pages.js', 'views.js', 'strip.js');
@@ -1257,4 +1295,4 @@ async function startupListsKeepChanges() {
   }
 }
 
-run({ tagRecent, tagPagePartialToast, tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });
+run({ clearShowsAll, emptySearchShowsAll, tagRecent, tagPagePartialToast, tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });

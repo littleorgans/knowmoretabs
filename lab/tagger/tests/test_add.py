@@ -98,6 +98,15 @@ class IntakeFoldTests(Synthetic):
         self.assertEqual(sorted({*before.known, NEW, "https://added.example/two"}), after.known)
         self.assertEqual(("One note", "Two"), (after.titles[NEW], after.titles["https://added.example/two"]))
 
+    def test_a_page_entered_the_library_at_its_first_sighting(self):
+        seen = Archive.load(self.root).known[0]
+        log = self.root / "pages/added.jsonl"
+        fake_knowmoretabs.append(log, {"schema_version": 1, "url": NEW, "added_at": "2026-10-08T10:00:00Z"})
+        fake_knowmoretabs.append(log, {"schema_version": 1, "url": seen, "added_at": "2026-10-08T10:01:00Z"})
+        archive = Archive.load(self.root)
+        self.assertEqual(datetime(2026, 10, 8, 10, tzinfo=UTC).timestamp(), archive.added[NEW])
+        self.assertEqual(datetime(2026, 10, 1, tzinfo=UTC).timestamp(), archive.added[seen], "its snapshot, earlier")
+
     def test_a_later_line_without_a_title_wins(self):
         log = self.root / "pages/added.jsonl"
         fake_knowmoretabs.append(
