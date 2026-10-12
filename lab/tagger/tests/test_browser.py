@@ -41,7 +41,8 @@ class Browser:
         self.addCleanup(self.server.shutdown)
         return app
 
-    def run_case(self, case: str, fragment: str = "") -> None:
+    def run_case(self, case: str, fragment: str = "") -> str:
+        """Run the case; what it returns, as JSON (empty when it returns nothing)."""
         url = f"http://127.0.0.1:{self.server.server_address[1]}/{fragment}"
         with tempfile.TemporaryDirectory() as profile:
             script = str(Path(__file__).with_name("browser.cjs"))
@@ -49,6 +50,7 @@ class Browser:
                 ["node", script, chrome(), profile, url, case], capture_output=True, text=True, timeout=60
             )
         self.assertEqual(0, result.returncode, result.stderr)
+        return result.stdout
 
 
 class BrowserTests(Browser, Fixture):
@@ -129,6 +131,16 @@ class AddBrowserTests(Browser, Synthetic):
     def test_a_link_is_added_tagged_and_found(self):
         self.paced(0.3)
         self.run_case("addFlow", "#add")
+
+    def test_cells_hold_their_place_from_link_to_index(self):
+        self.paced(0.3)
+        for name in ("Airships", "Archive", "Atlas", "Canals", "Coffee", "Docs", "Éclair", "Ferries", "iOS", "Maps"):
+            self.app.tag({"name": name})
+        self.app.tag({"name": "An invented tag name cut in its cell"})
+        self.app.tag({"name": "3D printing"})
+        measured = json.loads(self.run_case("addStable", "#add"))
+        print("addStable", json.dumps(measured))
+        self.assertIn(measured["tag"], self.app.store.app_tags()["https://added.example/notes/stable"], "the pick reached the server")
 
     def test_a_deep_link_fills_the_box_and_waits_for_enter(self):
         runs = self.logged()

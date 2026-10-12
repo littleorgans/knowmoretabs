@@ -405,6 +405,48 @@ const cases = {
     check(tiles()[0].querySelector('.ht').textContent === 'An invented page on zeppelin timetables', 'the added page is searchable');
     check(tiles()[0].querySelector('[data-untag="Sleeper cars"]'), 'with its tag');
   },
+  /* every tag cell holds its place from the link typed to the pick written: sampled each frame through Add, Library,
+     Content (a pick while it runs), Image, Search, Indexed, the write and its reply, then the reserved rows filled */
+  addStable: async ({ $, until, check }) => {
+    const K = window.KMT, seg = (k) => $(`#a-${k} .val`).textContent;
+    await K.ready;
+    const url = 'https://added.example/notes/stable';
+    $('#a-link').value = url;
+    $('#a-link').dispatchEvent(new Event('input'));
+    for (const a of document.getAnimations()) if (a.effect.getTiming().iterations !== Infinity) await a.finished;
+    if ($('#a-fold')) $('#a-fold').click();
+    const cells = [...document.querySelectorAll('#add-screen [data-tag]')];
+    check(cells.length >= 10, `the tag cells are there before Add (${cells.length})`);
+    const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
+    const first = cells.map(box);
+    const drift = () => Math.max(...cells.map((el, i) => (el.isConnected ? Math.max(...box(el).map((v, j) => Math.abs(v - first[i][j]))) : Infinity)));
+    const seen = {}, out = { cells: cells.length, frames: 0, max: 0, columns: new Set(first.map(([x]) => Math.round(x))).size };
+    let sampling = true;
+    const frame = () => {
+      out.frames++;
+      out.max = Math.max(out.max, drift());
+      const at = ['library', 'content', 'image', 'search'].map(seg).join(' | ');
+      seen[at] = (seen[at] || 0) + 1;
+      if (sampling) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+    $('#a-form').requestSubmit();
+    await until(() => $('#a-content').dataset.k === 'run', 'Content running');
+    const tag = cells[1].dataset.tag;
+    (cells[1].matches('button') ? cells[1] : cells[1].querySelector('button')).click();
+    await until(() => seg('search') === 'Indexed', 'Indexed');
+    await until(() => $(`#a-tile [data-untag="${tag}"]`), 'the pick on the tile');
+    await K.writes;
+    for (let i = 0; i < 10; i++) await new Promise((r) => requestAnimationFrame(r));
+    sampling = false;
+    K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: K.lib.app_tags.slice(0, 6), recent: K.lib.app_tags.slice(6, 12) });
+    out.filled = drift();
+    out.phases = Object.keys(seen);
+    K.changed();
+    check(out.max <= 0.5 && out.filled <= 0.5, `cells moved: ${JSON.stringify(out)}`);
+    check(['Adding', 'Added', 'Web', 'Ok · Web', 'Fetching', 'Indexed'].every((v) => out.phases.some((p) => p.includes(v))), `every stage sampled: ${out.phases.join(' / ')}`);
+    return { ...out, tag };
+  },
   /* #add=<link> fills the box and focuses Add, which waits; a later fragment refills it */
   addDeepLink: async ({ $, until, check }) => {
     const first = 'https://added.example/a b?x=1&y=é';
@@ -626,6 +668,7 @@ async function main() {
     const expression = `(${run})((${inPage})())`;
     const out = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }, sessionId);
     if (out.exceptionDetails) throw new Error(`${out.exceptionDetails.exception?.description || out.exceptionDetails.text}\n${errors.join('\n')}`);
+    if (out.result && out.result.value !== undefined) process.stdout.write(JSON.stringify(out.result.value) + '\n');   // a case's measurements
     if (afterReload[name]) {
       const reloaded = load();
       await send('Page.reload', {}, sessionId);
