@@ -8,7 +8,7 @@ use std::net::{Shutdown, TcpStream};
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use super::{Fixture, write_snapshot};
 
@@ -39,6 +39,39 @@ pub fn archive(fx: &Fixture) {
         format!(r#"{{"schema_version":1,"forgotten":["{HIDDEN}"]}}"#),
     )
     .unwrap();
+}
+
+/// The name a page's text and image are kept under, and its image served
+/// by: the hex SHA-256 of its URL.
+pub fn kept_name(url: &str) -> String {
+    use sha2::{Digest, Sha256};
+    format!("{:x}", Sha256::digest(url.as_bytes()))
+}
+
+/// Appends `line` to the log `pages/<log>`.
+pub fn append_line(fx: &Fixture, log: &str, line: &Value) {
+    let pages = fx.root.join("pages");
+    fs::create_dir_all(&pages).unwrap();
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(pages.join(log))
+        .unwrap();
+    writeln!(file, "{line}").unwrap();
+}
+
+/// Appends an image line for `url` and, given bytes, writes its file.
+pub fn kept_image(fx: &Fixture, url: &str, status: &str, jpeg: Option<&[u8]>) {
+    let images = fx.root.join("pages").join("images");
+    fs::create_dir_all(&images).unwrap();
+    append_line(
+        fx,
+        "images.jsonl",
+        &json!({"schema_version": 1, "url": url, "attempted_at": "2026-10-07T09:00:00Z", "status": status}),
+    );
+    if let Some(jpeg) = jpeg {
+        fs::write(images.join(format!("{}.jpg", kept_name(url))), jpeg).unwrap();
+    }
 }
 
 /// The binary serving on an ephemeral port, killed on drop.

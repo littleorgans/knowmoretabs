@@ -31,6 +31,7 @@ mod content_signed_in;
 mod content_store;
 #[cfg(test)]
 mod content_test;
+mod content_view;
 mod doctor;
 mod enrich;
 mod error;
