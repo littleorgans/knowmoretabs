@@ -248,7 +248,7 @@ const STAGES = {
     search: ev('search', 'running') },
 };
 const done = (value) => ({ ...STAGES.search, search: ev('search', 'done', { value }) });
-const addPage = (row, url, tags = [], suggested = []) => ({ row, title: `Page ${row}`, host: 'added.example', url, image: null, own: [], tags, suggested });
+const addPage = (row, url, tags = [], suggested = []) => ({ row, title: `Page ${row}`, host: 'added.example', url, image: null, tags, suggested });
 
 function addFixture() {
   const f = setup({ lit, lib: { app_tags: ['Coffee', 'Night trains', 'Trains'], tags: [] }, views: { chip: (t) => `<li class="tag">${t}</li>` } },
@@ -275,24 +275,28 @@ function addFixture() {
   f.submit = () => node('a-form').submit({ preventDefault() {} });
   f.click = (tag) => node('a-panel').click({ target: { closest: (s) => (s === 'button[data-tag]' ? { dataset: { tag } } : null) } });
   f.look = (tag) => (node('a-rows').innerHTML.match(new RegExp(`data-tag="${tag}" data-k="(\\w+)"`)) || [])[1];
-  f.applies = () => requests.filter((r) => r.route === 'api/apply').map((r) => r.body);
+  f.applies = () => requests.filter((r) => r.route === '/api/tags' && !r.body.undo).map((r) => r.body);
   f.filter = (text) => { node('a-tag').value = text; node('a-tag').input(); node('a-filter').submit({ preventDefault() {} }); };
-  let batch = 0;
-  f.applied = async (row, tags) => {   // the server takes each apply in turn
-    const out = [];
-    for (const tag of tags) {
-      const r = await f.next('api/apply');
-      out.push(r.body);
-      r.resolve({ pages: [{ row, tags: K.pages.get(row).tags }], changed: 1, batch: ++batch, app_tags: K.lib.app_tags });
-      await turn(); await turn();
-    }
-    return out;
+  /* the library's answer to a write on one page: the tags it holds afterwards and the record that undoes the write */
+  const answer = (key, tags, undo) => ({ undo: { tags: undo, vocabulary: {} }, urls: [key], tags: { [key]: tags },
+    vocabulary: K.lib.app_tags.map((name) => ({ name })), counts: { changed: 1, unchanged: 0, unknown: 0 } });
+  f.applied = async (row, tags) => {   // the library takes the next tag write, for this row's page
+    const r = await f.next('/api/tags'), key = K.pages.get(row).url;
+    r.resolve(answer(key, [...new Set([...K.pages.get(row).tags, ...tags])].sort(), tags.map((name) => ({ url: key, name, add: false, remove: false }))));
+    await turn(); await turn();
+    return r.body;
+  };
+  f.undone = async (row, tags) => {   // the library takes the next Undo; the page holds `tags` afterwards
+    const r = await f.next('/api/tags'), key = K.pages.get(row).url;
+    r.resolve(answer(key, tags, r.body.undo.tags.map((d) => ({ ...d, add: true }))));
+    for (let i = 0; i < 4; i++) await turn();
+    return r.body;
   };
   return f;
 }
 
-/* picks on a link before Add travel with it; none is written before the page has a row, then one change: an apply a
-   tag for that row, one toast, and its Undo retracts every batch */
+/* picks on a link before Add travel with it; none is written before the page has a row, then one library write for
+   the key Indexed names, one toast, and its Undo sends that write's record back */
 async function addPicksHeld() {
   const f = addFixture(), { K, node, requests } = f, url = 'https://added.example/one';
   f.type(url);
@@ -314,19 +318,30 @@ async function addPicksHeld() {
   }
   assert.equal(node('a-link').value, '', 'listed: the box is ready for the next link');
   await f.reply('api/add/1', f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url) }));
-  assert.deepEqual([f.look('Trains'), f.look('Coffee')], ['on', 'on'], 'Indexed: on at once');
-  assert.deepEqual(await f.applied(7, ['Trains', 'Coffee']), [{ rows: [7], tag: 'Trains', value: true }, { rows: [7], tag: 'Coffee', value: true }], 'one apply a tag, for its row');
+  assert.deepEqual([f.look('Trains'), f.look('Coffee')], ['pend', 'pend'], 'Indexed: striped until the library answers');
+  assert.deepEqual(await f.applied(7, ['Trains', 'Coffee']), { urls: [url], add: ['Trains', 'Coffee'], remove: [] }, 'one write, for its key');
+  assert.deepEqual([f.look('Trains'), f.look('Coffee')], ['on', 'on'], 'then on');
   await f.reply('api/library', { ...K.lib });
   assert.equal(K.toasted, 'Added “Trains”, “Coffee” to “Page 7”');
   K.undo();
+  const undone = await f.undone(7, []);
+  assert.deepEqual(undone.undo.tags.map((d) => [d.url, d.name]), [[url, 'Trains'], [url, 'Coffee']], 'one Undo: the write\'s own record');
   assert.deepEqual([f.look('Trains'), f.look('Coffee')], ['off', 'off'], 'Undo takes both off');
-  const undone = [];
-  for (let i = 0; i < 2; i++) {
-    const r = await f.next('api/undo');
-    undone.push(r.body);
-    r.resolve({ pages: [{ row: 7, tags: [] }], app_tags: K.lib.app_tags });
-  }
-  assert.deepEqual(undone, [{ batch: 1 }, { batch: 2 }], 'every batch retracted');
+}
+
+/* a write the library refuses or never answers leaves the page as it was, says so, and is not sent again */
+async function addPicksFailure() {
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/one';
+  f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
+  await f.reply('api/add', f.job(1, url, STAGES.running));
+  await f.reply('api/add/1', f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url) }));
+  (await f.next('/api/tags')).reject(new Error('the library is busy'));
+  for (let i = 0; i < 4; i++) await turn();
+  assert.match(K.failure.message, /the library is busy/, 'said');
+  assert.equal(f.look('Trains'), 'off', 'the page as the library holds it, the pick not kept');
+  await f.reply('api/library', { ...K.lib });
+  for (let i = 0; i < 4; i++) await turn();
+  assert.deepEqual(f.applies(), [], 'and never sent again');
 }
 
 /* a second link does not stop the first job: it writes the first page's picks to the first page's row only */
@@ -343,12 +358,12 @@ async function addPicksBackground() {
   await f.reply('api/add', f.job(2, two, STAGES.running));
   await f.reply('api/add/1', f.job(1, one, STAGES.search));
   await f.reply('api/add/1', f.job(1, one, done('indexed'), { finished: true, page: addPage(7, one) }));
-  assert.deepEqual(await f.applied(7, ['Trains']), [{ rows: [7], tag: 'Trains', value: true }], 'the first job writes its own picks');
+  assert.deepEqual((await f.applied(7, ['Trains'])).add, ['Trains'], 'the first job writes its own picks');
   await f.reply('api/library', { ...K.lib });
   assert.match(node('a-tile').innerHTML, /added.example\/two/, 'the second page stays on screen');
   assert.deepEqual([f.look('Trains'), f.look('Coffee')], ['off', 'pend'], 'its cells untouched');
   await f.reply('api/add/2', f.job(2, two, done('indexed'), { finished: true, page: addPage(8, two) }));
-  assert.deepEqual(await f.applied(8, ['Coffee']), [{ rows: [8], tag: 'Coffee', value: true }]);
+  assert.deepEqual((await f.applied(8, ['Coffee'])).add, ['Coffee']);
   assert.deepEqual([f.look('Trains'), f.look('Coffee')], ['off', 'on']);
 }
 
@@ -385,7 +400,7 @@ async function addPicksOutcomes() {
   assert.deepEqual(index.body, { url: lone, action: 'index' });
   index.resolve(f.job(++id, lone, { library: ev('library', 'done', { value: 'known' }), search: ev('search', 'done', { value: 'indexed' }) },
     { action: 'index', finished: true, page: addPage(9, lone) }));
-  assert.deepEqual(await f.applied(9, ['Trains']), [{ rows: [9], tag: 'Trains', value: true }], 'its Retry writes them');
+  assert.deepEqual((await f.applied(9, ['Trains'])).add, ['Trains'], 'its Retry writes them');
   await f.reply('api/library', { ...K.lib });
   const failed = 'https://added.example/failed';
   f.type(failed); node('a-fold').click(); f.click('Coffee'); f.submit();
@@ -394,7 +409,7 @@ async function addPicksOutcomes() {
   await f.reply('api/add', f.job(++id, failed, STAGES.running));
   assert.equal(f.look('Coffee'), 'pend', 'knowmoretabs could not run: kept while Retry is offered');
   await f.reply(`api/add/${id}`, f.job(id, failed, done('indexed'), { finished: true, page: addPage(10, failed) }));
-  assert.deepEqual(await f.applied(10, ['Coffee']), [{ rows: [10], tag: 'Coffee', value: true }]);
+  assert.deepEqual((await f.applied(10, ['Coffee'])).add, ['Coffee']);
   await f.reply('api/library', { ...K.lib });
   const late = 'https://added.example/late', next = 'https://added.example/next';
   f.type(late); node('a-fold').click(); f.click('Coffee'); f.submit();
@@ -427,18 +442,18 @@ async function addFilterEnter() {
   f.filter('rain');
   assert.equal(node('a-tag').value, 'rain', 'several, none exact: nothing');
   assert.equal(f.look('Night trains'), 'off');
-  f.filter('  Sleeper cars ');
-  const made = await f.next('api/tags');
-  assert.deepEqual(made.body, { name: 'Sleeper cars' }, 'no match: the tag is made');
-  made.resolve({ tag: 'Sleeper cars', created: true, tags: [] });
+  f.filter('  sleeper  CARS ');
+  const made = await f.next('/api/vocabulary');
+  assert.deepEqual(made.body, { create: ['sleeper  CARS'] }, 'no match: the library makes the name');
+  made.resolve({ vocabulary: ['Coffee', 'Night trains', 'Sleeper cars', 'Trains'].map((name) => ({ name })), resolved: ['Sleeper cars'] });
   for (let i = 0; i < 4; i++) await turn();
   assert.deepEqual(plain(K.lib.app_tags), ['Coffee', 'Night trains', 'Sleeper cars', 'Trains'], 'listed while the page waits for its row');
-  assert.deepEqual([f.look('Sleeper cars'), node('a-tag').value], ['pend', ''], 'and picked');
+  assert.deepEqual([f.look('Sleeper cars'), node('a-tag').value], ['pend', ''], "and picked, in the library's spelling");
   f.filter('trains');
   assert.equal(f.look('Trains'), 'off', 'Enter on a picked tag unpicks it');
   await f.reply('api/add/1', f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url) }));
-  assert.deepEqual((await f.applied(7, ['Coffee', 'Sleeper cars'])).map((b) => b.tag), ['Coffee', 'Sleeper cars']);
-  assert.equal(requests.filter((r) => r.route === 'api/tags').length, 0);
+  assert.deepEqual((await f.applied(7, ['Coffee', 'Sleeper cars'])).add, ['Coffee', 'Sleeper cars']);
+  assert.equal(requests.filter((r) => r.route === '/api/vocabulary').length, 0, 'made once');
 }
 
 /* Draft picks belong to one address, including while the initial Add reply is delayed. */
@@ -450,7 +465,7 @@ async function addPicksAddress() {
   assert.equal(f.look('Trains'), 'off', 'editing to another address drops the old draft picks');
   f.click('Coffee'); f.submit();
   await f.reply('api/add', f.job(1, two, done('indexed'), { finished: true, page: addPage(8, two) }));
-  assert.deepEqual((await f.applied(8, ['Coffee'])).map((b) => b.tag), ['Coffee']);
+  assert.deepEqual((await f.applied(8, ['Coffee'])).add, ['Coffee']);
   await f.reply('api/library', { ...K.lib });
   assert.equal(K.has(8, 'Trains'), false, 'the other address never inherits the old picks');
 }
@@ -465,7 +480,7 @@ async function addPicksBeforeReply() {
   add.resolve(f.job(1, url, STAGES.added));
   for (let i = 0; i < 4; i++) await turn();
   await f.reply('api/add/1', f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url) }));
-  assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'the submitted address keeps the pick');
+  assert.deepEqual((await f.applied(7, ['Trains'])).add, ['Trains'], 'the submitted address keeps the pick');
   await f.reply('api/library', { ...K.lib });
   node('a-fold').click();
   assert.equal(f.look('Trains'), 'off', 'the next draft does not inherit it');
@@ -484,7 +499,7 @@ async function addPicksStalePoll() {
   assert.equal(K.toasted, undefined, 'the obsolete poll reports no dropped picks');
   assert.equal(f.look('Trains'), 'pend', 'the newest job keeps its picks until Indexed');
   await f.reply('api/add/2', f.job(2, url, done('indexed'), { action: 'index', finished: true, page: addPage(7, url) }));
-  assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'only one write, from the latest job');
+  assert.deepEqual((await f.applied(7, ['Trains'])).add, ['Trains'], 'only one write, from the latest job');
   await f.reply('api/library', { ...K.lib });
   assert.deepEqual(f.applies(), []);
 }
@@ -504,7 +519,7 @@ async function addPicksDetour() {
   assert.equal(node('a-act').textContent, 'Retry');
   node('a-act').click();
   await f.reply('api/add', f.job(2, url, done('indexed'), { action: 'index', finished: true, page: addPage(7, url) }));
-  assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'its Retry writes them');
+  assert.deepEqual((await f.applied(7, ['Trains'])).add, ['Trains'], 'its Retry writes them');
 }
 
 /* At Indexed the Suggested row fills with the model's tags for the page, best first, less those picked and as many as its
@@ -526,14 +541,12 @@ async function addSuggested() {
   await f.reply('api/library', { ...K.lib });
   assert.deepEqual(row(), ['Trains off', 'Timetables off', 'Night trains off'], 'the pick written: nothing moves');
   f.click('Timetables');
+  assert.deepEqual((await f.applied(7, ['Timetables'])).add, ['Timetables'], 'written as any pick');
   assert.deepEqual([row(), f.look('Timetables')], [['Trains off', 'Timetables on', 'Night trains off'], 'on'], 'on in place, as its cell');
-  assert.deepEqual(await f.applied(7, ['Timetables']), [{ rows: [7], tag: 'Timetables', value: true }], 'written as any pick');
   assert.equal(K.toasted, 'Added Timetables to 1 page');
   K.undo();
-  const undone = await f.next('api/undo');
-  undone.resolve({ pages: [{ row: 7, tags: ['Coffee'] }], app_tags: K.lib.app_tags });
-  for (let i = 0; i < 4; i++) await turn();
-  assert.deepEqual([undone.body, f.look('Timetables'), row()], [{ batch: 2 }, 'off', ['Trains off', 'Timetables off', 'Night trains off']], 'Undo, in place');
+  const undone = await f.undone(7, ['Coffee']);
+  assert.deepEqual([undone.undo.tags.map((d) => d.name), f.look('Timetables'), row()], [['Timetables'], 'off', ['Trains off', 'Timetables off', 'Night trains off']], 'Undo, in place');
   f.type('https://added.example/two');
   assert.deepEqual(row(), [], 'another link: its own row, empty');
   f.type('');
@@ -542,38 +555,32 @@ async function addSuggested() {
   assert.deepEqual(row(), ['Trains off', 'Timetables off'], 'back on the page: its suggestions, as many as a narrower line holds');
 }
 
-/* The final library refresh shares the writes' queue: held picks precede it, and a pick or Undo during the
-   refresh follows it, so its earlier snapshot can never replace a newer recent order. */
+/* The final library refresh never holds up a pick: a pick or its Undo during the refresh goes at once, and the read
+   it overtook is read again, so an earlier snapshot never replaces a newer recent order. An undone add was a use. */
 async function addLibraryWrites() {
-  const f = addFixture(), { K, node, requests } = f, url = 'https://added.example/recent';
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/recent';
   K.lib.recent = ['Coffee'];
   node('a-recent').columns = '136px 136px';
   f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
   await f.reply('api/add', f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url) }));
-  assert.ok(!requests.some(r => r.route === 'api/library'), 'the final refresh waits for held picks to settle');
-  await f.reply('api/apply', { pages: [{ row: 7, tags: ['Trains'] }], changed: 1, batch: 1,
-    app_tags: K.lib.app_tags, recent: ['Trains', 'Coffee'] });
+  assert.deepEqual((await f.applied(7, ['Trains'])).add, ['Trains'], 'held picks first');
   const refresh = await f.next('api/library');
-  K.gone.add(6);   // Add's refresh leaves the shell's local forgotten rows alone
   f.click('Coffee');
-  await turn(); await turn();
-  assert.equal(f.applies().length, 0, 'a pick during refresh waits for its earlier snapshot');
-  refresh.resolve({ ...K.lib, recent: ['Trains', 'Coffee'], forgotten: [] });
-  await f.reply('api/apply', { pages: [{ row: 7, tags: ['Coffee', 'Trains'] }], changed: 1, batch: 2,
-    app_tags: K.lib.app_tags, recent: ['Coffee', 'Trains'] });
-  assert.deepEqual(plain(K.lib.recent), ['Coffee', 'Trains'], 'the later pick stays first');
-  assert.ok(K.gone.has(6), 'the Add refresh preserves local forgotten rows');
+  assert.deepEqual((await f.applied(7, ['Coffee'])).add, ['Coffee'], 'a pick during the refresh goes at once');
+  refresh.resolve({ ...K.lib, recent: ['Trains', 'Coffee'], forgotten: [] });   // read before that pick
+  (await f.next('api/library')).resolve({ ...K.lib, recent: ['Coffee', 'Trains'], forgotten: [] });
+  for (let i = 0; i < 4; i++) await turn();
+  assert.deepEqual(plain(K.lib.recent), ['Coffee', 'Trains'], 'the overtaken read is read again: the later pick stays first');
   assert.deepEqual([f.look('Coffee'), f.look('Trains')], ['on', 'on']);
-  const loaded = K.loadLibrary();
+  const loading = K.loadLibrary();
   const beforeUndo = await f.next('api/library');
   K.undo();
-  await turn(); await turn();
-  assert.ok(!requests.some(r => r.route === 'api/undo'), 'Undo also waits for the refresh');
-  beforeUndo.resolve({ ...K.lib });
-  await loaded;
-  await f.reply('api/undo', { pages: [{ row: 7, tags: ['Trains'] }], app_tags: K.lib.app_tags,
-    recent: ['Trains', 'Coffee'] });
-  assert.deepEqual(plain(K.lib.recent), ['Trains', 'Coffee'], 'Undo restores the prior order after the refresh');
+  const undone = await f.undone(7, ['Trains']);
+  assert.deepEqual(undone.urls, [], 'Undo goes at once, with its record');
+  beforeUndo.resolve({ ...K.lib, recent: ['Coffee', 'Trains'], forgotten: [] });
+  (await f.next('api/library')).resolve({ ...K.lib, recent: ['Coffee', 'Trains'], forgotten: [] });
+  await loading;
+  assert.deepEqual(plain(K.lib.recent), ['Coffee', 'Trains'], 'an undone add was still a use');
   assert.deepEqual([f.look('Coffee'), f.look('Trains')], ['off', 'on']);
 }
 
@@ -598,8 +605,9 @@ async function addFollowUpNamesTheKey(background = false) {
   if (background) { f.type('https://added.example/next'); f.submit(); }
   retry.resolve(f.job(2, key, done('indexed'), { action: 'index', finished: true, page: addPage(7, key) }));
   for (let i = 0; i < 4; i++) await turn();
+  const written = await f.applied(7, ['Trains', 'Coffee']);
+  assert.deepEqual([written.urls, written.add], [[key], ['Trains', 'Coffee']], 'the link\'s picks follow the key');
   assert.equal(K.has(7, 'Trains'), true, 'the follow up writes its picks even when another link is now drawn');
-  assert.deepEqual((await f.applied(7, ['Trains', 'Coffee'])).map((b) => b.tag), ['Trains', 'Coffee'], 'the link\'s picks follow the key');
   await f.reply('api/library', { ...K.lib });
   if (background) return;
   f.type(url); f.submit();
@@ -612,7 +620,7 @@ async function addFollowUpNamesTheKey(background = false) {
   const remove = await f.next('api/add');
   assert.deepEqual(remove.body, { url: key, action: 'forget' }, 'Remove names the key too');
   remove.resolve(f.job(4, key, { library: ev('library', 'done', { value: 'forgotten' }) }, { action: 'forget', finished: true }));
-  await f.reply('api/library', { ...K.lib });
+  await f.reply('api/library', { ...K.lib, forgotten: [7] });
   assert.equal(K.gone.has(7), true, 'Remove hides the indexed row when the link and key differ');
 }
 
@@ -630,7 +638,7 @@ async function addFollowUpStalePoll() {
   for (let i = 0; i < 4; i++) await turn();
   assert.equal(K.toasted, undefined, 'the superseded poll reports no dropped picks');
   signed.resolve(f.job(2, key, done('indexed'), { signed_in: true, retry: ['content'], finished: true, page: addPage(7, key) }));
-  assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'the follow up writes them');
+  assert.deepEqual((await f.applied(7, ['Trains'])).add, ['Trains'], 'the follow up writes them');
 }
 
 /* Restore on a forgotten variant follows the key: its progress shows, its picks are written once at Indexed, one Undo */
@@ -654,15 +662,13 @@ async function addRestoreFollowsTheKey() {
   await f.reply('api/add/2', f.job(2, key, { ...STAGES.search, ...known }, { action: 'restore', restored: true }));
   assert.equal(node('a-link').value, '', 'listed: the box is ready for the next link');
   await f.reply('api/add/2', f.job(2, key, { ...done('indexed'), ...known }, { action: 'restore', restored: true, finished: true, page: addPage(7, key) }));
-  assert.deepEqual(await f.applied(7, ['Trains']), [{ rows: [7], tag: 'Trains', value: true }], 'written once, at Indexed');
+  assert.deepEqual((await f.applied(7, ['Trains'])).add, ['Trains'], 'written once, at Indexed');
   await f.reply('api/library', { ...K.lib });
   assert.equal(K.toasted, 'Added “Trains” to “Page 7”');
   K.undo();
-  const undo = await f.next('api/undo');
-  assert.deepEqual(undo.body, { batch: 1 });
-  undo.resolve({ pages: [{ row: 7, tags: [] }], app_tags: K.lib.app_tags });
-  for (let i = 0; i < 4; i++) await turn();
-  assert.equal(f.requests.length, 0, 'one write, one Undo');
+  const undo = await f.undone(7, []);
+  assert.deepEqual(undo.undo.tags, [{ url: key, name: 'Trains', add: false, remove: false }], 'its record, for the key');
+  assert.equal(f.requests.filter((r) => r.route !== 'api/library').length, 0, 'one write, one Undo');
 }
 
 /* a poll the Library cannot answer is not a finished job: its stages stay as last seen, nothing is asked again,
@@ -688,4 +694,4 @@ async function addPollFails() {
   assert.equal(K.lib, lib, 'no reload as if it had finished');
 }
 
-run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true), addFollowUpStalePoll, addRestoreFollowsTheKey, addPollFails });
+run({ addLibraryWrites, addPicksFailure, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true), addFollowUpStalePoll, addRestoreFollowsTheKey, addPollFails });

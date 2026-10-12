@@ -10,10 +10,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import patch
 
+import synthetic_archive
+from test_app import Served
+
 from tagger import archive
 from tagger.archive import STATE_FILE, Archive, LibraryState, Unreadable, signature
-
-import synthetic_archive
 
 STATE = {
     "schema_version": 1,
@@ -166,3 +167,66 @@ class ConsistentReadTests(StateCase):
         self.assertNotEqual(first, replaced, "a new inode")
         os.utime(path, ns=(replaced[3] + 1, replaced[3] + 1))
         self.assertNotEqual(replaced, signature(path), "the same inode, a newer mtime")
+
+
+class FollowerTests(Served):
+    """The app reads `library.json` again exactly when its signature moved, and only then."""
+
+    def tags_of(self, row: int) -> list[str]:
+        """The page's tags as the service shows them after its next request."""
+        self.assertEqual(200, self.call("GET", "/api/library")[0])
+        return self.app.page(row)["tags"]
+
+    def swapped(self, row: int) -> tuple[int, bytes]:
+        """The file's bytes with one of the page's tags swapped for another name of the same length."""
+        raw = (self.root / STATE_FILE).read_bytes()
+        state = json.loads(raw)
+        state["tags"][self.lib.records[row]["key"]]["add"] = ["Coffee"]
+        return len(raw), (json.dumps(state, indent=1) + "\n").encode()
+
+    def tagged_row(self) -> int:
+        return next(i for i, r in enumerate(self.lib.records) if r["tags"] == ["Trains"] and not r["forgotten"])
+
+    def test_unchanged_requests_never_read_the_file_or_encode_again(self):
+        self.call("GET", "/api/library")
+        with (
+            patch.object(LibraryState, "read", wraps=LibraryState.read) as read,
+            patch.object(self.app, "encode", side_effect=AssertionError("encoded")),
+        ):
+            for _ in range(3):
+                self.assertEqual(200, self.call("GET", "/api/library")[0])
+                self.assertEqual(200, self.call("GET", "/api/pins")[0])
+        read.assert_not_called()
+
+    def test_a_new_file_with_the_old_size_and_mtime_is_read(self):
+        row = self.tagged_row()
+        self.assertEqual(["Trains"], self.tags_of(row))
+        before = signature(self.root / STATE_FILE)
+        size, raw = self.swapped(row)
+        self.assertEqual(size, len(raw))
+        part = self.root / "library.json.part"
+        part.write_bytes(raw)
+        os.utime(part, ns=(before[3], before[3]))
+        part.replace(self.root / STATE_FILE)
+        self.assertEqual(before[2:], signature(self.root / STATE_FILE)[2:], "only the inode tells them apart")
+        self.assertEqual(["Coffee"], self.tags_of(row))
+
+    def test_an_edit_in_place_with_a_newer_mtime_is_read(self):
+        row = self.tagged_row()
+        self.assertEqual(["Trains"], self.tags_of(row))
+        before = signature(self.root / STATE_FILE)
+        _, raw = self.swapped(row)
+        with (self.root / STATE_FILE).open("r+b") as f:
+            f.write(raw)
+        os.utime(self.root / STATE_FILE, ns=(before[3] + 1, before[3] + 1))
+        self.assertEqual(before[:3], signature(self.root / STATE_FILE)[:3], "only the mtime tells them apart")
+        self.assertEqual(["Coffee"], self.tags_of(row))
+
+    def test_a_missing_file_is_an_empty_library_until_it_is_created(self):
+        row = self.tagged_row()
+        state = json.loads((self.root / STATE_FILE).read_text())
+        (self.root / STATE_FILE).unlink()
+        self.assertEqual([], self.tags_of(row))
+        self.assertEqual([], self.call("GET", "/api/library")[1]["app_tags"])
+        synthetic_archive.write_state(self.root, state)
+        self.assertEqual(["Trains"], self.tags_of(row))

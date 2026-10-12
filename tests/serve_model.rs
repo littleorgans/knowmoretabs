@@ -583,6 +583,13 @@ fn refusals_the_shell_makes_never_reach_the_service() {
         ("GET", "/model/img/not-a-hash"),
         ("GET", "/model/api/sessions/1a"),
         ("GET", "/modelx/api/library"),
+        // Decisions are the shell's own writes; the service's old ones are gone.
+        ("POST", "/model/api/tags"),
+        ("POST", "/model/api/apply"),
+        ("POST", "/model/api/forget"),
+        ("POST", "/model/api/send"),
+        ("GET", "/model/api/sessions"),
+        ("GET", "/model/review.js"),
     ] {
         let fields = [host.clone(), json(), length()];
         let missing = shell.raw(method, path, &fields, br#"{"query":"x"}"#);
@@ -640,7 +647,7 @@ fn every_family_forwards_its_method_and_path_and_comes_back_typed() {
         ok("/api/library", "application/json; charset=utf-8", &json),
         ok("/api/add/12", "application/json", &json),
         ok("/api/search", "application/json", &json),
-        ok("/api/sessions/3/pages/1", "application/json", &json),
+        ok("/api/exclusions", "application/json", &json),
     ];
     let service = table_service(&fx, table.clone());
     let shell = service.shell(&fx);
@@ -658,8 +665,8 @@ fn every_family_forwards_its_method_and_path_and_comes_back_typed() {
         ("POST", "/model/api/search".to_owned(), "/api/search", api),
         (
             "POST",
-            "/model/api/sessions/3/pages/1".to_owned(),
-            "/api/sessions/3/pages/1",
+            "/model/api/exclusions".to_owned(),
+            "/api/exclusions",
             api,
         ),
     ] {
@@ -776,25 +783,6 @@ fn the_bare_prefix_redirects_below_it() {
     ];
     assert_eq!(shell.raw("POST", "/model", &fields, b"").status, 404);
     assert!(service.seen().is_empty(), "the service was contacted");
-}
-
-/// Send answers only once its knowmoretabs runs are done: well past the
-/// deadline a search waits.
-#[cfg(unix)]
-#[test]
-fn send_waits_past_the_rank_deadline_for_its_own() {
-    let fx = fixture();
-    let sent = r#"{"ok": true}"#;
-    let fields = json_fields(&fx, sent);
-    let service = Service::start(move |request| {
-        std::thread::sleep(Duration::from_secs(3));
-        Some(proven(request, "200 OK", &fields, sent))
-    });
-    let shell = service.shell(&fx);
-    let start = Instant::now();
-    let answer = shell.post("/model/api/send", &json!({ "preview": 1 }));
-    assert_eq!((answer.status, answer.text()), (200, sent.to_owned()));
-    assert!(start.elapsed() >= Duration::from_secs(3));
 }
 
 /// The shell's nav as it serves it, no view marked.

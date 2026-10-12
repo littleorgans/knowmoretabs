@@ -1,7 +1,9 @@
 """The app's model side, loaded once: the library's cached vectors, a keyword index, and test S2's supervised
 rules fitted on every owner labelled page. Search fuses EG2 cosine with keywords (and images on request) by
 reciprocal rank; a result set gets suggested tags (S2's mean z ranking) and, for the picked tags, prechecks.
-Tags the owner makes in the app join the library as zero shot tags with their name as the query (`add_tags`).
+The decisions follow `library.json` (`apply_state`): a name the vocabulary gains joins as a zero shot tag with its
+name as the query (`add_tags`), a retired one keeps its column out of sight, and every page's tags, labels and
+visibility are the file's, without touching a vector, the keyword index or a fitted head.
 Document vectors are persisted by page id. Startup and `sync` refresh changed inputs
 and reuse matching rows after knowmoretabs adds, forgets or restores a page.
 
@@ -45,13 +47,13 @@ Embed = Callable[[list[dict], str], np.ndarray]  # page records, text input name
 @dataclass
 class Library:
     records: list[dict]  # dataset rows, content and image paths under the given root
-    tags: list[str]  # every active owner tag, most used first
-    Y: np.ndarray  # pages x tags, owner labels
+    tags: list[str]  # a column per name: those active at load, most used first, then those gained; never removed
+    Y: np.ndarray  # pages x tags, the active names each page holds
     X: np.ndarray  # text vectors
     input_name: str
     image: np.ndarray | None  # pages x d image vectors; rows without an image are zero
     has_image: np.ndarray
-    live: np.ndarray  # rows a search may return: known and not forgotten
+    live: np.ndarray  # rows a view may show: known and not forgotten
     keywords: TfidfVectorizer
     K: object  # pages x terms TF-IDF
     rules: Rules
@@ -117,7 +119,7 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
         for t in r["tags"]:
             counts[t] += 1
     tags = sorted(counts, key=lambda n: (-counts[n], n.lower()))
-    Y = np.array([[t in r["tags"] for t in tags] for r in records], np.int8)
+    Y = _labels(records, tags)
     input_name = next((name for name in TEXT_INPUTS if VectorStore(paths.emb / MODEL, name).exists), TEXT_INPUTS[0])
     X, image, has_image, vector_counts = _vectors(
         paths,
@@ -187,6 +189,11 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
     return lib, stats
 
 
+def _labels(records: list[dict], tags: list[str]) -> np.ndarray:
+    """Pages x tags: 1 where the record holds the tag."""
+    return np.array([[t in r["tags"] for t in tags] for r in records], np.int8).reshape(len(records), len(tags))
+
+
 def _queries(encode: Encode, texts: list[str], dim: int) -> np.ndarray:
     """Unit query vectors, one row per text; with no text, none (an encoder may return a flat empty array)."""
     return encode(texts) if texts else np.zeros((0, dim), np.float32)
@@ -205,6 +212,29 @@ def find_tag(lib: Library, name: str) -> str | None:
     """The library's spelling of `name` in any case, as `tag --import` matches names."""
     folded = name.lower()
     return next((t for t in lib.tags if t.lower() == folded), None)
+
+
+def active(lib: Library) -> np.ndarray:
+    """The tag columns whose names the vocabulary holds active: the ones a view lists, suggests or takes."""
+    return np.array([t.lower() in lib.state.active for t in lib.tags], bool)
+
+
+def project(lib: Library) -> Library:
+    """Every loaded record's tags, labels and visibility, `Y` and `live`, as `lib.state` holds them."""
+    state = lib.state
+    records = [
+        {**r, "tags": (tags := state.tags(r["key"])), "labelled": bool(tags), "forgotten": r["key"] in state.forgotten}
+        for r in lib.records
+    ]
+    live = np.array([not r["forgotten"] for r in records], bool)
+    return replace(lib, records=records, Y=_labels(records, lib.tags), live=live)
+
+
+def apply_state(lib: Library, state: LibraryState, encode: Encode) -> Library:
+    """The library following `state`: each active name without a column joins as a zero shot tag (a retired name
+    brought back takes its own column again), and every record follows the state's decisions."""
+    lib = add_tags(lib, list(state.active.values()), encode)
+    return project(replace(lib, state=state))
 
 
 def add_tags(lib: Library, names: list[str], encode: Encode) -> Library:
@@ -230,10 +260,8 @@ def add_tags(lib: Library, names: list[str], encode: Encode) -> Library:
 
 
 def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Library:
-    """Refresh and persist the given known pages, preserving all other keyed cache rows; tag uses and retirements
-    as the archive holds them."""
-    if lib.state != archive.state:
-        lib = replace(lib, state=archive.state)
+    """Refresh and persist the given known pages, preserving all other keyed cache rows. Their decisions are the ones
+    `lib.state` holds, not the archive's, which may be older: the caller follows the file afterwards."""
     known = set(archive.known)
     urls = [url for url in dict.fromkeys(urls) if url in known]
     if not urls:
@@ -251,7 +279,7 @@ def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Libra
     if counts["failed"]:
         print(json.dumps({"image_failed": counts["failed"]}))
     records, rows = lib.records.copy(), dict(lib.rows)
-    X, Y, live = lib.X.copy(), lib.Y.copy(), lib.live.copy()
+    X = lib.X.copy()
     image = None if lib.image is None else lib.image.copy()
     has_image = lib.has_image.copy()
     for i, (url, record) in enumerate(zip(urls, fresh, strict=True)):
@@ -260,30 +288,28 @@ def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Libra
             rows[url] = len(records)
             records.append(record)
             X = np.vstack([X, vectors[i : i + 1]])
-            Y = np.vstack([Y, np.zeros((1, Y.shape[1]), Y.dtype)])
-            live = np.concatenate([live, [not record["forgotten"]]])
             if image is not None:
                 image = np.vstack([image, image_rows[i : i + 1]])
             has_image = np.concatenate([has_image, mask[i : i + 1]])
         else:
-            records[row], X[row], live[row] = record, vectors[i], not record["forgotten"]
+            records[row], X[row] = record, vectors[i]
             if image is not None:
                 image[row] = image_rows[i]
             has_image[row] = mask[i]
     S = np.hstack([lib.rules.scores(X)["supervised"], X @ lib.added_q.T])
     keywords, K = _keyword_index(records)
-    return replace(
-        lib,
-        records=records,
-        X=X,
-        Y=Y,
-        live=live,
-        image=image,
-        has_image=has_image,
-        S=S,
-        spread=_spread(S),
-        keywords=keywords,
-        K=K,
+    return project(
+        replace(
+            lib,
+            records=records,
+            X=X,
+            image=image,
+            has_image=has_image,
+            S=S,
+            spread=_spread(S),
+            keywords=keywords,
+            K=K,
+        )
     )
 
 
@@ -353,18 +379,21 @@ def newest(lib: Library, among: np.ndarray) -> np.ndarray:
 
 
 def suggest(lib: Library, rows: list[int], k: int = SUGGEST) -> list[dict]:
-    """Tags ranked by the mean, over the result pages, of the supervised score's z against the library."""
+    """Active tags ranked by the mean, over the result pages, of the supervised score's z against the library."""
     z = (lib.S[rows] - lib.S.mean(axis=0)) / lib.spread
-    mean = z.mean(axis=0)
-    return [{"tag": lib.tags[j], "z": float(mean[j])} for j in np.argsort(-mean, kind="stable")[:k]]
+    mean, on = z.mean(axis=0), active(lib)
+    order = [j for j in np.argsort(-mean, kind="stable") if on[j]]
+    return [{"tag": lib.tags[j], "z": float(mean[j])} for j in order[:k]]
 
 
 def tag_info(lib: Library) -> list[dict]:
-    positives = lib.Y.sum(axis=0)
+    """Every active tag, in column order: how many pages hold it, and whether a head or its name scores it."""
+    positives, on = lib.Y.sum(axis=0), active(lib)
     heads = set(lib.rules.heads.tolist())
     return [
         {"name": t, "positives": int(positives[j]), "source": "head" if j in heads else "zero shot"}
         for j, t in enumerate(lib.tags)
+        if on[j]
     ]
 
 

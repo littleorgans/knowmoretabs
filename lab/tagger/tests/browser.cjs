@@ -1,7 +1,8 @@
 // The one screen in headless Chrome, on a running app behind the Library shell: the real DOM, lit-html and the
 // shell's CSP. usage: node browser.cjs <chrome> <profile dir> <the page's url below /model/> <case>
 // Chrome speaks the DevTools protocol over a pipe (fds 3 and 4), so no port and no package is needed.
-// Any console error, page exception or CSP report fails the case, as does a request anywhere but the shell's /model/.
+// Any console error, page exception or CSP report fails the case, as does a request anywhere but the shell's /model/
+// and the library's own writes at its root.
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 
@@ -65,70 +66,32 @@ function inPage() {
 }
 
 async function startupForgetUndo({ $, tiles, until, check, search }) {
+  const K = window.KMT;
   await until(() => window.releaseSelection, 'selection reply held');
   await search('night train');
   const row = Number(tiles()[1].dataset.row);
   tiles()[1].querySelector('[data-forget]').click();
+  await until(() => K.gone.has(row) && !$('#toast-undo').hidden, 'forgotten by the library, with Undo');
   if (window.startupUndoEarly) $('#toast-undo').click();
   window.releaseSelection();
   await until(() => window.releasePins, 'pins reply held');
   window.releasePins();
-  await window.KMT.ready;
-  await window.KMT.writes;
-  if (!window.startupUndoEarly) {
-    check(!window.KMT.sel.includes(row) && !window.KMT.pins.includes(row), 'startup leaves the forgotten row out');
-    $('#toast-undo').click();
-    await window.KMT.writes;
-  }
+  await K.ready;
+  await K.mutations;
+  await K.writes;
   const saved = window.startupSaved;
-  check(window.KMT.sel.join() === saved.join(), 'Undo restores saved selection order');
-  check(window.KMT.pins.join() === saved.join(), 'Undo restores saved pin order');
+  if (!window.startupUndoEarly) {
+    check(K.sel.join() === saved.join() && !K.selected().includes(row), 'startup keeps the forgotten row in its place, out of sight');
+    $('#toast-undo').click();
+  }
+  await until(() => !K.gone.has(row), 'Undo restores the forgotten row');
+  check(K.selected().join() === saved.join(), 'the saved selection order, shown');
+  check(K.pinned().join() === saved.join(), 'the saved pin order, shown');
   $('#show-pins').click();
-  check(tiles().map((t) => Number(t.dataset.row)).join() === saved.join(), 'Pinned shows the restored saved list');
-  check(!window.KMT.gone.has(row), 'Undo restores the forgotten row');
+  check(tiles().map((t) => Number(t.dataset.row)).join() === saved.join(), 'Pinned shows the saved list');
 }
 
 const cases = {
-  sendPartialForget: async ({ $, tiles, until, check, search }) => {
-    const K = window.KMT;
-    await K.ready;
-    await search('night train');
-    const before = K.lib.pages;
-    await K.api('api/forget', { rows: [Number(tiles()[0].dataset.row)], value: true }); // as another tab would
-    $('#send-btn').click();
-    await until(() => $('#send').open && !$('#send-go').hidden, 'send preview ready');
-    $('#send-go').click();
-    await until(() => $('#send-close').textContent === 'Done', 'partial send finished');
-    check($('#send-body').textContent.startsWith('Stopped.'), 'uncertain forget reports failure');
-    const library = await K.api('api/library');
-    check(library.pages < before, 'the forget is not yet shown here');
-    check(K.lib.pages === library.pages, 'failed send refreshes the browser library count');
-    check(K.views.view().total === library.pages, 'failed send refreshes the search count');
-  },
-  sendFlow: async ({ $, tiles, until, check, search }) => {
-    const K = window.KMT;
-    await K.ready;
-    await search('night train');
-    tiles()[0].click();
-    await K.tagSelection('Browser send');
-    $('#send-btn').click();
-    await until(() => $('#send').open && !$('#send-go').hidden, 'send preview ready');
-    check(!$('#send-body details').open, 'commands are collapsed');
-    $('#send-go').click();
-    await until(() => $('#send-close').textContent === 'Done', 'send finished');
-    check($('#send-body').textContent.startsWith('Sent.'), 'send succeeded');
-    check($('#send-go').hidden, 'completed send cannot be submitted twice');
-    const library = await K.api('api/library');
-    check(K.lib.pages === library.pages, 'send keeps the browser library count');
-    check(K.views.view().total === library.pages, 'send keeps the search count');
-    $('#send-close').click();
-    $('#send-btn').click();
-    await until(() => $('#send').open, 'resend preview ready');
-    check($('#send-body').textContent.includes('Nothing to send.'), 'resend is settled');
-    check($('#send-go').hidden, 'empty resend has no Send button');
-    $('#send-close').click();
-    check(!$('#send').open, 'dialog remains dismissible');
-  },
   startupTags: async ({ tiles, until, check, search }) => {
     await until(() => window.releaseSelection, 'selection reply held');
     await search('night train');
@@ -141,7 +104,7 @@ const cases = {
     await until(() => window.releasePins, 'pins reply held');
     window.releasePins();
     await K.ready;
-    await K.writes;
+    await K.mutations;
     check(K.has(row, tag), 'startup reply preserves the newer page tag');
     check(tiles()[0].textContent.includes(tag), 'the rendered tile retains the newer page tag');
   },
@@ -166,16 +129,16 @@ const cases = {
     tileOf(row).click();
     tileOf(row).querySelector('[data-pin]').click();
     tileOf(row).querySelector('[data-forget]').click();
-    await window.KMT.writes;
+    await until(() => !tileOf(row), 'forgotten by the library');
     await search('espresso');
     $('#toast-undo').click();
     await until(() => Number(pos().match(/of (\d+)/)?.[1]) === all, 'Undo updates the new search count');
-    await window.KMT.writes;
+    await window.KMT.mutations;
     check($('#n-sel').textContent === '1' && $('#n-pin').textContent === '1', 'Undo restores selection and pin after a new search');
     await search('night train');
     const victim = tiles()[2].dataset.row;
     tileOf(victim).querySelector('[data-forget]').click();
-    await window.KMT.writes;
+    await until(() => !tileOf(victim), 'forgotten by the library');
     await page('#next', 50);
     $('#toast-undo').click();
     await until(() => Number(pos().match(/of (\d+)/)?.[1]) === all, 'Undo updates page two count');
@@ -264,7 +227,7 @@ const cases = {
     await until(() => tileOf(gone), 'the neighbour back');
     check(tiles()[1] === tile && tileOf(row) === tile, 'and Undo keeps it too');
     tile.querySelector('[data-untag="Sleeper cars"]').click();
-    await until(() => !tile.querySelector('[data-untag]'), 'the tag off the tile');
+    await until(() => !tile.querySelector('[data-untag="Sleeper cars"]'), 'the tag off the tile');
     check(tileOf(row) === tile && tile.classList.contains('sel'), '× keeps the tile node, still selected');
     $('#clear').click();
     await until(() => !tile.classList.contains('sel'), 'the selection cleared');
@@ -398,7 +361,7 @@ const cases = {
     await until(() => $('#toast-msg').textContent === 'Removed Sleeper cars from 1 page' && !$('#toast-undo').hidden, 'the toast');
     $('#toast-undo').click();
     await until(() => $('#a-tile [data-untag="Sleeper cars"]') && cell.dataset.k === 'on', 'Undo puts it back');
-    await window.KMT.writes;
+    await window.KMT.mutations;
     $('#nav-tag').click();
     await until(() => !$('#tag-screen').hidden && $('#add-screen').hidden, 'the Tag screen');
     $('#s-q').value = 'zeppelin timetables';
@@ -454,14 +417,14 @@ const cases = {
     await until(() => suggested().length, 'the suggestions');
     out.suggested = suggested().map((el) => el.dataset.tag);
     await until(() => $(`#a-tile [data-untag="${tag}"]`), 'the pick on the tile');
-    await K.writes;
+    await K.mutations;
     await until(() => recent()[0].dataset.tag === tag, 'the tag written first in Recently used');
     check(recent()[0].dataset.k === 'on' && fits() === columns, 'shown on, the line as full as before');
     const chip = suggested().find((el) => el.dataset.tag === 'Timetables');
     check(chip, `Timetables suggested: ${out.suggested.join(', ')}`);
     chip.click();
     await until(() => $('#a-tile [data-untag="Timetables"]'), 'the suggestion on the tile');
-    await K.writes;
+    await K.mutations;
     const looks = [chip, cellOf('Timetables')].map((el) => el.dataset.k);
     check(chip.isConnected && looks.join() === 'on,on', `the chip and its cell read alike: ${looks}`);
     for (let i = 0; i < 10; i++) await new Promise((r) => requestAnimationFrame(r));
@@ -596,6 +559,94 @@ const cases = {
     $('#a-act').click();
     await until(() => seg('library') === 'Already in library' && seg('search') === 'Indexed', 'added, not restored again');
   },
+  /* the cutover end to end (test_auto_sync.py): every tag decision, new name, forget and restore Tag and Add link make
+     is the library's own write; another caller's writes meet them in the one archive. Returns what it saw. */
+  autoSync: async ({ $, tiles, tileOf, until, check, search }) => {
+    const K = window.KMT, o = {};
+    const post = (path, body) => fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      .then(async (r) => ({ status: r.status, ...(await r.json()) }));
+    const urlOf = (row) => K.pages.get(row).url, rowOf = (url) => [...K.pages.values()].find((p) => p.url === url).row;
+    const undoable = (re) => until(() => !$('#toast').hidden && !$('#toast-undo').hidden && re.test($('#toast-msg').textContent), `the toast ${re}`);
+    const tagsOn = (row) => [...tileOf(row).querySelectorAll('[data-untag]')].map((x) => x.dataset.untag);
+    await K.ready;
+    o.appTags = K.lib.app_tags.slice();
+    o.recent = K.lib.recent.slice();
+    await search('night train');
+    const rows = tiles().map((t) => Number(t.dataset.row));
+    const tagged = rows.find((r) => K.pages.get(r).tags.length);
+    o.shown = { url: urlOf(tagged), tags: tagsOn(tagged) };
+    // a new name with stray spaces, through the strip, on one selected page: the library's spelling on the tile
+    const [one, two, three, revived, invalid, other, external] = rows.filter((r) => !K.pages.get(r).tags.includes('Sleeper cars'));
+    tileOf(one).click();
+    $('#new-tag').value = ' Sleeper   cars ';
+    $('#newtag').requestSubmit();
+    await until(() => tagsOn(one).includes('Sleeper cars'), 'the new name on the tile');
+    o.made = urlOf(one);
+    // a strip write with Undo; meanwhile another caller changes the same name on a touched page and an unrelated one
+    tileOf(one).click(); tileOf(two).click(); tileOf(three).click();
+    $('#strip [data-tag="Sleeper cars"] [data-act="add"]').click();
+    await until(() => tagsOn(two).includes('Sleeper cars') && tagsOn(three).includes('Sleeper cars'), 'the strip write');
+    await undoable(/^Added Sleeper cars to 2 pages$/);
+    o.touched = [urlOf(two), urlOf(three)];
+    const elsewhere = await post('/api/tags', { urls: [urlOf(two), 'https://unknown.example/x'], add: [], remove: ['Sleeper cars'] });
+    o.elsewhere = { status: elsewhere.status, unknown: elsewhere.counts.unknown };
+    o.unrelated = urlOf(other);
+    check((await post('/api/tags', { urls: [o.unrelated], add: ['Recipes'], remove: [] })).status === 200, 'the unrelated write');
+    $('#toast-undo').click();
+    await until(() => !tagsOn(two).includes('Sleeper cars') && !tagsOn(three).includes('Sleeper cars'), 'Undo takes it off both');
+    // a retired name put on a page brings it back; its Undo retires it again, on every page the answer names
+    tileOf(two).click(); tileOf(three).click();
+    await K.tagSelection('Woodworking', [revived]);
+    o.revived = { url: urlOf(revived), listed: K.lib.app_tags.includes('Woodworking'), shown: tagsOn(revived).includes('Woodworking') };
+    await undoable(/^Added Woodworking to 1 page$/);
+    $('#toast-undo').click();
+    await until(() => !tagsOn(revived).includes('Woodworking') && !K.lib.app_tags.includes('Woodworking'), 'retired again');
+    // a refused write: said, and the page as it was
+    const before = tagsOn(invalid).join();
+    await K.tagSelection('x'.repeat(41), [invalid]);
+    o.refused = { toast: $('#toast-msg').textContent, kept: tagsOn(invalid).join() === before };
+    // Forget a selected and pinned page through Tag: out of sight, its place kept; Undo restores it there
+    $('#show-sel').click();
+    await until(() => tiles().length === K.selected().length && tiles().length > 1, 'the selection');
+    const saved = K.sel.map(urlOf), gone = Number(tiles()[1].dataset.row);
+    tileOf(gone).querySelector('[data-forget]').click();
+    await until(() => !tileOf(gone), 'forgotten by the library');
+    o.forgot = { url: urlOf(gone), saved, kept: K.sel.map(urlOf), shown: K.selected().map(urlOf), pinned: K.pinned().map(urlOf) };
+    await undoable(/^Forgotten$/);
+    $('#toast-undo').click();
+    await until(() => tileOf(gone), 'restored in its place');
+    o.restored = { shown: K.selected().map(urlOf), pinned: K.pinned().map(urlOf) };
+    $('#show-sel').click();
+    // another caller retires a name and forgets a page: the next service read follows, no restart
+    o.external = urlOf(external);
+    check((await post('/api/vocabulary', { create: [], retire: ['Typography'] })).status === 200, 'retired elsewhere');
+    check((await post('/api/forget', { urls: [o.external] })).status === 200, 'forgotten elsewhere');
+    await K.loadLibrary();
+    await search('night train');
+    o.followed = { typography: K.lib.app_tags.includes('Typography'), external: tiles().some((t) => t.dataset.row === String(external)) };
+    // Add link: picks before Indexed wait, then one write on the key Indexed names, one toast, one Undo
+    await search('espresso');
+    const bare = [...K.pages.values()].find((p) => !p.tags.length && !K.gone.has(p.row) && /^https:\/\/coffee/.test(p.url));
+    check(bare, 'an untagged coffee page to add again');
+    location.hash = '#add';
+    await until(() => !$('#add-screen').hidden, 'Add link');
+    $('#a-link').value = bare.url;
+    $('#a-link').dispatchEvent(new Event('input'));
+    $('#a-fold').click();
+    for (const t of ['Coffee', 'Recipes']) $(`#a-rows [data-tag="${t}"]`).click();
+    o.pending = ['Coffee', 'Recipes'].map((t) => $(`#a-rows [data-tag="${t}"]`).dataset.k);
+    const sent = window.shellWrites.length;
+    $('#a-form').requestSubmit();
+    await until(() => $('#a-search .val').textContent === 'Indexed', 'Indexed');
+    await until(() => ['Coffee', 'Recipes'].every((t) => $(`#a-tile [data-untag="${t}"]`)), 'the picks on the tile');
+    o.add = { url: bare.url, writes: window.shellWrites.slice(sent) };
+    await undoable(/^Added “Coffee”, “Recipes” to /);
+    $('#toast-undo').click();
+    await until(() => !$('#a-tile [data-untag]'), 'Undo takes both off');
+    await K.mutations;
+    o.add.after = window.shellWrites.slice(sent).length;
+    return o;
+  },
   /* a web address pasted into the empty box starts at once */
   addPaste: async ({ $, until, check }) => {
     const data = new DataTransfer();
@@ -626,6 +677,9 @@ const cases = {
     }
   },
 };
+
+/* the console lines a case causes on purpose: the refused write autoSync sends */
+const expectedErrors = { autoSync: [/^network: .*status of 400 \(Bad Request\) \/api\/tags$/] };
 
 /* the checks a case makes once the page has reloaded */
 const afterReload = {
@@ -676,6 +730,14 @@ async function main() {
         return fetchNormally(...args);
       };
     ` }, sessionId);
+    if (name === 'autoSync') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+      const fetchNormally = window.fetch;
+      window.shellWrites = [];
+      window.fetch = async (...args) => {
+        if (String(args[0]).startsWith('/api/')) window.shellWrites.push({ path: args[0], body: JSON.parse(args[1].body) });
+        return fetchNormally(...args);
+      };
+    ` }, sessionId);
     if (name === 'startupDuringPage') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
       const fetchNormally = window.fetch;
       window.searchRequests = 0;
@@ -713,13 +775,15 @@ async function main() {
         awaitPromise: true, returnByValue: true }, sessionId);
       if (restored.exceptionDetails) throw new Error(restored.exceptionDetails.exception?.description || restored.exceptionDetails.text);
     }
-    assert.deepEqual(errors, [], `no console error, exception or CSP report: ${errors.join(' | ')}`);
-    const page = new URL(url), strays = requests.filter((at) => {
+    const unexpected = errors.filter((e) => !(expectedErrors[name] || []).some((re) => re.test(e)));
+    assert.deepEqual(unexpected, [], `no console error, exception or CSP report: ${unexpected.join(' | ')}`);
+    const page = new URL(url), own = ['/api/tags', '/api/vocabulary', '/api/forget', '/api/restore'];
+    const strays = requests.filter((at) => {
       const to = new URL(at);
-      return to.origin !== page.origin || !(to.pathname.startsWith('/model/') || to.pathname === '/favicon.ico');
+      return to.origin !== page.origin || !(to.pathname.startsWith('/model/') || own.includes(to.pathname) || to.pathname === '/favicon.ico');
     });
     assert.ok(requests.length > 0, 'requests are seen');
-    assert.deepEqual(strays, [], `every request goes to the shell's /model/: ${strays.join(' | ')}`);
+    assert.deepEqual(strays, [], `every request goes to the shell's /model/ or its own API: ${strays.join(' | ')}`);
   } finally {
     proc.kill();
   }

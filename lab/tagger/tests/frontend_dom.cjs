@@ -29,12 +29,11 @@ function setup(...files) {
   };
   const K = {};
   const mocks = {
-    $: node, esc: String, short: String, title: () => '', pct: String,
-    own: () => '', thumb: () => '', save() {}, changed() {},
-    fail(err) { this.failure = err; }, toast(msg, undo) { this.toasted = msg; this.undo = undo || null; }, flyIn() {}, flyOut(c, d, done) { done(); }, refreshSets() {},
-    state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
-    lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
-    search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
+    $: node, esc: String, short: String, title: () => '',
+    thumb: () => '', save() {}, changed() {},
+    fail: (err) => { K.failure = err; }, toast(msg, undo) { this.toasted = msg; this.undo = undo || null; },
+    state: { search: { query: 'old', images: false, n: 20 } },
+    lib: { sizes: [20, 50], images: true },
     views: { render() {}, key: () => false, restore: async () => {}, refresh: async () => {} }, strip: { render() {} }, add: { render() {}, enter() {} }, lit, ...overrides,
   };
   const listeners = {}, keys = {};   // the window's and the document's, by event

@@ -1,37 +1,73 @@
-/* knowmoretabs · tagger app · pages, the selection, pins and app tags
-   Every page this tab has shown, by row, with its app tags (the tags made
-   in this app; archive tags stay out of this screen). The selection and
-   the pins, which the server keeps across searches and restarts until
-   changed; pinning parks a page for later and never selects it. Forgotten
-   pages, out of every view at once. And the writes that change any of
-   these, sent one at a time in order: a change shows at once and the
-   server's reply to the latest one settles it. A tag change or a forget
-   offers Undo, which puts every page back exactly as it was. */
+/* knowmoretabs · tagger app · pages, the selection, pins and tags
+   Every page this tab has shown, by row, with its tags as the library holds
+   them. The selection and the pins, which the server keeps across searches
+   and restarts until changed; pinning parks a page for later and never
+   selects it. A forgotten page stays in both, out of every view and count,
+   and is back in its place once restored. Tags, new names, forget and
+   restore are the library's own writes (the shell's API): one at a time in
+   order, each shown once the library answers what it now holds, and Undo
+   sends back the library's exact record of what a write changed. A failed
+   write leaves every page as it was. The service's view of the library (tag
+   counts, every name, Recently used) is read again after a write, apart from
+   the writes, so neither waits on the other. */
 (function () {
   const K = window.KMT;
   K.pages = new Map();
-  K.sel = [];                      // selected rows, in the order selected
-  K.pins = [];                     // pinned rows, in the order pinned
-  K.gone = new Set();              // forgotten rows (the server's, then this tab's): out of every view
-  K.writes = Promise.resolve();    // every write, queued; a send waits for them
-  let tagging = 0;                 // each tag change's serial
-  const changing = new Map();      // row -> tag -> latest change, so independent picks settle independently
+  K.sel = [];                      // selected rows, in the order selected; a forgotten one stays, unshown
+  K.pins = [];                     // pinned rows, in the order pinned; likewise
+  K.gone = new Set();              // forgotten rows: out of every view
+  K.writes = Promise.resolve();    // the service's list writes, queued
+  K.mutations = Promise.resolve(); // the library's writes, queued apart from the service
+  K.generation = 0;                // bumped by every library write sent and every one answered
+  const rows = new Map();          // page key -> row
+  const confirmed = new Map();     // row -> the generation a library reply last set its tags at
 
-  K.know = (pages, replace = true) => { for (const p of pages) if (replace || !K.pages.has(p.row)) K.pages.set(p.row, p); return pages.map((p) => p.row); };
+  /* pages the service sent for a request made at generation `at`: a library reply since then keeps its tags */
+  K.know = (pages, replace = true, at = K.generation) => {
+    for (const p of pages) {
+      const had = K.pages.get(p.row);
+      if (!had || replace) K.pages.set(p.row, had && confirmed.get(p.row) > at ? { ...p, tags: had.tags } : p);
+      rows.set(p.url, p.row);
+    }
+    return pages.map((p) => p.row);
+  };
   K.has = (row, tag) => K.pages.get(row).tags.includes(tag);
+  K.selected = () => K.sel.filter((r) => !K.gone.has(r));
+  K.pinned = () => K.pins.filter((r) => !K.gone.has(r));
   const count = (n) => `${n} page${n === 1 ? "" : "s"}`;
 
   /* `body` may be a function, read when the write is sent, so it carries the latest state */
-  function write(path, body, ready) {
-    const next = K.writes.then(() => ready).then(() => K.api(path, typeof body === "function" ? body() : body));
+  function write(path, body) {
+    const next = K.writes.then(() => K.api(path, typeof body === "function" ? body() : body));
     K.writes = next.catch(() => {});
     return next;
   }
+  /* one library write, after the ones before it */
+  function mutate(route, body) {
+    K.generation++;
+    const sent = K.mutations.then(() => K.shell(route, body));
+    K.mutations = sent.catch(() => {});
+    return sent.then((out) => { K.generation++; return out; });
+  }
 
-  /* A library snapshot shares the writes' order, so it cannot replace a later tag reply's recent list. */
-  K.loadLibrary = () => write("api/library").then((out) => {
-    K.lib = out;
-  });
+  /* The service's view of the library, once the library's writes before it are in. A reply a write overtook
+     (sent or answered meanwhile) is read again; a call while one is in flight shares it. */
+  let reading = null;
+  K.loadLibrary = () => reading || (reading = (async () => {
+    try {
+      for (;;) {
+        await K.mutations;
+        const at = K.generation;
+        const out = await K.api("api/library");
+        if (at !== K.generation) continue;
+        K.lib = out;
+        K.gone = new Set(out.forgotten);
+        return;
+      }
+    } finally { reading = null; }
+  })());
+  const refresh = () => K.loadLibrary().then(() => K.changed(), K.fail);   // a failed read leaves the write done
+  const failed = (err) => { K.fail(err); K.changed(); };   // every page as the library holds it, said once
 
   /* ---- the selection and the pins: lists the server keeps, sent whole. A list is sent only once its
      startup load is in: a change made before then is made again on the loaded list, which is then sent ---- */
@@ -63,117 +99,87 @@
     }
   })());
 
-  /* ---- forget: the page leaves every view, the selection, the pins and the counts at once.
-     Undo puts it back in its place, selected and pinned as it was ---- */
+  /* what a tag reply says the library holds now: each page it names that this tab has, and the active names */
+  function adopt(out) {
+    for (const [url, tags] of Object.entries(out.tags)) {
+      const row = rows.get(url);
+      if (row === undefined) continue;
+      K.pages.get(row).tags = tags;
+      confirmed.set(row, K.generation);
+    }
+    names(out.vocabulary);
+    K.changed();
+  }
+  const names = (vocabulary) => { if (K.lib) K.lib.app_tags = vocabulary.map((v) => v.name).sort(K.byName); };
+  const undoable = (undo) => undo.tags.length > 0 || Object.keys(undo.vocabulary).length > 0;
+  /* the library's record of a write, sent back: each decision it changed as it was */
+  const reverse = (undo) => mutate("tags", { urls: [], undo }).then((out) => { adopt(out); refresh(); }, failed);
+
+  /* ---- forget: the page leaves every view and count once the library has forgotten it; Undo restores what
+     this forget changed, and the page is back in its place in the selection and the pins ---- */
+  function hide(urls, gone) {
+    for (const url of urls) {
+      const row = rows.get(url);
+      if (row === undefined || K.gone.has(row) === gone) continue;
+      K.gone[gone ? "add" : "delete"](row);
+      K.lib.pages += gone ? -1 : 1;
+    }
+    K.changed();
+  }
   K.forget = (row) => {
-    if (K.gone.has(row)) return;
-    const was = { selection: -1, pins: -1 };   // its place in each list, set as it leaves
-    const out = () => {
-      K.gone.add(row);
-      for (const name in was) edit(name, (list) => {
-        was[name] = list.indexOf(row);   // replay remembers its place in the loaded list for Undo
-        put(row, false)(list);
-      });
-      K.lib.pages--;
-      K.changed();
-    };
-    const back = () => {
-      K.gone.delete(row);
-      for (const name in was) {
-        edit(name, (list) => { if (was[name] >= 0 && !list.includes(row)) list.splice(Math.min(was[name], list.length), 0, row); });
-      }
-      K.lib.pages++;
-      K.changed();
-    };
-    // Forget prunes the server's lists: first load their membership so replay and Undo can preserve it.
-    const send = (value) => write("api/forget", { rows: [row], value }, K.listsReady).then((reply) => { K.lib.pages = reply.pages; K.changed(); });
-    out();
-    send(true).catch((err) => { back(); K.fail(err); });
-    K.toast("Forgotten", () => {
-      if (!K.gone.has(row)) return;
-      back();
-      send(false).then(() => K.views.refresh(row)).catch((err) => { out(); K.fail(err); });
-      for (const name in was) if (was[name] >= 0) keep(name);
-    });
+    if (K.gone.has(row)) return Promise.resolve();
+    const url = K.pages.get(row).url;
+    return mutate("forget", { urls: [url] }).then((out) => {
+      hide([url], true);
+      K.toast("Forgotten", out.urls.length ? () => mutate("restore", { urls: out.urls }).then((back) => {
+        hide(back.urls, false);
+        K.views.refresh(row);
+        refresh();
+      }, failed) : null);
+      refresh();
+    }, failed);
   };
 
-  /* ---- app tags: add `tags` to (value true) or take them off `rows`, one write a tag; one toast, whose Undo
-     retracts every batch the server made ---- */
-  const set = (rows, tag, value, mine) => {
-    for (const r of rows) {
-      if (mine !== undefined) {
-        if (!changing.has(r)) changing.set(r, new Map());
-        changing.get(r).set(tag, mine);
-      }
-      const tags = K.pages.get(r).tags.filter((t) => t !== tag);
-      K.pages.get(r).tags = value ? tags.concat(tag).sort() : tags;
-    }
-  };
-  /* each reply settles its own tag, preserving newer picks on that tag and pending picks on other tags */
-  function settle(path, body, rows, tag, mine, onError) {
-    const current = (r) => changing.get(r).get(tag) === mine;
-    return write(path, body).then((out) => {
-      for (const p of out.pages) if (current(p.row)) set([p.row], tag, p.tags.includes(tag));
-      K.lib.app_tags = out.app_tags;
-      K.lib.recent = out.recent;
-      K.changed();
+  /* ---- tags: `add` and `remove` on `rows` in one library write, shown once it answers, with one toast and its
+     Undo. `say()` reads the toast ---- */
+  function retag(rows, add, remove, say) {
+    const urls = rows.map((r) => K.pages.get(r).url);
+    return mutate("tags", { urls, add, remove }).then((out) => {
+      adopt(out);
+      const lost = out.counts.unknown ? `. ${count(out.counts.unknown)} not in your library` : "";
+      K.toast(say() + lost, undoable(out.undo) ? () => reverse(out.undo) : null);
+      refresh();
       return out;
-    }, (err) => { onError(rows.filter(current), err); K.changed(); });
-  }
-  /* each of `tags` on (or off) `rows` at once, then written in order; a failed write puts back its tag only.
-     `say(done)` reads the toast for the tags written */
-  function change(tags, value, rows, say) {
-    const mine = ++tagging;
-    for (const tag of tags) set(rows, tag, value, mine);
-    K.changed();
-    let failure;
-    const sent = tags.map((tag) => settle("api/apply", { rows, tag, value }, rows, tag, mine, (current, err) => {
-      set(current, tag, !value);
-      failure ||= err;
-    }));
-    return Promise.all(sent).then((outs) => {
-      const done = tags.filter((_, i) => outs[i]), lost = tags.filter((_, i) => !outs[i]).map(K.short);
-      const batches = tags.map((tag, i) => [tag, outs[i] && outs[i].batch]).filter(([, batch]) => batch);
-      if (done.length) K.toast(say(done) + (lost.length ? `. Not ${value ? "added" : "removed"}: ${lost.join(", ")}` : ""),
-        batches.length ? () => undo(batches, rows, value, mine) : null);
-      else K.fail(failure);
-    });
-  }
-  /* `batches`: [tag, batch] for each write to retract */
-  function undo(batches, rows, value, was) {
-    const before = new Map(rows.map((r) => [r, new Set(K.pages.get(r).tags)]));
-    const mine = ++tagging;
-    for (const [tag] of batches) for (const r of rows) {
-      set([r], tag, changing.get(r).get(tag) === was ? !value : K.has(r, tag), mine);
-    }
-    K.changed();
-    return Promise.all(batches.map(([tag, batch]) => settle("api/undo", { batch }, rows, tag, mine, (current, err) => {
-      for (const r of current) set([r], tag, before.get(r).has(tag));
-      K.fail(err);
-    })));
+    }, failed);
   }
   const nothing = (msg) => { K.toast(msg); return Promise.resolve(); };
 
   /* the strip's name: add the tag to every selected page (or every page of `on`, the Add link tile's) that lacks it */
-  K.tagSelection = (tag, on = K.sel) => {
+  K.tagSelection = (tag, on = K.selected()) => {
     if (!on.length) return nothing(`Select pages first, then click a tag to add it to them`);
     const rows = on.filter((r) => !K.has(r, tag));
     if (!rows.length) return nothing(`Every selected page has ${K.short(tag)}`);
-    return change([tag], true, rows, () => `Added ${K.short(tag)} to ${count(rows.length)}`);
+    return retag(rows, [tag], [], () => `Added ${K.short(tag)} to ${count(rows.length)}`);
   };
   /* the strip's ×: take the tag off every selected page (or page of `on`) that has it */
-  K.untagSelection = (tag, on = K.sel) => {
+  K.untagSelection = (tag, on = K.selected()) => {
     const rows = on.filter((r) => K.has(r, tag));
     if (!rows.length) return nothing(`No selected page has ${K.short(tag)}`);
-    return change([tag], false, rows, () => `Removed ${K.short(tag)} from ${count(rows.length)}`);
+    return retag(rows, [], [tag], () => `Removed ${K.short(tag)} from ${count(rows.length)}`);
   };
   const named = (row) => `“${K.short(K.title(K.pages.get(row)))}”`;
   /* a tile chip's ×: this page only */
-  K.untag = (row, tag) => change([tag], false, [row], () => `Took “${K.short(tag)}” off ${named(row)}`);
-  /* the tags picked for one page before it had a row, those it lacks in one change: one toast, one Undo */
+  K.untag = (row, tag) => retag([row], [], [tag], () => `Took “${K.short(tag)}” off ${named(row)}`);
+  /* the tags picked for one page before it had a row, those it lacks in one write: one toast, one Undo */
   K.tagPage = (row, tags) => {
     const lack = tags.filter((t) => !K.has(row, t));
     if (!lack.length) return Promise.resolve();
-    return change(lack, true, [row], (done) => `Added ${done.map((t) => `“${K.short(t)}”`).join(", ")} to ${named(row)}`);
+    return retag([row], lack, [], () => `Added ${lack.map((t) => `“${K.short(t)}”`).join(", ")} to ${named(row)}`);
   };
+  /* a name typed as a new tag, in the library's vocabulary (made, brought back, or there in any case): its spelling */
+  K.newTag = (name) => mutate("vocabulary", { create: [name] }).then((out) => {
+    names(out.vocabulary);
+    refresh();
+    return out.resolved[0];
+  });
 })();

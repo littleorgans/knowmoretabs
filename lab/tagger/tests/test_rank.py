@@ -16,8 +16,8 @@ class RankTests(Served):
 
     def test_every_page_once_forgotten_ones_included(self):
         in_archive = {r["key"] for r in self.lib.records if r["forgotten"]}
-        in_app = next(r["key"] for r in self.lib.records if not r["forgotten"])
-        self.app.forgotten.set([in_app])
+        just_now = next(i for i, r in enumerate(self.lib.records) if not r["forgotten"])
+        self.forget([just_now])
         self.assertTrue(in_archive)
         status, body, _ = self.rank("espresso grinder")
         self.assertEqual(200, status)
@@ -25,7 +25,7 @@ class RankTests(Served):
         keys = body["keys"]
         self.assertEqual(len(keys), len(set(keys)))
         self.assertEqual(sorted(r["key"] for r in self.lib.records), sorted(keys))
-        self.assertLessEqual(in_archive | {in_app}, set(keys))
+        self.assertLessEqual(in_archive | {self.lib.records[just_now]["key"]}, set(keys))
 
     def test_the_order_is_the_search_ranking_over_every_page(self):
         query = "espresso grinder"
@@ -41,7 +41,7 @@ class RankTests(Served):
             self.assertEqual((400, {"error": "type a search"}), (status, body))
 
     def test_every_reply_names_the_archive_by_device_and_inode(self):
-        st = (self.tmp / "archive").stat()
+        st = self.root.stat()
         named = f"{st.st_dev}:{st.st_ino}"
         replies = {
             "rank": self.rank("night train"),

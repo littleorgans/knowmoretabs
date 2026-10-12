@@ -1,8 +1,9 @@
 """The screens in headless Chrome (`browser.cjs`) on the app serving the synthetic archive, through the real Library
-shell (`KMT_BIN`) as `just up` runs them: lit-html under the shell's CSP, every request to the shell's /model/, tile
-nodes kept across updates, result pages, ≈ back to the same page, Forget, Undo and Pin, and Add link driven against
-a fake knowmoretabs on a fresh copy of the archive."""
+shell (`KMT_BIN`) as `just up` runs them: lit-html under the shell's CSP, every request to the shell's /model/ or the
+library's own writes, tile nodes kept across updates, result pages, ≈ back to the same page, Forget, Undo and Pin, and
+Add link driven against a fake knowmoretabs, each on a fresh copy of the archive."""
 
+import dataclasses
 import json
 import os
 import shutil
@@ -14,12 +15,13 @@ from urllib.parse import quote
 
 import pytest
 import shell
+import synthetic_archive
 from test_add import Synthetic, fake_binary
 from test_app import DIM, Fixture, fake_embed, fake_encode, fake_image
 
-from tagger.app import engine, send, server
-from tagger.app.store import Store
+from tagger.app import engine, server
 from tagger.archive import Archive
+from tagger.paths import Paths
 
 MAC_CHROME = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 
@@ -37,7 +39,7 @@ class Browser:
         assert shell.binary(), "set KMT_BIN to a knowmoretabs build (cargo build --locked): the screens run behind it"
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
-        app = server.App(lib, Store(self.data / "app"), fake_encode, fake_embed)
+        app = server.App(lib, self.data / "app", fake_encode, fake_embed)
         self.shell = shell.Shell(app, self.data, shell.binary())
         self.addCleanup(self.shell.close)
         return app
@@ -56,7 +58,10 @@ class Browser:
 
 class BrowserTests(Browser, Fixture):
     def setUp(self):
-        self.app = self.start(self.lib)
+        root = Path(tempfile.mkdtemp()) / "archive"
+        self.addCleanup(shutil.rmtree, root.parent)
+        shutil.copytree(self.tmp / "archive", root)  # the library's writes land on this test's own copy
+        self.app = self.start(dataclasses.replace(self.lib, root=root))
 
     def test_startup_reply_preserves_newer_page_tags(self):
         saved = [p["row"] for p in self.app.search({"query": "night train", "n": 50})["hits"][:2]]
@@ -135,21 +140,26 @@ class AddBrowserTests(Browser, Synthetic):
 
     def test_cells_hold_their_place_from_link_to_index(self):
         self.paced(0.3)
-        for name in ("Airships", "Archive", "Atlas", "Canals", "Coffee", "Docs", "Éclair", "Ferries", "iOS", "Maps"):
-            self.app.tag({"name": name})
-        self.app.tag({"name": "An invented tag name cut in its cell"})
-        self.app.tag({"name": "3D printing"})
-        for name in ("Night trains", "Sleeper cabins", "Timetables"):  # the fake page's night train: the model's picks
-            self.app.tag({"name": name})
-        used = ["Archive", "Atlas", "Canals", "Coffee", "Docs", "Ferries", "iOS", "Maps"]
-        for tag in used:  # Recently used holds more than its line fits
-            self.app.store.apply([self.app.lib.records[0]["key"]], tag, True)
+        names = ["Airships", "Archive", "Atlas", "Canals", "Coffee", "Docs", "Éclair", "Ferries", "iOS", "Maps"]
+        names += ["An invented tag name cut in its cell", "3D printing"]
+        names += ["Night trains", "Sleeper cabins", "Timetables"]  # the fake page's night train: the model's picks
+        used = ["Archive", "Atlas", "Canals", "Coffee", "Docs", "Ferries", "iOS", "Maps"]  # more than its line fits
+
+        def seed(state):
+            for name in names:
+                state["vocabulary"].setdefault(name, {"created_at": synthetic_archive.AT})
+            for i, name in enumerate(used):
+                state["vocabulary"][name]["used_at"] = f"2026-10-0{i + 1}T00:00:00Z"
+            for name in synthetic_archive.DEFINITIONS:  # only the model's names are suggested; the rest are retired
+                if name not in names:
+                    state["vocabulary"][name]["retired_at"] = "2026-10-09T00:00:00Z"
+
+        synthetic_archive.edit_state(self.root, seed)
         measured = json.loads(self.run_case("addStable", "#add"))
         print("addStable", json.dumps(measured))
         self.assertEqual(["Sleeper cabins", "Timetables"], measured["suggested"], "best first, less the pick")
-        tags = self.app.store.app_tags()["https://added.example/notes/stable"]
-        self.assertEqual([measured["tag"], "Timetables"], tags, "the pick and the suggestion reached the server")
-        self.assertIn(measured["tag"], tags, "the pick reached the server")
+        tags = Archive.load(self.root).state.tags("https://added.example/notes/stable")
+        self.assertEqual([measured["tag"], "Timetables"], tags, "the pick and the suggestion reached the library")
         self.assertNotIn(measured["tag"], used, "the pick was not recent before")
 
     def test_a_deep_link_fills_the_box_and_waits_for_enter(self):
@@ -201,33 +211,8 @@ class AddBrowserTests(Browser, Synthetic):
     def test_snapshot_refusal_replaces_all_segments_and_disables_the_tile(self):
         protected = self.data / "snapshot-synthetic"
         shutil.copytree(self.root, protected)
-        self.app.lib = engine.load(self.paths, protected, fake_encode, fake_embed, embed_image=fake_image, dim=DIM)[0]
+        lib = engine.load(self.paths, protected, fake_encode, fake_embed, embed_image=fake_image, dim=DIM)[0]
+        self.app.lib = dataclasses.replace(lib, paths=Paths(self.data))  # a copy inside the app's data directory
         with patch.object(self.app.adds, "_command") as command:
             self.run_case("addSnapshot", "#add")
             command.assert_not_called()
-
-
-class SendBrowserTests(Browser, Synthetic):
-    def setUp(self):
-        super().setUp()
-        self.app = self.start(self.load()[0])
-        self.app.binary = fake_binary(self.work)
-
-    def test_send_dialog_applies_once_and_remains_dismissible(self):
-        self.app.tag({"name": "Browser send"})
-        self.run_case("sendFlow")
-        archive = Archive.load(self.root)
-        tagged = [key for key in archive.known if "Browser send" in archive.state.tags(key)]
-        self.assertEqual(list(self.app.store.app_tags()), tagged)
-
-    def test_send_refreshes_the_view_after_a_forget_reports_failure(self):
-        original = send.run
-
-        def failed_after_forget(app, call):
-            error = original(app, call)
-            if error is None and call.args[0] == "forget":
-                return "synthetic failure after forget wrote"
-            return error
-
-        with patch.object(send, "run", side_effect=failed_after_forget):
-            self.run_case("sendPartialForget")

@@ -1,5 +1,5 @@
-"""The app on the synthetic archive with a fake encoder (no model): load, search fusion, prechecks, the store's
-persistence and export, and the HTTP guards and flow."""
+"""The app on the synthetic archive with a fake encoder (no model): load, search fusion, prechecks, the decisions
+followed from `library.json`, the app's own lists, and the HTTP guards and flow."""
 
 import dataclasses
 import json
@@ -20,7 +20,7 @@ import signed
 from tagger import cli, dataset
 from tagger.embed import CHAR_CAP, IMAGE_MODEL, MAX_TOKENS, MODELS, model_identity, page_texts
 from tagger.app import engine, server
-from tagger.app.store import SOURCE, Exclusions, Store, tag_name
+from tagger.app.store import Exclusions
 from tagger.archive import sha256_hex
 from tagger.heads import unit
 from tagger.paths import Paths
@@ -173,8 +173,9 @@ class EngineTests(Fixture):
                 self.assertEqual(s["checked"], bool(self.lib.S[row, j] >= self.lib.threshold[j]))
                 self.assertEqual(s["checked"], s["p"] >= 0.5)
 
-    def test_a_created_tag_is_a_zero_shot_tag_queried_by_its_name(self):
-        lib = engine.add_tags(self.lib, ["Sleeper cars"], fake_encode)
+    def test_a_name_the_vocabulary_gains_is_a_zero_shot_tag_queried_by_its_name(self):
+        gained = {**self.lib.state.active, "sleeper cars": "Sleeper cars"}
+        lib = engine.apply_state(self.lib, dataclasses.replace(self.lib.state, active=gained), fake_encode)
         self.assertEqual(len(self.lib.tags), len(lib.tags) - 1)  # the loaded library is left as it was
         j = lib.tags.index("Sleeper cars")
         s = lib.X @ fake_encode(["Sleeper cars"])[0]
@@ -184,188 +185,39 @@ class EngineTests(Fixture):
         self.assertFalse(self.lib.Y[:, unseen].any())
         u = self.lib.S[:, unseen]
         self.assertAlmostEqual(u.mean() + engine.ZERO_K_SD * u.std(), self.lib.threshold[unseen], places=5)
-        self.assertEqual({"name": "Sleeper cars", "positives": 0, "source": "zero shot"}, engine.tag_info(lib)[j])
+        self.assertIn({"name": "Sleeper cars", "positives": 0, "source": "zero shot"}, engine.tag_info(lib))
         rows = list(range(len(lib.records)))
         sugg = [p[0] for p in engine.prechecks(lib, rows, ["Sleeper cars"])]
         self.assertEqual({"zero shot"}, {x["source"] for x in sugg})
         self.assertEqual([bool(x) for x in s >= lib.threshold[j]], [x["checked"] for x in sugg])
         self.assertIn("Sleeper cars", {x["tag"] for x in engine.suggest(lib, rows, len(lib.tags))})
 
+    def test_a_retired_name_keeps_its_column_out_of_sight_and_comes_back_in_it(self):
+        j, rows = self.lib.tags.index("Coffee"), list(range(len(self.lib.records)))
+        state = self.lib.state
+        retired = dataclasses.replace(
+            state,
+            active={k: v for k, v in state.active.items() if k != "coffee"},
+            retired={**state.retired, "coffee": "Coffee"},
+        )
+        lib = engine.apply_state(self.lib, retired, fake_encode)
+        self.assertEqual(self.lib.tags, lib.tags, "no column goes or moves")
+        self.assertNotIn("Coffee", [t["name"] for t in engine.tag_info(lib)])
+        self.assertNotIn("Coffee", {x["tag"] for x in engine.suggest(lib, rows, len(lib.tags))})
+        self.assertFalse(lib.Y[:, j].any())
+        self.assertFalse(any("Coffee" in r["tags"] for r in lib.records))
+        self.assertTrue(state.adds, "its decisions are still there")
+        back = engine.apply_state(lib, state, lambda texts: self.fail(f"encoded {texts}"))
+        self.assertEqual(self.lib.tags, back.tags)
+        np.testing.assert_array_equal(self.lib.Y, back.Y)
+        self.assertIs(self.lib.S, back.S, "the column it had, scored as before")
+        self.assertEqual(engine.tag_info(self.lib), engine.tag_info(back))
+
     def test_add_tags_skips_names_the_library_has_in_any_case(self):
         self.assertIs(self.lib, engine.add_tags(self.lib, ["coffee", "READ LATER"], fake_encode))
         lib = engine.add_tags(self.lib, ["New", "NEW", "trains"], fake_encode)
         self.assertEqual([*self.lib.tags, "New"], lib.tags)
         self.assertEqual("Coffee", engine.find_tag(lib, "cOFFEE"))
-
-
-class StoreTests(unittest.TestCase):
-    def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp)
-        self.old = os.umask(0o077)
-        self.addCleanup(os.umask, self.old)
-
-    @staticmethod
-    def sugg(*pairs):
-        return [{"tag": t, "checked": c, "p": 0.7 if c else 0.3, "source": "head"} for t, c in pairs]
-
-    def test_decisions_survive_a_restart_and_the_latest_wins(self):
-        store = Store(self.tmp)
-        a = store.create(
-            "q1", False, ["u1", "u2"], ["A", "B"], [self.sugg(("A", True), ("B", False)), self.sugg(("A", False))]
-        )
-        store.update(a["id"], 0, {"B": True}, "decided")
-        store.update(a["id"], 1, None, "skipped")
-        b = store.create("q2", True, ["u1"], ["A"], [self.sugg(("A", True))])
-        store.update(b["id"], 0, {"A": False}, "decided")
-        again = Store(self.tmp)
-        self.assertEqual(again.state, store.state)
-        latest = again.decisions()
-        self.assertEqual({("u1", "A"), ("u1", "B")}, set(latest))  # the skipped page is not a decision
-        self.assertFalse(latest[("u1", "A")]["value"])
-        self.assertEqual(b["id"], latest[("u1", "A")]["session"])
-        self.assertTrue(latest[("u1", "B")]["value"])
-        answers = [json.loads(line) for line in Path(again.export()["answers"]).read_text().splitlines()]
-        self.assertEqual([{"url": "u1", "tags": ["B"], "source": SOURCE}], answers)
-
-    def test_tag_names_follow_the_import_rules(self):
-        self.assertEqual("Model context protocol", tag_name("  Model \t context\nprotocol "))
-        self.assertEqual("x" * 40, tag_name("x" * 40))
-        self.assertEqual("研究", tag_name("研究"))
-        self.assertEqual("a b", tag_name("a\u00a0\u3000b"))
-        for bad, reason in [
-            ("", "empty"),
-            ("   ", "empty"),
-            ("x" * 41, "longer than 40"),
-            ("a\u0007b", "control"),
-            ("\u0000", "control"),
-            ("a\u001cb", "control"),  # whitespace to str.split, a control character to Rust
-        ]:
-            with self.assertRaisesRegex(ValueError, f"cannot use that name as a tag: it .*{reason}"):
-                tag_name(bad)
-
-    def test_created_tags_persist_privately_and_export_with_their_decisions(self):
-        store = Store(self.tmp)
-        store.add_tag("Sleeper cars")
-        again = Store(self.tmp)
-        self.assertEqual(["Sleeper cars"], again.tags())
-        self.assertEqual(0o600, stat.S_IMODE((self.tmp / "state.json").stat().st_mode))
-        s = again.create("q", False, ["u1"], ["Sleeper cars"], [self.sugg(("Sleeper cars", False))])
-        again.update(s["id"], 0, {"Sleeper cars": True}, "decided")
-        answers = [json.loads(line) for line in Path(again.export()["answers"]).read_text().splitlines()]
-        self.assertEqual([{"url": "u1", "tags": ["Sleeper cars"], "source": SOURCE}], answers)
-
-    def test_marks_name_only_offered_tags(self):
-        store = Store(self.tmp)
-        s = store.create("q", False, ["u1"], ["A"], [self.sugg(("A", True))])
-        with self.assertRaises(ValueError):
-            store.update(s["id"], 0, {"Z": True}, None)
-        with self.assertRaises(ValueError):
-            store.update(s["id"], 0, None, "maybe")
-
-    def test_invalid_status_does_not_change_marks_in_memory(self):
-        store = Store(self.tmp)
-        s = store.create("q", False, ["u1"], ["A"], [self.sugg(("A", True))])
-        with self.assertRaises(ValueError):
-            store.update(s["id"], 0, {"A": False}, "maybe")
-        self.assertTrue(store.session(s["id"])["pages"][0]["marks"]["A"])
-        self.assertEqual(Store(self.tmp).state, store.state)
-
-    def test_undo_reject_restores_flips_even_after_restart(self):
-        store = Store(self.tmp)
-        s = store.create("q", False, ["u1"], ["A", "B"], [self.sugg(("A", True), ("B", True))])
-        store.update(s["id"], 0, {"B": False}, None)
-        store.update(s["id"], 0, {"A": False, "B": False}, "decided")
-        again = Store(self.tmp)
-        page = again.update(s["id"], 0, None, "open")
-        self.assertEqual({"A": True, "B": False}, page["marks"])
-        self.assertEqual({}, again.decisions())
-
-    def test_editing_an_older_decided_set_is_the_latest_decision(self):
-        store = Store(self.tmp)
-        sets = [store.create("q", False, ["u1"], ["A"], [self.sugg(("A", True))]) for _ in range(2)]
-        store.update(sets[0]["id"], 0, None, "decided")
-        store.update(sets[1]["id"], 0, None, "decided")
-        store.update(sets[0]["id"], 0, {"A": False}, None)
-        self.assertFalse(Store(self.tmp).decisions()[("u1", "A")]["value"])
-
-    def test_applying_to_a_partly_tagged_selection_tags_only_the_rest(self):
-        store = Store(self.tmp)
-        self.assertEqual((["u1", "u2"], 1), store.apply(["u1", "u2"], "A", True))
-        self.assertEqual((["u3"], 2), store.apply(["u1", "u2", "u3"], "A", True))
-        self.assertEqual(([], None), store.apply(["u1", "u2", "u3"], "A", True))  # applying twice writes nothing
-        self.assertEqual(([], None), store.apply(["u4"], "A", False))  # nor does removing a tag a page lacks
-        self.assertEqual(3, len(store.state["direct"]))
-        self.assertEqual((["u2"], 3), store.apply(["u2", "u4"], "A", False))
-        self.assertEqual({"u1": ["A"], "u3": ["A"]}, Store(self.tmp).app_tags())
-
-    def test_undo_retracts_one_batch_so_each_page_is_exactly_as_before(self):
-        store = Store(self.tmp)
-        s = store.create("q", False, ["u1"], ["A"], [self.sugg(("A", True))])
-        store.update(s["id"], 0, None, "decided")  # u1 holds A from a review
-        store.apply(["u2"], "A", True)
-        _, first = store.apply(["u2"], "A", False)  # u2: a direct removal, before the batch
-        changed, batch = store.apply(["u1", "u2", "u3"], "A", True)
-        self.assertEqual(["u2", "u3"], changed)
-        before = Store(self.tmp).decisions()
-        store.apply(["u3"], "B", True)
-        self.assertEqual(["u2", "u3"], store.undo(batch))
-        again = Store(self.tmp)
-        self.assertEqual({"u1": ["A"], "u3": ["B"]}, again.app_tags())  # u1 kept A; the others lost only it
-        self.assertFalse(again.decisions()[("u2", "A")]["value"])  # u2's earlier removal stands
-        self.assertNotIn(("u3", "A"), again.decisions())  # u3 had no decision for A, and has none again
-        self.assertNotEqual(before, again.decisions())
-        self.assertEqual([], again.undo(batch))  # twice changes nothing
-        self.assertEqual(["u2"], again.undo(first))
-
-    def test_export_writes_forgotten_addresses_apart_and_leaves_them_out_of_the_answers(self):
-        store = Store(self.tmp)
-        store.apply(["u1", "u2 'odd' $x", "u3"], "A", True)
-        odd = "https://a.example/x y?q='1'&r=$(no)\nnext"
-        out = store.export(["u2 'odd' $x", odd])
-        answers = [json.loads(line) for line in Path(out["answers"]).read_text().splitlines()]
-        self.assertEqual(["u1", "u3"], [a["url"] for a in answers])
-        manifest = Path(out["forget"])
-        self.assertEqual(manifest.parent, Path(out["answers"]).parent)
-        self.assertEqual(["u2 'odd' $x", odd, ""], manifest.read_text().split("\0"))  # each address NUL ended
-        self.assertEqual(0o600, stat.S_IMODE(manifest.stat().st_mode))
-        self.assertEqual((2, 2), (out["forgotten"], out["answer_pages"]))
-        self.assertIsNone(store.export()["forget"])
-
-    def test_export_carries_direct_tags_and_a_direct_removal_overrides_a_review(self):
-        store = Store(self.tmp)
-        s = store.create("q", False, ["u1", "u2"], ["A"], [self.sugg(("A", False))] * 2)
-        store.update(s["id"], 0, {"A": True}, "decided")
-        store.update(s["id"], 1, {"A": True}, "decided")
-        self.assertEqual({"u1": ["A"], "u2": ["A"]}, store.app_tags())  # kept in a review
-        store.apply(["u2"], "A", False)
-        store.apply(["u3"], "B", True)
-        out = Store(self.tmp).export()
-        answers = [json.loads(line) for line in Path(out["answers"]).read_text().splitlines()]
-        expected = [{"url": "u1", "tags": ["A"], "source": SOURCE}, {"url": "u3", "tags": ["B"], "source": SOURCE}]
-        self.assertEqual(expected, answers)
-        log = {(r["url"], r["tag"]): r for r in map(json.loads, Path(out["decisions"]).read_text().splitlines())}
-        self.assertEqual(("no", None, None), tuple(log[("u2", "A")][k] for k in ("answer", "model", "session")))
-        self.assertEqual({"url", "tag", "answer", "model", "session", "at"}, set(log[("u3", "B")]))
-        self.assertEqual((3, 1), (out["decided"], out["flipped"]))  # direct decisions have no model to flip
-
-    def test_export_writes_private_answers_and_log_alone_in_a_folder(self):
-        store = Store(self.tmp)
-        s = store.create("q", False, ["u1", "u2", "u3"], ["A", "B"], [self.sugg(("A", True), ("B", True))] * 3)
-        store.update(s["id"], 0, {"B": False}, "decided")
-        store.update(s["id"], 1, {"A": False, "B": False}, "decided")
-        out = store.export()
-        answers = [json.loads(line) for line in Path(out["answers"]).read_text().splitlines()]
-        self.assertEqual([{"url": "u1", "tags": ["A"], "source": SOURCE}], answers)
-        log = [json.loads(line) for line in Path(out["decisions"]).read_text().splitlines()]
-        self.assertEqual(4, len(log))
-        self.assertEqual(3, sum(row["answer"] != row["model"] for row in log))
-        self.assertEqual((4, 3, 1, 1), (out["decided"], out["flipped"], out["answer_pages"], out["answer_tags"]))
-        folder = Path(out["folder"])
-        self.assertEqual({"answers.jsonl", "decisions.jsonl"}, {p.name for p in folder.iterdir()})
-        for p in [*folder.iterdir(), self.tmp / "state.json"]:
-            self.assertEqual(0o600, stat.S_IMODE(p.stat().st_mode))
-        self.assertNotEqual(folder, Path(store.export()["folder"]))
 
 
 class ExclusionTests(unittest.TestCase):
@@ -386,7 +238,7 @@ class ExclusionTests(unittest.TestCase):
         self.assertEqual((3, "click"), (entry["rank"], entry["by"]))
         self.assertEqual({"u0"}, again.keys("other"))
         self.assertEqual(0o600, stat.S_IMODE(again.path.stat().st_mode))
-        self.assertFalse((self.tmp / "state.json").exists())
+        self.assertEqual(["not-relevant.json"], [p.name for p in self.tmp.iterdir()])
         again.apply("q", self.keys, "include", "u2")
         self.assertEqual(set(), Exclusions(self.tmp).keys("q"))
         self.assertNotIn("q", Exclusions(self.tmp).state["queries"])
@@ -433,12 +285,15 @@ class ExclusionTests(unittest.TestCase):
 
 
 class Served(Fixture):
-    """The app on a fresh store, served on a free port, and one HTTP call to it as the shell makes it."""
+    """The app on its own copy of the archive and fresh lists, served on a free port, and one HTTP call to it as the
+    shell makes it. `edit` and `tag` change `library.json` as knowmoretabs does, replacing it whole."""
 
     def setUp(self):
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
-        self.app = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
+        self.root = self.data / "archive"
+        shutil.copytree(self.tmp / "archive", self.root)
+        self.app = self.restart()
         self.server = server.serve(self.app, 0, signed.KEY)
         self.port = self.server.server_address[1]
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -446,15 +301,38 @@ class Served(Fixture):
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
+    def restart(self) -> server.App:
+        """An app on this archive and these lists, as a restart starts one."""
+        return server.App(dataclasses.replace(self.lib, root=self.root), self.data / "app", fake_encode, fake_embed)
+
     def call(self, method, path, body=None, headers=None, prove=True):
         return signed.call(self.port, method, path, body, headers, prove)
 
+    def edit(self, change) -> dict:
+        return synthetic_archive.edit_state(self.root, change)
+
+    def tag(self, rows: list[int], name: str, side: str = "add", used_at: str | None = None) -> None:
+        keys = [self.lib.records[r]["key"] for r in rows]
+        self.edit(lambda state: synthetic_archive.decide(state, keys, name, side, used_at))
+
+    def forget(self, rows: list[int], value: bool = True) -> None:
+        keys = {self.lib.records[r]["key"] for r in rows}
+
+        def change(state):
+            kept = [k for k in state["forgotten"] if k not in keys]
+            state["forgotten"] = kept + sorted(keys) if value else kept
+
+        self.edit(change)
+
+    def rows_for(self, query: str, n: int = 20, **body) -> list[int]:
+        return [h["row"] for h in self.call("POST", "/api/search", {"query": query, "n": n, **body})[1]["hits"]]
+
+    def found(self, query: str) -> dict:
+        """Each hit's tags, by row."""
+        return {h["row"]: h["tags"] for h in self.call("POST", "/api/search", {"query": query, "n": 50})[1]["hits"]}
+
 
 class ServerTests(Served):
-    def record(self) -> dict:
-        """The export record a send writes first."""
-        return self.app.store.export(self.app.forgotten.keys)
-
     def test_api_finishes_while_an_image_transfer_is_blocked(self):
         started, release, answered = threading.Event(), threading.Event(), threading.Event()
         handler = self.server.RequestHandlerClass
@@ -479,7 +357,7 @@ class ServerTests(Served):
                 release.set()
             self.assertEqual(200, image.result(timeout=2)[0])
 
-    def test_concurrent_requests_serialize_model_and_store_access(self):
+    def test_concurrent_requests_serialize_model_and_list_access(self):
         started, release = threading.Event(), threading.Event()
         dispatched, encoded = threading.Event(), threading.Event()
         handler = self.server.RequestHandlerClass
@@ -519,8 +397,8 @@ class ServerTests(Served):
 
     def test_guards(self):
         self.assertEqual(421, self.call("GET", "/api/library", headers={"Host": "attacker.example"})[0])
-        self.assertEqual(403, self.call("POST", "/api/send", {}, {"Origin": "http://attacker.example"})[0])
-        self.assertEqual(415, self.call("POST", "/api/send", {}, {"Content-Type": "text/plain"})[0])
+        self.assertEqual(403, self.call("POST", "/api/search", {}, {"Origin": "http://attacker.example"})[0])
+        self.assertEqual(415, self.call("POST", "/api/search", {}, {"Content-Type": "text/plain"})[0])
         self.assertEqual(404, self.call("GET", "/..%2Fserver.py")[0])
         self.assertEqual(404, self.call("GET", "/static/../server.py")[0])
         status, body, r = self.call("GET", "/")
@@ -535,11 +413,66 @@ class ServerTests(Served):
         status, body, r = self.call("GET", f"/img/{self.app.page(shown)['image']}")
         self.assertEqual((200, "image/jpeg"), (status, r.getheader("Content-Type")))
 
+    def test_the_decision_session_and_send_routes_are_gone(self):
+        rows = self.rows_for("night train")[:2]
+        before = (self.root / "library.json").read_bytes()
+        for method, path, body in (
+            ("POST", "/api/apply", {"rows": rows, "tag": "Trains", "value": True}),
+            ("POST", "/api/undo", {"batch": 1}),
+            ("POST", "/api/forget", {"rows": rows, "value": True}),
+            ("POST", "/api/tags", {"name": "Sleeper cars"}),
+            ("GET", "/api/sessions", None),
+            ("GET", "/api/sessions/1", None),
+            ("POST", "/api/sessions", {"query": "night train", "rows": rows, "picked": ["Trains"]}),
+            ("POST", "/api/sessions/1/pages/0", {"status": "decided"}),
+            ("POST", "/api/send/preview", {}),
+            ("POST", "/api/send", {"preview": 1}),
+            ("GET", "/review.js", None),
+            ("GET", "/swipe.js", None),
+            ("GET", "/pick.js", None),
+            ("GET", "/search.js", None),
+        ):
+            self.assertEqual(404, self.call(method, path, body)[0], path)
+        self.assertEqual(before, (self.root / "library.json").read_bytes())
+        self.assertFalse((self.data / "app" / "state.json").exists())
+
+    def test_files_an_earlier_app_kept_its_decisions_in_stay_unread_and_untouched(self):
+        rows = self.rows_for("night train")[:3]
+        keys = [self.lib.records[r]["key"] for r in rows]
+        old = self.data / "app"
+        old.mkdir(exist_ok=True)
+        (old / "exports" / "20261001T000000Z").mkdir(parents=True)
+        files = {
+            old / "state.json": json.dumps(
+                {
+                    "version": 1,
+                    "sessions": [],
+                    "tags": [{"name": "Only here", "created_at": 1.0}],
+                    "direct": [{"key": keys[0], "tag": "Only here", "value": True, "at": 2.0, "batch": 1}],
+                }
+            ),
+            old / "forgotten.json": json.dumps({"version": 1, "keys": keys[1:2]}),
+            old / "exports" / "20261001T000000Z" / "answers.jsonl": json.dumps({"url": keys[2], "tags": ["Old"]})
+            + "\n",
+        }
+        for path, text in files.items():
+            path.write_text(text)
+        app = self.restart()
+        names = [t["name"] for t in app.library()["tags"]] + app.library()["app_tags"]
+        self.assertNotIn("Only here", names)
+        self.assertNotIn(rows[1], app.library()["forgotten"])
+        self.assertTrue(app.lib.live[rows[1]])
+        self.assertEqual(self.lib.records[rows[0]]["tags"], app.page(rows[0])["tags"])
+        self.call("GET", "/api/library")
+        self.call("POST", "/api/search", {"query": "night train"})
+        self.assertEqual({path: text for path, text in files.items()}, {path: path.read_text() for path in files})
+        self.assertEqual(["20261001T000000Z"], [p.name for p in (old / "exports").iterdir()])
+
     def test_an_empty_search_lists_every_page_newest_first(self):
         n = len(self.lib.records)
         times = [None if i == 3 else float((i * 7) % n) for i in range(n)]  # one page without a time
         self.app.lib = dataclasses.replace(
-            self.lib, records=[{**r, "added": t} for r, t in zip(self.lib.records, times, strict=True)]
+            self.app.lib, records=[{**r, "added": t} for r, t in zip(self.app.lib.records, times, strict=True)]
         )
         live = np.flatnonzero(self.app.live())
         expected = sorted(live, key=lambda i: (times[i] is None, -(times[i] or 0), i))
@@ -548,57 +481,14 @@ class ServerTests(Served):
         self.assertEqual((0, 20, len(live)), (first["offset"], second["offset"], first["total"]))
         self.assertEqual(expected[:40], [h["row"] for h in first["hits"] + second["hits"]])
         self.assertEqual(3, expected[-1], "a page without a time comes last")
-        tagged = int(expected[0])
-        self.app.store.apply([self.lib.records[tagged]["key"]], "Trains", True)
+        before = self.call("POST", "/api/search", {"query": "", "n": 50, "untagged": True})[1]
+        tagged = next(int(r) for r in expected if not self.lib.records[r]["tags"])
+        self.tag([tagged], "Trains")
         untagged = self.call("POST", "/api/search", {"query": "", "n": 50, "untagged": True})[1]
-        self.assertEqual(len(live) - 1, untagged["total"])
+        self.assertEqual(before["total"] - 1, untagged["total"])
         self.assertNotIn(tagged, [h["row"] for h in untagged["hits"]])
 
-    def test_search_pick_review_export(self):
-        status, found, _ = self.call("POST", "/api/search", {"query": "night train", "n": 20})
-        self.assertEqual(200, status)
-        self.assertEqual(20, len(found["hits"]))
-        rows = [h["row"] for h in found["hits"]]
-        self.assertEqual(400, self.call("POST", "/api/sessions", {"rows": rows, "picked": ["Nope"]})[0])
-        status, s, _ = self.call("POST", "/api/sessions", {"query": "night train", "rows": rows, "picked": ["Trains"]})
-        self.assertEqual(200, status)
-        page = next(p for p in s["pages"] if p["sugg"])
-        flipped = {page["sugg"][0]["tag"]: not page["sugg"][0]["checked"]}
-        path = f"/api/sessions/{s['id']}/pages/{page['index']}"
-        status, after, _ = self.call("POST", path, {"marks": flipped, "status": "decided"})
-        self.assertEqual((200, "decided"), (status, after["status"]))
-        self.assertEqual(404, self.call("POST", f"/api/sessions/{s['id']}/pages/999", {"status": "decided"})[0])
-        listed = self.call("GET", "/api/sessions")[1]
-        self.assertEqual(1, listed[0]["decided"])
-        out = self.record()
-        self.assertEqual((1, 1), (out["decided"], out["flipped"]))
-
-    def test_a_new_tag_is_made_once_then_reviewed_exported_and_kept_over_a_restart(self):
-        status, made, _ = self.call("POST", "/api/tags", {"name": "  Sleeper   cars "})
-        self.assertEqual((200, "Sleeper cars", True), (status, made["tag"], made["created"]))
-        self.assertIn({"name": "Sleeper cars", "positives": 0, "source": "zero shot"}, made["tags"])
-        for same, spelling in (("sleeper CARS", "Sleeper cars"), ("coffee", "Coffee")):
-            status, again, _ = self.call("POST", "/api/tags", {"name": same})
-            self.assertEqual((200, spelling, False), (status, again["tag"], again["created"]))
-            self.assertEqual(made["tags"], again["tags"])
-        for bad in ("  ", "x" * 41, "a\u0007b"):
-            status, err, _ = self.call("POST", "/api/tags", {"name": bad})
-            self.assertEqual(400, status)
-            self.assertRegex(err["error"], "^cannot use that name as a tag: it ")
-        self.assertEqual(["Sleeper cars"], Store(self.data).tags())
-        rows = [h["row"] for h in self.call("POST", "/api/search", {"query": "night train"})[1]["hits"]]
-        s = self.call("POST", "/api/sessions", {"query": "night train", "rows": rows, "picked": ["Sleeper cars"]})[1]
-        page = s["pages"][0]
-        self.assertEqual([("Sleeper cars", "zero shot")], [(x["tag"], x["source"]) for x in page["sugg"]])
-        path = f"/api/sessions/{s['id']}/pages/{page['index']}"
-        self.call("POST", path, {"marks": {"Sleeper cars": True}, "status": "decided"})
-        out = self.record()
-        answers = [json.loads(line) for line in Path(out["answers"]).read_text().splitlines()]
-        self.assertEqual([{"url": page["url"], "tags": ["Sleeper cars"], "source": SOURCE}], answers)
-        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
-        self.assertEqual(made["tags"], restarted.library()["tags"])
-
-    def test_excluded_results_stay_out_of_suggestions_review_and_export(self):
+    def test_excluded_results_stay_out_of_suggestions(self):
         found = self.call("POST", "/api/search", {"query": "night train", "n": 20})[1]
         rows = [h["row"] for h in found["hits"]]
         self.assertEqual(([], None), (found["excluded"], found["cut"]))
@@ -609,32 +499,19 @@ class ServerTests(Served):
         self.assertEqual([rows[0], *rows[10:]], after["excluded"])
         self.assertEqual(rows[9], after["cut"])
         kept = rows[1:10]
-        self.assertEqual(engine.suggest(self.lib, kept), after["suggested"])
-        self.assertNotEqual(engine.suggest(self.lib, rows), after["suggested"])
+        self.assertEqual(engine.suggest(self.app.lib, kept), after["suggested"])
+        self.assertNotEqual(engine.suggest(self.app.lib, rows), after["suggested"])
         again = self.call("POST", "/api/search", {"query": "night train", "n": 20})[1]  # a reload or restart
         self.assertEqual((after["excluded"], rows[9]), (again["excluded"], again["cut"]))
         self.assertEqual(400, self.call("POST", "/api/exclusions", judge | {"action": "exclude", "row": -1})[0])
-        s = self.call("POST", "/api/sessions", {"query": "night train", "rows": rows, "picked": ["Trains"]})[1]
-        keys = {self.lib.records[r]["key"] for r in kept}
-        self.assertEqual(keys, {p["url"] for p in s["pages"]})
-        for p in s["pages"]:
-            if p["sugg"]:
-                self.call("POST", f"/api/sessions/{s['id']}/pages/{p['index']}", {"status": "decided"})
-        out = self.record()
-        exported = Path(out["answers"]).read_text() + Path(out["decisions"]).read_text()
-        self.assertTrue(all(json.loads(line)["url"] in keys for line in exported.splitlines()))
-        self.assertTrue((self.data / "not-relevant.json").exists())
-        self.assertEqual(
-            400,
-            self.call("POST", "/api/sessions", {"query": "night train", "rows": rows[10:], "picked": ["Trains"]})[0],
-        )
+        self.assertTrue((self.data / "app" / "not-relevant.json").exists())
 
     def test_a_page_excluded_in_one_search_is_untouched_in_another(self):
         other = {"query": "sleeper trains", "n": 20}
         before = self.call("POST", "/api/search", other)[1]
         refined = self.call("POST", "/api/search", other | {"refine": True})[1]
         rows = [h["row"] for h in self.call("POST", "/api/search", {"query": "night train", "n": 20})[1]["hits"]]
-        shared = next(h["row"] for h in before["hits"] if h["row"] in rows)
+        decisions = (self.root / "library.json").read_bytes()
         self.call("POST", "/api/exclusions", {"query": "night train", "rows": rows, "action": "cut", "row": rows[0]})
         self.call(
             "POST", "/api/exclusions", {"query": "night train", "rows": rows, "action": "exclude", "row": rows[0]}
@@ -644,12 +521,7 @@ class ServerTests(Served):
         self.assertEqual([], after["excluded"])
         again = self.call("POST", "/api/search", other | {"refine": True})[1]
         self.assertEqual(refined["hits"], again["hits"])
-        s = self.call(
-            "POST", "/api/sessions", {"query": "sleeper trains", "rows": [shared], "picked": ["Trains", "Coffee"]}
-        )
-        self.assertEqual(200, s[0])
-        self.assertEqual([self.lib.records[shared]["key"]], [p["url"] for p in s[1]["pages"]])
-        self.assertEqual({}, Store(self.data).decisions())  # an exclusion is not a tag rejection
+        self.assertEqual(decisions, (self.root / "library.json").read_bytes(), "an exclusion is not a dismissal")
 
     def test_refine_ranks_away_from_excluded_pages_and_keeps_them_excluded(self):
         plain = self.call("POST", "/api/search", {"query": "night train", "n": 20})[1]
@@ -675,7 +547,7 @@ class ServerTests(Served):
         self.assertEqual([rows[1]], self.call("POST", "/api/search", {"query": padded})[1]["excluded"])
 
     def test_refine_applies_the_cut_before_using_new_results_as_positives(self):
-        app = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
+        app = self.restart()
         query = "night train"
         q = fake_encode([query])[0]
         hits = engine.search(self.lib, q, query, 50)
@@ -686,51 +558,33 @@ class ServerTests(Served):
         self.assertEqual(10, len(prototype.call_args.args[1]))
         self.assertEqual(40, len(prototype.call_args.args[2]))
 
-    def rows_for(self, query: str, n: int = 20, **body) -> list[int]:
-        return [h["row"] for h in self.call("POST", "/api/search", {"query": query, "n": n, **body})[1]["hits"]]
-
-    def test_a_tag_applies_to_and_comes_off_the_selected_pages(self):
-        rows = self.rows_for("night train")[:3]
-        status, out, _ = self.call("POST", "/api/apply", {"rows": rows, "tag": "Trains", "value": True})
-        self.assertEqual((200, 3), (status, out["changed"]))
-        self.assertEqual([{"row": r, "tags": ["Trains"]} for r in rows], out["pages"])
-        self.assertEqual(["Trains"], out["app_tags"])
-        out = self.call("POST", "/api/apply", {"rows": rows[:1], "tag": "Trains", "value": False})[1]
-        self.assertEqual(([{"row": rows[0], "tags": []}], 1), (out["pages"], out["changed"]))
-        found = {h["row"]: h["tags"] for h in self.call("POST", "/api/search", {"query": "night train"})[1]["hits"]}
-        self.assertEqual([[], ["Trains"], ["Trains"]], [found[r] for r in rows])
-        for bad in ({"tag": "Nope", "value": True}, {"tag": "Trains", "value": "yes"}, {"tag": "Trains"}):
-            self.assertEqual(400, self.call("POST", "/api/apply", {"rows": rows, **bad})[0])
-        self.assertEqual(400, self.call("POST", "/api/apply", {"rows": [], "tag": "Trains", "value": True})[0])
-
     def test_the_selection_persists_privately_in_order_until_cleared(self):
         self.assertEqual({"pages": []}, self.call("GET", "/api/selection")[1])
         rows = self.rows_for("espresso")[:2] + self.rows_for("night train")[:2]
         picked = [rows[3], rows[0], rows[2]]
         self.assertEqual(200, self.call("POST", "/api/selection", {"rows": picked})[0])
-        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
+        restarted = self.restart()
         self.assertEqual(picked, [p["row"] for p in restarted.listed(restarted.selection)["pages"]])
-        self.assertEqual(0o600, stat.S_IMODE((self.data / "selection.json").stat().st_mode))
+        self.assertEqual(0o600, stat.S_IMODE((self.data / "app" / "selection.json").stat().st_mode))
         self.assertEqual(400, self.call("POST", "/api/selection", {"rows": [-1]})[0])
         self.assertEqual(picked, [p["row"] for p in self.call("GET", "/api/selection")[1]["pages"]])
         self.call("POST", "/api/selection", {"rows": []})
-        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
+        restarted = self.restart()
         self.assertEqual([], restarted.listed(restarted.selection)["pages"])
 
-    def test_forget_takes_a_page_out_of_every_view_the_selection_pins_and_counts_until_restored(self):
+    def test_a_page_the_library_forgets_leaves_every_view_and_count_and_keeps_its_place_in_the_lists(self):
         rows = self.rows_for("night train")
-        gone, kept = rows[1], [rows[0], rows[2]]
-        live = int(self.lib.live.sum())
-        self.call("POST", "/api/apply", {"rows": rows[:3], "tag": "Trains", "value": True})
+        gone = rows[1]
+        live = int(self.app.lib.live.sum())
         self.call("POST", "/api/selection", {"rows": [rows[0], gone, rows[2]]})
         self.call("POST", "/api/pins", {"rows": [gone, rows[2]]})
-        status, out, _ = self.call("POST", "/api/forget", {"rows": [gone], "value": True})
-        self.assertEqual((200, live - 1), (status, out["pages"]))
+        untagged_before = self.call("POST", "/api/search", {"query": "night train", "untagged": True})[1]["total"]
+        self.forget([gone])  # Tag's Forget, the Library's, or a CLI run: the library's own write
         searched = self.call("POST", "/api/search", {"query": "night train", "n": 50})[1]
         self.assertNotIn(gone, [h["row"] for h in searched["hits"]])
         self.assertEqual(live - 1, searched["total"])
-        untagged = self.call("POST", "/api/search", {"query": "night train", "untagged": True, "n": 50})[1]
-        self.assertEqual(live - 3, untagged["total"])
+        untagged = self.call("POST", "/api/search", {"query": "night train", "untagged": True})[1]["total"]
+        self.assertEqual(untagged_before - (not self.lib.records[gone]["tags"]), untagged)
         like = self.call("POST", "/api/like", {"tag": "Rust", "n": 50, "offset": 0})[1]
         every = [
             h["row"]
@@ -738,77 +592,38 @@ class ServerTests(Served):
             for h in self.call("POST", "/api/like", {"tag": "Rust", "n": 50, "offset": o})[1]["hits"]
         ]
         self.assertNotIn(gone, every)
-        self.assertEqual(live - 1, like["total"])
-        self.assertEqual(kept, [p["row"] for p in self.call("GET", "/api/selection")[1]["pages"]])
-        self.assertEqual([rows[2]], [p["row"] for p in self.call("GET", "/api/pins")[1]["pages"]])
         library = self.call("GET", "/api/library")[1]
-        self.assertEqual((live - 1, [gone]), (library["pages"], library["forgotten"]))
-        for path, body in (("/api/apply", {"tag": "Trains", "value": True}), ("/api/selection", {}), ("/api/pins", {})):
-            self.assertEqual(
-                400, self.call("POST", path, {"rows": [gone], **body})[0]
-            )  # a forgotten page takes nothing
-        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
+        self.assertEqual(live - 1, library["pages"])
+        self.assertIn(gone, library["forgotten"], "the screen leaves it out of its lists and counts")
+        self.assertEqual([rows[0], gone, rows[2]], [p["row"] for p in self.call("GET", "/api/selection")[1]["pages"]])
+        self.assertEqual([gone, rows[2]], [p["row"] for p in self.call("GET", "/api/pins")[1]["pages"]])
+        self.assertEqual(200, self.call("POST", "/api/pins", {"rows": [gone, rows[2]]})[0], "a list keeps its place")
+        self.assertEqual(400, self.call("POST", "/api/exclusions", {"query": "q", "rows": [gone], "action": "cut"})[0])
+        restarted = self.restart()
         self.assertEqual(live - 1, int(restarted.live().sum()))  # it stays forgotten over a restart
-        self.assertEqual(0o600, stat.S_IMODE((self.data / "forgotten.json").stat().st_mode))
-        self.assertNotIn("forgotten", json.loads((self.data / "state.json").read_text()))  # apart from decisions
-        status, out, _ = self.call("POST", "/api/forget", {"rows": [gone], "value": False})
-        self.assertEqual((200, live), (status, out["pages"]))
+        self.forget([gone], False)
         self.assertIn(gone, self.rows_for("night train", n=50))
-        pins = [p["row"] for p in self.call("GET", "/api/pins")[1]["pages"]]
-        self.assertEqual([rows[2]], pins)  # it left the pins for good; the screen's Undo puts it back itself
-        self.assertEqual(kept, [p["row"] for p in self.call("GET", "/api/selection")[1]["pages"]])
-        self.assertEqual(400, self.call("POST", "/api/forget", {"rows": [gone]})[0])
-        self.assertEqual(400, self.call("POST", "/api/forget", {"rows": [], "value": True})[0])
-        archived = int(np.flatnonzero(~self.lib.live)[0])  # forgotten in the archive: the app cannot bring it back
-        self.assertEqual(400, self.call("POST", "/api/forget", {"rows": [archived], "value": False})[0])
-
-    def test_export_writes_the_forget_manifest_and_leaves_forgotten_pages_out_of_the_answers(self):
-        rows = self.rows_for("night train")[:3]
-        self.call("POST", "/api/apply", {"rows": rows, "tag": "Trains", "value": True})
-        self.call("POST", "/api/forget", {"rows": [rows[1]], "value": True})
-        out = self.record()
-        keys = [self.lib.records[r]["key"] for r in rows]
-        answers = [json.loads(line)["url"] for line in Path(out["answers"]).read_text().splitlines()]
-        self.assertEqual(sorted([keys[0], keys[2]]), sorted(answers))
-        self.assertEqual(keys[1] + "\0", Path(out["forget"]).read_text())
-        self.assertEqual(1, out["forgotten"])
-
-    def test_undo_puts_back_exactly_the_pages_a_strip_action_changed(self):
-        rows = self.rows_for("night train")[:3]
-        self.call("POST", "/api/apply", {"rows": rows[:1], "tag": "Trains", "value": True})
-        out = self.call("POST", "/api/apply", {"rows": rows, "tag": "Trains", "value": True})[1]
-        self.assertEqual(2, out["changed"])
-        status, back, _ = self.call("POST", "/api/undo", {"batch": out["batch"]})
-        self.assertEqual(200, status)
-        self.assertEqual([{"row": rows[1], "tags": []}, {"row": rows[2], "tags": []}], back["pages"])
-        found = {h["row"]: h["tags"] for h in self.call("POST", "/api/search", {"query": "night train"})[1]["hits"]}
-        self.assertEqual([["Trains"], [], []], [found[r] for r in rows])
-        off = self.call("POST", "/api/apply", {"rows": rows, "tag": "Trains", "value": False})[1]
-        self.assertEqual(1, off["changed"])
-        self.call("POST", "/api/undo", {"batch": off["batch"]})
-        found = {h["row"]: h["tags"] for h in self.call("POST", "/api/search", {"query": "night train"})[1]["hits"]}
-        self.assertEqual([["Trains"], [], []], [found[r] for r in rows])
+        self.assertEqual(live, self.call("GET", "/api/library")[1]["pages"])
+        self.assertEqual([gone, rows[2]], [p["row"] for p in self.call("GET", "/api/pins")[1]["pages"]])
 
     def test_pins_persist_privately_in_order_and_never_touch_the_selection(self):
         rows = self.rows_for("espresso")[:3]
         self.call("POST", "/api/selection", {"rows": rows[:1]})
         self.assertEqual(200, self.call("POST", "/api/pins", {"rows": [rows[2], rows[1]]})[0])
-        restarted = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
+        restarted = self.restart()
         self.assertEqual([rows[2], rows[1]], [p["row"] for p in restarted.listed(restarted.pins)["pages"]])
         self.assertEqual([rows[0]], [p["row"] for p in restarted.listed(restarted.selection)["pages"]])
-        self.assertEqual(0o600, stat.S_IMODE((self.data / "pinned.json").stat().st_mode))
-        out = self.record()
-        self.assertEqual({"answers.jsonl", "decisions.jsonl"}, {p.name for p in Path(out["folder"]).iterdir()})
+        self.assertEqual(0o600, stat.S_IMODE((self.data / "app" / "pinned.json").stat().st_mode))
 
-    def test_untagged_only_leaves_out_pages_with_an_app_tag_and_ignores_archive_tags(self):
+    def test_untagged_only_leaves_out_every_page_with_a_tag(self):
         rows = self.rows_for("night train")
-        self.call("POST", "/api/apply", {"rows": rows[:5], "tag": "Trains", "value": True})
+        bare = [r for r in rows if not self.lib.records[r]["tags"]]
+        self.tag(bare[:2], "Trains")
         untagged = self.rows_for("night train", untagged=True)
-        self.assertEqual(20, len(untagged))
-        self.assertFalse(set(rows[:5]) & set(untagged))
-        self.assertEqual(set(rows[5:]), set(untagged[:15]))  # the rest, ranked again among untagged pages
-        archive_tagged = [r for r in untagged if self.lib.Y[r].any()]
-        self.assertTrue(archive_tagged)  # a page holding only archive tags is still untagged here
+        self.assertTrue(untagged)
+        self.assertFalse(any(self.app.lib.records[r]["tags"] for r in untagged))
+        self.assertFalse(set(bare[:2]) & set(untagged))
+        self.assertTrue(set(bare[2:]) <= set(self.rows_for("night train", n=50, untagged=True)))
 
     def test_search_and_like_pages_follow_on_from_an_offset_and_count_the_pages_ranked(self):
         every = self.rows_for("night train", n=server.MAX_RESULTS * 4)  # capped at one page
@@ -821,40 +636,46 @@ class ServerTests(Served):
         self.assertEqual(ranked, [h["row"] for h in first["hits"] + second["hits"]])
         last = self.call("POST", "/api/search", {"query": "night train", "n": 50, "offset": live - 3})[1]
         self.assertEqual(3, len(last["hits"]))
-        self.call("POST", "/api/apply", {"rows": ranked[:5], "tag": "Trains", "value": True})
+        self.tag(ranked[:5], "Trains")
+        without = int((self.app.lib.live & ~self.app.lib.Y[:, self.app.lib.tags.index("Trains")].astype(bool)).sum())
         untagged = self.call("POST", "/api/search", {"query": "night train", "untagged": True, "offset": 10})[1]
-        self.assertEqual(live - 5, untagged["total"])
+        self.assertEqual(int((self.app.lib.live & ~self.app.lib.Y.any(axis=1)).sum()), untagged["total"])
         like = self.call("POST", "/api/like", {"tag": "Trains", "n": 50, "offset": 50})[1]
-        self.assertEqual((50, live - 5), (like["offset"], like["total"]))
+        self.assertEqual((50, without), (like["offset"], like["total"]))
         before = self.call("POST", "/api/like", {"tag": "Trains", "n": 50})[1]["hits"]
         self.assertEqual(set(), {h["row"] for h in like["hits"]} & {h["row"] for h in before})
-        self.assertEqual(50, len(like["hits"]))
+        self.assertEqual(min(50, without - 50), len(like["hits"]))
 
     def test_more_like_this_excludes_only_its_tag_near_the_tags_pages(self):
-        self.call("POST", "/api/tags", {"name": "Sleeper cars"})
         trains = [r for r in self.rows_for("night train") if topic_of(self.lib.records[r]["key"]) == "trains"]
-        self.call("POST", "/api/apply", {"rows": trains[:4], "tag": "Sleeper cars", "value": True})
-        self.call("POST", "/api/apply", {"rows": trains[4:6], "tag": "Rust", "value": True})
+        self.tag(trains[:4], "Sleeper cars")
+        self.tag(trains[4:6], "Rust")
         status, out, _ = self.call("POST", "/api/like", {"tag": "Sleeper cars", "n": 20})
         self.assertEqual((200, "Sleeper cars", 20), (status, out["tag"], len(out["hits"])))
         liked = [h["row"] for h in out["hits"]]
         self.assertFalse(set(trains[:4]) & set(liked))
-        self.assertTrue(set(trains[4:6]) <= set(liked))  # a different app tag still belongs in this view
+        self.assertTrue(set(trains[4:6]) <= set(liked))  # a different tag still belongs in this view
         self.assertTrue(all("Sleeper cars" not in h["tags"] for h in out["hits"]))
         self.assertEqual(["trains"] * 5, [topic_of(self.lib.records[r]["key"]) for r in liked[:5]])
         self.assertEqual(400, self.call("POST", "/api/like", {"tag": "Nope"})[0])
 
-    def test_more_like_this_ranks_toward_the_tags_pages(self):
-        for name in ("Zephyr", "Quill"):  # names no page or topic word shares: only the tag's pages can pull
-            self.call("POST", "/api/tags", {"name": name})
+    def test_more_like_this_ranks_toward_the_tags_pages_and_away_from_its_dismissals(self):
         trains = [r for r in self.rows_for("night train") if topic_of(self.lib.records[r]["key"]) == "trains"]
-        self.call("POST", "/api/apply", {"rows": trains[:6], "tag": "Zephyr", "value": True})
+        self.tag(trains[:6], "Zephyr")  # names no page or topic word shares: only the tag's pages can pull
+        self.edit(lambda state: state["vocabulary"].setdefault("Quill", {"created_at": synthetic_archive.AT}))
 
         def trains_in_top_10(tag: str) -> int:
             hits = self.call("POST", "/api/like", {"tag": tag, "n": 20})[1]["hits"][:10]
             return sum(topic_of(h["url"]) == "trains" for h in hits)
 
         self.assertGreaterEqual(trains_in_top_10("Zephyr"), trains_in_top_10("Quill") + 3)
+        self.tag(trains[6:7], "Vellum")
+        self.tag(trains[7:8], "Vellum", "remove")
+        with patch("tagger.app.server.prototype", wraps=server.prototype) as prototype:
+            self.call("POST", "/api/like", {"tag": "Vellum", "n": 20})
+        _, toward, away = prototype.call_args.args
+        np.testing.assert_array_equal(self.app.lib.X[trains[6:7]], toward)
+        np.testing.assert_array_equal(self.app.lib.X[trains[7:8]], away, "the pages it was turned down on")
 
     def test_refined_cut_ranking_is_stable_after_reload_and_restart(self):
         body = {"query": "night train ", "n": 50}
@@ -863,10 +684,97 @@ class ServerTests(Served):
         self.call("POST", "/api/exclusions", judge | {"action": "exclude", "row": rows[1]})
         self.call("POST", "/api/exclusions", judge | {"action": "cut", "row": rows[9]})
         first = self.call("POST", "/api/search", body | {"refine": True})[1]
-        again = server.App(self.lib, Store(self.data), fake_encode, fake_embed).search(body | {"refine": True})
+        again = self.restart().search(body | {"refine": True})
         self.assertEqual([h["row"] for h in first["hits"]], [h["row"] for h in again["hits"]])
         self.assertEqual(first["excluded"], again["excluded"])
         self.assertEqual(first["suggested"], again["suggested"])
+
+
+class FollowTests(Served):
+    """Every view the service gives follows `library.json` as knowmoretabs leaves it, on the next request."""
+
+    def test_tags_labels_lists_and_counts_follow_a_replaced_file(self):
+        rows = self.rows_for("night train")
+        bare = [r for r in rows if not self.lib.records[r]["tags"]][:2]
+        held = next(r for r in rows if "Trains" in self.lib.records[r]["tags"])
+        self.call("POST", "/api/pins", {"rows": bare})
+        before = self.call("GET", "/api/library")[1]
+        self.tag(bare, "Typography")
+        self.tag([held], "Trains", "remove")
+        found = self.found("night train")
+        self.assertEqual([["Typography"], ["Typography"]], [found[r] for r in bare])
+        self.assertNotIn("Trains", found[held])
+        self.assertEqual([["Typography"]] * 2, [p["tags"] for p in self.call("GET", "/api/pins")[1]["pages"]])
+        j = self.app.lib.tags.index("Typography")
+        self.assertTrue(self.app.lib.Y[bare, j].all())
+        self.assertFalse(self.app.lib.Y[held, self.app.lib.tags.index("Trains")])
+        after = self.call("GET", "/api/library")[1]
+        count = lambda library, name: next(t["positives"] for t in library["tags"] if t["name"] == name)  # noqa: E731
+        self.assertEqual(count(before, "Typography") + 2, count(after, "Typography"))
+        self.assertEqual(count(before, "Trains") - 1, count(after, "Trains"))
+        self.assertNotIn(bare[0], self.rows_for("night train", n=50, untagged=True))
+
+    def test_a_new_name_is_encoded_once_and_a_retired_one_leaves_every_list(self):
+        encoded = []
+
+        def encode(texts):
+            encoded.append(list(texts))
+            return fake_encode(texts)
+
+        rows = self.rows_for("night train")
+        with patch.object(self.app, "encode", encode):
+            self.tag(rows[:2], "Sleeper cars", used_at="2026-10-09T00:00:00Z")
+            library = self.call("GET", "/api/library")[1]
+            self.call("GET", "/api/library")
+            self.call("POST", "/api/search", {"query": "", "n": 5})
+        self.assertEqual([["Sleeper cars"]], encoded, "once, at the first read after the change")
+        self.assertIn({"name": "Sleeper cars", "positives": 2, "source": "zero shot"}, library["tags"])
+        self.assertIn("Sleeper cars", library["app_tags"])
+        self.assertEqual("Sleeper cars", library["recent"][0])
+        columns = list(self.app.lib.tags)
+        self.edit(lambda state: state["vocabulary"]["Sleeper cars"].update(retired_at="2026-10-10T00:00:00Z"))
+        library = self.call("GET", "/api/library")[1]
+        self.assertNotIn("Sleeper cars", [t["name"] for t in library["tags"]] + library["app_tags"] + library["recent"])
+        self.assertFalse(any("Sleeper cars" in self.found("night train").get(r, []) for r in rows[:2]))
+        self.assertEqual(400, self.call("POST", "/api/like", {"tag": "Sleeper cars"})[0])
+        with patch.object(self.app, "encode", encode):
+            self.edit(lambda state: state["vocabulary"]["Sleeper cars"].pop("retired_at"))
+            library = self.call("GET", "/api/library")[1]
+        self.assertEqual(columns, self.app.lib.tags, "brought back in its own column")
+        self.assertEqual([["Sleeper cars"]], encoded, "and not encoded again")
+        self.assertIn({"name": "Sleeper cars", "positives": 2, "source": "zero shot"}, library["tags"])
+
+    def test_following_never_touches_vectors_keywords_or_heads(self):
+        before = self.app.lib
+        self.tag(self.rows_for("night train")[:3], "Sleeper cars")
+        self.forget(self.rows_for("espresso")[:1])
+        self.call("GET", "/api/library")
+        after = self.app.lib
+        self.assertIsNot(before, after)
+        for name in ("X", "image", "has_image", "keywords", "K", "rules"):
+            self.assertIs(getattr(before, name), getattr(after, name), name)
+        np.testing.assert_array_equal(before.S, after.S[:, : before.S.shape[1]])
+
+    def test_an_unreadable_file_answers_503_keeps_the_last_view_and_recovers(self):
+        rows = self.rows_for("night train")
+        shown, good = self.app.lib, json.loads((self.root / "library.json").read_text())
+        (self.root / "library.json").write_text('{"schema_version": 1, "forgo')
+        for method, path, body in (
+            ("GET", "/api/library", None),
+            ("POST", "/api/search", {"query": "night train"}),
+            ("POST", "/api/like", {"tag": "Trains"}),
+            ("GET", "/api/selection", None),
+            ("POST", "/api/pins", {"rows": rows[:1]}),
+            ("POST", "/api/rank", {"query": "night train"}),
+        ):
+            status, body, _ = self.call(method, path, body)
+            self.assertEqual(503, status, path)
+            self.assertIn("library cannot be read", body["error"])
+        self.assertIs(shown, self.app.lib, "the last good view stays, never shown as fresh")
+        synthetic_archive.decide(good, [self.lib.records[rows[0]]["key"]], "Typography")
+        synthetic_archive.write_state(self.root, good)
+        self.assertEqual(200, self.call("GET", "/api/library")[0])
+        self.assertIn("Typography", self.found("night train")[rows[0]])
 
 
 if __name__ == "__main__":

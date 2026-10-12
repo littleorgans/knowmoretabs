@@ -109,6 +109,24 @@ def edit_state(root: Path, change) -> dict:
     return state
 
 
+def decide(state: dict, urls: list[str], name: str, side: str = "add", used_at: str | None = None) -> None:
+    """What `tag --add` (`side` "add") or `tag --remove` leaves in `state` for `name` on each page, for a synthetic
+    archive: the vocabulary's spelling in any case (created if it has none; an add brings a retired one back and,
+    given `used_at`, records the use) on that side of each page and off the other."""
+    vocabulary = state.setdefault("vocabulary", {})
+    spelling = next((n for n in vocabulary if n.lower() == name.lower()), name)
+    term = vocabulary.setdefault(spelling, {"created_at": AT})
+    if side == "add":
+        term.pop("retired_at", None)
+        if used_at:
+            term["used_at"] = used_at
+    for url in urls:
+        page = state.setdefault("tags", {}).setdefault(url, {})
+        for kept in ("add", "remove"):
+            page[kept] = [n for n in page.get(kept, []) if n.lower() != spelling.lower()]
+        page[side].append(spelling)
+
+
 def jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))

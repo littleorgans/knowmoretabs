@@ -72,13 +72,10 @@ pub struct Route {
 const RANK: Duration = Duration::from_secs(2);
 /// The page, its files, images and the screens' API.
 const ORDINARY: Duration = Duration::from_secs(10);
-/// Send to library answers only once its knowmoretabs runs are done
-/// (`send.py`, 120 seconds each at most).
-const SEND: Duration = Duration::from_secs(300);
 
 /// The service's files besides its page (`lab/tagger/tagger/app/static`),
 /// each a single name at its root.
-const FILES: [(&str, Kind); 14] = [
+const FILES: [(&str, Kind); 10] = [
     ("add.js", Kind::Script),
     ("app.css", Kind::Css),
     ("app.js", Kind::Script),
@@ -87,21 +84,16 @@ const FILES: [(&str, Kind); 14] = [
     ("lit.js", Kind::Script),
     ("pages.js", Kind::Script),
     ("panel.js", Kind::Script),
-    ("pick.js", Kind::Script),
-    ("review.js", Kind::Script),
-    ("search.js", Kind::Script),
     ("strip.js", Kind::Script),
-    ("swipe.js", Kind::Script),
     ("views.js", Kind::Script),
 ];
 
 /// The service's API below `api/`, by method (`ROUTES`, `RANK_ROUTES` and
 /// `JOB_ROUTES` in `lab/tagger/tagger/app/server.py`); `#` is one decimal
-/// segment.
-const API: [(&str, &str); 21] = [
+/// segment. The screens' tag, vocabulary, forget and restore writes are
+/// this shell's own (`server.rs`), never the service's.
+const API: [(&str, &str); 11] = [
     ("GET", "library"),
-    ("GET", "sessions"),
-    ("GET", "sessions/#"),
     ("GET", "selection"),
     ("GET", "pins"),
     ("GET", "add/#"),
@@ -110,16 +102,8 @@ const API: [(&str, &str); 21] = [
     ("POST", "exclusions"),
     ("POST", "selection"),
     ("POST", "pins"),
-    ("POST", "forget"),
-    ("POST", "undo"),
-    ("POST", "tags"),
-    ("POST", "apply"),
     ("POST", "like"),
-    ("POST", "sessions"),
-    ("POST", "sessions/#/pages/#"),
     ("POST", "add"),
-    ("POST", "send/preview"),
-    ("POST", "send"),
 ];
 
 /// The route a request names by its method and its path below the prefix,
@@ -142,7 +126,6 @@ pub fn classify(method: &str, below: &str) -> Option<Route> {
     };
     let deadline = match (method, below) {
         ("POST", "api/rank") => RANK,
-        ("POST", "api/send") => SEND,
         _ => ORDINARY,
     };
     Some(Route {
@@ -188,23 +171,8 @@ mod tests {
             ("GET", &image, &format!("/{image}"), Kind::Jpeg, 10),
             ("GET", "api/library", "/api/library", Kind::Json, 10),
             ("GET", "api/add/42", "/api/add/42", Kind::Json, 10),
-            ("GET", "api/sessions/7", "/api/sessions/7", Kind::Json, 10),
             ("POST", "api/rank", "/api/rank", Kind::Json, 2),
-            ("POST", "api/send", "/api/send", Kind::Json, 300),
-            (
-                "POST",
-                "api/send/preview",
-                "/api/send/preview",
-                Kind::Json,
-                10,
-            ),
-            (
-                "POST",
-                "api/sessions/7/pages/3",
-                "/api/sessions/7/pages/3",
-                Kind::Json,
-                10,
-            ),
+            ("POST", "api/add", "/api/add", Kind::Json, 10),
         ] {
             assert_eq!(
                 route(method, below),
@@ -227,7 +195,7 @@ mod tests {
             ("POST", "index.html"),
             ("GET", "api/rank"),
             ("POST", "api/library"),
-            ("GET", "api/sessions/1/pages/2"),
+            ("GET", "api/add/1/pages/2"),
             ("GET", "index.htm"),
             ("GET", "server.py"),
             ("GET", "static/app.js"),
@@ -239,13 +207,28 @@ mod tests {
             ("GET", "api//library"),
             ("GET", "/api/library"),
             ("GET", "api/library/"),
-            ("GET", "api/sessions/"),
-            ("GET", "api/sessions/1a"),
-            ("GET", "api/sessions/-1"),
+            ("GET", "api/add/"),
+            ("GET", "api/add/1a"),
+            ("GET", "api/add/-1"),
             ("GET", "api/add/%31"),
             ("GET", "api/add/1234567890123456789"),
             ("POST", "api/rank/"),
-            ("PUT", "api/tags"),
+            ("PUT", "api/like"),
+            // The screens' old decision, session and Send routes and scripts.
+            ("POST", "api/tags"),
+            ("POST", "api/apply"),
+            ("POST", "api/undo"),
+            ("POST", "api/forget"),
+            ("GET", "api/sessions"),
+            ("GET", "api/sessions/7"),
+            ("POST", "api/sessions"),
+            ("POST", "api/sessions/7/pages/3"),
+            ("POST", "api/send/preview"),
+            ("POST", "api/send"),
+            ("GET", "review.js"),
+            ("GET", "swipe.js"),
+            ("GET", "pick.js"),
+            ("GET", "search.js"),
             ("GET", "img/"),
             ("GET", &format!("img/{}", &HASH[1..])),
             ("GET", &format!("img/{}", HASH.to_uppercase())),

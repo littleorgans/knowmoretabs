@@ -2,7 +2,7 @@
    Suggested and Recently used, one line each whatever they hold (Recently
    used: the tags last put on a page, latest first, as many as its line
    has columns, so none sits clipped out of sight); a box
-   that filters the app tags or names a new one; then every app tag,
+   that filters the tags or names a new one; then every tag,
    folded under one button, in letter rows ("#" first, then A to Z,
    letters without tags left out) of same width cells. A cell is one tag
    on one page: filled when the page has it, striped when picked and not
@@ -91,7 +91,7 @@
     making = true;
     const mine = target;
     try {
-      const made = await K.strip.make(name);
+      const made = await K.newTag(name);
       if (mine === target) { clear(); view.pick(made); }
     } catch (err) { tell(err.message); }
     finally { making = false; }

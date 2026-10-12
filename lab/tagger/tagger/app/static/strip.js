@@ -1,6 +1,6 @@
 /* knowmoretabs · tagger app · the selection bar and the tag strip
    Above the grid and sticky: how many pages are selected (Show selection,
-   Clear) and how many are pinned (Pinned shows them), then the app tags on
+   Clear) and how many are pinned (Pinned shows them), then the tags on
    the pages in view and the selection (and any shown before in this view,
    so one taken off can go back), each with up to three targets acting on
    the selection only. × takes the tag off every selected page that has it
@@ -8,7 +8,8 @@
    when they all have it, filled in part when some do, beside how many of
    the selection have it. ≈ shows pages without this tag like the tag's,
    and pressed again goes back. "+ New tag" makes a tag, or finds yours in
-   any case, and puts it on every selected page. */
+   any case, and puts it on every selected page. A forgotten page is
+   counted nowhere. */
 (function () {
   const K = window.KMT;
   let making = false;
@@ -32,13 +33,6 @@
 
   const sayIn = (id) => (msg) => { K.$(id).textContent = msg; K.$(id).hidden = !msg; };
   const say = sayIn("new-msg");
-  /* the tag `name` made (or found as yours in any case), listed among the app tags; its name as the server keeps it */
-  async function make(name) {
-    const made = await K.api("api/tags", { name });
-    K.lib.tags = made.tags;
-    if (!K.lib.app_tags.includes(made.tag)) K.lib.app_tags = [...K.lib.app_tags, made.tag].sort(K.byName);
-    return made.tag;
-  }
   /* the name in `box` made a tag (or found as yours in any case) and put on `rows`; true when it was */
   async function create(box, tell, rows) {
     const name = box.value.trim();
@@ -46,7 +40,7 @@
     if (!rows.length) { tell("Select pages first: a new tag goes on the selected pages."); return false; }
     making = true;
     try {
-      const tag = await make(name);
+      const tag = await K.newTag(name);
       box.value = "";
       tell("");
       await K.tagSelection(tag, rows);
@@ -57,23 +51,22 @@
 
   K.strip = {
     chip,
-    make,
     create,
     sayIn,
     render() {
-      const v = K.views.view(), n = K.sel.length;
+      const v = K.views.view(), sel = K.selected(), n = sel.length, pins = K.pinned().length;
       K.$("n-sel").textContent = n;
-      K.$("n-pin").textContent = K.pins.length;
+      K.$("n-pin").textContent = pins;
       K.$("selbar").classList.toggle("has", n > 0);
       K.$("clear").disabled = !n;
-      for (const [id, kind, count] of [["show-sel", "selection", n], ["show-pins", "pinned", K.pins.length]]) {
+      for (const [id, kind, count] of [["show-sel", "selection", n], ["show-pins", "pinned", pins]]) {
         K.$(id).setAttribute("aria-pressed", v.kind === kind);
         K.$(id).disabled = !count && v.kind !== kind;
       }
       const names = v.tags;
-      for (const r of K.views.shown(v).concat(K.sel)) for (const t of K.pages.get(r).tags) names.add(t);
+      for (const r of K.views.shown(v).concat(sel)) for (const t of K.pages.get(r).tags) names.add(t);
       if (v.kind === "like") names.add(v.tag);
-      K.$("strip").innerHTML = [...names].sort(K.byName).map((t) => chip(t, K.sel, v.kind === "like" && v.tag === t)).join("");
+      K.$("strip").innerHTML = [...names].sort(K.byName).map((t) => chip(t, sel, v.kind === "like" && v.tag === t)).join("");
       K.$("app-tags").innerHTML = (K.lib ? K.lib.app_tags : []).map((t) => `<option value="${K.esc(t)}"></option>`).join("");
     }
   };
@@ -89,7 +82,7 @@
   K.$("show-sel").addEventListener("click", () => K.views.showSelection());
   K.$("show-pins").addEventListener("click", () => K.views.showPinned());
   K.$("clear").addEventListener("click", () => K.views.clear());
-  K.$("newtag").addEventListener("submit", (e) => { e.preventDefault(); create(K.$("new-tag"), say, K.sel); });
+  K.$("newtag").addEventListener("submit", (e) => { e.preventDefault(); create(K.$("new-tag"), say, K.selected()); });
   K.$("new-tag").addEventListener("input", () => say(""));
   K.$("new-tag").addEventListener("keydown", (e) => {
     if (e.key !== "Escape") return;

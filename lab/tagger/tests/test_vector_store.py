@@ -148,10 +148,15 @@ def test_engine_restart_add_images_forget_restore_and_reorder(tmp_path):
     state_path.write_text(json.dumps(state | {"forgotten": [NEW]}))
     encode.reset_mock()
     images.reset_mock()
-    hidden = engine.sync(lib, Archive.load(root), [NEW], encode)
+
+    def follow(lib):  # as the app does after a sync: the page refreshed, then the decisions the file holds now
+        archive = Archive.load(root)
+        return engine.apply_state(engine.sync(lib, archive, [NEW], encode), archive.state, fake_encode)
+
+    hidden = follow(lib)
     assert not hidden.live[row]
     state_path.write_text(json.dumps(state | {"forgotten": []}))
-    restored = engine.sync(hidden, Archive.load(root), [NEW], encode)
+    restored = follow(hidden)
     assert restored.live[row]
     encode.assert_not_called()
     images.assert_not_called()

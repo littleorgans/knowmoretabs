@@ -26,7 +26,7 @@ Toolchains: on the owner's machine Homebrew's rust comes before rustup on `PATH`
 - Formatting: `cargo fmt --all -- --check`; exit 0, 2026-10-06.
 - Slice metadata, after touching a `//!` header, `slices.toml` or adding a source file: `cargo run --locked --package xtask -- slices --check`; exit 0, 2026-10-06. Without `--check`, `cargo xtask slices` regenerates the matrix doc (`code:xtask/src/main.rs#run`, `code:.cargo/config.toml`).
 - Local recipes: `just check` runs rustfmt, `scripts/clippy.py`, the slice check and ruff on `lab/tagger`; `just test` runs the Full and Frontend gates and the tagger tests (`code:justfile`). Both exit 0, 2026-10-12, on Homebrew rustc 1.99.0, Node 25.9.0 and uv 0.12.5.
-- Tagger lab, after touching `lab/tagger`: `uv run --locked --project lab/tagger pytest -q lab/tagger/tests`; exit 0, 2026-10-12. CI runs it as the lab job. With `KMT_BIN` set to a build (`cargo build --locked`, then `KMT_BIN="$PWD/target/debug/knowmoretabs"`), `RealSendTests` also runs the Send tests against that binary on scratch roots; without it they skip.
+- Tagger lab, after touching `lab/tagger`: `uv run --locked --project lab/tagger pytest -q lab/tagger/tests`; exit 0, 2026-10-12. CI runs it as the lab job. With `KMT_BIN` set to a build (`cargo build --locked`, then `KMT_BIN="$PWD/target/debug/knowmoretabs"`), the shell tests and `test_auto_sync.py`, the one end to end run of Tag and Add link writing through the real shell, run against that binary on scratch roots; without it they skip.
 - Release machinery: `.github/workflows/release.yml` runs on a `v*` tag or by hand; on a tag it fails unless the tag matches the `Cargo.toml` version and the changelog has a dated heading for it (`code:.github/workflows/release.yml`). Not executed.
 
 ## Hooks

@@ -6,8 +6,9 @@
    the library lists it) and its tag panel show, and stay put through every
    stage. Tags picked before the page has a row wait striped, go with the
    link when it is added and are written at Indexed, in one change with one
-   Undo; a newer link does not stop an older job writing its own. A refusal
-   clears them. At Indexed the model's suggestions for the page fill the
+   Undo, as the library's own write; a newer link does not stop an older job
+   writing its own, and a write that fails is said, never sent again. A
+   refusal clears them. At Indexed the model's suggestions for the page fill the
    Suggested row, less the tags picked, and stay put while it is on screen.
    A failed stage shows its value and one action, which starts a job of its
    own: Retry runs only the stages that failed. It names the page by the key

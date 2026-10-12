@@ -197,25 +197,21 @@ class ProofTests(Served):
     def test_host_origin_type_and_body_are_judged_first_and_unsigned(self):
         self.assertEqual(421, self.refused("GET", "/api/library", headers={"Host": "attacker.example"}))
         self.assertEqual(403, self.refused("GET", "/", headers={"Origin": "http://attacker.example"}))
-        self.assertEqual(403, self.refused("POST", "/api/send", {}, {"Origin": "http://attacker.example"}))
-        self.assertEqual(415, self.refused("POST", "/api/send", {}, {"Content-Type": "text/plain"}))
+        self.assertEqual(403, self.refused("POST", "/api/add", {}, {"Origin": "http://attacker.example"}))
+        self.assertEqual(415, self.refused("POST", "/api/add", {}, {"Content-Type": "text/plain"}))
         self.assertEqual([], self.routed)
 
     def test_writes_and_jobs_never_start_unproven(self):
         rows = [p["row"] for p in self.app.search({"query": "night train", "n": 3})["hits"]]
-        tag = self.app.lib.tags[0]
-        with patch.object(self.app.adds, "start") as start, patch.object(self.app.sends, "apply") as send:
+        with patch.object(self.app.adds, "start") as start:
             for path, body in (
-                ("/api/apply", {"rows": rows, "tag": tag, "value": True}),
-                ("/api/forget", {"rows": rows, "value": True}),
+                ("/api/selection", {"rows": rows}),
+                ("/api/pins", {"rows": rows}),
                 ("/api/add", {"url": "https://added.example/new"}),
-                ("/api/send", {"preview": 1}),
             ):
                 self.assertEqual(403, self.refused("POST", path, body, prove=False), path)
             start.assert_not_called()
-            send.assert_not_called()
-        self.assertEqual({}, self.app.store.app_tags())
-        self.assertEqual([], self.app.forgotten.keys)
+        self.assertEqual(([], []), (self.app.selection.keys, self.app.pins.keys))
 
 
 class StartupTests(unittest.TestCase):
