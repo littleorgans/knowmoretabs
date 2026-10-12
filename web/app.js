@@ -31,9 +31,15 @@ const host = (() => {
 })();
 
 // ---- 2. State -------------------------------------------------------------
+// The view settings this browser remembers; file:// may have no storage.
+const store = {
+  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, v); } catch { /* file:// without storage */ } },
+};
 const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rendered: [], q: '', domain: '', group: '', status: '', sort: 'last',
             openAll: false, preview: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages',
             vocab: new Map(), defs: new Map(), tags: [], tagsAll: false,   // vocab: lower-case name → name; tags: the tag filter, lower-case, all must match
+            letters: store.get('tagOrder') === 'letters',   // the tag bar in letter rows, else by count
             rank: null, model: null,     // rank: the model's order for a query, { q, at: address → place }; model: null until it answers or fails
             tab: 'history', content: new Map() };   // tab: the drawer's tab, kept for the session; content: page index → its capture, as last fetched
 const FOLD = 10;                                   // rows of "Open now" shown before "show all"
@@ -46,13 +52,13 @@ const $ = (id) => document.getElementById(id);
 // ---- theme: light or dark, the OS choice until the switch is used, then remembered here.
 // Runs before first paint (the script is parser-blocking at the end of body) so there is no flash.
 const THEME = {
-  get: () => { try { return localStorage.getItem('theme'); } catch { return null; } },
+  get: () => store.get('theme'),
   system: () => (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'),
   current: () => document.documentElement.dataset.theme || THEME.system(),
   set(t, remember) {
     document.documentElement.dataset.theme = t;
     const b = $('theme'); if (b) { const to = t === 'dark' ? 'light' : 'dark'; b.setAttribute('aria-label', `Switch to ${to} mode`); b.title = `Switch to ${to} mode (t)`; }
-    if (remember) { try { localStorage.setItem('theme', t); } catch { /* file:// without storage */ } }
+    if (remember) store.set('theme', t);
   },
   flip() {
     const h = document.documentElement; h.classList.add('switching'); clearTimeout(THEME.t); THEME.t = setTimeout(() => h.classList.remove('switching'), 300);
@@ -711,20 +717,41 @@ const targets = () => (S.sel.size ? [...S.sel] : S.cur >= 0 ? [S.cur] : []);
 // ---- 6b. Tags --------------------------------------------------------------
 // The bar is a ruled grid, one line of it until "N more". Picked tags lead;
 // every other count is over what is shown, so it is what a click will give.
+// In letter rows every tag shows, A to Z in the row of its first letter,
+// picked ones in place, as the Tagger's Add link panel lays out its tags.
+// The row a name sits in: its first letter, accents and case aside; digits and symbols share "#".
+const lead = (name) => { const c = name.normalize('NFD').charAt(0).toUpperCase().charAt(0); return c >= 'A' && c <= 'Z' ? c : '#'; };
+function letterRows(items, name) {
+  const rows = new Map();
+  for (const x of [...items].sort((a, b) => collator.compare(name(a), name(b)))) { const l = lead(name(x)); if (!rows.has(l)) rows.set(l, []); rows.get(l).push(x); }
+  return [...rows].sort(([a], [b]) => (a < b ? -1 : 1));   // "#" sorts before A
+}
 function tagbar() {
   const bar = $('tagbar'); bar.hidden = !S.vocab.size && !host.tag; if (bar.hidden) return;
+  $('tb-order')?.setAttribute('aria-pressed', S.letters);
   const n = tagCounts(S.shown), sug = new Map();
   for (const p of S.shown) for (const s of p.sug) sug.set(s.k, (sug.get(s.k) || 0) + 1);
   const cell = (k, c) => { const name = S.vocab.get(k) || k, on = c < 0, s = sug.get(k);
     const title = `${on ? 'Stop filtering by' : plural(c, 'page') + ' tagged'} ${name}${!on && s ? `, ${s === c ? (c === 1 ? 'suggested' : 'all suggested') : `${num.format(s)} of them suggested`}` : ''}${def(k)}`;
-    return `<li><button type="button" data-t="${esc(k)}" aria-pressed="${on}" title="${esc(title)}"><span>${esc(name)}</span><small>${on ? '×' : num.format(c)}</small></button></li>`; };
+    return `<li><button type="button" data-t="${esc(k)}" aria-pressed="${on}" title="${esc(title)}"><span>${esc(name)}</span><small>${on && !S.letters ? '×' : num.format(on ? n.get(k) || 0 : c)}</small></button></li>`; };
   const rest = [...n].filter(([k]) => !S.tags.includes(k) && S.vocab.has(k)).sort((a, b) => b[1] - a[1] || collator.compare(S.vocab.get(a[0]), S.vocab.get(b[0])));
-  $('tb').innerHTML = !S.vocab.size ? '<li class="none wide">No tags yet. Press <kbd>+</kbd> on any row to add one.</li>'
-    : S.tags.map((k) => cell(k, -1)).join('') + rest.map(([k, c]) => cell(k, c)).join('') + (rest.length || S.tags.length ? '' : `<li class="none${host.tag ? '' : ' wide'}">None of these pages is tagged.</li>`) +
-      `<li class="tb-end"><button type="button" id="tb-more" aria-expanded="${S.tagsAll}"></button></li>` + (host.tag ? '<li class="tb-end"><button type="button" id="tb-manage">Retire tags…</button></li>' : '');
+  const manage = host.tag ? '<li class="tb-end"><button type="button" id="tb-manage">Retire tags…</button></li>' : '';
+  const rows = S.letters && S.vocab.size && (rest.length || S.tags.length);
+  $('tb').classList.toggle('rows', !!rows);
+  if (rows) {
+    const c = new Map([...S.tags.map((k) => [k, -1]), ...rest]);
+    const row = (l, cells) => `<li class="tb-row"><span class="tb-l" aria-hidden="true">${l}</span><ul class="tb-grid">${cells}</ul></li>`;
+    $('tb').innerHTML = letterRows(c.keys(), (k) => S.vocab.get(k) || k).map(([l, ks]) => row(l, ks.map((k) => cell(k, c.get(k))).join(''))).join('') + (manage && row('', manage));
+  } else {
+    $('tb').innerHTML = !S.vocab.size ? '<li class="none wide">No tags yet. Press <kbd>+</kbd> on any row to add one.</li>'
+      : S.tags.map((k) => cell(k, -1)).join('') + rest.map(([k, c]) => cell(k, c)).join('') + (rest.length || S.tags.length ? '' : `<li class="none${host.tag ? '' : ' wide'}">None of these pages is tagged.</li>`) +
+        `<li class="tb-end"><button type="button" id="tb-more" aria-expanded="${S.tagsAll}"></button></li>` + manage;
+  }
   fitTags();
 }
+function flipOrder() { S.letters = !S.letters; store.set('tagOrder', S.letters ? 'letters' : 'count'); tagbar(); }
 // Collapsed, the line holds what the grid's own columns allow, the last cell saying how many more.
+// Letter rows have no "N more", so nothing folds.
 function fitTags() {
   const more = $('tb-more'); if (!more || $('tagbar').hidden) return;
   const cells = [...$('tb').querySelectorAll('li:not(.tb-end)')], manage = $('tb-manage')?.parentElement;
@@ -1062,6 +1089,9 @@ function wire() {
     if (b.id === 'tb-more') { S.tagsAll = !S.tagsAll; b.setAttribute('aria-expanded', S.tagsAll); fitTags(); }
     else if (b.id === 'tb-manage') { vocabDialog(); $('vocab').showModal(); }
     else filterTag(b.dataset.t); });
+  $('tb').insertAdjacentHTML('beforebegin', `<button type="button" id="tb-order" aria-pressed="${S.letters}" aria-label="Letter rows" title="Group tags by letter">` +
+    '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M2 3.5h1.5M2 8h1.5M2 12.5h1.5M6.5 3.5H14M6.5 8H14M6.5 12.5h5"/></svg></button>');
+  $('tb-order').addEventListener('click', flipOrder);
   new ResizeObserver(fitTags).observe($('tagbar'));
   new ResizeObserver(([e]) => { if (e.contentRect.width !== FIT.lw) { FIT.lw = e.contentRect.width; fitRows(); } }).observe($('list'));
   $('tag-sel').addEventListener('click', () => openTagger('sel'));
