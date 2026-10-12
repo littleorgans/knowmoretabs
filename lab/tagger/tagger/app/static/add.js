@@ -232,7 +232,7 @@
     render(tile(t.url, s), K.$("a-tile"));
     const has = (tag) => !t.draft && row !== null && K.has(row, tag);
     const sugg = !t.draft && suggested.url === t.url ? suggested.tags : [];
-    K.panel.render({ has, pend: (tag) => (t.draft && draft.has(tag)) || waiting(t.url, tag), pick, sugg, recent: [] });
+    K.panel.render({ has, pend: (tag) => (t.draft && draft.has(tag)) || waiting(t.url, tag), pick, sugg });
   }
 
   /* ---- the deep link: fill the box, focus Add, wait for Enter ---- */

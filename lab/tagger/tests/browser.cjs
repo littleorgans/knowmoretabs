@@ -407,7 +407,8 @@ const cases = {
     check(tiles()[0].querySelector('[data-untag="Sleeper cars"]'), 'with its tag');
   },
   /* every tag cell holds its place from the link typed to the pick written: sampled each frame through Add, Library,
-     Content (a pick while it runs), Image, Search, Indexed, the write and its reply, then the reserved rows filled */
+     Content (a pick while it runs), Image, Search, Indexed, the write and its reply, then the reserved rows filled.
+     Recently used, filled from the start, holds only what its line fits; the tag written moves to its front */
   addStable: async ({ $, until, check }) => {
     const K = window.KMT, seg = (k) => $(`#a-${k} .val`).textContent;
     await K.ready;
@@ -416,7 +417,7 @@ const cases = {
     $('#a-link').dispatchEvent(new Event('input'));
     for (const a of document.getAnimations()) if (a.effect.getTiming().iterations !== Infinity) await a.finished;
     if ($('#a-fold')) $('#a-fold').click();
-    const cells = [...document.querySelectorAll('#add-screen [data-tag]')];
+    const cells = [...document.querySelectorAll('#add-screen [data-tag]:not(#a-recent *)')];
     check(cells.length >= 10, `the tag cells are there before Add (${cells.length})`);
     const parts = [...document.querySelectorAll('#a-panel > *')], held = [...cells, ...parts];   // the rows, labels, filter and fold too
     const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
@@ -424,14 +425,24 @@ const cases = {
     const drift = () => Math.max(...held.map((el, i) => (el.isConnected ? Math.max(...box(el).map((v, j) => Math.abs(v - first[i][j]))) : Infinity)));
     const seen = {}, out = { cells: cells.length, frames: 0, max: 0, early: 0, columns: new Set(first.slice(0, cells.length).map(([x]) => Math.round(x))).size };
     const suggested = () => [...document.querySelectorAll('#a-sugg [data-tag]')];
+    const recentLine = $('#a-recent'), recent = () => [...recentLine.querySelectorAll('button')];
+    const fits = () => {   // as many as its columns, each wholly inside the line: none clipped, none out of sight
+      const [x, y, w, h] = box(recentLine), n = getComputedStyle(recentLine).gridTemplateColumns.split(' ').length;
+      check(recent().length === n && n > 1, `Recently used holds ${recent().length} for ${n} columns`);
+      check(recent().every((b) => { const [bx, by, bw, bh] = box(b); return bx >= x && by >= y && bx + bw <= x + w + 0.5 && by + bh <= y + h + 0.5; }), 'a recent cell sits clipped');
+      return n;
+    };
+    const columns = fits();
+    check(K.lib.recent.length > columns, `more used tags (${K.lib.recent.length}) than the line fits`);
     let sampling = true;
-    const frame = () => {
+    const frame = () => {   // a frame already asked for when sampling stops samples nothing
+      if (!sampling) return;
       out.frames++;
       out.max = Math.max(out.max, drift());
       const at = ['library', 'content', 'image', 'search'].map(seg).join(' | ');
       seen[at] = (seen[at] || 0) + 1;
       if (seg('search') !== 'Indexed' && suggested().length) out.early++;
-      if (sampling) requestAnimationFrame(frame);
+      requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
     $('#a-form').requestSubmit();
@@ -442,6 +453,9 @@ const cases = {
     await until(() => suggested().length, 'the suggestions');
     out.suggested = suggested().map((el) => el.dataset.tag);
     await until(() => $(`#a-tile [data-untag="${tag}"]`), 'the pick on the tile');
+    await K.writes;
+    await until(() => recent()[0].dataset.tag === tag, 'the tag written first in Recently used');
+    check(recent()[0].dataset.k === 'on' && fits() === columns, 'shown on, the line as full as before');
     const chip = suggested().find((el) => el.dataset.tag === 'Timetables');
     check(chip, `Timetables suggested: ${out.suggested.join(', ')}`);
     chip.click();
@@ -451,7 +465,7 @@ const cases = {
     check(chip.isConnected && looks.join() === 'on,on', `the chip and its cell read alike: ${looks}`);
     for (let i = 0; i < 10; i++) await new Promise((r) => requestAnimationFrame(r));
     sampling = false;
-    K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: K.lib.app_tags.slice(0, 6), recent: K.lib.app_tags.slice(6, 12) });
+    K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: K.lib.app_tags.slice(0, 6) });
     out.filled = drift();
     const line = $('#a-sugg'), edge = line.getBoundingClientRect();
     out.fits = [suggested().length, getComputedStyle(line).gridTemplateColumns.split(' ').length];
@@ -459,6 +473,11 @@ const cases = {
       `Suggested holds as many as its line shows: ${out.fits}`);
     out.phases = Object.keys(seen);
     K.changed();
+    $('#a-panel').style.width = '20rem';   // a narrower line holds fewer
+    for (let i = 0; i < 3; i++) await new Promise((r) => requestAnimationFrame(r));
+    out.recent = [columns, fits()];
+    check(out.recent[1] < columns, `a narrower line holds fewer: ${out.recent}`);
+    $('#a-panel').style.width = '';
     check(out.max <= 0.5 && out.filled <= 0.5 && !out.early, `cells moved, or Suggested filled before Indexed: ${JSON.stringify(out)}`);
     check(['Adding', 'Added', 'Web', 'Ok · Web', 'Fetching', 'Indexed'].every((v) => out.phases.some((p) => p.includes(v))), `every stage sampled: ${out.phases.join(' / ')}`);
     return { ...out, tag };

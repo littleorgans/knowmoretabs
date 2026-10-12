@@ -1,5 +1,7 @@
 /* knowmoretabs · tagger app · the tag panel (Add link)
-   Suggested and Recently used, one line each whatever they hold; a box
+   Suggested and Recently used, one line each whatever they hold (Recently
+   used: the tags last put on a page, latest first, as many as its line
+   has columns, so none sits clipped out of sight); a box
    that filters the app tags or names a new one; then every app tag,
    folded under one button, in letter rows ("#" first, then A to Z,
    letters without tags left out) of same width cells. A cell is one tag
@@ -13,7 +15,7 @@
 (function () {
   const K = window.KMT;
   const { html, nothing, render, repeat } = K.lit;
-  let view = null;     // { has(tag), pend(tag), pick(tag), sugg, recent }: the caller's, as last rendered
+  let view = null;     // { has(tag), pend(tag), pick(tag), sugg }: the caller's, as last rendered
   let open = false;    // the fold, as the owner left it
   let making = false;
   let target = 0;      // bumped for each new target: a tag made for an older one is not picked
@@ -40,6 +42,13 @@
   };
   const cells = (names) => repeat(names, (t) => t, cell);
   const row = ([k, names]) => html`<div class="lr"><span class="ll" aria-hidden="true">${k}</span><ul class="cells">${cells(names)}</ul></div>`;
+  /* a line's columns as laid out: none while it is not shown */
+  const columns = (ul) => getComputedStyle(ul).gridTemplateColumns.split(" ").filter((w) => w.endsWith("px")).length;
+  function recent() {
+    if (!view) return;
+    const ul = K.$("a-recent");
+    render(html`${cells(((K.lib && K.lib.recent) || []).slice(0, columns(ul)))}`, ul);
+  }
 
   function draw() {
     if (!view) return;
@@ -49,7 +58,7 @@
     K.$("a-fold").setAttribute("aria-expanded", String(expanded));
     K.$("a-rows").hidden = !expanded;
     render(html`${cells(fit(view.sugg, K.$("a-sugg")))}`, K.$("a-sugg"));
-    render(html`${cells(view.recent)}`, K.$("a-recent"));
+    recent();
     render(!expanded ? nothing : shown.length ? html`${repeat(letters(shown), ([k]) => k, row)}`
       : html`<p class="nil">No tag has “${typed}”. Enter makes it.</p>`, K.$("a-rows"));
   }
@@ -57,13 +66,14 @@
 
   K.panel = {
     lead,
-    /* draw for `view`; Suggested and Recently used list the names they hold, best first */
+    /* draw for `view`; Suggested lists the names it holds, best first */
     render(v) { view = v; draw(); },
     /* a new target: the filter empties and the fold closes */
     reset() { target++; open = false; box.value = ""; tell(""); },
   };
 
   new ResizeObserver(draw).observe(K.$("a-sugg"));   // a narrower line holds fewer
+  new ResizeObserver(recent).observe(K.$("a-recent"));
   K.$("a-panel").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-tag]");
     if (b && view) view.pick(b.dataset.tag);

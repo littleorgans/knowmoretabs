@@ -156,7 +156,7 @@ async function panelLetters() {
     'strip.js', 'panel.js');
   node('a-fold').setAttribute = function (k, v) { this[k] = v; };
   const picked = [];
-  K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: [], recent: [] });
+  K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: [] });
   const rows = () => [...node('a-rows').innerHTML.matchAll(/<span class="ll"[^>]*>([^<]*)<\/span><ul class="cells">(.*?)<\/ul>/g)]
     .map(([, k, cells]) => [k, [...cells.matchAll(/data-tag="([^"]*)"/g)].map((m) => m[1])]);
   const folded = () => [node('a-fold')['aria-expanded'], node('a-rows').hidden];
@@ -194,8 +194,39 @@ async function panelLetters() {
   assert.deepEqual(picked, ['apple'], 'a cell picks its tag');
   type('ap');
   K.panel.reset();
-  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [], recent: [] });
+  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [] });
   assert.deepEqual([node('a-tag').value, ...folded()], ['', 'false', true], 'a new target: no filter, the fold closed');
+}
+
+/* Recently used: the library's order, as many as the line has columns, each cell as its twin in the letter rows */
+async function panelRecent() {
+  const { K, node } = setup({ lit, lib: { app_tags: ['Alpha', 'apple', 'eagle', 'iOS', 'zeta'], recent: ['zeta', 'Alpha', 'eagle', 'apple', 'iOS'] } },
+    'strip.js', 'panel.js');
+  const picked = [];
+  const recent = () => [...node('a-recent').innerHTML.matchAll(/data-tag="([^"]*)"/g)].map((m) => m[1]);
+  const button = (id, t) => node(id).innerHTML.match(new RegExp(`<button[^>]*data-tag="${t}"[^>]*>`))[0];
+  node('a-recent').columns = '136px 136px 136px';
+  K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: [] });
+  assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle'], 'latest first, three columns, three cells');
+  node('a-fold').click();
+  for (const t of ['zeta', 'Alpha', 'eagle']) assert.equal(button('a-recent', t), button('a-rows', t), `${t} reads as its letter row cell`);
+  assert.match(button('a-recent', 'Alpha'), /data-k="on"/);
+  assert.match(button('a-recent', 'eagle'), /data-k="pend"/);
+  node('a-panel').click({ target: { closest: () => ({ dataset: { tag: 'zeta' } }) } });
+  assert.deepEqual(picked, ['zeta'], 'a recent cell picks as any cell');
+  node('a-recent').columns = '120px 120px 120px 120px 120px 120px';
+  node('a-recent').resized();
+  assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle', 'apple', 'iOS'], 'a wider line: more of them, all fitting');
+  node('a-recent').columns = 'repeat(auto-fill, minmax(8.5rem, 1fr))';
+  node('a-recent').resized();
+  assert.deepEqual(recent(), [], 'not laid out: none');
+  node('a-recent').columns = '136px 136px 136px';
+  K.lib.recent = ['iOS'];
+  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [] });
+  assert.deepEqual(recent(), ['iOS'], 'the order as the library last said');
+  K.lib.recent = [];
+  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [] });
+  assert.equal(node('a-recent').innerHTML, '', 'nothing used yet: the line stays, empty');
 }
 
 /* ---- picks before the page has a row: the real pages, strip, panel and add scripts; the server is the test ---- */
@@ -501,4 +532,4 @@ async function addSuggested() {
   assert.deepEqual(row(), ['Trains off', 'Timetables off'], 'back on the page: its suggestions, as many as a narrower line holds');
 }
 
-run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested });
+run({ addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested });

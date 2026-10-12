@@ -110,6 +110,7 @@
     return write(path, body).then((out) => {
       for (const p of out.pages) if (current(p.row)) set([p.row], tag, p.tags.includes(tag));
       K.lib.app_tags = out.app_tags;
+      K.lib.recent = out.recent;
       K.changed();
       return out;
     }, (err) => { onError(rows.filter(current), err); K.changed(); });
