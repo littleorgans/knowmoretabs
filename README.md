@@ -532,7 +532,9 @@ with a `schema_version`; it is the source of truth and readable in any
 editor. Everything under `export/` is derived and can be deleted.
 
 Nothing leaves the machine unless you run `enrich` or `content`. `save`,
-`serve`, `export` and the tag commands make no network requests of any kind;
+`export` and the tag commands make no network requests. `serve` makes none
+unless `--model-port` is set; then it sends each search query to the model
+service over loopback on this machine.
 `enrich` and `content` are the only code that sends your pages' addresses,
 or a video's id to YouTube through yt-dlp, and what each sends is described
 above; `content` also downloads one preview image per page from the address
