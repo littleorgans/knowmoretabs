@@ -87,13 +87,7 @@ class ThroughShellTests(Fixture):
         root = self.app.lib.root
         good = json.loads((root / "library.json").read_text())
         shown = self.app.lib
-        for field, value in (
-            ("created_at", "not a time"),
-            ("created_at", "2026-10-01T00:00:00"),
-            ("retired_at", "not a time"),
-            ("retired_at", "2026-10-01T00:00:00"),
-            ("definition", 7),
-        ):
+        for field, value in (("created_at", 7), ("retired_at", 7), ("definition", 7)):
             with self.subTest(field=field, value=value):
                 damaged = json.loads(json.dumps(good))
                 damaged["vocabulary"]["Coffee"][field] = value
@@ -104,6 +98,24 @@ class ThroughShellTests(Fixture):
         synthetic_archive.write_state(root, good)
         self.assertEqual(200, self.shell.call("GET", "/api/library")[0])
         self.assertEqual(200, self.shell.call("GET", "/model/api/library")[0], "a later valid replacement recovers")
+
+    def test_every_vocabulary_time_rust_reads_the_app_reads(self):
+        root = self.app.lib.root
+        good = json.loads((root / "library.json").read_text())
+        for field in ("created_at", "retired_at"):
+            for value in (
+                "2026-10-01T00:00:00z",
+                "2026-10-01T23:59:60Z",
+                "2026-10-01T00:00:00Z[UTC]",
+                "2026-10-01T00:00:00+02:00[Europe/Paris]",
+                "+002026-10-01T00:00:00Z",
+            ):
+                with self.subTest(field=field, value=value):
+                    edited = json.loads(json.dumps(good))
+                    edited["vocabulary"]["Coffee"][field] = value
+                    synthetic_archive.write_state(root, edited)
+                    self.assertEqual(200, self.shell.call("GET", "/api/library")[0], "Rust reads the state")
+                    self.assertEqual(200, self.shell.call("GET", "/model/api/library")[0], "so the app does too")
 
     def test_when_the_app_stops_tag_and_add_link_say_so_and_the_library_goes_on(self):
         self.shell.stop_service()

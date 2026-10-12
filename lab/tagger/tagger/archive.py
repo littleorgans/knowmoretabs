@@ -124,7 +124,9 @@ class LibraryState:
 
     @classmethod
     def parse(cls, raw: bytes, seen: tuple | None = None) -> "LibraryState":
-        """The fields `State` reads, checked as strictly as serde checks them; any other field is not read."""
+        """The fields `State` reads, checked as strictly as serde checks them but never more: a term's times need only
+        be text, since `jiff` reads spellings `instant` does not, and refusing one would hide a library Rust reads.
+        Any other field is not read."""
         try:
             state = json.loads(raw)
         except ValueError:
@@ -142,9 +144,8 @@ class LibraryState:
         active, retired, used = {}, {}, {}
         for name, term in vocabulary.items():
             if (
-                instant(term.get("created_at")) is None
-                or term.get("retired_at") is not None
-                and instant(term["retired_at"]) is None
+                not isinstance(term.get("created_at"), str)
+                or not isinstance(term.get("retired_at"), str | None)
                 or not isinstance(term.get("definition"), str | None)
             ):
                 raise Unreadable(f"vocabulary term {name!r} is malformed")
