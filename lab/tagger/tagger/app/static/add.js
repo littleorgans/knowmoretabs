@@ -110,6 +110,7 @@
   async function start(url, ask = { action: "add" }, link = url) {
     const mine = ++asked;
     latest.set(url, mine);
+    latest.set(link, mine);   // a follow up supersedes the link's job too: that job's late poll drops none of its picks
     try {
       let j = await K.api("/api/add", { url, ...ask });
       for (;;) {

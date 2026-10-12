@@ -83,6 +83,7 @@ CASES = {
         "addSuggested",
         "addFollowUpNamesTheKey",
         "addFollowUpPicksBackground",
+        "addFollowUpStalePoll",
     ],
 }
 

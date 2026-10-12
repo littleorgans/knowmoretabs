@@ -616,4 +616,21 @@ async function addFollowUpNamesTheKey(background = false) {
   assert.equal(K.gone.has(7), true, 'Remove hides the indexed row when the link and key differ');
 }
 
-run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true) });
+/* A follow up on the key supersedes the link's job: that job's poll resolving first drops none of the picks. */
+async function addFollowUpStalePoll() {
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/one/#top', key = 'https://added.example/one';
+  const blocked = { library: ev('library', 'done', { value: 'added', url: key }), content: ev('content', 'done', { status: 'blocked', tier: 'web', http_status: 403 }) };
+  f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
+  await f.reply('/api/add', f.job(1, url, { ...blocked, search: ev('search', 'running') }, { key }));
+  const old = await f.next('/api/add/1');
+  assert.equal(node('a-act').textContent, 'Try signed in');
+  node('a-act').click();
+  const signed = await f.next('/api/add');
+  old.resolve(f.job(1, url, { ...blocked, search: ev('search', 'done', { value: 'not_indexed' }) }, { key, finished: true }));
+  for (let i = 0; i < 4; i++) await turn();
+  assert.equal(K.toasted, undefined, 'the superseded poll reports no dropped picks');
+  signed.resolve(f.job(2, key, done('indexed'), { signed_in: true, retry: ['content'], finished: true, page: addPage(7, key) }));
+  assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'the follow up writes them');
+}
+
+run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true), addFollowUpStalePoll });
