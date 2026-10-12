@@ -456,6 +456,10 @@ pub struct VocabularyOutcome {
     /// Named to retire but never in the vocabulary. The CLI refuses these;
     /// the API ignores them, since there is nothing to retire.
     pub unknown: Vec<String>,
+    /// The vocabulary's spelling of each name to create, in request order
+    /// without repeats, whether it was created, brought back or already
+    /// there: what a caller puts on a page next.
+    pub resolved: Vec<String>,
     /// The active vocabulary afterwards.
     pub vocabulary: Vec<VocabularyEntry>,
 }
@@ -547,11 +551,15 @@ pub fn edit_vocabulary(
     if strict && !outcome.unknown.is_empty() {
         return Err(Error::UnknownTag(outcome.unknown));
     }
-    for name in create.iter().chain(&defined_names) {
-        match admit(&mut state, name, now) {
-            (_, Admitted::Known) => {}
-            (spelling, Admitted::Created) => outcome.created.push(spelling),
-            (spelling, Admitted::Revived) => outcome.revived.push(spelling),
+    for (index, name) in create.iter().chain(&defined_names).enumerate() {
+        let (spelling, admitted) = admit(&mut state, name, now);
+        match admitted {
+            Admitted::Known => {}
+            Admitted::Created => outcome.created.push(spelling.clone()),
+            Admitted::Revived => outcome.revived.push(spelling.clone()),
+        }
+        if index < create.len() {
+            outcome.resolved.push(spelling);
         }
     }
     for (name, text) in define {

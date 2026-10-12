@@ -403,7 +403,10 @@ impl Server {
         };
         match tags::edit_vocabulary(&self.root, &edit, false, self.log) {
             Ok(outcome) => {
-                let body = serde_json::json!({ "vocabulary": outcome.vocabulary });
+                let body = serde_json::json!({
+                    "vocabulary": outcome.vocabulary,
+                    "resolved": outcome.resolved,
+                });
                 Response::ok("application/json", body.to_string().into_bytes())
             }
             Err(err) => self.refusal(&err),
