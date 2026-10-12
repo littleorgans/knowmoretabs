@@ -68,10 +68,21 @@ class App:
 
     def sync(self, url: str, archive) -> dict | None:
         """After knowmoretabs changed one page: the library in line with the archive for it, and the page as the
-        screen shows it, or None when the screen does not show it. Hold the lock."""
+        screen shows it with the tags `suggested` for it, or None when the screen does not show it. Hold the lock."""
         self.lib = engine.sync(self.lib, archive, [url], self.embed)
         row = self.lib.rows.get(url)
-        return self.page(row) if row is not None and self.live()[row] else None
+        if row is None or not self.live()[row]:
+            return None
+        page = self.page(row)
+        return {**page, "suggested": self.suggested(row, page["tags"])}
+
+    def suggested(self, row: int, held: list[str]) -> list[str]:
+        """The app tags the page lacks that the model would put on it, best first: each whose score clears its
+        threshold (`engine.prechecks`: a head's, or zero shot for a tag with too few positives or made here), by
+        confidence; at most `engine.SUGGEST`."""
+        tags = [t for t in self.app_tags() if t not in held]
+        checked = [s for s in engine.prechecks(self.lib, [row], tags)[0] if s["checked"]]
+        return [s["tag"] for s in sorted(checked, key=lambda s: -s["p"])[: engine.SUGGEST]]
 
     def page(self, row: int) -> dict:
         """A page as the views show it: `tags` are its app tags; `own`, its archive tags, only the review shows."""
