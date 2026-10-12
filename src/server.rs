@@ -19,7 +19,9 @@ use serde::Deserialize;
 use crate::archive::Archive;
 use crate::capture::Log;
 use crate::error::Error;
-use crate::http::{self, Head, IO_TIMEOUT, Response, Status, json_request};
+use crate::http::{
+    self, BODY_LIMIT, Framing, HEAD_LIMIT, Head, IO_TIMEOUT, Response, Status, json_request,
+};
 use crate::library::{self, Shape};
 use crate::triage::{self, Action};
 use crate::{assets, export, image_store, library_history, out, suggestions, tags};
@@ -140,12 +142,12 @@ struct Server {
 impl Server {
     fn serve(&self, mut stream: TcpStream) {
         let deadline = Instant::now() + IO_TIMEOUT;
-        let (head, rest) = match http::read_head(&mut stream, deadline) {
-            Ok(Some(head)) => head,
+        let (head, rest) = match http::read_head(&mut stream, deadline, HEAD_LIMIT) {
+            Ok(head) => head,
             // Opened and closed without a request: a preconnect, not an error.
-            Ok(None) => return,
-            Err(response) => {
-                self.finish(&mut stream, "<unreadable>", &response);
+            Err(Framing::Closed) => return,
+            Err(framing) => {
+                self.finish(&mut stream, "<unreadable>", &unread_head(framing));
                 return;
             }
         };
@@ -155,12 +157,13 @@ impl Server {
                 let line = format!("{} {}", head.method, head.target);
                 // Judge Host and Origin before reading any further body bytes;
                 // `rest` may contain bytes prefetched with the head.
-                let response = match http::check_headers(&head, self.port) {
+                let body = http::check_headers(&head, self.port).and_then(|()| {
+                    http::read_body(&mut stream, &head.fields, rest, deadline, BODY_LIMIT)
+                        .map_err(unread_body)
+                });
+                let response = match body {
+                    Ok(body) => self.route(&head, &body),
                     Err(response) => response,
-                    Ok(()) => match http::read_body(&mut stream, &head, rest, deadline) {
-                        Err(response) => response,
-                        Ok(body) => self.route(&head, &body),
-                    },
                 };
                 (line, response)
             }
@@ -367,6 +370,33 @@ impl Server {
     fn failure(&self, err: &Error) -> Response {
         self.log.warn(&err.to_string());
         Response::error(Status::InternalServerError, &err.to_string())
+    }
+}
+
+/// A request head the wire could not frame.
+fn unread_head(framing: Framing) -> Response {
+    match framing {
+        Framing::TooLarge => Response::error(
+            Status::RequestHeaderFieldsTooLarge,
+            "request head too large",
+        ),
+        _ => Response::error(Status::BadRequest, "incomplete request"),
+    }
+}
+
+/// A request body the wire could not frame.
+fn unread_body(framing: Framing) -> Response {
+    match framing {
+        Framing::Chunked => Response::error(
+            Status::LengthRequired,
+            "send a Content-Length, not a transfer encoding",
+        ),
+        Framing::BadLength => Response::error(Status::BadRequest, "bad Content-Length"),
+        Framing::TooLarge => Response::error(Status::ContentTooLarge, "request body too large"),
+        Framing::Overrun => Response::error(Status::BadRequest, "body longer than Content-Length"),
+        Framing::Closed | Framing::Incomplete => {
+            Response::error(Status::BadRequest, "incomplete body")
+        }
     }
 }
 

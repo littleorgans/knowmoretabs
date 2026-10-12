@@ -107,6 +107,60 @@ fn responses_close_the_connection_and_carry_no_cors_headers() {
     assert!(text.ends_with("\r\n\r\n{\"error\":\"method not allowed\"}"));
 }
 
+/// The caller's limit, not `HEAD_LIMIT`, bounds the head, and each way a
+/// message can fail to frame has its own name, so a server and a client
+/// can each give it their own answer.
+#[test]
+fn framing_names_why_a_message_could_not_be_read() {
+    let alive = || Instant::now() + IO_TIMEOUT;
+    let head_of = |sent: &[u8], limit: usize| {
+        let (mut socket, mut client) = socket_pair();
+        client.write_all(sent).unwrap();
+        client.shutdown(Shutdown::Write).unwrap();
+        read_head(&mut socket, alive(), limit)
+    };
+    assert_eq!(head_of(b"", 64), Err(Framing::Closed));
+    assert_eq!(
+        head_of(b"HTTP/1.1 200 OK\r\n", 64),
+        Err(Framing::Incomplete)
+    );
+    assert_eq!(head_of(&[b'x'; 65], 64), Err(Framing::TooLarge));
+    assert_eq!(
+        head_of(b"HTTP/1.1 200 OK\r\n\r\n{}", 64),
+        Ok((b"HTTP/1.1 200 OK".to_vec(), b"{}".to_vec()))
+    );
+
+    let body_of = |fields: &str, rest: &[u8], limit: usize| {
+        let (mut socket, client) = socket_pair();
+        drop(client);
+        let fields = Fields::parse(fields.split("\r\n")).unwrap();
+        read_body(&mut socket, &fields, rest.to_vec(), alive(), limit)
+    };
+    assert_eq!(
+        body_of("Transfer-Encoding: chunked", b"", 64),
+        Err(Framing::Chunked)
+    );
+    assert_eq!(
+        body_of("Content-Length: +1", b"", 64),
+        Err(Framing::BadLength)
+    );
+    // The declared length is refused before a byte is read.
+    assert_eq!(
+        body_of("Content-Length: 65", b"", 64),
+        Err(Framing::TooLarge)
+    );
+    assert_eq!(
+        body_of("Content-Length: 1", b"xy", 64),
+        Err(Framing::Overrun)
+    );
+    assert_eq!(
+        body_of("Content-Length: 3", b"xy", 64),
+        Err(Framing::Incomplete)
+    );
+    assert_eq!(body_of("Content-Length: 2", b"xy", 64), Ok(b"xy".to_vec()));
+    assert_eq!(body_of("", b"", 64), Ok(Vec::new()));
+}
+
 fn socket_pair() -> (TcpStream, TcpStream) {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
     let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
@@ -229,26 +283,32 @@ fn review_head_and_body_share_one_deadline() {
     client.write_all(HEAD).unwrap();
     client.write_all(b"\r\n\r\nx").unwrap();
     assert!(
-        matches!(read_head(&mut socket, Instant::now()), Ok(None)),
+        read_head(&mut socket, Instant::now(), HEAD_LIMIT) == Err(Framing::Closed),
         "a spent deadline read a head anyway"
     );
 
     let head = Head::parse(HEAD).ok().unwrap();
-    let err = read_body(&mut socket, &head, Vec::new(), Instant::now()).unwrap_err();
-    assert_eq!(err.status, Status::BadRequest);
+    let err = read_body(
+        &mut socket,
+        &head.fields,
+        Vec::new(),
+        Instant::now(),
+        BODY_LIMIT,
+    );
+    assert_eq!(err, Err(Framing::Incomplete));
 
     // Both refusals were the clock and not a missing byte: the request is
     // still there, whole, for a budget that has time. This reads it back
     // through the same two functions, which is also the demonstration
     // that the socket was never the problem.
     let alive = Instant::now() + IO_TIMEOUT;
-    let Ok(Some((head, rest))) = read_head(&mut socket, alive) else {
+    let Ok((head, rest)) = read_head(&mut socket, alive, HEAD_LIMIT) else {
         panic!("the head is queued; a live budget has to find it");
     };
     assert_eq!(head, HEAD, "the head was consumed by a spent deadline");
     let head = Head::parse(&head).ok().unwrap();
     assert_eq!(
-        read_body(&mut socket, &head, rest, alive).ok(),
+        read_body(&mut socket, &head.fields, rest, alive, BODY_LIMIT).ok(),
         Some(b"x".to_vec()),
         "the body byte was consumed by a spent deadline"
     );

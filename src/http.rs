@@ -19,9 +19,9 @@ use serde::de::DeserializeOwned;
 
 /// Request line plus headers, including the final CRLF CRLF. A browser's own
 /// headers fit in a few hundred bytes; the margin is for localhost cookies.
-const HEAD_LIMIT: usize = 16 * 1024;
+pub(crate) const HEAD_LIMIT: usize = 16 * 1024;
 /// A bulk forget of every page in a large archive is well under this.
-const BODY_LIMIT: usize = 4 * 1024 * 1024;
+pub(crate) const BODY_LIMIT: usize = 4 * 1024 * 1024;
 /// Browsers open connections they never write to (preconnects); a thread
 /// waiting on one must give up rather than hold a socket forever.
 pub(crate) const IO_TIMEOUT: Duration = Duration::from_secs(10);
@@ -131,8 +131,7 @@ fn origin_allowed(origin: &str, port: u16) -> bool {
 pub(crate) struct Head {
     pub(crate) method: String,
     pub(crate) target: String,
-    /// Names lower-cased; values as sent, trimmed.
-    headers: Vec<(String, String)>,
+    pub(crate) fields: Fields,
 }
 
 impl Head {
@@ -157,36 +156,51 @@ impl Head {
         {
             return Err(bad());
         }
-        let mut headers = Vec::new();
-        for line in lines.filter(|line| !line.is_empty()) {
-            let (name, value) = line.split_once(':').ok_or_else(bad)?;
-            if name.is_empty()
-                || !name.bytes().all(is_token)
-                || value.bytes().any(|b| b.is_ascii_control() && b != b'\t')
-            {
-                return Err(bad());
-            }
-            let name = name.to_ascii_lowercase();
-            // These fields have one meaning per request. Never let the
-            // security check and framing silently choose the first value.
-            if matches!(
-                name.as_str(),
-                "host" | "origin" | "content-length" | "content-type"
-            ) && headers.iter().any(|(n, _)| n == &name)
-            {
-                return Err(bad());
-            }
-            headers.push((name, value.trim_matches([' ', '\t']).to_owned()));
-        }
         Ok(Self {
             method: method.to_owned(),
             target: target.to_owned(),
-            headers,
+            fields: Fields::parse(lines).ok_or_else(bad)?,
         })
     }
 
     pub(crate) fn header(&self, name: &str) -> Option<&str> {
-        self.headers
+        self.fields.get(name)
+    }
+}
+
+/// The header fields after a request or status line: names lower-cased;
+/// values as sent, trimmed.
+pub(crate) struct Fields(Vec<(String, String)>);
+
+impl Fields {
+    /// `None` for a malformed line or a repeated field that has one meaning.
+    fn parse<'a>(lines: impl Iterator<Item = &'a str>) -> Option<Self> {
+        let mut fields: Vec<(String, String)> = Vec::new();
+        for line in lines.filter(|line| !line.is_empty()) {
+            let (name, value) = line.split_once(':')?;
+            if name.is_empty()
+                || !name.bytes().all(is_token)
+                || value.bytes().any(|b| b.is_ascii_control() && b != b'\t')
+            {
+                return None;
+            }
+            let name = name.to_ascii_lowercase();
+            // These fields have one meaning per message. Never let the
+            // security check and framing silently choose the first value.
+            if matches!(
+                name.as_str(),
+                "host" | "origin" | "content-length" | "content-type"
+            ) && fields.iter().any(|(n, _)| n == &name)
+            {
+                return None;
+            }
+            fields.push((name, value.trim_matches([' ', '\t']).to_owned()));
+        }
+        Some(Self(fields))
+    }
+
+    pub(crate) fn get(&self, name: &str) -> Option<&str> {
+        self.0
             .iter()
             .find(|(n, _)| n == name)
             .map(|(_, v)| v.as_str())
@@ -235,36 +249,45 @@ impl Write for DeadlineWriter<'_> {
     }
 }
 
+/// Why a message could not be framed. A server answers each with its own
+/// status; a client gives up on the exchange.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Framing {
+    /// Nothing arrived before the peer closed or the deadline passed.
+    Closed,
+    /// The head or the body stopped short.
+    Incomplete,
+    /// Over the caller's limit, for the head as read or the body as declared.
+    TooLarge,
+    /// A transfer encoding instead of a `Content-Length`.
+    Chunked,
+    /// A `Content-Length` that is not a plain decimal number.
+    BadLength,
+    /// More bytes arrived with the head than the `Content-Length` declares.
+    Overrun,
+}
+
 /// The head's bytes and whatever body bytes arrived in the same read.
 type HeadAndRest = (Vec<u8>, Vec<u8>);
 
-/// Reads up to the blank line. Returns the head and whatever body bytes
-/// arrived with it, or `None` when the client sent nothing at all.
+/// Reads up to the blank line, at most `limit` bytes. Returns the head and
+/// whatever body bytes arrived with it.
 pub(crate) fn read_head(
     stream: &mut TcpStream,
     deadline: Instant,
-) -> Result<Option<HeadAndRest>, Response> {
+    limit: usize,
+) -> Result<HeadAndRest, Framing> {
     let mut buf = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
     loop {
-        if buf.len() == HEAD_LIMIT {
-            return Err(Response::error(
-                Status::RequestHeaderFieldsTooLarge,
-                "request head too large",
-            ));
+        if buf.len() == limit {
+            return Err(Framing::TooLarge);
         }
-        let size = chunk.len().min(HEAD_LIMIT - buf.len());
+        let size = chunk.len().min(limit - buf.len());
         let n = match read_before(stream, &mut chunk[..size], deadline) {
-            Ok(0) => {
-                return if buf.is_empty() {
-                    Ok(None)
-                } else {
-                    Err(Response::error(Status::BadRequest, "incomplete request"))
-                };
-            }
-            Ok(n) => n,
-            Err(_) if buf.is_empty() => return Ok(None),
-            Err(_) => return Err(Response::error(Status::BadRequest, "incomplete request")),
+            Ok(n) if n > 0 => n,
+            _ if buf.is_empty() => return Err(Framing::Closed),
+            _ => return Err(Framing::Incomplete),
         };
         buf.extend_from_slice(&chunk[..n]);
         let search_from = buf.len().saturating_sub(n + 3);
@@ -272,55 +295,43 @@ pub(crate) fn read_head(
             let end = search_from + at + 4;
             let rest = buf.split_off(end);
             buf.truncate(end - 4);
-            return Ok(Some((buf, rest)));
+            return Ok((buf, rest));
         }
     }
 }
 
-/// Only `Content-Length` bodies, and only up to the cap, which is checked
-/// before anything is allocated or read.
+/// Only `Content-Length` bodies, and only up to `limit`, which is checked
+/// before anything is allocated or read. No length is an empty body.
 pub(crate) fn read_body(
     stream: &mut TcpStream,
-    head: &Head,
+    fields: &Fields,
     mut body: Vec<u8>,
     deadline: Instant,
-) -> Result<Vec<u8>, Response> {
-    if head.header("transfer-encoding").is_some() {
-        return Err(Response::error(
-            Status::LengthRequired,
-            "send a Content-Length, not a transfer encoding",
-        ));
+    limit: usize,
+) -> Result<Vec<u8>, Framing> {
+    if fields.get("transfer-encoding").is_some() {
+        return Err(Framing::Chunked);
     }
-    let length = match head.header("content-length") {
+    let length = match fields.get("content-length") {
         None => 0,
         Some(value) => {
             if value.is_empty() || !value.bytes().all(|b| b.is_ascii_digit()) {
-                return Err(Response::error(Status::BadRequest, "bad Content-Length"));
+                return Err(Framing::BadLength);
             }
-            value
-                .parse::<usize>()
-                .map_err(|_| Response::error(Status::BadRequest, "bad Content-Length"))?
+            value.parse::<usize>().map_err(|_| Framing::BadLength)?
         }
     };
-    if length > BODY_LIMIT {
-        return Err(Response::error(
-            Status::ContentTooLarge,
-            "request body too large",
-        ));
+    if length > limit {
+        return Err(Framing::TooLarge);
     }
     if body.len() > length {
-        return Err(Response::error(
-            Status::BadRequest,
-            "body longer than Content-Length",
-        ));
+        return Err(Framing::Overrun);
     }
     let mut already = body.len();
     body.resize(length, 0);
     while already < length {
         match read_before(stream, &mut body[already..], deadline) {
-            Ok(0) | Err(_) => {
-                return Err(Response::error(Status::BadRequest, "incomplete body"));
-            }
+            Ok(0) | Err(_) => return Err(Framing::Incomplete),
             Ok(n) => already += n,
         }
     }
