@@ -5,6 +5,8 @@ added one at a time (`pages/added.jsonl`, folded by `intake::snapshot` as one mo
 Title: the most recent non blank tab title, snapshots ascending (`library::build`); an added page's comes from the
 latest intake line for its URL.
 Owner labels: `library.json` tags[url].add resolved through active vocabulary (`State::page_tags`).
+Last use: an active term's `used_at`, when an add last put it on a page (`tags::apply`); a time that does not parse
+is no use.
 Capture ok: the latest valid schema 1 log line is `ok` and its hash named file exists
 (`content_store::file_name`, `image_store::read_kept`). Latest follows file order (`jsonl::parse`).
 Page metadata: latest `pages/metadata.jsonl` record, used only when status is ok (`prompt::PageLine::enrich`).
@@ -15,6 +17,7 @@ import ipaddress
 import json
 import urllib.parse
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 
 
@@ -39,6 +42,15 @@ def public(raw: str) -> bool:
         return True
     except ValueError:
         return True
+
+
+def instant(raw) -> float | None:
+    """Seconds since the epoch of an RFC 3339 time with its offset, as `jiff::Timestamp` writes it; else None."""
+    try:
+        at = datetime.fromisoformat(raw)
+    except (TypeError, ValueError):
+        return None
+    return at.timestamp() if at.tzinfo else None
 
 
 def latest_log(path: Path, required=("url",)) -> dict:
@@ -68,6 +80,7 @@ class Archive:
     forgotten: set
     active: dict  # folded name -> spelling
     retired: set  # folded names the vocabulary holds retired
+    used: dict  # folded active name -> its last use, epoch seconds
     owner_tags: dict  # url -> sorted active tags
     tag_adds: dict  # url -> the names its `add` list holds, retired ones included
     tag_removes: dict  # url -> the names its `remove` list holds (dismissed), retired ones included
@@ -82,6 +95,11 @@ class Archive:
         vocab = state.get("vocabulary", {})
         active = {name.lower(): name for name, term in vocab.items() if term.get("retired_at") is None}
         retired = {name.lower() for name, term in vocab.items() if term.get("retired_at") is not None}
+        used = {
+            name.lower(): at
+            for name, term in vocab.items()
+            if term.get("retired_at") is None and (at := instant(term.get("used_at"))) is not None
+        }
         titles: dict = {}
         known: set = set()
         for directory in sorted((root / "snapshots").iterdir(), key=lambda p: p.name):
@@ -139,6 +157,7 @@ class Archive:
             forgotten=set(state.get("forgotten", [])),
             active=active,
             retired=retired,
+            used=used,
             owner_tags=owner_tags,
             tag_adds={url: page.get("add", []) for url, page in state.get("tags", {}).items()},
             tag_removes={url: page.get("remove", []) for url, page in state.get("tags", {}).items()},

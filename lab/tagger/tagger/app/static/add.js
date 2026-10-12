@@ -123,7 +123,7 @@
     } catch (err) { if (mine === asked) K.fail(err); }
   }
   async function settle(j) {
-    if (j.stages.library && [...LISTED, "forgotten"].includes(j.stages.library.value)) K.lib = await K.api("/api/library");
+    if (j.stages.library && [...LISTED, "forgotten"].includes(j.stages.library.value)) await K.loadLibrary();
     K.changed();
   }
   /* every poll's job, drawn or not: picks held for its link are written once the page has a row, and dropped
@@ -232,7 +232,7 @@
     render(tile(t.url, s), K.$("a-tile"));
     const has = (tag) => !t.draft && row !== null && K.has(row, tag);
     const sugg = !t.draft && suggested.url === t.url ? suggested.tags : [];
-    K.panel.render({ has, pend: (tag) => (t.draft && draft.has(tag)) || waiting(t.url, tag), pick, sugg, recent: [] });
+    K.panel.render({ has, pend: (tag) => (t.draft && draft.has(tag)) || waiting(t.url, tag), pick, sugg });
   }
 
   /* ---- the deep link: fill the box, focus Add, wait for Enter ---- */

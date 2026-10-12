@@ -100,7 +100,7 @@ async function addStates() {
 
 /* what the screen asks the server: the deep link's title with its own link only, and the action's request */
 async function addRequests() {
-  const { K, node, context } = setup({ lit, strip: { render() {}, sayIn: () => () => {} }, lib: { app_tags: [] } }, 'panel.js', 'add.js');
+  const { K, node, context } = setup({ lit, strip: { render() {}, sayIn: () => () => {} }, lib: { app_tags: [] } }, 'pages.js', 'panel.js', 'add.js');
   const asked = [];
   let reply = () => new Promise(() => {});
   K.api = (path, body) => { asked.push([path, body]); return reply(path, body); };
@@ -156,7 +156,7 @@ async function panelLetters() {
     'strip.js', 'panel.js');
   node('a-fold').setAttribute = function (k, v) { this[k] = v; };
   const picked = [];
-  K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: [], recent: [] });
+  K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: [] });
   const rows = () => [...node('a-rows').innerHTML.matchAll(/<span class="ll"[^>]*>([^<]*)<\/span><ul class="cells">(.*?)<\/ul>/g)]
     .map(([, k, cells]) => [k, [...cells.matchAll(/data-tag="([^"]*)"/g)].map((m) => m[1])]);
   const folded = () => [node('a-fold')['aria-expanded'], node('a-rows').hidden];
@@ -194,8 +194,48 @@ async function panelLetters() {
   assert.deepEqual(picked, ['apple'], 'a cell picks its tag');
   type('ap');
   K.panel.reset();
-  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [], recent: [] });
+  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [] });
   assert.deepEqual([node('a-tag').value, ...folded()], ['', 'false', true], 'a new target: no filter, the fold closed');
+}
+
+/* Recently used: the library's order, as many as the line has columns, each cell as its twin in the letter rows */
+async function panelRecent() {
+  const { K, node } = setup({ lit, lib: { app_tags: ['Alpha', 'apple', 'eagle', 'iOS', 'zeta'], recent: ['zeta', 'Alpha', 'eagle', 'apple', 'iOS'] } },
+    'strip.js', 'panel.js');
+  const picked = [];
+  const recent = () => [...node('a-recent').innerHTML.matchAll(/data-tag="([^"]*)"/g)].map((m) => m[1]);
+  const suggested = () => [...node('a-sugg').innerHTML.matchAll(/data-tag="([^"]*)"/g)].map((m) => m[1]);
+  const button = (id, t) => node(id).innerHTML.match(new RegExp(`<button[^>]*data-tag="${t}"[^>]*>`))[0];
+  node('a-recent').columns = '136px 136px 136px';
+  K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: K.lib.app_tags });
+  assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle'], 'latest first, three columns, three cells');
+  assert.deepEqual(suggested(), ['Alpha', 'apple', 'eagle'], 'Suggested shares the one line cap');
+  node('a-fold').click();
+  for (const t of ['zeta', 'Alpha', 'eagle']) assert.equal(button('a-recent', t), button('a-rows', t), `${t} reads as its letter row cell`);
+  assert.match(button('a-recent', 'Alpha'), /data-k="on"/);
+  assert.match(button('a-recent', 'eagle'), /data-k="pend"/);
+  node('a-panel').click({ target: { closest: () => ({ dataset: { tag: 'zeta' } }) } });
+  assert.deepEqual(picked, ['zeta'], 'a recent cell picks as any cell');
+  node('a-recent').columns = '120px 120px 120px 120px 120px 120px';
+  node('a-recent').resized();
+  assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle', 'apple', 'iOS'], 'a wider line: more of them, all fitting');
+  node('a-sugg').columns = 2;
+  node('a-sugg').resized();
+  assert.deepEqual(suggested(), ['Alpha', 'apple'], 'Suggested redraws on resize too');
+  assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle', 'apple', 'iOS'], 'each row fits its own columns');
+  node('a-sugg').columns = 'none';
+  node('a-sugg').resized();
+  assert.deepEqual(suggested(), [], 'Suggested not laid out: none');
+  node('a-recent').columns = 'repeat(auto-fill, minmax(8.5rem, 1fr))';
+  node('a-recent').resized();
+  assert.deepEqual(recent(), [], 'not laid out: none');
+  node('a-recent').columns = '136px 136px 136px';
+  K.lib.recent = ['iOS'];
+  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [] });
+  assert.deepEqual(recent(), ['iOS'], 'the order as the library last said');
+  K.lib.recent = [];
+  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [] });
+  assert.equal(node('a-recent').innerHTML, '', 'nothing used yet: the line stays, empty');
 }
 
 /* ---- picks before the page has a row: the real pages, strip, panel and add scripts; the server is the test ---- */
@@ -291,7 +331,7 @@ async function addPicksHeld() {
 
 /* a second link does not stop the first job: it writes the first page's picks to the first page's row only */
 async function addPicksBackground() {
-  const f = addFixture(), { node } = f, one = 'https://added.example/one', two = 'https://added.example/two';
+  const f = addFixture(), { K, node } = f, one = 'https://added.example/one', two = 'https://added.example/two';
   f.type(one); f.click('Trains'); f.submit();
   await f.reply('/api/add', f.job(1, one, STAGES.running));
   await f.reply('/api/add/1', f.job(1, one, STAGES.added));
@@ -304,6 +344,7 @@ async function addPicksBackground() {
   await f.reply('/api/add/1', f.job(1, one, STAGES.search));
   await f.reply('/api/add/1', f.job(1, one, done('indexed'), { finished: true, page: addPage(7, one) }));
   assert.deepEqual(await f.applied(7, ['Trains']), [{ rows: [7], tag: 'Trains', value: true }], 'the first job writes its own picks');
+  await f.reply('/api/library', { ...K.lib });
   assert.match(node('a-tile').innerHTML, /added.example\/two/, 'the second page stays on screen');
   assert.deepEqual([f.look('Trains'), f.look('Coffee')], ['off', 'pend'], 'its cells untouched');
   await f.reply('/api/add/2', f.job(2, two, done('indexed'), { finished: true, page: addPage(8, two) }));
@@ -501,4 +542,39 @@ async function addSuggested() {
   assert.deepEqual(row(), ['Trains off', 'Timetables off'], 'back on the page: its suggestions, as many as a narrower line holds');
 }
 
-run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested });
+/* The final library refresh shares the writes' queue: held picks precede it, and a pick or Undo during the
+   refresh follows it, so its earlier snapshot can never replace a newer recent order. */
+async function addLibraryWrites() {
+  const f = addFixture(), { K, node, requests } = f, url = 'https://added.example/recent';
+  K.lib.recent = ['Coffee'];
+  node('a-recent').columns = '136px 136px';
+  f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
+  await f.reply('/api/add', f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url) }));
+  assert.ok(!requests.some(r => r.route === '/api/library'), 'the final refresh waits for held picks to settle');
+  await f.reply('/api/apply', { pages: [{ row: 7, tags: ['Trains'] }], changed: 1, batch: 1,
+    app_tags: K.lib.app_tags, recent: ['Trains', 'Coffee'] });
+  const refresh = await f.next('/api/library');
+  K.gone.add(6);   // Add's refresh leaves the shell's local forgotten rows alone
+  f.click('Coffee');
+  await turn(); await turn();
+  assert.equal(f.applies().length, 0, 'a pick during refresh waits for its earlier snapshot');
+  refresh.resolve({ ...K.lib, recent: ['Trains', 'Coffee'], forgotten: [] });
+  await f.reply('/api/apply', { pages: [{ row: 7, tags: ['Coffee', 'Trains'] }], changed: 1, batch: 2,
+    app_tags: K.lib.app_tags, recent: ['Coffee', 'Trains'] });
+  assert.deepEqual(plain(K.lib.recent), ['Coffee', 'Trains'], 'the later pick stays first');
+  assert.ok(K.gone.has(6), 'the Add refresh preserves local forgotten rows');
+  assert.deepEqual([f.look('Coffee'), f.look('Trains')], ['on', 'on']);
+  const loaded = K.loadLibrary();
+  const beforeUndo = await f.next('/api/library');
+  K.undo();
+  await turn(); await turn();
+  assert.ok(!requests.some(r => r.route === '/api/undo'), 'Undo also waits for the refresh');
+  beforeUndo.resolve({ ...K.lib });
+  await loaded;
+  await f.reply('/api/undo', { pages: [{ row: 7, tags: ['Trains'] }], app_tags: K.lib.app_tags,
+    recent: ['Trains', 'Coffee'] });
+  assert.deepEqual(plain(K.lib.recent), ['Trains', 'Coffee'], 'Undo restores the prior order after the refresh');
+  assert.deepEqual([f.look('Coffee'), f.look('Trains')], ['off', 'on']);
+}
+
+run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested });

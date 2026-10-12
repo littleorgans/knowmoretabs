@@ -80,7 +80,7 @@ class App:
         """The app tags the page lacks that the model would put on it, best first: each whose score clears its
         threshold (`engine.prechecks`: a head's, or zero shot for a tag with too few positives or made here), by
         confidence; at most `engine.SUGGEST`."""
-        tags = [t for t in self.app_tags() if t not in held]
+        tags = [t for t in self.tag_lists()["app_tags"] if t not in held]
         checked = [s for s in engine.prechecks(self.lib, [row], tags)[0] if s["checked"]]
         return [s["tag"] for s in sorted(checked, key=lambda s: -s["p"])[: engine.SUGGEST]]
 
@@ -97,17 +97,23 @@ class App:
             "tags": self.store.app_tags().get(r["key"], []),
         }
 
-    def app_tags(self) -> list[str]:
-        """Tags made or applied in the app, by name."""
+    def tag_lists(self) -> dict:
+        """`app_tags`: tags made or applied in the app, by name. `recent`: those used, latest first, a use being a
+        direct decision putting one on a page or an add the archive records doing so; names it holds retired are
+        left out."""
         held = {t for tags in self.store.app_tags().values() for t in tags}
-        return sorted(held | set(self.store.tags()), key=str.lower)
+        names = sorted(held | set(self.store.tags()), key=str.lower)
+        direct = self.store.used()
+        when = {t: max(direct.get(t, 0), self.lib.used.get(t.lower(), 0)) for t in names}
+        recent = [t for t in names if when[t] and t.lower() not in self.lib.retired]
+        return {"app_tags": names, "recent": sorted(recent, key=lambda t: -when[t])}
 
     def library(self) -> dict:
         return {
             "pages": int(self.live().sum()),
             "forgotten": self.gone(),
             "tags": engine.tag_info(self.lib),
-            "app_tags": self.app_tags(),
+            **self.tag_lists(),
             "images": self.lib.image is not None,
             "input": self.lib.input_name,
             "sizes": [20, MAX_RESULTS],
@@ -236,13 +242,13 @@ class App:
             raise ValueError("name pages, one of your tags, and true or false")
         changed, batch = self.store.apply([self.lib.records[r]["key"] for r in rows], tag, value)
         pages = [{"row": r, "tags": self.page(r)["tags"]} for r in rows]
-        return {"pages": pages, "changed": len(changed), "batch": batch, "app_tags": self.app_tags()}
+        return {"pages": pages, "changed": len(changed), "batch": batch, **self.tag_lists()}
 
     def undo(self, body: dict) -> dict:
         """Retract one apply's decisions (its `batch`): each page it changed back as it was."""
         keys = self.store.undo(int(body.get("batch", 0)))
         rows = [self.lib.rows[k] for k in dict.fromkeys(keys) if k in self.lib.rows]
-        return {"pages": [{"row": r, "tags": self.page(r)["tags"]} for r in rows], "app_tags": self.app_tags()}
+        return {"pages": [{"row": r, "tags": self.page(r)["tags"]} for r in rows], **self.tag_lists()}
 
     def listed(self, keys: Keys) -> dict:
         """The selected or pinned pages this library still shows, in the order added."""

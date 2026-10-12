@@ -9,9 +9,9 @@
   const root = document.documentElement;
 
   K.changed = () => { K.views.render(); K.strip.render(); K.add.render(); };
-  /* the library's counts and the forgotten rows as the server has them now */
+  /* the shell also takes the forgotten rows on startup and after Send */
   const loadLibrary = async () => {
-    K.lib = await K.api("/api/library");
+    await K.loadLibrary();
     K.gone = new Set(K.lib.forgotten);
   };
 

@@ -59,6 +59,8 @@ class Library:
     threshold: np.ndarray
     spread: np.ndarray  # per tag SD of S over the library
     root: Path  # the archive the records point into
+    used: dict  # folded active tag -> its last use the archive records, epoch seconds (`Archive.used`)
+    retired: set  # folded names the archive holds retired
     paths: Paths  # durable document stores
     embed_image: Callable | None  # lazy image encoder, shared by startup and sync
     dim: int
@@ -165,6 +167,8 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
         threshold=threshold,
         spread=_spread(S),
         root=root,
+        used=archive.used,
+        retired=archive.retired,
         paths=paths,
         embed_image=embed_image,
         dim=dim,
@@ -229,7 +233,10 @@ def add_tags(lib: Library, names: list[str], encode: Encode) -> Library:
 
 
 def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Library:
-    """Refresh and persist the given known pages, preserving all other keyed cache rows."""
+    """Refresh and persist the given known pages, preserving all other keyed cache rows; tag uses and retirements
+    as the archive holds them."""
+    if (lib.used, lib.retired) != (archive.used, archive.retired):
+        lib = replace(lib, used=archive.used, retired=archive.retired)
     known = set(archive.known)
     urls = [url for url in dict.fromkeys(urls) if url in known]
     if not urls:

@@ -461,6 +461,7 @@ async function screenFixture(...more) {
   const { K, node } = f;
   K.changed = () => { K.views.render(); K.strip.render(); };
   K.lib = { sizes: [20, 50], images: true, pages: 9, app_tags: ['A'] };
+  await turn();   // a shell loaded for its keys finishes its unmocked startup before this fixture takes over
   const requests = [];
   K.api = (route, body) => new Promise((resolve, reject) => requests.push({ route, body: body && plain(body), resolve, reject }));
   const loading = K.loadLists();   // the startup load of the selection and the pins, both empty
@@ -672,6 +673,21 @@ async function tagPageSiblingFailure() {
   assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'both failed tags clear, including the older change');
 }
 
+/* A write's reply and its Undo's carry the recent order, kept on K.lib for the Add link panel. */
+async function tagRecent() {
+  const { K } = setup('pages.js');
+  K.title = (p) => p.title;
+  K.know([page(1, ['A'])]);
+  K.lib = { app_tags: ['A', 'B'], recent: ['A'] };
+  K.api = (route) => Promise.resolve(route === '/api/apply'
+    ? { pages: [{ row: 1, tags: ['A', 'B'] }], changed: 1, batch: 1, app_tags: ['A', 'B'], recent: ['B', 'A'] }
+    : { pages: [{ row: 1, tags: ['A'] }], app_tags: ['A', 'B'], recent: ['A'] });
+  await K.tagSelection('B', [1]);
+  assert.deepEqual(plain(K.lib.recent), ['B', 'A'], 'the tag just used comes first');
+  await K.undo();
+  assert.deepEqual(plain(K.lib.recent), ['A'], 'undone, it was no use');
+}
+
 /* Use core's real error reporter: a partial flush presents its result in one toast. */
 async function tagPagePartialToast() {
   const { K, coreFail } = setup('pages.js');
@@ -791,6 +807,7 @@ async function startupDuringPage() {
   const requests = [];
   const { K, node } = setup({ api: (route, body) => new Promise((resolve) => requests.push({ route, body, resolve })) },
     'pages.js', 'views.js', 'strip.js', 'app.js');
+  await turn();
   requests.shift().resolve({ sizes: [20, 50], images: true, pages: 120, app_tags: [], forgotten: [] });
   await turn();
   assert.equal(requests[0].route, '/api/selection');
@@ -1240,4 +1257,4 @@ async function startupListsKeepChanges() {
   }
 }
 
-run({ tagPagePartialToast, tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });
+run({ tagRecent, tagPagePartialToast, tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });
