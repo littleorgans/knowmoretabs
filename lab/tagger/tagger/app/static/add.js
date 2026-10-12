@@ -123,7 +123,7 @@
     } catch (err) { if (mine === asked) K.fail(err); }
   }
   async function settle(j) {
-    if (j.stages.library && [...LISTED, "forgotten"].includes(j.stages.library.value)) K.lib = await K.api("/api/library");
+    if (j.stages.library && [...LISTED, "forgotten"].includes(j.stages.library.value)) await K.loadLibrary();
     K.changed();
   }
   /* every poll's job, drawn or not: picks held for its link are written once the page has a row, and dropped

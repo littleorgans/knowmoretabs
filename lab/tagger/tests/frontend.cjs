@@ -461,6 +461,7 @@ async function screenFixture(...more) {
   const { K, node } = f;
   K.changed = () => { K.views.render(); K.strip.render(); };
   K.lib = { sizes: [20, 50], images: true, pages: 9, app_tags: ['A'] };
+  await turn();   // a shell loaded for its keys finishes its unmocked startup before this fixture takes over
   const requests = [];
   K.api = (route, body) => new Promise((resolve, reject) => requests.push({ route, body: body && plain(body), resolve, reject }));
   const loading = K.loadLists();   // the startup load of the selection and the pins, both empty
@@ -806,6 +807,7 @@ async function startupDuringPage() {
   const requests = [];
   const { K, node } = setup({ api: (route, body) => new Promise((resolve) => requests.push({ route, body, resolve })) },
     'pages.js', 'views.js', 'strip.js', 'app.js');
+  await turn();
   requests.shift().resolve({ sizes: [20, 50], images: true, pages: 120, app_tags: [], forgotten: [] });
   await turn();
   assert.equal(requests[0].route, '/api/selection');

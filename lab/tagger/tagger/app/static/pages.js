@@ -28,6 +28,11 @@
     return next;
   }
 
+  /* A library snapshot shares the writes' order, so it cannot replace a later tag reply's recent list. */
+  K.loadLibrary = () => write("/api/library").then((out) => {
+    K.lib = out;
+  });
+
   /* ---- the selection and the pins: lists the server keeps, sent whole. A list is sent only once its
      startup load is in: a change made before then is made again on the loaded list, which is then sent ---- */
   const lists = { selection: () => K.sel, pins: () => K.pins };

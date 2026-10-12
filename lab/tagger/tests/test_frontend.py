@@ -71,6 +71,7 @@ CASES = {
         "addSignedInStages",
         "panelLetters",
         "panelRecent",
+        "addLibraryWrites",
         "addPicksHeld",
         "addPicksBackground",
         "addPicksOutcomes",
