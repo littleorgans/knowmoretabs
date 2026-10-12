@@ -4,6 +4,7 @@ import os
 from unittest.mock import patch
 
 import pytest
+import signed
 
 from tagger import cli
 from tagger.app import engine, server
@@ -39,7 +40,7 @@ def test_missing_or_empty_data_fails_before_model_load(tmp_path, present):
     if present:
         paths.data.mkdir()
     with patch("tagger.embed.load_text") as load, pytest.raises(SystemExit) as error:
-        server.run(paths, tmp_path / "archive", 0, False)
+        server.run(paths, tmp_path / "archive", 0, False, signed.key_file(tmp_path))
     assert str(error.value) == f"missing tagger vectors at {paths.data}; run tagger embed --model eg2"
     load.assert_not_called()
     assert paths.data.exists() == present
@@ -81,6 +82,6 @@ def test_cli_passes_resolved_root_and_default_data(tmp_path, monkeypatch, positi
             patch.dict(os.environ),
         ):
             cli.main()
-        run.assert_called_once_with(Paths(root / "tagger"), root, cli.APP_PORT, True)
+        run.assert_called_once_with(Paths(root / "tagger"), root, cli.APP_PORT, True, secret_file=None)
     finally:
         os.umask(old_umask)

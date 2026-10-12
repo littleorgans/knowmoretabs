@@ -1,0 +1,54 @@
+{
+ "about": "Fixed vectors for the shell to service proof: src/service_auth.rs and lab/tagger/tests/test_service_auth.py check the same bytes. Synthetic key; never a real one.",
+ "key": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+ "requests": [
+  {
+   "nonce": "7c60029713f2150f81482229c01ed8cf2348ace9b0c95c292cb3c3a3b28d7ef0",
+   "time": "1760270400000",
+   "method": "POST",
+   "path": "/api/rank",
+   "content_type": "application/json",
+   "body": "{\"query\":\"night train\"}",
+   "mac": "3c57895a83e17e5b7133c6c5bfad7a371b406c1b7bd9de05d4e701f57d14892b"
+  },
+  {
+   "nonce": "7c60029713f2150f81482229c01ed8cf2348ace9b0c95c292cb3c3a3b28d7ef0",
+   "time": "1760270400000",
+   "method": "GET",
+   "path": "/index.html",
+   "content_type": "",
+   "body": "",
+   "mac": "77e6705dc2209b18e75ce0aa532cad2b3cb90d71d53aa457c54e0d8cd14c0c15"
+  }
+ ],
+ "responses": [
+  {
+   "nonce": "7c60029713f2150f81482229c01ed8cf2348ace9b0c95c292cb3c3a3b28d7ef0",
+   "method": "POST",
+   "path": "/api/rank",
+   "status": 200,
+   "content_type": "application/json; charset=utf-8",
+   "archive": "16777232:4242",
+   "body": "{\"keys\": [\"https://a.example/one\"]}",
+   "mac": "a486bac3163f4e9bed70bc45cd1798fba58091d88d0d87feb61b55507825106c"
+  },
+  {
+   "nonce": "7c60029713f2150f81482229c01ed8cf2348ace9b0c95c292cb3c3a3b28d7ef0",
+   "method": "GET",
+   "path": "/api/nothing",
+   "status": 404,
+   "content_type": "application/json; charset=utf-8",
+   "archive": "16777232:4242",
+   "body": "{\"error\": \"not found\"}",
+   "mac": "26ba49d3fd0df20bc164e793e5eb1ef44955c36044759fe133a5c59c69a9044d"
+  }
+ ],
+ "framed": {
+  "fields": [
+   "kmt",
+   "",
+   "é"
+  ],
+  "hex": "00000000000000036b6d7400000000000000000000000000000002c3a9"
+ }
+}
