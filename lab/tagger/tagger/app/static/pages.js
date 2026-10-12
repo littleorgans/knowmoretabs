@@ -29,7 +29,7 @@
   }
 
   /* A library snapshot shares the writes' order, so it cannot replace a later tag reply's recent list. */
-  K.loadLibrary = () => write("/api/library").then((out) => {
+  K.loadLibrary = () => write("api/library").then((out) => {
     K.lib = out;
   });
 
