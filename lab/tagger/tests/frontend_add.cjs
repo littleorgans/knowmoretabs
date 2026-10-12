@@ -428,7 +428,7 @@ async function addPicksBeforeReply() {
   assert.equal(f.look('Trains'), 'off', 'the next draft does not inherit it');
 }
 
-/* An already sent poll must not consume picks owned by a newer job for the same address. */
+/* A poll already sent for a superseded job must not drop the picks the newer job for its address will write. */
 async function addPicksStalePoll() {
   const f = addFixture(), { K, node } = f, url = 'https://added.example/retry';
   f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
@@ -436,9 +436,9 @@ async function addPicksStalePoll() {
   const old = await f.next('/api/add/1');
   K.add.start(url, { action: 'index' });
   await f.reply('/api/add', f.job(2, url, STAGES.added, { action: 'index' }));
-  old.resolve(f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url) }));
+  old.resolve(f.job(1, url, done('not_indexed'), { finished: true }));
   for (let i = 0; i < 4; i++) await turn();
-  assert.deepEqual(f.applies(), [], 'the obsolete poll cannot write the newer job\'s picks');
+  assert.equal(K.toasted, undefined, 'the obsolete poll reports no dropped picks');
   assert.equal(f.look('Trains'), 'pend', 'the newest job keeps its picks until Indexed');
   await f.reply('/api/add/2', f.job(2, url, done('indexed'), { action: 'index', finished: true, page: addPage(7, url) }));
   assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'only one write, from the latest job');
