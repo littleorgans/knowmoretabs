@@ -117,7 +117,7 @@ pub fn forward(
 impl ModelService {
     /// One request on its own connection, closed after the reply.
     fn exchange(&self, path: &str, body: &[u8], root: &Path) -> Result<Response, Failure> {
-        let archive = archive_identity(root).ok_or(Failure::OtherArchive)?;
+        let archive = archive_identity(root);
         let deadline = Instant::now() + FORWARD_TIMEOUT;
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, self.port));
         let mut stream = TcpStream::connect_timeout(&address, FORWARD_TIMEOUT).map_err(|err| {
@@ -143,7 +143,9 @@ impl ModelService {
         let (head, rest) = http::read_head(&mut stream, deadline, HEAD_LIMIT)
             .map_err(|_| late(deadline, Failure::Malformed))?;
         let reply = ResponseHead::parse(&head).ok_or(Failure::Malformed)?;
-        if reply.fields.get(ARCHIVE_HEADER) != Some(archive.as_str()) {
+        // Judged on the reply, so a service that is not running or not
+        // answering is told apart from one serving another archive.
+        if archive.is_none() || reply.fields.get(ARCHIVE_HEADER) != archive.as_deref() {
             return Err(Failure::OtherArchive);
         }
         let status = match reply.code {
