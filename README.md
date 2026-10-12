@@ -25,8 +25,10 @@ just install
 just up
 ```
 
-Run `just down` to stop both apps and remove their logs. `just up dev` runs
-from this checkout; refresh the browser after editing frontend files. The
+`just up` first checks that the installed apps match this checkout; when they
+do not, it starts nothing and asks for `just install`. Run `just down` to stop
+both apps and remove their logs. `just up dev` runs from this checkout, with no
+install check; refresh the browser after editing frontend files. The
 Library uses port 41878 and Tagger 41879; override them with
 `just lib_port=42078 tagger_port=42079 up` (use the same overrides for `down`).
 Logs and pid files live under `<resolved root>/logs`. Startup waits up to
