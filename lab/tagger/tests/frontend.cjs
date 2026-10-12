@@ -284,10 +284,10 @@ async function sendWait() {
   assert.equal(previews, 1);
 }
 
-const PLAN = { tags_on: 3, pages_on: 2, tags_off: 4, pages_off: 3, never_tags: 2, never_pages: 1, cleared: 1, new: ['<Night> trains'], revived: [],
-  forget: 1, restore: 0, missing: 0, ready: true, preview: 7,
+const PLAN = { tags_on: 3, pages_on: 2, tags_off: 4, pages_off: 3, never_tags: 2, never_pages: 1, cleared: 1, dismiss_tags: 2, dismiss_pages: 1,
+  new: ['<Night> trains'], revived: [], forget: 1, kept_forgotten: 0, missing: 0, ready: true, preview: 7,
   commands: ["knowmoretabs --root /r tag '--add=<Night> trains' -- https://a.example/", 'knowmoretabs --root /r forget -- https://b.example/'] };
-const NOTHING = { ...PLAN, tags_on: 0, pages_on: 0, tags_off: 0, pages_off: 0, never_tags: 0, never_pages: 0, cleared: 0, new: [], forget: 0, commands: [], ready: false };
+const NOTHING = { ...PLAN, tags_on: 0, pages_on: 0, tags_off: 0, pages_off: 0, never_tags: 0, never_pages: 0, cleared: 0, dismiss_tags: 0, dismiss_pages: 0, new: [], forget: 0, commands: [], ready: false };
 
 async function sendPreview() {
   const { K, node } = setup('app.js');
@@ -302,9 +302,10 @@ async function sendPreview() {
   assert.ok(html.includes('<dt>Tags removed</dt><dd><b>4</b> tags on <b>3</b> pages</dd>'));
   assert.ok(html.includes('<dt>Removed, never tagged here</dt><dd><b>2</b> tags on <b>1</b> page</dd>'));
   assert.ok(html.includes('<dt>Pages cleared</dt><dd><b>1</b> page</dd>'));
+  assert.ok(html.includes('<dt>Dismissed</dt><dd><b>2</b> tags on <b>1</b> page</dd>'));
   assert.ok(html.includes('<dt>New tags</dt><dd>&lt;Night> trains</dd>'), 'names are escaped');
   assert.ok(html.includes('<dt>Forget</dt><dd><b>1</b> page</dd>'));
-  assert.ok(!html.includes('Restore') && !html.includes('Not in library') && !html.includes('Back from retired'), 'empty rows are left out');
+  assert.ok(!html.includes('library only') && !html.includes('Not in library') && !html.includes('Back from retired'), 'empty rows are left out');
   assert.ok(html.includes('<details><summary>Details</summary><pre>knowmoretabs --root /r tag'), 'commands sit under Details');
   assert.equal(node('send-go').hidden, false);
   assert.equal(node('send-close').textContent, 'Cancel');
@@ -327,10 +328,10 @@ async function sendNothing() {
 async function sendRestore() {
   const { K, node } = setup('app.js');
   await turn();
-  K.api = async () => ({ ...NOTHING, restore: 3, revived: ['Trains'], ready: true, commands: ['knowmoretabs --root /r restore -- https://c.example/'] });
+  K.api = async () => ({ ...NOTHING, kept_forgotten: 3, revived: ['Trains'], ready: true, commands: ['knowmoretabs --root /r tag --add=Trains -- https://c.example/'] });
   await K.sendNow();
   const html = node('send-body').innerHTML;
-  assert.ok(html.includes('<dt>Restore</dt><dd><b>3</b> pages</dd>') && html.includes('<dt>Back from retired</dt><dd>Trains</dd>'), html);
+  assert.ok(html.includes('<dt>Forgotten in the library only</dt><dd><b>3</b> pages</dd>') && html.includes('<dt>Back from retired</dt><dd>Trains</dd>'), html);
   assert.equal(node('send-go').hidden, false);
 }
 

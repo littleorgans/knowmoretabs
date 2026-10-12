@@ -54,10 +54,11 @@
       x.tags_off && ["Tags removed", on(x.tags_off, x.pages_off)],
       x.never_tags && ["Removed, never tagged here", on(x.never_tags, x.never_pages)],
       x.cleared && ["Pages cleared", K.plural(x.cleared, "page")],
+      x.dismiss_tags && ["Dismissed", on(x.dismiss_tags, x.dismiss_pages)],
       x.new.length && ["New tags", K.esc(x.new.join(", "))],
       x.revived.length && ["Back from retired", K.esc(x.revived.join(", "))],
       x.forget && ["Forget", K.plural(x.forget, "page")],
-      x.restore && ["Restore", K.plural(x.restore, "page")],
+      x.kept_forgotten && ["Forgotten in the library only", K.plural(x.kept_forgotten, "page")],
       x.missing && ["Not in library", K.plural(x.missing, "page")],
     ].filter(Boolean);
     return rows.length ? `<dl>${rows.map(([t, d]) => `<dt>${t}</dt><dd>${d}</dd>`).join("")}</dl>` : "";
@@ -88,7 +89,7 @@
     try {
       const x = await K.api("/api/send", { preview });
       const done = x.steps.filter((s) => s.ok).map((s) => s.command);
-      if (x.forget || x.restore) {
+      if (x.forget) {
         try {
           await loadLibrary();
           K.changed();
