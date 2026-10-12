@@ -229,7 +229,11 @@ snapshot, `added`, so tagging, forgetting, `content --url`, `serve` and
 image in the same run, as `content --url` does for that page: the same routes,
 a browser render when it reads thin, and with `--signed-in` the owner's own
 Chrome. A title the text was kept with joins the page's line when it had none.
-A page already in the library gets no line; its text is read again only after
+A new page is kept under its address less trailing slashes, the fragment
+(except an app route, `#/` or `#!`) and tracking parameters such as `utm_*`,
+and a page held under an address that cleans the same is that page, so every
+later stage and `--json` name the key the library holds; existing keys are
+never rewritten. A page already in the library gets no line; its text is read again only after
 an error, and a failed image is retried. An address that is not http or https,
 one on this machine or the private network, and a forgotten page are refused,
 writing nothing. `--retry content|image`, repeatable, retries a page already

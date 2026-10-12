@@ -62,6 +62,7 @@ mod metadata_writer;
 mod model;
 mod model_service;
 mod out;
+mod page_key;
 mod platform;
 mod process_tree;
 mod prompt;

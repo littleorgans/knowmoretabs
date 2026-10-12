@@ -8,8 +8,10 @@
    link when it is added and are written at Indexed, in one change with one
    Undo; a newer link does not stop an older job writing its own. A refusal
    clears them. At Indexed the model's suggestions for the page fill the
-   Suggested row, less the tags picked, and stay put while it is on screen. A failed stage shows its value and one action, which starts
-   a job of its own: Retry runs only the stages that failed.
+   Suggested row, less the tags picked, and stay put while it is on screen.
+   A failed stage shows its value and one action, which starts a job of its
+   own: Retry runs only the stages that failed. It names the page by the key
+   knowmoretabs reports holding it under, which may be a cleaned form of the link.
    `#add=<encoded link>&title=<encoded title>` fills the box and focuses
    Add, which waits for Enter; the title goes with that link. */
 (function () {
@@ -105,14 +107,21 @@
   const web = (s) => { try { return ["http:", "https:"].includes(new URL(s).protocol); } catch { return false; } };
 
   /* a job polls while drawn, and after that while it is its link's newest and picks wait for its row */
-  async function start(url, ask = { action: "add" }) {
+  async function start(url, ask = { action: "add" }, link = url) {
     const mine = ++asked;
     latest.set(url, mine);
+    latest.set(link, mine);   // a follow up supersedes the link's job too: that job's late poll drops none of its picks
     try {
       let j = await K.api("/api/add", { url, ...ask });
       for (;;) {
         if (latest.get(url) !== mine) return;   // a reply already in flight may belong to a superseded job
+        if (link !== url && held.has(link)) {   // the first reply moves picks, including ones made while it waited
+          held.set(url, new Set([...(held.get(url) || []), ...held.get(link)]));
+          held.delete(link);
+        }
         const drawn = mine === asked;
+        if (drawn && link !== url && box.value.trim() === link) box.value = url;   // the box names the key: a forgotten link's Restore is not its draft
+        link = url;   // a background follow up owns its picks too, even when it is never shown
         if (drawn && (j.action !== "forget" || j.finished)) show(j);   // a Remove shows its outcome only
         track(j, drawn);
         if (j.finished) return settle(j);
@@ -141,7 +150,7 @@
     }
   }
   function show(j) {
-    if (job && job.url !== j.url) {   // another page: the last one's row and, once it is done, its picks go
+    if (job && job.url !== j.url && job.key !== j.key) {   // another page: the last one's row and, once it is done, its picks go
       row = null;
       if (job.finished) track(job, false);
     }
@@ -229,7 +238,7 @@
     if (opening) { result.classList.remove("in"); void result.offsetWidth; result.classList.add("in"); }
     if (!live) return;
     if (shown !== t.url) { shown = t.url; K.panel.reset(); }
-    render(tile(t.url, s), K.$("a-tile"));
+    render(tile(t.draft ? t.url : job.key, s), K.$("a-tile"));
     const has = (tag) => !t.draft && row !== null && K.has(row, tag);
     const sugg = !t.draft && suggested.url === t.url ? suggested.tags : [];
     K.panel.render({ has, pend: (tag) => (t.draft && draft.has(tag)) || waiting(t.url, tag), pick, sugg });
@@ -275,7 +284,10 @@
     K.$("a-go").disabled = false;
     submit();
   });
-  K.$("a-act").addEventListener("click", () => { if (job && offer) start(job.url, offer); });
+  K.$("a-act").addEventListener("click", () => {   // a follow up names the page's key
+    if (!job || !offer) return;
+    start(job.key, offer, job.url);
+  });
   K.$("a-tile").addEventListener("click", (e) => {
     if (K.opens(e)) return;
     const x = e.target.closest("[data-untag]");

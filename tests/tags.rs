@@ -221,6 +221,32 @@ fn bad_names_and_unknown_urls_are_refused_and_nothing_is_written() {
     assert_eq!(value["error"]["kind"], "unknown_tag");
 }
 
+/// Guard: `add` cleans the key it mints, and tagging still takes only exact
+/// keys, so a key from before cleaning stays its own page.
+#[test]
+fn tag_takes_exact_keys_only() {
+    let fx = Fixture::new();
+    let legacy = "https://a.test/p#x";
+    write_snapshot(
+        &fx.root,
+        "2026-01-01-000000Z",
+        "2026-01-01T00:00:00Z",
+        &[(1, legacy, "Legacy")],
+    );
+    let dirty = "https://c.test/three/?utm_source=n#top";
+    assert_success(&fx.run(&["add", dirty, "--no-content"]));
+
+    for url in [dirty, "https://a.test/p"] {
+        let output = fx.run(&["tag", url, "--add", "MCP"]);
+        assert_eq!(output.status.code(), Some(1), "{url}");
+        assert!(!fx.root.join("library.json").exists(), "{url}");
+    }
+    assert_success(&fx.run(&["tag", "https://c.test/three", legacy, "--add", "MCP"]));
+    let library = exported(&fx);
+    assert_eq!(page_tags(&library, legacy), json!(["MCP"]));
+    assert_eq!(page_tags(&library, "https://c.test/three"), json!(["MCP"]));
+}
+
 /// Clearing takes a name out of both lists: the page is undecided about it
 /// again, which is neither a tag nor a dismissal.
 #[test]

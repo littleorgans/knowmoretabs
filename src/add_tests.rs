@@ -94,7 +94,7 @@ fn a_new_page_writes_one_line_and_a_second_add_writes_nothing() {
     let (_dir, root) = archive();
     assert_eq!(
         apply(&root, A, Some("One"), false, || panic!("not held")).unwrap(),
-        Outcome::Added
+        Outcome::Added(A.into())
     );
     let first = log_bytes(&root).unwrap();
     let lines: Vec<serde_json::Value> = String::from_utf8(first.clone())
@@ -113,10 +113,10 @@ fn a_new_page_writes_one_line_and_a_second_add_writes_nothing() {
     );
     assert!(lines[0]["added_at"].as_str().unwrap().ends_with('Z'));
 
-    assert_eq!(add(&root, A), Outcome::Known);
+    assert_eq!(add(&root, A), Outcome::Known(A.into()));
     assert_eq!(
         apply(&root, A, Some("Another"), false, || panic!("not held")).unwrap(),
-        Outcome::Known
+        Outcome::Known(A.into())
     );
     assert_eq!(log_bytes(&root).unwrap(), first, "byte for byte");
 }
@@ -125,7 +125,7 @@ fn a_new_page_writes_one_line_and_a_second_add_writes_nothing() {
 fn a_page_a_snapshot_holds_is_known_and_never_written() {
     let (_dir, root) = archive();
     saved(&root, &[SAVED]);
-    assert_eq!(add(&root, SAVED), Outcome::Known);
+    assert_eq!(add(&root, SAVED), Outcome::Known(SAVED.into()));
     assert_eq!(log_bytes(&root), None);
 }
 
@@ -133,7 +133,7 @@ fn a_page_a_snapshot_holds_is_known_and_never_written() {
 fn a_forgotten_page_stays_forgotten() {
     let (_dir, root) = archive();
     saved(&root, &[SAVED]);
-    assert_eq!(add(&root, A), Outcome::Added);
+    assert_eq!(add(&root, A), Outcome::Added(A.into()));
     triage::apply(
         &root,
         &[SAVED.to_owned(), A.to_owned()],
@@ -143,8 +143,8 @@ fn a_forgotten_page_stays_forgotten() {
     )
     .unwrap();
     let before = log_bytes(&root);
-    assert_eq!(add(&root, SAVED), Outcome::Forgotten);
-    assert_eq!(add(&root, A), Outcome::Forgotten);
+    assert_eq!(add(&root, SAVED), Outcome::Forgotten(SAVED.into()));
+    assert_eq!(add(&root, A), Outcome::Forgotten(A.into()));
     assert_eq!(log_bytes(&root), before);
 
     // Forgotten with no snapshot or line left that names it: still refused.
@@ -155,7 +155,7 @@ fn a_forgotten_page_stays_forgotten() {
         format!(r#"{{"schema_version":1,"forgotten":["{B}"]}}"#),
     )
     .unwrap();
-    assert_eq!(add(&fresh, B), Outcome::Forgotten);
+    assert_eq!(add(&fresh, B), Outcome::Forgotten(B.into()));
     assert_eq!(log_bytes(&fresh), None);
 }
 
@@ -175,12 +175,12 @@ fn a_retry_refuses_a_page_the_library_does_not_hold_and_writes_nothing() {
         Outcome::Refused(Reason::NotInLibrary)
     );
     assert_eq!(log_bytes(&root), None, "no intake line");
-    assert_eq!(retry(&root, SAVED).unwrap(), Outcome::Known);
-    assert_eq!(add(&root, B), Outcome::Added);
+    assert_eq!(retry(&root, SAVED).unwrap(), Outcome::Known(SAVED.into()));
+    assert_eq!(add(&root, B), Outcome::Added(B.into()));
     let before = log_bytes(&root);
-    assert_eq!(retry(&root, B).unwrap(), Outcome::Known);
+    assert_eq!(retry(&root, B).unwrap(), Outcome::Known(B.into()));
     triage::apply(&root, &[B.to_owned()], triage::Action::Forget, true, QUIET).unwrap();
-    assert_eq!(retry(&root, B).unwrap(), Outcome::Forgotten);
+    assert_eq!(retry(&root, B).unwrap(), Outcome::Forgotten(B.into()));
     assert_eq!(log_bytes(&root), before);
     assert_eq!(
         retry(&root, "http://localhost/").unwrap(),
@@ -189,14 +189,83 @@ fn a_retry_refuses_a_page_the_library_does_not_hold_and_writes_nothing() {
 }
 
 #[test]
+fn a_new_page_is_kept_under_its_cleaned_address() {
+    let (_dir, root) = archive();
+    let asked = "https://a.test/one/?utm_source=n#top";
+    assert_eq!(add(&root, asked), Outcome::Added(A.into()));
+    let first = log_bytes(&root).unwrap();
+    let line: serde_json::Value = serde_json::from_slice(&first).unwrap();
+    assert_eq!(line["url"], A);
+    assert_eq!(add(&root, asked), Outcome::Known(A.into()));
+    assert_eq!(log_bytes(&root).unwrap(), first, "byte for byte");
+}
+
+#[test]
+fn an_address_whose_cleaned_form_is_held_is_known() {
+    let (_dir, root) = archive();
+    assert_eq!(add(&root, A), Outcome::Added(A.into()));
+    let before = log_bytes(&root);
+    assert_eq!(add(&root, &format!("{A}/#x")), Outcome::Known(A.into()));
+    assert_eq!(log_bytes(&root), before);
+}
+
+#[test]
+fn a_saved_page_is_known_by_its_cleaned_form() {
+    let (_dir, root) = archive();
+    let tab = format!("{SAVED}?utm_source=n");
+    saved(&root, &[&tab]);
+    assert_eq!(add(&root, SAVED), Outcome::Known(tab));
+    assert_eq!(log_bytes(&root), None);
+}
+
+#[test]
+fn a_visible_variant_beats_a_forgotten_one() {
+    let (_dir, root) = archive();
+    let (visible, hidden) = (format!("{SAVED}?utm_source=a"), format!("{SAVED}#x"));
+    saved(&root, &[&visible, &hidden]);
+    triage::apply(&root, &[hidden], triage::Action::Forget, true, QUIET).unwrap();
+    assert_eq!(add(&root, SAVED), Outcome::Known(visible));
+    assert_eq!(log_bytes(&root), None);
+}
+
+#[test]
+fn a_forgotten_variant_keeps_the_page_forgotten() {
+    let (_dir, root) = archive();
+    let hidden = format!("{SAVED}#x");
+    saved(&root, &[&hidden]);
+    triage::apply(
+        &root,
+        std::slice::from_ref(&hidden),
+        triage::Action::Forget,
+        true,
+        QUIET,
+    )
+    .unwrap();
+    assert_eq!(add(&root, &format!("{SAVED}/")), Outcome::Forgotten(hidden));
+    assert_eq!(log_bytes(&root), None);
+}
+
+#[test]
+fn a_retry_finds_the_page_by_its_cleaned_form() {
+    let (_dir, root) = archive();
+    assert_eq!(add(&root, A), Outcome::Added(A.into()));
+    let before = log_bytes(&root);
+    assert_eq!(
+        apply(&root, &format!("{A}#x"), None, true, || panic!("not held")).unwrap(),
+        Outcome::Known(A.into())
+    );
+    assert_eq!(log_bytes(&root), before);
+}
+
+#[test]
 fn the_library_lists_added_pages_beside_saved_ones() {
     let (_dir, root) = archive();
     saved(&root, &[SAVED]);
     assert_eq!(
         apply(&root, B, Some("Two"), false, || panic!("not held")).unwrap(),
-        Outcome::Added
+        Outcome::Added(B.into())
     );
-    assert_eq!(add(&root, A), Outcome::Added);
+    assert_eq!(add(&root, A), Outcome::Added(A.into()));
     let loaded = library::load(&Archive::at(&root)).unwrap();
     let ids: Vec<_> = loaded.snapshots.iter().map(|s| s.id.as_str()).collect();
     assert_eq!(ids, ["2026-10-07-090000Z", intake::SNAPSHOT_ID]);
@@ -223,7 +292,7 @@ fn a_held_lock_is_waited_for_and_said_once() {
     waited.recv_timeout(Duration::from_secs(10)).unwrap();
     assert_eq!(log_bytes(&root), None, "nothing written while waiting");
     drop(held);
-    assert_eq!(adding.join().unwrap().unwrap(), Outcome::Added);
+    assert_eq!(adding.join().unwrap().unwrap(), Outcome::Added(A.into()));
 }
 
 #[test]
@@ -258,7 +327,7 @@ fn tag_content_and_forget_accept_an_added_page() {
     assert!(matches!(content(), Err(Error::NotInLibrary(_))));
     assert!(matches!(forget(), Err(Error::NotInLibrary(_))));
 
-    assert_eq!(add(&root, A), Outcome::Added);
+    assert_eq!(add(&root, A), Outcome::Added(A.into()));
     assert_eq!(tag().unwrap().vocabulary[0].name, "Reading");
     let state = State::read(&root).unwrap();
     assert_eq!(
@@ -281,16 +350,16 @@ fn json_lines_are_the_contract_shape() {
         json!({"stage": "library", "state": "waiting"})
     );
     assert_eq!(
-        library_done(Outcome::Added),
-        json!({"stage": "library", "state": "done", "value": "added"})
+        library_done(&Outcome::Added(A.into())),
+        json!({"stage": "library", "state": "done", "value": "added", "url": A})
     );
     assert_eq!(
-        library_done(Outcome::Known),
-        json!({"stage": "library", "state": "done", "value": "known"})
+        library_done(&Outcome::Known(A.into())),
+        json!({"stage": "library", "state": "done", "value": "known", "url": A})
     );
     assert_eq!(
-        library_done(Outcome::Forgotten),
-        json!({"stage": "library", "state": "done", "value": "forgotten"})
+        library_done(&Outcome::Forgotten(A.into())),
+        json!({"stage": "library", "state": "done", "value": "forgotten", "url": A})
     );
     for (reason, name) in [
         (Reason::NotWeb, "not_web"),
@@ -299,16 +368,16 @@ fn json_lines_are_the_contract_shape() {
         (Reason::NotInLibrary, "not_in_library"),
     ] {
         assert_eq!(
-            library_done(Outcome::Refused(reason)),
+            library_done(&Outcome::Refused(reason)),
             json!({"stage": "library", "state": "done", "value": "refused", "reason": name})
         );
     }
     assert_eq!(
-        done_line(A, Outcome::Known, &Ended::default()),
+        done_line(A, &Outcome::Known(A.into()), &Ended::default()),
         json!({"stage": "done", "state": "done", "url": A, "value": "known",
             "content": null, "image": null})
     );
-    assert!(Outcome::Added.in_library() && Outcome::Known.in_library());
-    assert!(!Outcome::Forgotten.in_library());
+    assert!(Outcome::Added(A.into()).in_library() && Outcome::Known(A.into()).in_library());
+    assert!(!Outcome::Forgotten(A.into()).in_library());
     assert!(!Outcome::Refused(Reason::NotWeb).in_library());
 }

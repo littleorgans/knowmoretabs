@@ -83,7 +83,9 @@ pub enum Command {
     #[command(
         long_about = "Adds one page to the library by its address, with no session file and no new \
 snapshot: one line in <root>/pages/added.jsonl, which the library lists as one snapshot of added pages. \
-A page already in the library gets no line. Refused, writing nothing: an address that is not http or \
+A new page is kept under its address less trailing slashes, the fragment (except an app route, #/ or #!) \
+and tracking parameters such as utm_*. A page already in the library, under that address or any that \
+cleans the same, gets no line. Refused, writing nothing: an address that is not http or \
 https, one on this machine or the private network, and a page you forgot (knowmoretabs restore brings \
 it back). Then, unless --no-content, the page's text and image are captured as content --url does for \
 that one page, sending its address to its own site: rendered in the --browser binary when it reads thin, \

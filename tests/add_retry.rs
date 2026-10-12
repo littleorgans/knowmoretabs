@@ -171,7 +171,7 @@ fn a_content_retry_reads_the_text_and_never_a_kept_image() {
     assert_eq!(
         lines[1..4],
         [
-            json!({"stage": "library", "state": "done", "value": "known"}),
+            json!({"stage": "library", "state": "done", "value": "known", "url": A}),
             json!({"stage": "content", "state": "running", "tier": "web"}),
             json!({"stage": "content", "state": "done", "status": "ok", "tier": "web",
                 "http_status": 200, "title": "One note"}),
