@@ -249,7 +249,7 @@ class App:
                     kept.set([k for k in kept.keys if k not in keys])
         else:
             self.forgotten.set([k for k in self.forgotten.keys if k not in keys])
-            self.lib.live[rows] = True  # Undo shows app pages immediately; the next send restores the library.
+            self.lib.live[rows] = True  # Undo shows app pages immediately; Send leaves the library forgotten.
         return {"pages": int(self.live().sum())}
 
     def create(self, body: dict) -> dict:

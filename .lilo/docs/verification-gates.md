@@ -26,7 +26,7 @@ Toolchains: on the owner's machine Homebrew's rust comes before rustup on `PATH`
 - Formatting: `cargo fmt --all -- --check`; exit 0, 2026-10-06.
 - Slice metadata, after touching a `//!` header, `slices.toml` or adding a source file: `cargo run --locked --package xtask -- slices --check`; exit 0, 2026-10-06. Without `--check`, `cargo xtask slices` regenerates the matrix doc (`code:xtask/src/main.rs#run`, `code:.cargo/config.toml`).
 - Local recipes: `just check` runs rustfmt, `scripts/clippy.py`, the slice check and ruff on `lab/tagger`; `just test` runs the Full and Frontend gates and the tagger tests (`code:justfile`). Both exit 0, 2026-10-12, on Homebrew rustc 1.99.0, Node 25.9.0 and uv 0.12.5.
-- Tagger lab, after touching `lab/tagger`: `uv run --locked --project lab/tagger pytest -q lab/tagger/tests`; exit 0, 2026-10-12. CI does not run it.
+- Tagger lab, after touching `lab/tagger`: `uv run --locked --project lab/tagger pytest -q lab/tagger/tests`; exit 0, 2026-10-12. CI runs it as the lab job. With `KMT_BIN` set to a build (`cargo build --locked`, then `KMT_BIN="$PWD/target/debug/knowmoretabs"`), `RealSendTests` also runs the Send tests against that binary on scratch roots; without it they skip.
 - Release machinery: `.github/workflows/release.yml` runs on a `v*` tag or by hand; on a tag it fails unless the tag matches the `Cargo.toml` version and the changelog has a dated heading for it (`code:.github/workflows/release.yml`). Not executed.
 
 ## Hooks
@@ -35,13 +35,14 @@ none: no tracked hook config and no `core.hooksPath`.
 
 ## CI
 
-`code:.github/workflows/ci.yml` runs on pull requests only, never on pushes to `main`. Rust jobs, all on toolchain 1.89.0, the `Cargo.toml` `rust-version`, then one Node job:
+`code:.github/workflows/ci.yml` runs on pull requests only, never on pushes to `main`. Rust jobs, all on toolchain 1.89.0, the `Cargo.toml` `rust-version`, then the lab and one Node job:
 
 - rustfmt: `cargo fmt --all -- --check`, on `ubuntu-24.04`.
 - clippy: `cargo clippy --workspace --all-targets --locked -- -D warnings`, on `ubuntu-24.04`.
 - test: `cargo test --workspace --all-targets --locked` on linux, linux-arm, macos and windows, `fail-fast: false`; Windows first disables `core.autocrlf` and fails if any checked-out file has CRLF.
 - xtask slices: `cargo run --locked --package xtask -- slices --check`.
 - frontend: `node --test tests/serve_frontend.cjs`, on `ubuntu-24.04` with the image's Node, no Rust toolchain.
+- lab: the Tagger lab gate on `ubuntu-24.04` and `macos-latest`, `fail-fast: false`, 25 minutes: `cargo build --locked`, uv 0.12.5 with Python 3.12 and a cache keyed on `lab/tagger/uv.lock`, `uv sync --locked`, then pytest with `KMT_BIN` on the build and the Hugging Face offline variables. No Windows (`fcntl`) and no linux-arm (cost).
 
 Actions are pinned to commit SHAs.
 

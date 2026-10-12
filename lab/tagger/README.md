@@ -82,20 +82,23 @@ Ctrl+Z undo while the message shows, Esc leaves ≈ or Pinned (else clears the s
 Decisions live in `<data>/app/state.json` (review sessions, and direct decisions: page, tag, kept, time, batch); the
 selection, the pins and the forgotten pages in `selection.json`, `pinned.json` and `forgotten.json` beside it.
 Send to library (`e`) makes the archive the app runs on match the app, through knowmoretabs
-(`tagger/app/send.py`). The app is the source of truth: every library page ends with exactly the app's tags for it,
-as the owner's own (a page the app holds no tag for ends with none; a Library edit is overwritten), and the
-library's forgotten pages end equal to the app's forgotten list (pages only the library forgot are restored). Pages
-the app holds that the library does not are skipped. Its dialog first shows what will change, computed from the
-archive and writing nothing: tags added, tags removed (and of those, on pages never tagged here), pages cleared, new
-tag names, names back from retirement, pages to forget and to restore, pages not in the library. Send then writes the
+(`tagger/app/send.py`). The app is the source of truth: every name made or decided on here joins the library's
+vocabulary unless it holds the name, active or retired; every library page ends with exactly the app's tags for it,
+as the owner's own (a page the app holds no tag for ends with none; a Library edit is overwritten); a "no" here
+becomes a dismissal where the library holds that name on neither list for the page (a retired name stays retired);
+pages forgotten here are forgotten in the library. Send never restores: pages the library forgot stay forgotten,
+including pages undone here after a send; restore them in the Library. Pages the app holds that the library does not
+are skipped. Its dialog first shows what will change, computed from the archive and writing nothing: tags added,
+tags removed (and of those, on pages never tagged here), pages cleared, dismissals, new tag names, names back from
+retirement, pages to forget, pages forgotten in the library only, pages not in the library. Send then writes the
 record, `<data>/app/exports/<UTC time>/`: `answers.jsonl` (source `kmt-tagger-app`, kept tags per page, forgotten
 pages left out), `decisions.jsonl` (page, tag, answer, the model's precheck and session, both null for a direct
 decision) and, when pages were forgotten, `forget.urls` (exact addresses, each ended by a NUL). Then it runs
-`knowmoretabs --root <archive> tag --add=<name>|--remove=<name> -- <urls>` per tag, then `forget -- <urls>` and
-`restore -- <urls>`, each call atomic, with a 120 s timeout. A failed call stops the send and shows knowmoretabs'
-error: the calls before it stay applied. Nothing is remembered between sends, so sending again plans afresh and
-converges. The record's paths and the commands sit under Details. Refused on a snapshot copy inside the data
-directory.
+`knowmoretabs --root <archive> tags --create=<name>…`, then `tag --add=<name> -- <urls>` per tag, then
+`tag --remove=<name> -- <urls>` for tags coming off and for dismissals, then `forget -- <urls>`, each call atomic,
+with a 120 s timeout. A failed call stops the send and shows knowmoretabs' error: the calls before it stay applied.
+Nothing is remembered between sends, so sending again plans afresh and converges. The record's paths and the
+commands sit under Details. Refused on a snapshot copy inside the data directory.
 `knowmoretabs serve` reads the archive on every request: reload the Library to see a send. Pins are not sent.
 Add link (`#add`; `#add=<encoded link>&title=<encoded title>` fills the box and focuses Add, which waits for Enter):
 Add, Enter, or a paste of a web address into the empty box starts a job that runs

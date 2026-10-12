@@ -123,6 +123,53 @@ jobs:
       - name: Check slice metadata and the generated matrix
         run: cargo run --locked --package xtask -- slices --check
 
+  # The Tagger lab's pytest suite, with its Send tests also run against the
+  # binary built here (KMT_BIN). Windows is out: the lab's vector store needs
+  # `fcntl`. linux-arm is out to bound cost: the locked torch pulls about
+  # 3.1 GB of CUDA wheels on x86-64 Linux and about 0.2 GB on macOS, cached
+  # by the lock. The tests load no model weights; the offline variables make
+  # an accidental download fail fast. The browser cases run where the image
+  # has Chrome. `prune-cache: false` keeps the downloaded wheels in the cache.
+  lab:
+    name: lab (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            runner: ubuntu-24.04
+          - name: macos
+            runner: macos-latest
+    steps:
+      - name: Check out
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - name: Install the MSRV toolchain
+        uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # branch 1.89.0
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          key: lab-${{ matrix.name }}
+      - name: Build knowmoretabs
+        run: cargo build --locked
+      - name: Install uv
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.5"
+          python-version: "3.12"
+          enable-cache: true
+          cache-dependency-glob: lab/tagger/uv.lock
+          prune-cache: false
+      - name: Install the lab
+        run: uv sync --locked --project lab/tagger
+      - name: Test the lab
+        env:
+          KMT_BIN: ${{ github.workspace }}/target/debug/knowmoretabs
+          HF_HUB_OFFLINE: "1"
+          TRANSFORMERS_OFFLINE: "1"
+        run: uv run --locked --project lab/tagger pytest -q lab/tagger/tests
+
   # The page derives what it shows from the library document, and Cargo
   # cannot run JavaScript. Node comes with the pinned image, so this needs
   # no toolchain and no third-party action; the test uses Node's own runner.
