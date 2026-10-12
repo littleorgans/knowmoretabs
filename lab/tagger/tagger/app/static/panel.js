@@ -8,7 +8,8 @@
    stage moves it; only a new tag or the filter does. Typing opens the
    fold to the matching cells; Enter takes the exact match, else the only
    match, else makes the tag when nothing matches. What the panel acts on
-   and what a pick does belong to its caller: `K.panel.render(view)`. */
+   and what a pick does belong to its caller: `K.panel.render(view)`.
+   Suggested shows only as many cells as its line holds. */
 (function () {
   const K = window.KMT;
   const { html, nothing, render, repeat } = K.lit;
@@ -29,6 +30,8 @@
     }
     return [...rows].sort(([a], [b]) => (a < b ? -1 : 1));   // "#" sorts before A
   }
+  /* as many of a one line row's names as its line has columns: none clipped out of sight yet reachable by Tab */
+  const fit = (names, line) => names.slice(0, getComputedStyle(line).gridTemplateColumns.split(" ").length);
   const matching = (q) => (K.lib ? K.lib.app_tags : []).filter((t) => t.toLowerCase().includes(q));
 
   const cell = (t) => {
@@ -45,7 +48,7 @@
     K.$("a-fold").textContent = `All ${all.length} tag${all.length === 1 ? "" : "s"}`;
     K.$("a-fold").setAttribute("aria-expanded", String(expanded));
     K.$("a-rows").hidden = !expanded;
-    render(html`${cells(view.sugg)}`, K.$("a-sugg"));
+    render(html`${cells(fit(view.sugg, K.$("a-sugg")))}`, K.$("a-sugg"));
     render(html`${cells(view.recent)}`, K.$("a-recent"));
     render(!expanded ? nothing : shown.length ? html`${repeat(letters(shown), ([k]) => k, row)}`
       : html`<p class="nil">No tag has “${typed}”. Enter makes it.</p>`, K.$("a-rows"));
@@ -60,6 +63,7 @@
     reset() { target++; open = false; box.value = ""; tell(""); },
   };
 
+  new ResizeObserver(draw).observe(K.$("a-sugg"));   // a narrower line holds fewer
   K.$("a-panel").addEventListener("click", (e) => {
     const b = e.target.closest("button[data-tag]");
     if (b && view) view.pick(b.dataset.tag);

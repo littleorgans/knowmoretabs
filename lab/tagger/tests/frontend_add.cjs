@@ -206,7 +206,7 @@ const STAGES = {
     search: ev('search', 'running') },
 };
 const done = (value) => ({ ...STAGES.search, search: ev('search', 'done', { value }) });
-const addPage = (row, url, tags = []) => ({ row, title: `Page ${row}`, host: 'added.example', url, image: null, own: [], tags });
+const addPage = (row, url, tags = [], suggested = []) => ({ row, title: `Page ${row}`, host: 'added.example', url, image: null, own: [], tags, suggested });
 
 function addFixture() {
   const f = setup({ lit, lib: { app_tags: ['Coffee', 'Night trains', 'Trains'], tags: [] }, views: { chip: (t) => `<li class="tag">${t}</li>` } },
@@ -464,4 +464,39 @@ async function addPicksDetour() {
   assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'its Retry writes them');
 }
 
-run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour });
+/* At Indexed the Suggested row fills with the model's tags for the page, best first, less those picked and as many as its
+   line holds; it stays put while the page is on screen. A pick there writes as any pick and reads as its cell in the list */
+async function addSuggested() {
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/one';
+  K.lib.app_tags.push('Canals', 'Timetables');
+  const row = () => [...node('a-sugg').innerHTML.matchAll(/data-tag="([^"]*)" data-k="(\w+)"/g)].map(([, t, k]) => `${t} ${k}`);
+  f.type(url); node('a-fold').click(); f.click('Coffee'); f.submit();
+  await f.reply('/api/add', f.job(1, url, STAGES.running));
+  for (const stages of [STAGES.added, STAGES.image, STAGES.search]) {
+    await f.reply('/api/add/1', f.job(1, url, stages));
+    assert.deepEqual(row(), [], 'empty before Indexed');
+  }
+  const model = ['Trains', 'Coffee', 'Timetables', 'Night trains', 'Canals'];
+  await f.reply('/api/add/1', f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url, [], model) }));
+  assert.deepEqual(row(), ['Trains off', 'Timetables off', 'Night trains off'], 'best first, less the pick, as many as its line holds');
+  await f.applied(7, ['Coffee']);
+  await f.reply('/api/library', { ...K.lib });
+  assert.deepEqual(row(), ['Trains off', 'Timetables off', 'Night trains off'], 'the pick written: nothing moves');
+  f.click('Timetables');
+  assert.deepEqual([row(), f.look('Timetables')], [['Trains off', 'Timetables on', 'Night trains off'], 'on'], 'on in place, as its cell');
+  assert.deepEqual(await f.applied(7, ['Timetables']), [{ rows: [7], tag: 'Timetables', value: true }], 'written as any pick');
+  assert.equal(K.toasted, 'Added Timetables to 1 page');
+  K.undo();
+  const undone = await f.next('/api/undo');
+  undone.resolve({ pages: [{ row: 7, tags: ['Coffee'] }], app_tags: K.lib.app_tags });
+  for (let i = 0; i < 4; i++) await turn();
+  assert.deepEqual([undone.body, f.look('Timetables'), row()], [{ batch: 2 }, 'off', ['Trains off', 'Timetables off', 'Night trains off']], 'Undo, in place');
+  f.type('https://added.example/two');
+  assert.deepEqual(row(), [], 'another link: its own row, empty');
+  f.type('');
+  node('a-sugg').columns = 2;
+  K.add.render();
+  assert.deepEqual(row(), ['Trains off', 'Timetables off'], 'back on the page: its suggestions, as many as a narrower line holds');
+}
+
+run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested });

@@ -18,7 +18,7 @@ from unittest.mock import Mock, patch
 
 import fake_knowmoretabs
 import numpy as np
-from test_app import DIM, build, fake_embed, fake_encode, fake_image
+from test_app import DIM, build, fake_embed, fake_encode, fake_image, topic_of
 
 from tagger import cli
 from tagger.app import add, engine, server
@@ -321,6 +321,23 @@ class AddJobTests(Served):
         self.assertEqual(self.app.library()["pages"], self.call(self.port, "GET", "/api/library")[1]["pages"])
         argv = json.loads(self.log.read_text().splitlines()[0])["argv"]
         self.assertEqual(["--root", str(self.root), "add", "--json", "--", NEW], argv)
+
+    def test_an_indexed_page_carries_the_app_tags_the_model_suggests_best_first(self):
+        """App tags only (the library's Read later clears its head's threshold too), each above its threshold, by
+        confidence, none the page holds, at most `engine.SUGGEST`; none for a page the model has nothing for."""
+        for name in ("Canals", "Night trains", "Timetables"):  # new: zero shot, their names as queries
+            self.app.tag({"name": name})
+        live = int(np.flatnonzero(self.app.live())[0])
+        self.app.apply({"rows": [live], "tag": "Trains", "value": True})  # the library's tag, an app tag once decided
+        job = self.add(NEW)
+        self.assertEqual(
+            ["Trains", "Night trains", "Timetables"], job["page"]["suggested"], "a head's confidence first"
+        )
+        self.app.apply({"rows": [job["page"]["row"]], "tag": "Trains", "value": True})
+        with patch.object(engine, "SUGGEST", 1):
+            self.assertEqual(["Night trains"], self.add(NEW)["page"]["suggested"])
+        coffee = next(r["key"] for r in self.lib.records if topic_of(r["key"]) == "coffee")
+        self.assertEqual([], self.add(coffee)["page"]["suggested"])
 
     def test_a_known_page_is_already_in_the_library_and_not_indexed_twice(self):
         key = self.lib.records[3]["key"]
