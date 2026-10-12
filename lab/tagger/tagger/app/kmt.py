@@ -1,5 +1,6 @@
-"""How the app runs knowmoretabs, for Add link and Send to library alike: `App.binary` (a name found on PATH, or a
-path) on the app's own archive, and never on a snapshot copy inside the app's data directory.
+"""How the app runs knowmoretabs, for Add link and Send to library alike: `App.binary` (`tagger app --kmt-bin`, the
+binary `just up` serves the Library with; else this name, found on PATH) on the app's own archive, and never on a
+snapshot copy inside the app's data directory.
 """
 
 BINARY = "knowmoretabs"
