@@ -140,7 +140,8 @@ class AddBrowserTests(Browser, Synthetic):
         self.app.tag({"name": "3D printing"})
         measured = json.loads(self.run_case("addStable", "#add"))
         print("addStable", json.dumps(measured))
-        self.assertIn(measured["tag"], self.app.store.app_tags()["https://added.example/notes/stable"], "the pick reached the server")
+        tags = self.app.store.app_tags()["https://added.example/notes/stable"]
+        self.assertIn(measured["tag"], tags, "the pick reached the server")
 
     def test_a_deep_link_fills_the_box_and_waits_for_enter(self):
         runs = self.logged()
