@@ -204,10 +204,12 @@ async function panelRecent() {
     'strip.js', 'panel.js');
   const picked = [];
   const recent = () => [...node('a-recent').innerHTML.matchAll(/data-tag="([^"]*)"/g)].map((m) => m[1]);
+  const suggested = () => [...node('a-sugg').innerHTML.matchAll(/data-tag="([^"]*)"/g)].map((m) => m[1]);
   const button = (id, t) => node(id).innerHTML.match(new RegExp(`<button[^>]*data-tag="${t}"[^>]*>`))[0];
   node('a-recent').columns = '136px 136px 136px';
-  K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: [] });
+  K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: K.lib.app_tags });
   assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle'], 'latest first, three columns, three cells');
+  assert.deepEqual(suggested(), ['Alpha', 'apple', 'eagle'], 'Suggested shares the one line cap');
   node('a-fold').click();
   for (const t of ['zeta', 'Alpha', 'eagle']) assert.equal(button('a-recent', t), button('a-rows', t), `${t} reads as its letter row cell`);
   assert.match(button('a-recent', 'Alpha'), /data-k="on"/);
@@ -217,6 +219,13 @@ async function panelRecent() {
   node('a-recent').columns = '120px 120px 120px 120px 120px 120px';
   node('a-recent').resized();
   assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle', 'apple', 'iOS'], 'a wider line: more of them, all fitting');
+  node('a-sugg').columns = 2;
+  node('a-sugg').resized();
+  assert.deepEqual(suggested(), ['Alpha', 'apple'], 'Suggested redraws on resize too');
+  assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle', 'apple', 'iOS'], 'each row fits its own columns');
+  node('a-sugg').columns = 'none';
+  node('a-sugg').resized();
+  assert.deepEqual(suggested(), [], 'Suggested not laid out: none');
   node('a-recent').columns = 'repeat(auto-fill, minmax(8.5rem, 1fr))';
   node('a-recent').resized();
   assert.deepEqual(recent(), [], 'not laid out: none');
