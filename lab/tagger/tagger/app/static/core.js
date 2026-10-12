@@ -13,6 +13,7 @@
   K.plural = (n, word) => `<b>${n}</b> ${word}${n === 1 ? "" : "s"}`;
   K.short = (t) => (t.length > 44 ? t.slice(0, 42).trimEnd() + "…" : t);
   K.title = (p) => p.title || "Untitled page";
+  K.byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" });   // tag names, as every list orders them
 
   /* ---- where you are ---- */
   let saved = {};

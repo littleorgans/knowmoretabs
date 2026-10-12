@@ -91,35 +91,47 @@
     });
   };
 
-  /* ---- app tags: add `tag` to (value true) or take it off `rows`; Undo retracts the server's batch ---- */
+  /* ---- app tags: add `tags` to (value true) or take them off `rows`, one write a tag; one toast, whose Undo
+     retracts every batch the server made ---- */
   const set = (rows, tag, value) => {
     for (const r of rows) {
       const tags = K.pages.get(r).tags.filter((t) => t !== tag);
       K.pages.get(r).tags = value ? tags.concat(tag).sort() : tags;
     }
   };
-  function settle(path, body, mine, onError) {
+  /* one write of a change; the reply to the change's `last` write settles the pages, the others only report */
+  function settle(path, body, mine, last, onError) {
     return write(path, body).then((out) => {
-      if (mine === tagging) for (const p of out.pages) K.pages.get(p.row).tags = p.tags;
+      if (mine === tagging && last) for (const p of out.pages) K.pages.get(p.row).tags = p.tags;
       K.lib.app_tags = out.app_tags;
       K.changed();
       return out;
     }, (err) => { onError(); K.fail(err); K.changed(); });
   }
-  function change(tag, value, rows, say) {
-    const before = new Map(rows.map((r) => [r, K.pages.get(r).tags]));
-    set(rows, tag, value);
+  /* each of `tags` on (or off) `rows` at once, then written in order; a failed write puts back its tag only.
+     `say(done)` reads the toast for the tags written */
+  function change(tags, value, rows, say) {
+    for (const tag of tags) set(rows, tag, value);
     const mine = ++tagging;
     K.changed();
-    return settle("/api/apply", { rows, tag, value }, mine, () => {
-      if (mine === tagging) for (const [r, tags] of before) K.pages.get(r).tags = tags;
-    }).then((out) => { if (out) K.toast(say, out.batch ? () => undo(out.batch, rows, tag, value) : null); });
+    const sent = tags.map((tag, i) => settle("/api/apply", { rows, tag, value }, mine, i === tags.length - 1, () => {
+      if (mine === tagging) set(rows, tag, !value);
+    }));
+    return Promise.all(sent).then((outs) => {
+      const done = tags.filter((_, i) => outs[i]), lost = tags.filter((_, i) => !outs[i]).map(K.short);
+      const batches = tags.map((tag, i) => [tag, outs[i] && outs[i].batch]).filter(([, batch]) => batch);
+      if (done.length) K.toast(say(done) + (lost.length ? `. Not ${value ? "added" : "removed"}: ${lost.join(", ")}` : ""),
+        batches.length ? () => undo(batches, rows, value) : null);
+    });
   }
-  function undo(batch, rows, tag, value) {
-    set(rows, tag, !value);
+  /* `batches`: [tag, batch] for each write to retract */
+  function undo(batches, rows, value) {
+    for (const [tag] of batches) set(rows, tag, !value);
     const mine = ++tagging;
     K.changed();
-    return settle("/api/undo", { batch }, mine, () => { if (mine === tagging) set(rows, tag, value); });
+    return Promise.all(batches.map(([tag, batch], i) => settle("/api/undo", { batch }, mine, i === batches.length - 1, () => {
+      if (mine === tagging) set(rows, tag, value);
+    })));
   }
   const nothing = (msg) => { K.toast(msg); return Promise.resolve(); };
 
@@ -128,14 +140,21 @@
     if (!on.length) return nothing(`Select pages first, then click a tag to add it to them`);
     const rows = on.filter((r) => !K.has(r, tag));
     if (!rows.length) return nothing(`Every selected page has ${K.short(tag)}`);
-    return change(tag, true, rows, `Added ${K.short(tag)} to ${count(rows.length)}`);
+    return change([tag], true, rows, () => `Added ${K.short(tag)} to ${count(rows.length)}`);
   };
   /* the strip's ×: take the tag off every selected page (or page of `on`) that has it */
   K.untagSelection = (tag, on = K.sel) => {
     const rows = on.filter((r) => K.has(r, tag));
     if (!rows.length) return nothing(`No selected page has ${K.short(tag)}`);
-    return change(tag, false, rows, `Removed ${K.short(tag)} from ${count(rows.length)}`);
+    return change([tag], false, rows, () => `Removed ${K.short(tag)} from ${count(rows.length)}`);
   };
+  const named = (row) => `“${K.short(K.title(K.pages.get(row)))}”`;
   /* a tile chip's ×: this page only */
-  K.untag = (row, tag) => change(tag, false, [row], `Took “${K.short(tag)}” off “${K.short(K.title(K.pages.get(row)))}”`);
+  K.untag = (row, tag) => change([tag], false, [row], () => `Took “${K.short(tag)}” off ${named(row)}`);
+  /* the tags picked for one page before it had a row, those it lacks in one change: one toast, one Undo */
+  K.tagPage = (row, tags) => {
+    const lack = tags.filter((t) => !K.has(row, t));
+    if (!lack.length) return Promise.resolve();
+    return change(lack, true, [row], (done) => `Added ${done.map((t) => `“${K.short(t)}”`).join(", ")} to ${named(row)}`);
+  };
 })();

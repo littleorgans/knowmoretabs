@@ -577,6 +577,49 @@ async function bulkUndo() {
   await settle();
 }
 
+/* tags for one page in one change: one write a tag it lacks, in order, one toast; Undo retracts every batch, and a
+   failed write takes back its own tag only */
+async function tagPageUndo() {
+  const { K, requests, settle, press } = await screenFixture('app.js');
+  const seen = [], api = K.api, toast = K.toast;
+  let toasts = 0;
+  K.api = (route, body) => { seen.push([route, body && plain(body)]); return api(route, body); };
+  K.toast = (...args) => { toasts++; return toast.apply(K, args); };
+  K.title = (p) => p.title;
+  K.tagPage(1, ['C', 'A', 'B']);
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B', 'C'], 'the tags it lacks show at once');
+  await turn();
+  assert.equal(requests.length, 1, 'writes go one at a time');
+  await settle();
+  assert.deepEqual(seen, [['/api/apply', { rows: [1], tag: 'C', value: true }], ['/api/apply', { rows: [1], tag: 'B', value: true }]]);
+  assert.equal(toasts, 1, 'one toast');
+  assert.equal(K.toasted, 'Added “C”, “B” to “Page 1”');
+  seen.length = 0;
+  press('u');
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'Undo takes both off at once');
+  await settle();
+  assert.deepEqual(seen, [['/api/undo', { batch: 1 }], ['/api/undo', { batch: 2 }]], 'and the server retracts every batch');
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'and its replies agree');
+  seen.length = 0; toasts = 0;
+  K.tagPage(1, ['B', 'C']);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], changed: 1, batch: 3, app_tags: ['A', 'B'] });
+  await turn(); await turn();
+  requests.shift().reject(new Error('name pages, one of your tags, and true or false'));
+  await turn(); await turn();
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the failed tag goes back, the written one stays');
+  assert.match(K.failure.message, /one of your tags/);
+  assert.equal(toasts, 1, 'one toast for what was written');
+  assert.equal(K.toasted, 'Added “B” to “Page 1”. Not added: C');
+  seen.length = 0;
+  K.undo();
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A'] }], app_tags: ['A'] });
+  await turn();
+  assert.deepEqual(seen, [['/api/undo', { batch: 3 }]], 'Undo retracts the written batch only');
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A']);
+}
+
 /* Forget: out of the grid, the selection, the pins and every count at once; Undo puts it back as it was */
 async function forgetAndUndo() {
   const { K, node, requests, click, key, settle, press, shown } = await screenFixture('app.js');
@@ -1123,4 +1166,4 @@ async function startupListsKeepChanges() {
   }
 }
 
-run({ startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });
+run({ tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });

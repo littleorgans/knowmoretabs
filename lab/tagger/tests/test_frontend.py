@@ -38,6 +38,7 @@ CASES = {
         "select",
         "chipActsOnSelection",
         "bulkUndo",
+        "tagPageUndo",
         "forgetAndUndo",
         "forgetUndoOrder",
         "forgetThenNext",
