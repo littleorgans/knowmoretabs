@@ -1,8 +1,9 @@
 """Send to library on the synthetic archive against a fake knowmoretabs: the preview counts what the mirror will
-change and writes nothing; a send leaves every library page with exactly the app's tags (none for a page the app
-never tagged), forgets and restores until the forgotten pages match, skips pages the library lacks, and a resend
-after a partial failure converges. A failed call stops the send with the error on screen; a snapshot root is never
-written. The tests that inject no CLI failure also run against the real knowmoretabs (KMT_BIN, scratch roots)."""
+change and writes nothing; a send creates the app's names first, leaves every library page with exactly the app's
+tags (none for a page the app never tagged), dismisses the app's "no" where the library is undecided, forgets the
+app's forgotten pages and leaves the library's own forgotten, skips pages the library lacks, and a resend after a
+partial failure converges. A failed call stops the send with the error on screen; a snapshot root is never
+written."""
 
 import json
 import errno
@@ -51,8 +52,22 @@ class SendTests(Served):
     def state(self) -> dict:
         return json.loads((self.root / "library.json").read_text())
 
+    def lists(self, key: str) -> dict:
+        return self.state().get("tags", {}).get(key, {})
+
     def adds(self, key: str) -> list[str]:
-        return self.state().get("tags", {}).get(key, {}).get("add", [])
+        return self.lists(key).get("add", [])
+
+    def removes(self, key: str) -> list[str]:
+        return self.lists(key).get("remove", [])
+
+    def retire(self, name: str) -> None:
+        """The library retires `name` (holding it first when it never did)."""
+        state = self.state()
+        state["vocabulary"].setdefault(name, {"created_at": "2026-01-01T00:00:00Z"})[
+            "retired_at"
+        ] = "2026-01-02T00:00:00Z"
+        (self.root / "library.json").write_text(json.dumps(state))
 
     def runs(self) -> list[list[str]]:
         return [json.loads(line)["argv"][2:] for line in self.log.read_text().splitlines()] if self.log.exists() else []
@@ -65,17 +80,22 @@ class SendTests(Served):
         name = self.post("/api/tags", {"name": name})["tag"]  # the library's spelling, when it has the name
         return self.post("/api/apply", {"rows": rows, "tag": name, "value": value})
 
+    def no(self, rows: list[int], name: str) -> None:
+        """A "no" in the app: the tag put on, then taken off."""
+        self.tag(rows, name)
+        self.tag(rows, name, False)
+
     def send(self) -> dict:
         self.post("/api/send/preview")
         return self.post("/api/send")
 
     def settle(self) -> None:
-        """The first send: the synthetic library's own tags come off and its forgotten page comes back."""
+        """The first send: the synthetic library's own tags come off; its forgotten page stays forgotten."""
         self.assertTrue(self.send()["ok"])
 
     def counts(self, out: dict) -> dict:
-        keys = ("tags_on", "tags_off", "never_tags", "cleared", "forget", "restore", "missing")
-        return {k: out[k] for k in keys if out[k]}
+        keys = ("tags_on", "tags_off", "never_tags", "cleared", "dismiss_tags", "forget", "kept_forgotten", "missing")
+        return {k: out[k] for k in keys if out.get(k)}
 
     def assert_mirrored(self) -> None:
         archive = Archive.load(self.root)
@@ -83,22 +103,26 @@ class SendTests(Served):
         for key in archive.known:
             fold = lambda tags: sorted(t.lower() for t in tags)  # noqa: E731
             self.assertEqual(fold(app_tags.get(key, [])), fold(archive.owner_tags.get(key, [])), "tags differ")
-        self.assertEqual(set(self.app.forgotten.keys) & set(archive.known), archive.forgotten)
+        self.assertLessEqual(set(self.app.forgotten.keys) & set(archive.known), archive.forgotten)
         self.assertFalse(self.post("/api/send/preview")["ready"])
 
     def test_the_preview_counts_the_mirror_and_writes_nothing(self):
         self.tag(self.rows[:2], "Trains")
         self.tag(self.rows[1:3], "Sleeper cars")
+        self.no(self.rows[2:3], "Trains")
+        self.post("/api/tags", {"name": "Night trains"})
         self.post("/api/forget", {"rows": [self.rows[3]], "value": True})
         before = (self.root / "library.json").read_bytes()
         out = self.post("/api/send/preview")
-        expect = {"tags_on": 4, "tags_off": 99, "never_tags": 99, "cleared": 85, "forget": 1, "restore": 1}
-        self.assertEqual(expect, self.counts(out))
-        self.assertEqual((3, 85, 85), (out["pages_on"], out["pages_off"], out["never_pages"]))
-        self.assertEqual((["Sleeper cars"], []), (out["new"], out["revived"]))
-        self.assertIn("tag '--add=Sleeper cars' -- ", out["commands"][0])
-        self.assertIn("tag --add=Trains -- ", out["commands"][1])
-        self.assertIn(" restore -- ", out["commands"][-1])
+        expect = {"tags_on": 4, "tags_off": 99, "never_tags": 99, "cleared": 85, "dismiss_tags": 1, "forget": 1}
+        self.assertEqual({**expect, "kept_forgotten": 1}, self.counts(out))
+        self.assertEqual((3, 85, 85, 1), (out["pages_on"], out["pages_off"], out["never_pages"], out["dismiss_pages"]))
+        self.assertEqual((["Night trains", "Sleeper cars"], []), (out["new"], out["revived"]))
+        self.assertIn(" tags '--create=Night trains' '--create=Sleeper cars'", out["commands"][0])
+        self.assertIn("tag '--add=Sleeper cars' -- ", out["commands"][1])
+        self.assertIn("tag --add=Trains -- ", out["commands"][2])
+        self.assertIn(shlex.join(["tag", "--remove=Trains", "--", self.keys[2]]), out["commands"][-2])
+        self.assertIn(" forget -- ", out["commands"][-1])
         self.assertEqual(before, (self.root / "library.json").read_bytes())
         self.assertEqual([], self.runs())
         self.assertFalse((self.app.store.root / "exports").exists(), "the record is written by the send")
@@ -119,7 +143,7 @@ class SendTests(Served):
         self.assert_mirrored()
         runs = len(self.runs())
         again = self.post("/api/send/preview")
-        self.assertEqual(([], {}), (again["commands"], self.counts(again)))
+        self.assertEqual(([], {"kept_forgotten": 1}), (again["commands"], self.counts(again)))
         self.assertEqual(runs, len(self.runs()))
 
     def test_a_library_with_its_own_tags_ends_equal_to_the_app(self):
@@ -138,7 +162,7 @@ class SendTests(Served):
         self.kmt("tag", "--add=Trains", "--", self.keys[0])
         self.kmt("tag", "--add=Sleeper cars", "--", self.keys[0])
         out = self.post("/api/send/preview")
-        self.assertEqual({"tags_off": 2, "never_tags": 2, "cleared": 1}, self.counts(out))
+        self.assertEqual({"tags_off": 2, "never_tags": 2, "cleared": 1, "kept_forgotten": 1}, self.counts(out))
         self.assertTrue(self.post("/api/send")["ok"])
         self.assertEqual([], self.adds(self.keys[0]))
         self.assert_mirrored()
@@ -148,42 +172,40 @@ class SendTests(Served):
         self.settle()
         self.tag(self.rows[:1], "Trains", False)
         out = self.post("/api/send/preview")
-        self.assertEqual({"tags_off": 1, "cleared": 1}, self.counts(out), "tagged here once, so not never tagged")
+        expect = {"tags_off": 1, "cleared": 1, "kept_forgotten": 1}
+        self.assertEqual(expect, self.counts(out), "tagged here once, so not never tagged")
         self.assertTrue(self.post("/api/send")["ok"])
         self.assertEqual(([], ["Trains"]), (self.adds(self.keys[0]), self.adds(self.keys[1])))
         self.assert_mirrored()
 
     def test_a_retired_name_comes_back_only_where_the_app_has_it(self):
         self.settle()
+        self.retire("Sleeper cars")
         state = self.state()
-        state["vocabulary"]["Sleeper cars"] = {
-            "created_at": "2026-01-01T00:00:00Z",
-            "retired_at": "2026-01-02T00:00:00Z",
-        }
         state.setdefault("tags", {})[self.keys[1]] = {"add": ["Sleeper cars"], "remove": []}
         (self.root / "library.json").write_text(json.dumps(state))
         self.tag(self.rows[:1], "sleeper cars")
         out = self.post("/api/send/preview")
         self.assertEqual((["sleeper cars"], []), (out["revived"], out["new"]))
-        self.assertEqual({"tags_on": 1, "tags_off": 1, "never_tags": 1}, self.counts(out), "hidden while retired")
+        expect = {"tags_on": 1, "tags_off": 1, "never_tags": 1, "kept_forgotten": 1}
+        self.assertEqual(expect, self.counts(out), "hidden while retired")
         self.assertTrue(self.post("/api/send")["ok"])
         self.assertIsNone(self.state()["vocabulary"]["Sleeper cars"].get("retired_at"))
         self.assertEqual((["Sleeper cars"], []), (self.adds(self.keys[0]), self.adds(self.keys[1])))
         self.assert_mirrored()
 
-    def test_forgotten_pages_are_forgotten_and_restored_until_both_lists_match(self):
-        restored = self.lib.rows[next(iter(self.start.forgotten))]
-        self.assertFalse(self.app.live()[restored])
+    def test_a_page_forgotten_only_in_the_library_stays_forgotten(self):
+        kept = next(iter(self.start.forgotten))
         self.settle()
-        self.assertTrue(self.app.live()[restored], "the app shows a page the library brought back")
-        self.kmt("forget", "--", self.keys[1])  # in the Library only
+        self.assertFalse(self.app.live()[self.lib.rows[kept]], "the library's own forgotten page stays hidden")
+        self.kmt("forget", "--", self.keys[1])  # in the Library only, as its view and Add link's Remove forget
         self.post("/api/forget", {"rows": [self.rows[0]], "value": True})
         out = self.post("/api/send/preview")
-        self.assertEqual({"forget": 1, "restore": 1}, self.counts(out))
+        self.assertEqual({"forget": 1, "kept_forgotten": 2}, self.counts(out))
         self.assertTrue(self.post("/api/send")["ok"])
-        self.assertEqual([self.keys[0]], self.state()["forgotten"])
+        self.assertEqual(sorted([kept, self.keys[0], self.keys[1]]), sorted(self.state()["forgotten"]))
         self.assertEqual([self.keys[0]], self.app.forgotten.keys)
-        self.assertEqual((False, True), (self.app.live()[self.rows[0]], self.app.live()[self.rows[1]]))
+        self.assertFalse(self.app.live()[self.rows[0]])
         self.assert_mirrored()
 
     def test_pages_the_library_does_not_hold_are_counted_and_left_out(self):
@@ -194,10 +216,88 @@ class SendTests(Served):
         self.assertEqual(2, out["missing"])
         self.assertFalse(any("synthetic-" in command for command in out["commands"]))
         self.assertTrue(self.post("/api/send")["ok"])
-        self.assertEqual({"missing": 2}, self.counts(self.post("/api/send/preview")))
+        self.assertEqual({"kept_forgotten": 1, "missing": 2}, self.counts(self.post("/api/send/preview")))
         self.assert_mirrored()
 
-    def test_undo_forget_after_send_restores_the_app_then_the_library(self):
+    def test_a_no_for_a_new_name_creates_it_before_its_dismissal(self):
+        self.settle()
+        self.no(self.rows[:1], "Sleeper cars")
+        out = self.post("/api/send/preview")
+        self.assertEqual(({"dismiss_tags": 1, "kept_forgotten": 1}, ["Sleeper cars"]), (self.counts(out), out["new"]))
+        self.assertTrue(self.post("/api/send")["ok"])
+        self.assertEqual(["Sleeper cars"], self.removes(self.keys[0]))
+        self.assertIsNone(self.state()["vocabulary"]["Sleeper cars"].get("retired_at"))
+        create, dismiss = ["tags", "--create=Sleeper cars"], ["tag", "--remove=Sleeper cars", "--", self.keys[0]]
+        self.assertEqual([create, dismiss], self.runs()[-2:])
+        self.assert_mirrored()
+
+    def test_a_no_becomes_a_dismissal_only_where_the_library_is_undecided(self):
+        self.settle()
+        self.kmt("tag", "--add=Trains", "--", self.keys[0])
+        self.kmt("tag", "--remove=Trains", "--", self.keys[1])
+        self.no(self.rows[:3], "Trains")
+        out = self.post("/api/send/preview")
+        self.assertEqual({"tags_off": 1, "cleared": 1, "dismiss_tags": 1, "kept_forgotten": 1}, self.counts(out))
+        self.assertFalse(any(self.keys[1] in command for command in out["commands"]), "already dismissed")
+        self.assertTrue(self.post("/api/send")["ok"])
+        self.assertEqual([{"add": [], "remove": ["Trains"]}] * 3, [self.lists(k) for k in self.keys[:3]])
+        self.assert_mirrored()
+
+    def test_a_retired_name_takes_a_dismissal_without_revival(self):
+        self.settle()
+        self.no(self.rows[:1], "Trains")
+        self.retire("Trains")
+        out = self.post("/api/send/preview")
+        self.assertEqual(([], []), (out["new"], out["revived"]))
+        self.assertEqual({"dismiss_tags": 1, "kept_forgotten": 1}, self.counts(out))
+        self.assertTrue(self.post("/api/send")["ok"])
+        self.assertEqual(["Trains"], self.removes(self.keys[0]))
+        self.assertIsNotNone(self.state()["vocabulary"]["Trains"].get("retired_at"))
+        self.assert_mirrored()
+
+    def test_a_name_made_in_the_app_reaches_the_vocabulary(self):
+        self.settle()
+        self.post("/api/tags", {"name": "Sleeper cars"})
+        out = self.post("/api/send/preview")
+        self.assertEqual((["Sleeper cars"], True), (out["new"], out["ready"]))
+        self.assertTrue(self.post("/api/send")["ok"])
+        self.assertIsNone(self.state()["vocabulary"]["Sleeper cars"].get("retired_at"))
+        self.assert_mirrored()
+
+    def test_the_extended_send_converges_to_an_empty_preview(self):
+        self.tag(self.rows[:2], "Sleeper cars")  # a new name, added
+        self.post("/api/tags", {"name": "Night trains"})  # a new name on no page
+        self.no(self.rows[2:3], "Trains")
+        self.no(self.rows[3:4], "Typography")
+        self.retire("Typography")  # a dismissal without revival
+        self.tag(self.rows[:1], "Keyboards")
+        self.retire("Keyboards")  # added, so back from retirement
+        self.post("/api/forget", {"rows": [self.rows[1]], "value": True})
+        out = self.post("/api/send/preview")
+        expect = ("tags_on", "tags_off", "never_tags", "cleared", "dismiss_tags", "forget", "kept_forgotten")
+        self.assertEqual(expect, tuple(self.counts(out)), "every category at once")
+        self.assertEqual((["Night trains", "Sleeper cars"], ["Keyboards"]), (out["new"], out["revived"]))
+        self.assertEqual(2, out["dismiss_tags"])
+        self.assertTrue(self.post("/api/send")["ok"])
+        again = self.post("/api/send/preview")
+        self.assertEqual(([], {"kept_forgotten": 1}), (again["commands"], self.counts(again)))
+        self.assert_mirrored()
+
+    def test_a_failed_create_stops_the_send_and_a_resend_converges(self):
+        self.settle()
+        self.no(self.rows[:1], "Sleeper cars")
+        before = (self.root / "library.json").read_bytes()
+        with patch.dict(os.environ, {"FAKE_KMT_FAIL": "tags"}):
+            out = self.send()
+        self.assertEqual(
+            (False, "error: tags failed", [False]), (out["ok"], out["error"], [s["ok"] for s in out["steps"]])
+        )
+        self.assertEqual(before, (self.root / "library.json").read_bytes())
+        self.assertTrue(self.send()["ok"])
+        self.assertEqual(["Sleeper cars"], self.removes(self.keys[0]))
+        self.assert_mirrored()
+
+    def test_undo_forget_after_send_shows_the_page_here_and_leaves_the_library_forgotten(self):
         row, key = self.rows[0], self.keys[0]
         self.post("/api/forget", {"rows": [row], "value": True})
         self.assertTrue(self.send()["ok"])
@@ -206,8 +306,9 @@ class SendTests(Served):
         self.post("/api/forget", {"rows": [row], "value": False})
         self.assertTrue(self.app.live()[row], "Undo shows the page before sending the restore")
         self.assertEqual(before + 1, self.app.library()["pages"])
-        self.assertEqual({"restore": 1}, self.counts(self.post("/api/send/preview")))
-        self.assertTrue(self.post("/api/send")["ok"])
+        out = self.post("/api/send/preview")
+        self.assertEqual(({"kept_forgotten": 2}, False), (self.counts(out), out["ready"]), "Send never restores")
+        self.assertIn(key, self.state()["forgotten"])
         self.assert_mirrored()
 
     def test_a_partial_failure_then_a_resend_converges(self):
@@ -225,7 +326,7 @@ class SendTests(Served):
         self.assertEqual(["Sleeper cars"], self.adds(self.keys[0]), "the calls before it stay applied")
         self.assertNotIn(self.keys[3], self.state()["forgotten"])
         again = self.post("/api/send/preview")
-        self.assertEqual({"forget": 1, "restore": 1}, self.counts(again), "the rest, and nothing twice")
+        self.assertEqual({"forget": 1, "kept_forgotten": 1}, self.counts(again), "the rest, and nothing twice")
         self.assertTrue(self.post("/api/send")["ok"])
         self.assert_mirrored()
 
@@ -247,11 +348,11 @@ class SendTests(Served):
         self.assert_mirrored()
 
     def test_a_failed_first_call_leaves_the_library_unchanged_and_the_error_on_screen(self):
-        self.tag(self.rows[:2], "Sleeper cars")
+        self.tag(self.rows[:2], "Trains")
         before = (self.root / "library.json").read_bytes()
-        with patch.dict(os.environ, {"FAKE_KMT_FAIL": "--add=Sleeper cars"}):
+        with patch.dict(os.environ, {"FAKE_KMT_FAIL": "--add=Trains"}):
             out = self.send()
-        self.assertEqual((False, "error: --add=Sleeper cars failed"), (out["ok"], out["error"]))
+        self.assertEqual((False, "error: --add=Trains failed"), (out["ok"], out["error"]))
         self.assertEqual([False], [s["ok"] for s in out["steps"]])
         self.assertEqual(before, (self.root / "library.json").read_bytes())
         self.assertEqual(2, self.post("/api/send/preview")["tags_on"])
@@ -364,7 +465,7 @@ class SendTests(Served):
             finally:
                 release.set()
             self.assertTrue(future.result()[1]["ok"])
-        self.assertEqual({"tags_on": 1}, self.counts(self.post("/api/send/preview")))
+        self.assertEqual({"tags_on": 1, "kept_forgotten": 1}, self.counts(self.post("/api/send/preview")))
 
     def test_export_failure_returns_a_result_without_running_the_cli(self):
         self.tag(self.rows[:1], "Trains")

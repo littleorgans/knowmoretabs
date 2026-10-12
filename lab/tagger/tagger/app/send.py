@@ -1,15 +1,18 @@
 """Send to library: the library made equal to the app, through knowmoretabs. The app is the source of truth.
 
-`preview` plans against the archive as it stands and writes nothing. Every page the library holds ends with exactly
-the app's tags for it, as the owner's own (names matched without regard to case, as knowmoretabs matches them); a
-page the app holds no tag for ends with none. A retired name in a page's `add` list counts as on the page once the
-send brings the name back. The library's forgotten pages end equal to the app's forgotten list: pages only the app
-forgot are forgotten, pages only the library forgot are restored. Pages the app holds that the library does not are
-left out and counted. Nothing is remembered between sends: each plans afresh from the archive, so sending again
-after a partial failure converges. `apply` runs the plan the owner saw: the export record, then per tag
-`tag --add=NAME`, then `tag --remove=NAME`, then `forget`, then `restore`. Each call is atomic in knowmoretabs (one
-`library.json` replace under its lock); the send is not. A failed call stops it; the calls before it stay applied.
-A call's stderr goes to the screen only.
+`preview` plans against the archive as it stands and writes nothing. Every name the app made or decided on joins the
+library's vocabulary unless the vocabulary holds it, active or retired. Every page the library holds ends with
+exactly the app's tags for it, as the owner's own (names matched without regard to case, as knowmoretabs matches
+them); a page the app holds no tag for ends with none. A retired name in a page's `add` list counts as on the page
+once the send brings the name back. An app "no" becomes a dismissal (the page's `remove` list) where the library
+holds the name on neither list for that page; a retired name takes it without coming back. Pages only the app
+forgot are forgotten; pages the library forgot stay forgotten and are counted, since Send never restores. Pages the
+app holds that the library does not are left out and counted. Nothing is remembered between sends: each plans
+afresh from the archive, so sending again after a partial failure converges. `apply` runs the plan the owner saw:
+the export record, then `tags --create=NAME…`, then per tag `tag --add=NAME`, then `tag --remove=NAME` for tags
+coming off, then for dismissals, then `forget`. Each call is atomic in knowmoretabs (one `library.json` replace under
+its lock); the send is not. A failed call stops it; the calls before it stay applied. A call's stderr goes to the
+screen only.
 """
 
 import os
@@ -23,8 +26,7 @@ from ..archive import Archive
 from . import engine, kmt
 
 TIMEOUT = 120  # seconds per call; knowmoretabs waits for the archive lock
-ARGS = 100_000  # bytes of addresses per call, well under the system's argument limit
-VISIBILITY = ("forget", "restore")  # the calls that hide or show pages
+ARGS = 100_000  # bytes of arguments per call, well under the system's argument limit
 
 
 @dataclass
@@ -42,26 +44,27 @@ class Plan:
     off: dict[str, list[str]] = field(default_factory=dict)  # tag -> pages it comes off
     never: dict[str, list[str]] = field(default_factory=dict)  # of `off`, on pages the app never tagged
     cleared: int = 0  # pages showing tags that end with none
-    new: list[str] = field(default_factory=list)  # names the vocabulary lacks
-    revived: list[str] = field(default_factory=list)  # names it holds retired
+    dismiss: dict[str, list[str]] = field(default_factory=dict)  # tag -> pages it is dismissed on
+    new: list[str] = field(default_factory=list)  # names the vocabulary never held, created first
+    revived: list[str] = field(default_factory=list)  # of `on`, names it holds retired
     forget: list[str] = field(default_factory=list)
-    restore: list[str] = field(default_factory=list)
+    kept_forgotten: int = 0  # pages the library forgot and the app did not, left forgotten
     missing: int = 0  # pages the app holds and the library does not
 
     def calls(self) -> list[Call]:
-        out = []
-        for verb, tags in (("add", self.on), ("remove", self.off)):
+        # `=`: a name may start with a dash
+        out = [Call(["tags", *part], []) for part in chunks([f"--create={tag}" for tag in self.new])]
+        for verb, tags in (("add", self.on), ("remove", self.off), ("remove", self.dismiss)):
             for tag, urls in sorted(tags.items()):
-                flag = f"--{verb}={tag}"  # `=`: a name may start with a dash
-                out += [Call(["tag", flag, "--", *part], part) for part in chunks(urls)]
-        return out + [Call([verb, "--", *part], part) for verb in VISIBILITY for part in chunks(getattr(self, verb))]
+                out += [Call(["tag", f"--{verb}={tag}", "--", *part], part) for part in chunks(urls)]
+        return out + [Call(["forget", "--", *part], part) for part in chunks(self.forget)]
 
     def summary(self) -> dict:
         def count(tags: dict[str, list[str]]) -> tuple[int, int]:
             return sum(map(len, tags.values())), len({u for urls in tags.values() for u in urls})
 
-        (tags_on, pages_on), (tags_off, pages_off), (never_tags, never_pages) = map(
-            count, (self.on, self.off, self.never)
+        (tags_on, pages_on), (tags_off, pages_off), (never_tags, never_pages), (dismiss_tags, dismiss_pages) = map(
+            count, (self.on, self.off, self.never, self.dismiss)
         )
         return {
             "tags_on": tags_on,
@@ -71,12 +74,14 @@ class Plan:
             "never_tags": never_tags,
             "never_pages": never_pages,
             "cleared": self.cleared,
+            "dismiss_tags": dismiss_tags,
+            "dismiss_pages": dismiss_pages,
             "new": self.new,
             "revived": self.revived,
             "forget": len(self.forget),
-            "restore": len(self.restore),
+            "kept_forgotten": self.kept_forgotten,
             "missing": self.missing,
-            "ready": bool(self.on or self.off or self.forget or self.restore),
+            "ready": bool(self.new or self.on or self.off or self.dismiss or self.forget),
         }
 
 
@@ -93,8 +98,14 @@ def chunks(urls: list[str]) -> list[list[str]]:
 
 
 def plan(store, forgotten: list[str], archive: Archive) -> Plan:
-    known, app_tags, p = set(archive.known), store.app_tags(), Plan()
-    decided = {key for key, _ in store.decisions()}
+    known, app_tags, decisions, p = set(archive.known), store.app_tags(), store.decisions(), Plan()
+    decided = {key for key, _ in decisions}
+    # one spelling per name, over every name the app made or decided on
+    named = {tag.lower(): tag for tag in sorted({*store.tags(), *(tag for _, tag in decisions)}, reverse=True)}
+    no: dict[str, set[str]] = {}  # page -> folded names its latest decisions take off
+    for (key, tag), d in decisions.items():
+        if not d["value"]:
+            no.setdefault(key, set()).add(tag.lower())
     pages = [
         (key, {t.lower(): t for t in app_tags.get(key, ())}, {n.lower(): n for n in archive.tag_adds.get(key, ())})
         for key in archive.known
@@ -109,14 +120,20 @@ def plan(store, forgotten: list[str], archive: Archive) -> Plan:
             if key not in decided:
                 p.never.setdefault(has[folded], []).append(key)
         p.cleared += bool(has.keys() & archive.active.keys() and not want)
-    named = {tag.lower(): tag for tag in sorted(p.on, reverse=True)}  # one spelling per name
+        dismissed = {n.lower() for n in archive.tag_removes.get(key, ())}
+        for folded in sorted(no.get(key, set()) - want.keys() - has.keys() - dismissed):
+            p.dismiss.setdefault(named[folded], []).append(key)
+    adding = {tag.lower() for tag in p.on}
     for folded, tag in sorted(named.items()):
         if folded not in archive.active:
-            (p.revived if folded in archive.retired else p.new).append(tag)
+            if folded not in archive.retired:
+                p.new.append(tag)
+            elif folded in adding:
+                p.revived.append(tag)
     gone = set(forgotten)
     p.forget = [key for key in forgotten if key in known and key not in archive.forgotten]
-    p.restore = sorted(archive.forgotten - gone)
-    p.missing = len((app_tags.keys() | gone) - known)
+    p.kept_forgotten = len(archive.forgotten - gone)
+    p.missing = len(({key for key, _ in decisions} | gone) - known)
     return p
 
 
@@ -183,16 +200,16 @@ class Send:
                 steps.append({"command": call.command(self.app), "ok": error is None})
                 if error is not None:
                     break
-            if shown := [url for call in ran if call.args[0] in VISIBILITY for url in call.urls]:
+            if hidden := [url for call in ran if call.args[0] == "forget" for url in call.urls]:
                 try:
-                    self._show(shown)
-                except Exception as err:  # an embed or index failure: the pages show right at the next start
-                    error = error or f"the app could not show the forgotten and restored pages until a restart: {err}"
+                    self._hide(hidden)
+                except Exception as err:  # an embed or index failure: the pages hide right at the next start
+                    error = error or f"the app could not hide the forgotten pages until a restart: {err}"
             return {**p.summary(), "ok": error is None, "error": error, "steps": steps, "record": record}
 
-    def _show(self, urls: list[str]) -> None:
-        """Pages a forget or restore touched, hidden or shown in the app as the archive now has them (a failed
-        call too: it may have written before it failed)."""
+    def _hide(self, urls: list[str]) -> None:
+        """Pages a forget touched, hidden in the app as the archive now has them (a failed call too: it may have
+        written before it failed)."""
         archive = Archive.load(self.app.lib.root)  # outside the app's lock: file reads only
         with self.app.lock:
             self.app.lib = engine.sync(self.app.lib, archive, urls, self.app.embed)

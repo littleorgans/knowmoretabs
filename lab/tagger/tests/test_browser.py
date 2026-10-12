@@ -210,14 +210,14 @@ class SendBrowserTests(Browser, Synthetic):
         tagged = [key for key, tags in Archive.load(self.root).owner_tags.items() if "Browser send" in tags]
         self.assertEqual(list(self.app.store.app_tags()), tagged)
 
-    def test_send_refreshes_the_view_after_a_restore_reports_failure(self):
+    def test_send_refreshes_the_view_after_a_forget_reports_failure(self):
         original = send.run
 
-        def failed_after_restore(app, call):
+        def failed_after_forget(app, call):
             error = original(app, call)
-            if error is None and call.args[0] == "restore":
-                return "synthetic failure after restore wrote"
+            if error is None and call.args[0] == "forget":
+                return "synthetic failure after forget wrote"
             return error
 
-        with patch.object(send, "run", side_effect=failed_after_restore):
-            self.run_case("sendPartialRestore")
+        with patch.object(send, "run", side_effect=failed_after_forget):
+            self.run_case("sendPartialForget")
