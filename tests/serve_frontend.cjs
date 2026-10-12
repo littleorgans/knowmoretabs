@@ -380,3 +380,86 @@ test('in the shared nav the Library marks only its own view', () => {
     assert.deepEqual(links.filter((l) => l.current).map((l) => l.href), [marked], view);
   }
 });
+
+// ---- The tag bar: count order or letter rows --------------------------------
+// The renderer over synthetic tagged pages, served, with storage and the bar's
+// nodes stubbed; `bar()` reads what `tagbar` drew back as rows of cells.
+function tagPanel(saved = {}) {
+  const storage = new Map(Object.entries(saved));
+  const nodes = {
+    tagbar: { hidden: false },
+    tb: { innerHTML: '', classList: { toggle(name, on) { this[name] = on; } } },
+    'tb-order': { setAttribute(k, v) { this[k] = String(v); } },
+  };
+  // Counts run against the alphabet, so an order by count cannot pass for A to Z.
+  const counts = { apple: 6, 'Ápex': 5, Alpha: 4, beta: 7, '3D': 2, '#hash': 3, Zeta: 1 };
+  const pages = Object.keys(counts).flatMap((t) => Array.from({ length: counts[t] }, () => t))
+    .map((t, i) => ({ url: `https://synthetic.test/page-${i}`, domain: 'synthetic.test', title: `Page ${i}`, tags: [t] }));
+  const context = vm.createContext({
+    document: { getElementById: (id) => nodes[id] || null, documentElement: { style: { setProperty() {} } } },
+    localStorage: { getItem: (k) => storage.get(k) ?? null, setItem: (k, v) => storage.set(k, String(v)) },
+    IntersectionObserver: class {},
+    library: {
+      pages, vocabulary: [...Object.keys(counts), 'Unused'].map((name) => ({ name })),
+      snapshots: [snapshot('2026-01-01-000000Z', '2026-01-01T00:00:00Z', pages.map((_, i) => i))],
+    },
+  });
+  vm.runInContext(renderer, context);
+  const run = (code) => vm.runInContext(code, context);
+  run('derive(library); S.shown = S.pages.slice();');
+  const cells = (html) => [...html.matchAll(/data-t="[^"]*" aria-pressed="(\w+)"[^>]*><span>([^<]*)<\/span><small>([^<]*)<\/small>/g)]
+    .map(([, on, name, n]) => (on === 'true' ? `${name} ×` : `${name} ${n}`));
+  const bar = () => {
+    run('tagbar();');
+    const html = nodes.tb.innerHTML;
+    const rows = [...html.matchAll(/<li class="tb-row"><span class="tb-l" aria-hidden="true">([^<]*)<\/span><ul class="tb-grid">(.*?)<\/ul><\/li>/g)];
+    return { html, rows: rows.map(([, l, inner]) => [l, cells(inner)]), cells: cells(html) };
+  };
+  return { run, bar, storage, nodes };
+}
+
+test('letter rows: one row per first letter, "#" first, A to Z by name whatever the counts, counts on every cell', () => {
+  const tags = tagPanel({ tagOrder: 'letters' });
+  const { rows, html } = tags.bar();
+  assert.deepEqual(rows.filter(([l]) => l), [
+    ['#', ['#hash 3', '3D 2']],
+    ['A', ['Alpha 4', 'Ápex 5', 'apple 6']],
+    ['B', ['beta 7']],
+    ['Z', ['Zeta 1']],
+  ]);
+  assert.equal(tags.nodes.tb.classList.rows, true);
+  assert.doesNotMatch(html, /Unused|tb-l" aria-hidden="true">U/, 'a letter with no tag on these pages has no row');
+  assert.doesNotMatch(html, /tb-more/, 'letter rows show every tag, so nothing folds');
+  assert.match(html, /<li class="tb-row"><span class="tb-l" aria-hidden="true"><\/span><ul class="tb-grid"><li class="tb-end"><button type="button" id="tb-manage">Retire tags…/);
+});
+
+test('letter rows keep a picked tag in its row, pressed', () => {
+  const tags = tagPanel({ tagOrder: 'letters' });
+  tags.run('S.tags = ["beta"]; S.shown = S.pages.filter((p) => p.all.has("beta"));');
+  assert.deepEqual(tags.bar().rows.filter(([l]) => l), [['B', ['beta ×']]]);
+});
+
+test('count order is the default: picked first, then by count, then "N more"', () => {
+  const tags = tagPanel();
+  const { rows, cells, html } = tags.bar();
+  assert.deepEqual(rows, []);
+  assert.equal(tags.nodes.tb.classList.rows, false);
+  assert.deepEqual(cells, ['beta 7', 'apple 6', 'Ápex 5', 'Alpha 4', '#hash 3', '3D 2', 'Zeta 1']);
+  assert.match(html, /id="tb-more"/);
+});
+
+test('the order switch flips the bar, says so, and is remembered for the next visit', () => {
+  const tags = tagPanel();
+  tags.bar();
+  assert.equal(tags.nodes['tb-order']['aria-pressed'], 'false');
+  tags.run('flipOrder();');
+  assert.equal(tags.nodes['tb-order']['aria-pressed'], 'true');
+  assert.equal(tags.nodes.tb.classList.rows, true);
+  assert.equal(tags.storage.get('tagOrder'), 'letters');
+  const again = tagPanel(Object.fromEntries(tags.storage));
+  assert.deepEqual(again.bar().rows.map(([l]) => l), ['#', 'A', 'B', 'Z', '']);
+  assert.equal(again.nodes['tb-order']['aria-pressed'], 'true');
+  again.run('flipOrder();');
+  assert.equal(again.storage.get('tagOrder'), 'count');
+  assert.deepEqual(again.bar().rows, []);
+});
