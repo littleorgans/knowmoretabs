@@ -7,8 +7,8 @@ check:
     cargo fmt --all -- --check
     python3 scripts/clippy.py
     cargo run --locked --package xtask -- slices --check
-    uv run --locked --project lab/tagger ruff check lab/tagger scripts/clippy.py
-    uv run --locked --project lab/tagger ruff format --check lab/tagger scripts/clippy.py
+    uv run --locked --project lab/tagger ruff check lab/tagger scripts
+    uv run --locked --project lab/tagger ruff format --check lab/tagger scripts
     @echo 'Python type checker: none configured'
 
 test:
