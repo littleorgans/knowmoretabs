@@ -109,6 +109,37 @@ fn a_url_not_in_the_library_is_refused_and_nothing_is_written() {
     assert_eq!(value["error"]["kind"], "not_in_library");
 }
 
+/// Guard: `add` cleans the key it mints, and forget and restore still take
+/// only exact keys, so a key from before cleaning stays its own page.
+#[test]
+fn forget_and_restore_take_exact_keys_only() {
+    let fx = Fixture::new();
+    let legacy = "https://a.test/p#x";
+    write_snapshot(
+        &fx.root,
+        "2026-01-01-000000Z",
+        "2026-01-01T00:00:00Z",
+        &[(1, legacy, "Legacy")],
+    );
+    let dirty = "https://c.test/three/?utm_source=n#top";
+    assert_success(&fx.run(&["add", dirty, "--no-content"]));
+
+    let output = fx.run(&["forget", dirty]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(
+        fx.run(&["forget", "https://a.test/p"]).status.code(),
+        Some(1)
+    );
+    assert!(!fx.root.join("library.json").exists());
+
+    assert_success(&fx.run(&["forget", "https://c.test/three", legacy]));
+    assert_eq!(
+        state(&fx),
+        json!({"schema_version": 1, "forgotten": ["https://a.test/p#x", "https://c.test/three"]})
+    );
+    assert_success(&fx.run(&["restore", legacy]));
+}
+
 #[test]
 fn repeating_a_forget_is_idempotent_and_says_so() {
     let fx = Fixture::new();
