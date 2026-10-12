@@ -84,6 +84,7 @@ CASES = {
         "addFollowUpNamesTheKey",
         "addFollowUpPicksBackground",
         "addFollowUpStalePoll",
+        "addRestoreFollowsTheKey",
     ],
 }
 

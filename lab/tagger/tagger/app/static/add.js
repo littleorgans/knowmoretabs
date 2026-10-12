@@ -119,8 +119,9 @@
           held.set(url, new Set([...(held.get(url) || []), ...held.get(link)]));
           held.delete(link);
         }
-        link = url;   // a background follow up owns its picks too, even when it is never shown
         const drawn = mine === asked;
+        if (drawn && link !== url && box.value.trim() === link) box.value = url;   // the box names the key: a forgotten link's Restore is not its draft
+        link = url;   // a background follow up owns its picks too, even when it is never shown
         if (drawn && (j.action !== "forget" || j.finished)) show(j);   // a Remove shows its outcome only
         track(j, drawn);
         if (j.finished) return settle(j);

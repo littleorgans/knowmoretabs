@@ -633,4 +633,36 @@ async function addFollowUpStalePoll() {
   assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'the follow up writes them');
 }
 
-run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true), addFollowUpStalePoll });
+/* Restore on a forgotten variant follows the key: its progress shows, its picks are written once at Indexed, one Undo */
+async function addRestoreFollowsTheKey() {
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/one/#top', key = 'https://added.example/one';
+  f.type(url); f.submit();
+  await f.reply('/api/add', f.job(1, url, { library: ev('library', 'done', { value: 'forgotten', url: key }) }, { key, finished: true }));
+  await f.reply('/api/library', { ...K.lib });
+  assert.equal(node('a-act').textContent, 'Restore');
+  node('a-act').click();
+  const restore = await f.next('/api/add');
+  assert.deepEqual(restore.body, { url: key, action: 'restore' }, 'Restore names the key');
+  restore.resolve(f.job(2, key, STAGES.running, { action: 'restore' }));
+  for (let i = 0; i < 4; i++) await turn();
+  assert.equal(node('a-link').value, key, 'the box names the key, not a draft of the link');
+  assert.equal(node('a-library-val').textContent, 'Adding', 'the Restore\'s progress shows');
+  assert.match(node('a-tile').innerHTML, /class="ht link">https:\/\/added.example\/one<\/h3>/, 'the tile names the key');
+  node('a-fold').click(); f.click('Trains');
+  assert.equal(f.look('Trains'), 'pend', 'a pick waits for the key\'s row');
+  const known = { library: ev('library', 'done', { value: 'known', url: key }) };
+  await f.reply('/api/add/2', f.job(2, key, { ...STAGES.search, ...known }, { action: 'restore', restored: true }));
+  assert.equal(node('a-link').value, '', 'listed: the box is ready for the next link');
+  await f.reply('/api/add/2', f.job(2, key, { ...done('indexed'), ...known }, { action: 'restore', restored: true, finished: true, page: addPage(7, key) }));
+  assert.deepEqual(await f.applied(7, ['Trains']), [{ rows: [7], tag: 'Trains', value: true }], 'written once, at Indexed');
+  await f.reply('/api/library', { ...K.lib });
+  assert.equal(K.toasted, 'Added “Trains” to “Page 7”');
+  K.undo();
+  const undo = await f.next('/api/undo');
+  assert.deepEqual(undo.body, { batch: 1 });
+  undo.resolve({ pages: [{ row: 7, tags: [] }], app_tags: K.lib.app_tags });
+  for (let i = 0; i < 4; i++) await turn();
+  assert.equal(f.requests.length, 0, 'one write, one Undo');
+}
+
+run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true), addFollowUpStalePoll, addRestoreFollowsTheKey });
