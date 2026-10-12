@@ -20,6 +20,8 @@ const host = (() => {
     tag: (urls, add, remove) => post('api/tags', { urls, add, remove }),
     undoTags: (undo) => post('api/tags', { urls: [], undo }),
     vocab: (create, retire) => post('api/vocabulary', { create, retire }),
+    // One page's capture: its latest content and image lines and its kept text.
+    content: (url) => fetch('api/content?url=' + encodeURIComponent(url)).then(json),
     // Every page's address, best first, from the model service serve forwards to.
     rank: (query) => post('model/api/rank', { query }).then((r) => {
       if (!Array.isArray(r?.keys) || !r.keys.every((k) => typeof k === 'string')) throw new Error('not a ranking');
@@ -32,7 +34,8 @@ const host = (() => {
 const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rendered: [], q: '', domain: '', group: '', status: '', sort: 'last',
             openAll: false, preview: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages',
             vocab: new Map(), defs: new Map(), tags: [], tagsAll: false,   // vocab: lower-case name → name; tags: the tag filter, lower-case, all must match
-            rank: null, model: null };   // rank: the model's order for a query, { q, at: address → place }; model: null until it answers or fails
+            rank: null, model: null,     // rank: the model's order for a query, { q, at: address → place }; model: null until it answers or fails
+            tab: 'history', content: new Map() };   // tab: the drawer's tab, kept for the session; content: page index → its capture, as last fetched
 const FOLD = 10;                                   // rows of "Open now" shown before "show all"
 const EAGER = 300, CHUNK = 200;                    // rows rendered up front; rows per lazy placeholder after that
 const COLS = 12, COL = 4, SROWS = 4;               // the sighting strip: marks to a row, px per mark (--col), rows
@@ -370,10 +373,39 @@ function histHTML(p, cls = 'hist in') {
   const first = F.dayYear.format(S.snaps[p.first].date), last = F.dayYear.format(S.snaps[p.last].date);
   const only = S.domain.toLowerCase() === p.domain ? 'Clear site filter' : `Filter to ${esc(p.domain)}`;
   const full = p.link ? `<a class="full" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.url)}">${esc(p.url)}</a>` : `<p class="full" title="${esc(p.url)}">${esc(p.url)}</p>`;
-  return `<div class="${cls}"><div class="hist-in">${full}` +
+  const history = full +
     `<p class="sum">Seen in ${p.n} of ${plural(S.snaps.length, 'snapshot')} · ${first === last ? first : `${first} to ${last}`}${p.open ? ' · open now' : ''}${groups}${tagged}</p>` +
     `<p class="acts">${p.domain ? `<button type="button" data-act="domain">${only}</button>` : ''}<button type="button" data-act="copy">Copy URL</button>${host.forget ? act : ro}</p>` +
-    browserHTML(p) + `<div class="sights"><h4>${plural(p.seen.length, 'sighting')}</h4><ol>${sightings.join('')}</ol></div></div></div>`;
+    browserHTML(p) + `<div class="sights"><h4>${plural(p.seen.length, 'sighting')}</h4><ol>${sightings.join('')}</ol></div>`;
+  // An export has no server to read the text from, so its drawer is the history alone.
+  if (!host.content) return `<div class="${cls}"><div class="hist-in">${history}</div></div>`;
+  const id = (name) => `${name}-${p.i}`, on = (name) => S.tab === name;
+  const tab = (name, label) => `<button type="button" role="tab" id="tab-${id(name)}" aria-controls="pane-${id(name)}" aria-selected="${on(name)}" tabindex="${on(name) ? 0 : -1}" data-act="tab" data-tab="${name}">${label}</button>`;
+  const pane = (name, inner) => `<div class="pane" role="tabpanel" id="pane-${id(name)}" aria-labelledby="tab-${id(name)}" data-pane="${name}"${on(name) ? '' : ' hidden'}>${inner}</div>`;
+  const text = S.content.has(p.i) ? contentHTML(S.content.get(p.i)) : '<p class="cnote">Loading…</p>';
+  return `<div class="${cls}"><div class="hist-in"><div class="tabs" role="tablist" aria-label="Page">${tab('history', 'History')}${tab('content', 'Content')}</div>` +
+    pane('history', history) + pane('content', text) + '</div></div>';
+}
+// What `content` kept of a page, as GET api/content answers: how the fetch
+// ended, then the text. The text is markdown shown as written, never parsed:
+// each paragraph goes through esc, so nothing a page said becomes markup.
+const TIERS = { web: 'Web', x: 'X', github: 'GitHub', youtube: 'YouTube', headless: 'Headless', signed_in: 'Signed in' };
+const FAILED = ['error', 'unavailable'];
+const said = (word) => { const w = String(word).replace(/_/g, ' '); return w.charAt(0).toUpperCase() + w.slice(1); };
+function contentHTML(r) {
+  if (r.error) return `<p class="cnote">Could not load the content: ${esc(r.error)}</p>`;
+  const c = r.content, img = r.image, text = typeof r.text === 'string' && r.text.trim() ? r.text : '', meta = [];
+  if (c) {
+    meta.push(`<span>${esc([said(c.status), TIERS[c.tier] || (c.tier && said(c.tier)), c.status !== 'ok' && c.reason].filter(Boolean).join(' · '))}</span>`);
+    const at = new Date(c.attempted_at);
+    if (!isNaN(at)) meta.push(`<span title="${F.full.format(at)} UTC">Fetched ${ago(at)}</span>`);
+  }
+  if (text) meta.push(`<span>${plural((text.match(/\S+/g) || []).length, 'word')}</span>`);
+  if (img) meta.push(`<span${FAILED.includes(img.status) ? ' class="bad"' : ''}>Image: ${esc([said(img.status), img.reason].filter(Boolean).join(' · '))}</span>`);
+  if (text) meta.push('<button type="button" data-act="copytext">Copy text</button>');
+  const body = text ? `<div class="ctext" tabindex="0" aria-label="Page text">${text.trim().split(/\n{2,}/).map((par) => `<p>${esc(par)}</p>`).join('')}</div>`
+    : `<p class="cnote">${c ? 'No text kept for this page.' : 'Not fetched yet. Run <code>knowmoretabs content</code> to fetch page text.'}</p>`;
+  return (meta.length ? `<p class="cmeta">${meta.join('')}</p>` : '') + body;
 }
 function render() {
   const t0 = performance.now();
@@ -592,6 +624,7 @@ function toggle(i, force, now = false) {
     S.exp.add(i);
     if (!h) { el.insertAdjacentHTML('beforeend', histHTML(S.pages[i], 'hist')); h = el.lastElementChild; h.getBoundingClientRect(); }
     h.inert = false; h.classList.add('in');
+    if (host.content && S.tab === 'content') loadContent(i);
   } else {
     S.exp.delete(i);
     if (h) {
@@ -601,6 +634,25 @@ function toggle(i, force, now = false) {
     }
   }
   el.querySelector('.more').setAttribute('aria-expanded', open); el.classList.toggle('exp', open);
+}
+// The drawer's tabs: the one picked shows and is the one Tab reaches; the
+// choice holds for the next drawer opened.
+function showTab(i, name, focus = false) {
+  S.tab = name;
+  const h = rowOf(i)?.querySelector('.hist'); if (!h) return;
+  for (const b of h.querySelectorAll('[role="tab"]')) { const on = b.dataset.tab === name; b.setAttribute('aria-selected', on); b.tabIndex = on ? 0 : -1; if (on && focus) b.focus(); }
+  for (const pane of h.querySelectorAll('[role="tabpanel"]')) pane.hidden = pane.dataset.pane !== name;
+  if (name === 'content') loadContent(i);
+}
+// Read again each time the tab shows, as a capture may have run since; the
+// pane is repainted only when the answer changed, so focus and scroll stay.
+async function loadContent(i) {
+  const was = S.content.get(i);
+  let got; try { got = await host.content(S.pages[i].url); } catch (e) { got = { error: e.message }; }
+  if (got.error && was && !was.error) return;   // keep what was read before
+  S.content.set(i, got);
+  const pane = rowOf(i)?.querySelector('[data-pane="content"]');
+  if (pane && (!was || JSON.stringify(was) !== JSON.stringify(got))) pane.innerHTML = contentHTML(got);
 }
 function select(i, on, shift) {
   if (shift && S.anchor >= 0) {
@@ -902,6 +954,13 @@ function keys(e) {
     return;
   }
   if (k === 'Escape') return stepBack(t);
+  if (t.getAttribute?.('role') === 'tab' && ['ArrowLeft', 'ArrowRight', 'Home', 'End', ' '].includes(k)) {
+    e.preventDefault();
+    const tabs = [...t.parentNode.children], at = tabs.indexOf(t);
+    const to = k === ' ' ? t : k === 'Home' ? tabs[0] : k === 'End' ? tabs.at(-1) : tabs[(at + (k === 'ArrowLeft' ? tabs.length - 1 : 1)) % tabs.length];
+    return showTab(+t.closest('.row').dataset.i, to.dataset.tab, true);
+  }
+  if (t.classList?.contains('ctext') && ['ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End', ' '].includes(k)) return;   // the text scrolls
   if (isForm(t)) { if ((k === 'ArrowDown' || k === 'Enter') && t.id === 'q') { e.preventDefault(); move(1); } return; }
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const inRow = t.closest && t.closest('.row');
@@ -978,6 +1037,8 @@ function wire() {
     if (act.dataset.act === 'tagf') filterTag(act.dataset.t);
     if (act.dataset.act === 'tag') openTagger(i);
     if (act.dataset.act === 'copy') navigator.clipboard.writeText(p.url).then(() => toast('URL copied'));
+    if (act.dataset.act === 'tab') showTab(i, act.dataset.tab, true);
+    if (act.dataset.act === 'copytext') navigator.clipboard.writeText(S.content.get(i)?.text || '').then(() => toast('Text copied'));
     if (act.dataset.act === 'forget') apply([i], false);
     if (act.dataset.act === 'restore') apply([i], true);
   });

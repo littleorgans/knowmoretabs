@@ -357,6 +357,24 @@ button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
 .hist .acts button[data-act="forget"]:hover, .tray-end .primary.forget:hover { background: var(--forget); border-color: var(--forget); color: var(--bg); }
 .hist .ro { flex-basis: 100%; color: var(--ink-3); overflow-wrap: anywhere; }
 .hist .ro code { user-select: all; color: var(--ink); }
+/* serve's drawer has two tabs, History and Content: the tabs sit on the drawer's top rule, the first label on the content's edge */
+.hist.in .hist-in:has(> .tabs) { padding-top: 0; }
+.hist .tabs { display: flex; margin-left: -0.875rem; border-bottom: 1px solid var(--line); }
+.hist .tabs button { height: 2.5rem; padding: 0 0.875rem; background: none; border: 0; font-size: 0.8125rem; font-weight: 500; color: var(--ink-2); transition: color 0.15s var(--ease), box-shadow 0.15s var(--ease); }
+.hist .tabs button:hover { color: var(--ink); }
+.hist .tabs button[aria-selected="true"] { color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
+.hist .pane { display: grid; gap: 1.25rem; min-width: 0; }
+.hist .pane[hidden] { display: none; }
+.hist .pane[data-pane="content"] { max-width: 72ch; }
+.hist .cmeta { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 1.25rem; margin: 0; color: var(--ink-3); }
+.hist .cmeta .bad { color: var(--forget); }
+.hist .cmeta button { margin-left: auto; padding: 0; background: none; border: 0; font: inherit; color: var(--ink-2); }
+.hist .cmeta button:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 0.2em; }
+.hist .ctext { max-height: 24rem; overflow: auto; overscroll-behavior: contain; font: 0.9375rem/1.6 var(--serif); color: var(--ink); }
+.hist .ctext p { margin: 0 0 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
+.hist .ctext p:last-child { margin-bottom: 0; }
+.hist .cnote { margin: 0; color: var(--ink-3); }
+.hist .cnote code { font: 0.75rem var(--mono); color: var(--ink); }
 
 #empty { margin: 0; padding: 4rem 1.5rem; color: var(--ink-2); text-align: center; border-bottom: 1px solid var(--line); font-size: 1rem; }
 #empty button { background: none; border: 0; padding: 0; color: var(--ink); font: inherit; text-decoration: underline; text-underline-offset: 0.2em; }
