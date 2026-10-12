@@ -303,10 +303,21 @@ fn chunked_html_or_unframed_replies_are_refused() {
 #[test]
 fn a_service_that_is_not_running_is_unavailable() {
     let fx = fixture();
-    let port = {
-        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        listener.local_addr().unwrap().port()
-    };
+    // Keep an outgoing connection alive: its local port has no listener,
+    // and ephemeral binds cannot allocate it to another test. Merely
+    // binding without listening times out on macOS instead of refusing.
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let reserved = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_peer, _) = listener.accept().unwrap();
+    let address = reserved.local_addr().unwrap();
+    let port = address.port();
+    assert_eq!(
+        TcpStream::connect_timeout(&address, Duration::from_secs(1))
+            .unwrap_err()
+            .kind(),
+        std::io::ErrorKind::ConnectionRefused,
+        "the reserved model port must refuse connections"
+    );
     let shell = Server::start_with(&fx, &["--model-port", &port.to_string()]);
     let refused = rank(&shell, "x");
     assert_eq!(refused.status, 503, "{}", refused.text());
