@@ -34,6 +34,7 @@
 
   /* every path is relative: the Library serves this page and its API below its own /model/ */
   K.api = async (path, body) => {
+    if (K.down) throw new Error("Tag and Add link stopped answering. Reload before trying again.");
     let r;
     try {
       r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -56,6 +57,8 @@
     K.$("outage").hidden = false;
     K.$("tag-screen").inert = K.$("add-screen").inert = true;
     K.$("send-btn").disabled = true;
+    K.$("send-go").disabled = true;
+    K.$("toast-undo").disabled = true;
   };
 
   /* ---- a page's picture: the captured image, or the host's initial; `inner` goes on top ---- */

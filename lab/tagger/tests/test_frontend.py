@@ -68,6 +68,7 @@ CASES = {
         "startupForgetAndUndo",
         "startupTagsKeepChanges",
         "outage",
+        "outageDuringSend",
     ],
     "frontend_add.cjs": [
         "addStates",

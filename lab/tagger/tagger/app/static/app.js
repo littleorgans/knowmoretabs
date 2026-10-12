@@ -70,7 +70,7 @@
   const show = (html, go) => {
     K.$("send-body").innerHTML = html;
     K.$("send-go").hidden = !go;
-    K.$("send-go").disabled = false;
+    K.$("send-go").disabled = K.down;
     K.$("send-close").textContent = go ? "Cancel" : "Done";
   };
   let preview;

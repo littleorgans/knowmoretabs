@@ -1320,6 +1320,8 @@ async function outage() {
     assert.equal(node('outage').hidden, false, `${name}: the line shows`);
     assert.equal(node('tag-screen').inert && node('add-screen').inert, true, `${name}: no control acts`);
     assert.equal(node('send-btn').disabled, true, `${name}: no Send`);
+    assert.equal(node('toast-undo').disabled, true, `${name}: no Undo outside the inert screens`);
+    await assert.rejects(K.api('api/undo', { batch: 1 }), /Reload/);
     await turn(); await turn();
     assert.deepEqual(plain(sent), [['api/apply', 'POST']], `${name}: sent once, never again`);
     coreFail(new Error('the model service is not answering'));
@@ -1327,4 +1329,25 @@ async function outage() {
   }
 }
 
-run({ clearShowsAll, emptySearchShowsAll, tagRecent, tagPagePartialToast, tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult, outage });
+async function outageDuringSend() {
+  const { K, node, context } = setup('app.js');
+  await K.ready;
+  const sent = [];
+  let finish;
+  context.fetch = (path) => {
+    sent.push(path);
+    return new Promise((resolve) => { finish = resolve; });
+  };
+  const previewing = K.sendNow();
+  await turn();
+  K.outage();
+  assert.equal(node('send-go').disabled, true, 'an open Send dialog stops taking actions');
+  finish({ status: 200, ok: true, json: async () => PLAN });
+  await previewing;
+  assert.equal(node('send-go').disabled, true, 'a pending preview cannot enable Send again');
+  await node('send-go').click();
+  assert.deepEqual(sent, ['api/send/preview'], 'no Send reaches the service after an outage');
+  assert.match(node('send-body').innerHTML, /Reload/);
+}
+
+run({ clearShowsAll, emptySearchShowsAll, tagRecent, tagPagePartialToast, tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult, outage, outageDuringSend });
