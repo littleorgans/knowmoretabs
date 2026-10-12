@@ -77,14 +77,19 @@
     <li class="end"><output class="secs" id="a-secs"></output><button type="button" class="act" id="a-act" hidden></button></li>
   </ol>
 
-  <section class="result" id="a-result" aria-label="Added page" hidden>
+  <section class="result" id="a-result" aria-label="The page and its tags" hidden>
     <div id="a-tile"></div>
-    <div class="tagrow" id="a-tagrow">
-      <p class="lbl">Tags</p>
-      <ul class="tagstrip" id="a-strip"></ul>
-      <button type="button" class="newtag-btn" id="a-new">+ New tag</button>
-      <form id="a-newtag" class="newtag" hidden><input id="a-new-tag" type="text" list="app-tags" autocomplete="off" aria-label="New tag, put on this page"></form>
-      <p id="a-new-msg" class="msg" role="alert" hidden></p>
+    <div class="tpanel" id="a-panel">
+      <p class="lbl">Suggested</p>
+      <ul class="cells line" id="a-sugg" aria-label="Suggested tags"></ul>
+      <p class="lbl">Recently used</p>
+      <ul class="cells line" id="a-recent" aria-label="Recently used tags"></ul>
+      <form id="a-filter" class="tfilter" role="search">
+        <input id="a-tag" type="text" placeholder="Filter or new tag" autocomplete="off" spellcheck="false" aria-label="Filter tags, or name a new one">
+      </form>
+      <p id="a-msg" class="msg" role="alert" hidden></p>
+      <button type="button" class="fold" id="a-fold" aria-expanded="false" aria-controls="a-rows"></button>
+      <div class="lrows" id="a-rows" hidden></div>
     </div>
   </section>
 </main>
@@ -123,6 +128,7 @@
 <script src="pages.js" defer></script>
 <script src="views.js" defer></script>
 <script src="strip.js" defer></script>
+<script src="panel.js" defer></script>
 <script src="add.js" defer></script>
 <script src="app.js" defer></script>
 </body>

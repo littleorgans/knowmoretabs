@@ -98,7 +98,7 @@ async function addStates() {
 
 /* what the screen asks the server: the deep link's title with its own link only, and the action's request */
 async function addRequests() {
-  const { K, node, context } = setup({ lit, strip: { render() {}, sayIn: () => () => {} }, lib: { app_tags: [] } }, 'add.js');
+  const { K, node, context } = setup({ lit, strip: { render() {}, sayIn: () => () => {} }, lib: { app_tags: [] } }, 'panel.js', 'add.js');
   const asked = [];
   let reply = () => new Promise(() => {});
   K.api = (path, body) => { asked.push([path, body]); return reply(path, body); };
@@ -146,4 +146,53 @@ async function addSignedInStages() {
     assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier: 'web', http_status: 403, reason } } }).act, null, `${reason}`);
 }
 
-run({ addStates, addRequests, addSignedInStages });
+/* the panel's letter rows: "#" first, letters without tags left out, case and accents folded; typing filters every
+   tag and opens the fold, Esc and the fold put it back */
+async function panelLetters() {
+  const { K, node } = setup({ lit, lib: { app_tags: ['zeta', 'Alpha', 'apple', 'Éclair', 'eagle', 'iOS', '3D print', '#hash', 'straße'] } },
+    'strip.js', 'panel.js');
+  node('a-fold').setAttribute = function (k, v) { this[k] = v; };
+  const picked = [];
+  K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: [], recent: [] });
+  const rows = () => [...node('a-rows').innerHTML.matchAll(/<span class="ll"[^>]*>([^<]*)<\/span><ul class="cells">(.*?)<\/ul>/g)]
+    .map(([, k, cells]) => [k, [...cells.matchAll(/data-tag="([^"]*)"/g)].map((m) => m[1])]);
+  const folded = () => [node('a-fold')['aria-expanded'], node('a-rows').hidden];
+  const type = (value) => { node('a-tag').value = value; node('a-tag').input(); };
+  const esc = () => { const e = { key: 'Escape', stopped: false, preventDefault() {}, stopPropagation() { this.stopped = true; } }; node('a-tag').keydown(e); return e.stopped; };
+  assert.equal(node('a-fold').textContent, 'All 9 tags');
+  assert.deepEqual(folded(), ['false', true], 'the fold starts closed');
+  assert.equal(node('a-rows').innerHTML, '');
+  node('a-fold').click();
+  assert.deepEqual(folded(), ['true', false]);
+  assert.deepEqual(rows(), [['#', ['#hash', '3D print']], ['A', ['Alpha', 'apple']], ['E', ['eagle', 'Éclair']], ['I', ['iOS']], ['S', ['straße']], ['Z', ['zeta']]],
+    '"#" first, then A to Z by name; no B row');
+  const html = node('a-rows').innerHTML;
+  assert.match(html, /data-tag="Alpha" data-k="on" aria-pressed="true" title="Alpha"><span>Alpha<\/span>/, 'the page has it: on');
+  assert.match(html, /data-tag="eagle" data-k="pend" aria-pressed="true"/, 'picked, not written: pending');
+  assert.match(html, /data-tag="apple" data-k="off" aria-pressed="false"/);
+  assert.doesNotMatch(html, /class="ct"|data-act|≈|×/, 'no count, no ×, no ≈');
+  type('E');
+  assert.deepEqual(rows(), [['A', ['apple']], ['E', ['eagle']], ['S', ['straße']], ['Z', ['zeta']]], 'the filter keeps the matching cells, any case');
+  assert.equal(esc(), true, 'Esc clears the filter and stays in the box');
+  assert.equal(node('a-tag').value, '');
+  assert.equal(esc(), false, 'the next Esc is the shell\'s: it leaves the box');
+  assert.equal(rows().length, 6, 'cleared: the fold as it was left, open');
+  node('a-fold').click();
+  assert.deepEqual(folded(), ['false', true]);
+  type('ap');
+  assert.deepEqual(folded(), ['true', false], 'typing opens the fold');
+  assert.deepEqual(rows(), [['A', ['apple']]]);
+  type('zz');
+  assert.match(node('a-rows').innerHTML, /No tag has “zz”. Enter makes it./);
+  node('a-fold').click();
+  assert.deepEqual([node('a-tag').value, ...folded()], ['', 'false', true], 'the fold pressed while filtering clears and closes');
+  node('a-fold').click();
+  node('a-panel').click({ target: { closest: (s) => (s === 'button[data-tag]' ? { dataset: { tag: 'apple' } } : null) } });
+  assert.deepEqual(picked, ['apple'], 'a cell picks its tag');
+  type('ap');
+  K.panel.reset();
+  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [], recent: [] });
+  assert.deepEqual([node('a-tag').value, ...folded()], ['', 'false', true], 'a new target: no filter, the fold closed');
+}
+
+run({ addStates, addRequests, addSignedInStages, panelLetters });

@@ -65,6 +65,7 @@ CASES = {
         "addStates",
         "addRequests",
         "addSignedInStages",
+        "panelLetters",
     ],
 }
 

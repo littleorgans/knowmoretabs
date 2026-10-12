@@ -116,6 +116,7 @@
       row = K.know([j.page])[0];
       K.gone.delete(row);
     }
+    if (!job || job.url !== j.url) K.panel.reset();
     job = j;
     const box = K.$("a-link"), s = say(j);
     if (s.framed && cleared !== j.id) {   // listed: the box is ready for the next link
@@ -161,11 +162,12 @@
     if (opening) { result.classList.remove("in"); void result.offsetWidth; result.classList.add("in"); }
     if (!s.framed) return;
     render(tile(s), K.$("a-tile"));
-    const open = s.indexed && row !== null;
-    K.$("a-tagrow").classList.toggle("off", !open);
-    K.$("a-tagrow").setAttribute("aria-disabled", String(!open));
-    const rows = open ? [row] : [];
-    K.$("a-strip").innerHTML = (K.lib ? K.lib.app_tags : []).map((t) => K.strip.chip(t, rows, false)).join("");
+    K.panel.render({ has: (t) => row !== null && K.has(row, t), pend: () => false, pick, sugg: [], recent: [] });
+  }
+  /* a cell for this page: the tag on, or off, with Undo */
+  function pick(tag) {
+    if (row === null) return;
+    if (K.has(row, tag)) K.untagSelection(tag, [row]); else K.tagSelection(tag, [row]);
   }
 
   /* ---- the deep link: fill the box, focus Add, wait for Enter ---- */
@@ -205,21 +207,4 @@
     const x = e.target.closest("[data-untag]");
     if (x && row !== null) K.untag(row, x.dataset.untag);
   });
-  K.$("a-strip").addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-act]");
-    if (!b || row === null) return;
-    const tag = b.closest("[data-tag]").dataset.tag;
-    if (b.dataset.act === "add") K.tagSelection(tag, [row]);
-    else if (b.dataset.act === "remove") K.untagSelection(tag, [row]);
-    else { location.hash = "#tag"; K.views.like(tag); }
-  });
-  const tellNew = K.strip.sayIn("a-new-msg");
-  const closeNew = () => { K.$("a-newtag").hidden = true; K.$("a-new").hidden = false; K.$("a-new-tag").value = ""; tellNew(""); };
-  K.$("a-new").addEventListener("click", () => { K.$("a-new").hidden = true; K.$("a-newtag").hidden = false; K.$("a-new-tag").focus(); });
-  K.$("a-newtag").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    if (row !== null && await K.strip.create(K.$("a-new-tag"), tellNew, [row])) closeNew();
-  });
-  K.$("a-new-tag").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closeNew(); K.$("a-new").focus(); } });
-  K.$("a-new-tag").addEventListener("input", () => tellNew(""));
 })();
