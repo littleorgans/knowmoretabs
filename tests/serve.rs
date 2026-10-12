@@ -977,6 +977,9 @@ fn stderr_that_goes_nowhere_does_not_stop_the_server() {
 
 // --- Assets -----------------------------------------------------------------
 
+const LIBRARY_POLICY: &str = "default-src 'none'; script-src 'self'; style-src 'self'; \
+     connect-src 'self'; img-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
 #[test]
 fn assets_have_correct_types_and_no_network_implying_headers() {
     let fx = Fixture::new();
@@ -1003,6 +1006,13 @@ fn assets_have_correct_types_and_no_network_implying_headers() {
         assert_eq!(reply.header("x-content-type-options"), Some("nosniff"));
         assert_eq!(reply.header("cache-control"), Some("no-store"));
         assert_eq!(reply.header("connection"), Some("close"));
+        assert_eq!(reply.header("referrer-policy"), Some("no-referrer"));
+        // The page's own policy, as its header too, which alone can refuse
+        // framing; and no inline style, unlike the model service's pages.
+        let policy = content_type
+            .starts_with("text/html")
+            .then_some(LIBRARY_POLICY);
+        assert_eq!(reply.header("content-security-policy"), policy, "{path}");
         for name in [
             "access-control-allow-origin",
             "set-cookie",

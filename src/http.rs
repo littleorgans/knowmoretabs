@@ -17,6 +17,8 @@ use std::time::{Duration, Instant};
 
 use serde::de::DeserializeOwned;
 
+use crate::assets::Policy;
+
 /// Request line plus headers, including the final CRLF CRLF. A browser's own
 /// headers fit in a few hundred bytes; the margin is for localhost cookies.
 pub(crate) const HEAD_LIMIT: usize = 16 * 1024;
@@ -380,10 +382,12 @@ fn find(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Status {
     Ok,
+    PermanentRedirect,
     BadRequest,
     Forbidden,
     NotFound,
     MethodNotAllowed,
+    Conflict,
     LengthRequired,
     ContentTooLarge,
     UnsupportedMediaType,
@@ -398,10 +402,12 @@ impl Status {
     pub(crate) fn code(self) -> u16 {
         match self {
             Self::Ok => 200,
+            Self::PermanentRedirect => 308,
             Self::BadRequest => 400,
             Self::Forbidden => 403,
             Self::NotFound => 404,
             Self::MethodNotAllowed => 405,
+            Self::Conflict => 409,
             Self::LengthRequired => 411,
             Self::ContentTooLarge => 413,
             Self::UnsupportedMediaType => 415,
@@ -416,10 +422,12 @@ impl Status {
     fn reason(self) -> &'static str {
         match self {
             Self::Ok => "OK",
+            Self::PermanentRedirect => "Permanent Redirect",
             Self::BadRequest => "Bad Request",
             Self::Forbidden => "Forbidden",
             Self::NotFound => "Not Found",
             Self::MethodNotAllowed => "Method Not Allowed",
+            Self::Conflict => "Conflict",
             Self::LengthRequired => "Length Required",
             Self::ContentTooLarge => "Content Too Large",
             Self::UnsupportedMediaType => "Unsupported Media Type",
@@ -436,26 +444,57 @@ pub(crate) struct Response {
     pub(crate) status: Status,
     content_type: &'static str,
     body: Vec<u8>,
-    allow: Option<&'static str>,
+    /// What a page may load; every HTML response names one (`html`).
+    policy: Option<Policy>,
+    /// One more field: `Allow` on a 405, `Location` on a redirect.
+    field: Option<(&'static str, &'static str)>,
 }
 
 impl Response {
-    pub(crate) fn ok(content_type: &'static str, body: Vec<u8>) -> Self {
+    /// Any type but HTML, which goes through `html`.
+    pub(crate) fn new(status: Status, content_type: &'static str, body: Vec<u8>) -> Self {
+        debug_assert!(
+            !content_type.starts_with("text/html"),
+            "HTML without a policy"
+        );
         Self {
-            status: Status::Ok,
+            status,
             content_type,
             body,
-            allow: None,
+            policy: None,
+            field: None,
         }
+    }
+
+    pub(crate) fn ok(content_type: &'static str, body: Vec<u8>) -> Self {
+        Self::new(Status::Ok, content_type, body)
     }
 
     /// A JSON body with any status, such as one a checked service answered.
     pub(crate) fn json(status: Status, body: Vec<u8>) -> Self {
+        Self::new(status, "application/json", body)
+    }
+
+    /// A page, under the policy that says what it may load.
+    pub(crate) fn html(status: Status, body: Vec<u8>, policy: Policy) -> Self {
         Self {
             status,
-            content_type: "application/json",
+            content_type: "text/html; charset=utf-8",
             body,
-            allow: None,
+            policy: Some(policy),
+            field: None,
+        }
+    }
+
+    /// Always to a path of this server's own.
+    pub(crate) fn redirect(location: &'static str) -> Self {
+        Self {
+            field: Some(("Location", location)),
+            ..Self::new(
+                Status::PermanentRedirect,
+                "text/plain; charset=utf-8",
+                Vec::new(),
+            )
         }
     }
 
@@ -470,7 +509,7 @@ impl Response {
 
     pub(crate) fn method_not_allowed(allow: &'static str) -> Self {
         Self {
-            allow: Some(allow),
+            field: Some(("Allow", allow)),
             ..Self::error(Status::MethodNotAllowed, "method not allowed")
         }
     }
@@ -480,14 +519,18 @@ impl Response {
     fn write_to(&self, stream: &mut impl Write) -> io::Result<()> {
         let mut out = format!(
             "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\
-             Connection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n",
+             Connection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n\
+             Referrer-Policy: no-referrer\r\n",
             self.status.code(),
             self.status.reason(),
             self.content_type,
             self.body.len()
         );
-        if let Some(allow) = self.allow {
-            let _ = write!(out, "Allow: {allow}\r\n");
+        if let Some(policy) = self.policy {
+            let _ = write!(out, "Content-Security-Policy: {}\r\n", policy.header());
+        }
+        if let Some((name, value)) = self.field {
+            let _ = write!(out, "{name}: {value}\r\n");
         }
         out.push_str("\r\n");
         stream.write_all(out.as_bytes())?;

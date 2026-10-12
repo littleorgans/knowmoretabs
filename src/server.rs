@@ -19,6 +19,7 @@ use std::time::Instant;
 use serde::Deserialize;
 
 use crate::archive::Archive;
+use crate::assets::Policy;
 use crate::capture::Log;
 use crate::error::Error;
 use crate::http::{
@@ -212,6 +213,8 @@ impl Server {
                     Err(err) => self.failure(&err),
                 }
             }
+            // Below the prefix, so the page's relative files are the service's.
+            ("GET", "/model") => Response::redirect(model_service::PREFIX),
             _ if path.starts_with(model_service::PREFIX) => {
                 model_service::forward(self.model.as_ref(), &self.root, head, path, body, self.log)
             }
@@ -234,7 +237,7 @@ impl Server {
         };
         match name {
             "index.html" => match export::embed(content, "") {
-                Ok(html) => Response::ok("text/html; charset=utf-8", html.into_bytes()),
+                Ok(html) => Response::html(Status::Ok, html.into_bytes(), Policy::Library),
                 Err(err) => self.failure(&err),
             },
             "app.css" => Response::ok("text/css; charset=utf-8", content.as_bytes().to_vec()),

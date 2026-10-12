@@ -66,8 +66,8 @@ fn key_file(fx: &Fixture) -> PathBuf {
 
 /// A head field of a request or reply, by name in any case.
 fn field<'a>(message: &'a [u8], name: &str) -> Option<&'a str> {
-    let text = std::str::from_utf8(message).ok()?;
-    let head = &text[..text.find("\r\n\r\n")?];
+    let end = message.windows(4).position(|w| w == b"\r\n\r\n")?;
+    let head = std::str::from_utf8(&message[..end]).ok()?;
     head.split("\r\n").skip(1).find_map(|line| {
         let (n, v) = line.split_once(':')?;
         n.eq_ignore_ascii_case(name).then(|| v.trim())
@@ -87,7 +87,14 @@ fn request_line(request: &[u8]) -> (String, String) {
 /// `reply` with the proof `key` gives it as the answer to `request`: over
 /// the request's nonce, method and path, and the status, type, archive and
 /// body the reply declares.
-fn prove_with(key: &[u8], request: &[u8], status: &str, fields: &[String], body: &str) -> Vec<u8> {
+fn prove_with(
+    key: &[u8],
+    request: &[u8],
+    status: &str,
+    fields: &[String],
+    body: impl AsRef<[u8]>,
+) -> Vec<u8> {
+    let body = body.as_ref();
     let unproven = reply(status, fields, body);
     let (method, path) = request_line(request);
     let proof = mac(
@@ -101,7 +108,7 @@ fn prove_with(key: &[u8], request: &[u8], status: &str, fields: &[String], body:
             field(&unproven, "content-type").unwrap_or(""),
             field(&unproven, "x-kmt-archive").unwrap_or(""),
             &body.len().to_string(),
-            &hex(&Sha256::digest(body.as_bytes())),
+            &hex(&Sha256::digest(body)),
         ],
     );
     let mut fields = fields.to_vec();
@@ -110,7 +117,7 @@ fn prove_with(key: &[u8], request: &[u8], status: &str, fields: &[String], body:
 }
 
 /// The service's own answer to `request`.
-fn proven(request: &[u8], status: &str, fields: &[String], body: &str) -> Vec<u8> {
+fn proven(request: &[u8], status: &str, fields: &[String], body: impl AsRef<[u8]>) -> Vec<u8> {
     prove_with(&key(), request, status, fields, body)
 }
 
@@ -150,7 +157,7 @@ fn the_stand_ins_wire_matches_the_shared_vectors() {
         text("path"),
         text("nonce")
     );
-    let answer = proven(request.as_bytes(), "200 OK", &fields, &text("body"));
+    let answer = proven(request.as_bytes(), "200 OK", &fields, text("body"));
     assert_eq!(
         field(&answer, "x-kmt-response-mac"),
         Some(text("mac").as_str())
@@ -240,13 +247,14 @@ fn request(stream: &mut TcpStream) -> Vec<u8> {
 }
 
 /// A reply head and body as the service writes them.
-fn reply(status: &str, fields: &[String], body: &str) -> Vec<u8> {
+fn reply(status: &str, fields: &[String], body: impl AsRef<[u8]>) -> Vec<u8> {
     let mut head = format!("HTTP/1.1 {status}\r\n");
     for field in fields {
         head.push_str(field);
         head.push_str("\r\n");
     }
-    format!("{head}\r\n{body}").into_bytes()
+    head.push_str("\r\n");
+    [head.as_bytes(), body.as_ref()].concat()
 }
 
 /// The fields of a JSON reply over this archive.
@@ -360,12 +368,17 @@ fn the_services_refusals_pass_through_and_other_statuses_do_not() {
     let replies = [
         ("400 Bad Request", json_fields(&fx, blank), blank),
         ("503 Service Unavailable", json_fields(&fx, busy), busy),
+        ("403 Forbidden", json_fields(&fx, busy), busy),
+        ("404 Not Found", json_fields(&fx, busy), busy),
+        ("409 Conflict", json_fields(&fx, busy), busy),
+        ("415 Unsupported Media Type", json_fields(&fx, busy), busy),
         (
             "500 Internal Server Error",
             json_fields(&fx, broken),
             broken,
         ),
         ("302 Found", json_fields(&fx, broken), broken),
+        ("421 Misdirected Request", json_fields(&fx, broken), broken),
     ];
     let turn = Mutex::new(0);
     let service = Service::start(move |request| {
@@ -377,9 +390,11 @@ fn the_services_refusals_pass_through_and_other_statuses_do_not() {
     let shell = service.shell(&fx);
     let relayed = rank(&shell, "");
     assert_eq!((relayed.status, relayed.text()), (400, blank.to_owned()));
-    let relayed = rank(&shell, "x");
-    assert_eq!((relayed.status, relayed.text()), (503, busy.to_owned()));
-    for _ in 0..2 {
+    for status in [503, 403, 404, 409, 415] {
+        let relayed = rank(&shell, "x");
+        assert_eq!((relayed.status, relayed.text()), (status, busy.to_owned()));
+    }
+    for _ in 0..3 {
         let failed = rank(&shell, "x");
         assert_eq!(failed.status, 502, "{}", failed.text());
         assert!(!failed.text().contains("boom"));
@@ -568,18 +583,221 @@ fn refusals_the_shell_makes_never_reach_the_service() {
     }
     for (method, path) in [
         ("GET", RANK),
-        ("POST", "/model/api/search"),
+        ("POST", "/model/api/nothing"),
         ("POST", "/model/"),
+        ("POST", "/model/index.html"),
         ("POST", "/model/api/rank/"),
         ("POST", "/model/../api/library"),
         ("POST", "/model//api/rank"),
+        ("GET", "/model/server.py"),
+        ("GET", "/model/static/app.js"),
+        ("GET", "/model/..%2Fserver.py"),
+        ("GET", "/model/img/not-a-hash"),
+        ("GET", "/model/api/sessions/1a"),
+        ("GET", "/modelx/api/library"),
     ] {
         let fields = [host.clone(), json(), length()];
         let missing = shell.raw(method, path, &fields, br#"{"query":"x"}"#);
         assert_eq!(missing.status, 404, "{method} {path}: {}", missing.text());
     }
+    let fields = [host.clone(), length()];
+    let bodied = shell.raw("GET", "/model/api/library", &fields, br#"{"query":"x"}"#);
+    assert_eq!(bodied.status, 400, "{}", bodied.text());
     assert!(service.seen().is_empty(), "the service was contacted");
     still_serving(&shell);
+}
+
+const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+/// A synthetic JPEG's first and last bytes: not text, so only bytes carry it.
+const JPEG: &[u8] = b"\xff\xd8\xff\xe0\x00\x10JFIF\x00\xff\xd9";
+/// The service's page, as small as can show what the shell does with it.
+const PAGE: &str = "<!doctype html><title>Tag</title><header><!-- nav:start --><!-- nav:end --></header>\
+                    <script src=\"core.js\" defer></script>";
+
+/// One service path's answer: status line, type and body.
+type Answer = (String, &'static str, &'static str, Vec<u8>);
+
+/// A stand-in answering each service path from `table`, proven.
+fn table_service(fx: &Fixture, table: Vec<Answer>) -> Service {
+    let archive = format!("X-KMT-Archive: {}", identity(fx));
+    Service::start(move |request| {
+        let (_, path) = request_line(request);
+        let (_, status, kind, body) = table.iter().find(|(p, ..)| *p == path)?;
+        let fields = vec![
+            format!("Content-Type: {kind}"),
+            format!("Content-Length: {}", body.len()),
+            archive.clone(),
+        ];
+        Some(proven(request, status, &fields, body))
+    })
+}
+
+#[cfg(unix)]
+#[test]
+fn every_family_forwards_its_method_and_path_and_comes_back_typed() {
+    let fx = fixture();
+    let module = r#"export * from "./lit-html.js";"#;
+    let json = br#"{"pages": 3}"#.to_vec();
+    let html = "text/html; charset=utf-8";
+    let ok = |path: &str, kind: &'static str, body: &[u8]| -> Answer {
+        (path.to_owned(), "200 OK", kind, body.to_vec())
+    };
+    let image = format!("/img/{HASH}");
+    let table = vec![
+        ok("/", html, PAGE.as_bytes()),
+        ok("/index.html", html, PAGE.as_bytes()),
+        ok("/app.css", "text/css; charset=utf-8", b"body{}"),
+        ok("/lit.js", "application/javascript", module.as_bytes()),
+        ok(&image, "image/jpeg", JPEG),
+        ok("/api/library", "application/json; charset=utf-8", &json),
+        ok("/api/add/12", "application/json", &json),
+        ok("/api/search", "application/json", &json),
+        ok("/api/sessions/3/pages/1", "application/json", &json),
+    ];
+    let service = table_service(&fx, table.clone());
+    let shell = service.shell(&fx);
+    let css = "text/css; charset=utf-8";
+    let script = "text/javascript; charset=utf-8";
+    let api = "application/json";
+    for (method, path, upstream, kind) in [
+        ("GET", "/model/".to_owned(), "/", html),
+        ("GET", "/model/index.html".to_owned(), "/index.html", html),
+        ("GET", "/model/app.css?v=1".to_owned(), "/app.css", css),
+        ("GET", "/model/lit.js".to_owned(), "/lit.js", script),
+        ("GET", format!("/model{image}"), &image, "image/jpeg"),
+        ("GET", "/model/api/library".to_owned(), "/api/library", api),
+        ("GET", "/model/api/add/12".to_owned(), "/api/add/12", api),
+        ("POST", "/model/api/search".to_owned(), "/api/search", api),
+        (
+            "POST",
+            "/model/api/sessions/3/pages/1".to_owned(),
+            "/api/sessions/3/pages/1",
+            api,
+        ),
+    ] {
+        let answer = if method == "POST" {
+            shell.post(&path, &json!({ "query": "x" }))
+        } else {
+            shell.get(&path)
+        };
+        assert_eq!(answer.status, 200, "{path}: {}", answer.text());
+        assert_eq!(answer.header("content-type"), Some(kind), "{path}");
+        assert_eq!(answer.header("referrer-policy"), Some("no-referrer"));
+        let policy = answer.header("content-security-policy");
+        if kind == html {
+            let policy = policy.unwrap_or_default();
+            assert!(
+                policy.contains("style-src 'self' 'unsafe-inline';"),
+                "{policy}"
+            );
+            assert!(policy.contains("script-src 'self';"), "{policy}");
+            assert!(policy.ends_with("frame-ancestors 'none'"), "{policy}");
+        } else {
+            assert_eq!(policy, None, "{path}");
+            let (.., body) = table.iter().find(|(p, ..)| p == upstream).unwrap();
+            assert_eq!(&answer.body, body, "{path}");
+        }
+        assert!(
+            answer
+                .headers
+                .iter()
+                .all(|(name, _)| !name.starts_with("x-kmt"))
+        );
+        let seen = service.seen();
+        let request = seen.last().unwrap();
+        assert_eq!(
+            request_line(request),
+            (method.to_owned(), upstream.to_owned())
+        );
+        assert!(request_proven(request), "{path}");
+        assert_eq!(field(request, "content-type").is_some(), method == "POST");
+        assert_eq!(field(request, "origin"), None);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn a_success_of_another_type_or_a_refusal_that_is_not_json_is_refused() {
+    let fx = fixture();
+    let missing = br#"{"error": "no image"}"#.to_vec();
+    let (a, b) = ("a".repeat(64), "b".repeat(64));
+    let page = PAGE.as_bytes().to_vec();
+    let table: Vec<Answer> = vec![
+        (
+            "/api/library".to_owned(),
+            "200 OK",
+            "text/html",
+            page.clone(),
+        ),
+        ("/".to_owned(), "200 OK", "application/json", b"{}".to_vec()),
+        (
+            "/app.css".to_owned(),
+            "200 OK",
+            "text/javascript",
+            b"x".to_vec(),
+        ),
+        ("/lit.js".to_owned(), "200 OK", "text/plain", b"x".to_vec()),
+        (format!("/img/{HASH}"), "200 OK", "text/html", page.clone()),
+        (format!("/img/{a}"), "404 Not Found", "text/html", page),
+        (
+            format!("/img/{b}"),
+            "404 Not Found",
+            "application/json",
+            missing.clone(),
+        ),
+    ];
+    let service = table_service(&fx, table);
+    let shell = service.shell(&fx);
+    for (path, status) in [
+        ("/model/api/library".to_owned(), 502),
+        ("/model/".to_owned(), 502),
+        ("/model/app.css".to_owned(), 502),
+        ("/model/lit.js".to_owned(), 502),
+        (format!("/model/img/{HASH}"), 502),
+        (format!("/model/img/{a}"), 502),
+        (format!("/model/img/{b}"), 404),
+    ] {
+        let answer = shell.get(&path);
+        assert_eq!(answer.status, status, "{path}: {}", answer.text());
+        assert!(!answer.text().contains("<title>Tag"), "{path}");
+    }
+    assert_eq!(shell.get(&format!("/model/img/{b}")).body, missing);
+    still_serving(&shell);
+}
+
+#[test]
+fn the_bare_prefix_redirects_below_it() {
+    let fx = fixture();
+    let service = Service::start(|_| None);
+    let shell = service.shell(&fx);
+    let moved = shell.get("/model");
+    assert_eq!(moved.status, 308);
+    assert_eq!(moved.header("location"), Some("/model/"));
+    let fields = [
+        format!("Host: {}", shell.host()),
+        "Content-Length: 0".to_owned(),
+    ];
+    assert_eq!(shell.raw("POST", "/model", &fields, b"").status, 404);
+    assert!(service.seen().is_empty(), "the service was contacted");
+}
+
+/// Send answers only once its knowmoretabs runs are done: well past the
+/// deadline a search waits.
+#[cfg(unix)]
+#[test]
+fn send_waits_past_the_rank_deadline_for_its_own() {
+    let fx = fixture();
+    let sent = r#"{"ok": true}"#;
+    let fields = json_fields(&fx, sent);
+    let service = Service::start(move |request| {
+        std::thread::sleep(Duration::from_secs(3));
+        Some(proven(request, "200 OK", &fields, sent))
+    });
+    let shell = service.shell(&fx);
+    let start = Instant::now();
+    let answer = shell.post("/model/api/send", &json!({ "preview": 1 }));
+    assert_eq!((answer.status, answer.text()), (200, sent.to_owned()));
+    assert!(start.elapsed() >= Duration::from_secs(3));
 }
 
 /// What a squatter on the port, a replay, or bytes changed after the proof

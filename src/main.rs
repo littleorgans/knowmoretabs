@@ -60,6 +60,7 @@ mod metadata;
 mod metadata_fetch;
 mod metadata_writer;
 mod model;
+mod model_routes;
 mod model_service;
 mod out;
 mod page_key;
