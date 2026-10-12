@@ -348,10 +348,11 @@ def order(lib: Library, q: np.ndarray, text: str, among: np.ndarray) -> np.ndarr
 
 def newest(lib: Library, among: np.ndarray) -> np.ndarray:
     """Every row `among`, the latest to enter the library first (`Archive.added`), then those without a time;
-    ties keep row order."""
+    ties follow URL order, including rows appended by sync."""
     added = np.array([-np.inf if r["added"] is None else r["added"] for r in lib.records])
+    keys = np.array([r["key"] for r in lib.records])
     rows = np.flatnonzero(among)
-    return rows[np.argsort(-added[rows], kind="stable")]
+    return rows[np.lexsort((keys[rows], -added[rows]))]
 
 
 def suggest(lib: Library, rows: list[int], k: int = SUGGEST) -> list[dict]:

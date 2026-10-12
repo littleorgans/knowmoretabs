@@ -117,6 +117,16 @@ class IntakeFoldTests(Synthetic):
 
 
 class LoadTests(Synthetic):
+    def test_empty_search_breaks_synced_timestamp_ties_by_url(self):
+        lib, _ = self.load()
+        keys = [NEW + "/z", NEW + "/a"]
+        for key in keys:
+            capture(self.root, key, "An invented page")
+        lib = engine.sync(lib, Archive.load(self.root), keys, fake_embed)
+        app = server.App(lib, Store(self.work / "app"), fake_encode, fake_embed)
+        hits = app.search({"query": "", "n": 5})["hits"]
+        self.assertEqual(sorted(keys), [lib.records[h["row"]]["key"] for h in hits[:2]])
+
     def test_a_library_with_no_owner_vocabulary_starts_with_no_tags(self):
         state = json.loads((self.root / "library.json").read_text())
         for term in state["vocabulary"].values():
