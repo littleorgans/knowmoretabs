@@ -733,7 +733,7 @@ function tagbar() {
   for (const p of S.shown) for (const s of p.sug) sug.set(s.k, (sug.get(s.k) || 0) + 1);
   const cell = (k, c) => { const name = S.vocab.get(k) || k, on = c < 0, s = sug.get(k);
     const title = `${on ? 'Stop filtering by' : plural(c, 'page') + ' tagged'} ${name}${!on && s ? `, ${s === c ? (c === 1 ? 'suggested' : 'all suggested') : `${num.format(s)} of them suggested`}` : ''}${def(k)}`;
-    return `<li><button type="button" data-t="${esc(k)}" aria-pressed="${on}" title="${esc(title)}"><span>${esc(name)}</span><small>${on ? '×' : num.format(c)}</small></button></li>`; };
+    return `<li><button type="button" data-t="${esc(k)}" aria-pressed="${on}" title="${esc(title)}"><span>${esc(name)}</span><small>${on && !S.letters ? '×' : num.format(on ? n.get(k) || 0 : c)}</small></button></li>`; };
   const rest = [...n].filter(([k]) => !S.tags.includes(k) && S.vocab.has(k)).sort((a, b) => b[1] - a[1] || collator.compare(S.vocab.get(a[0]), S.vocab.get(b[0])));
   const manage = host.tag ? '<li class="tb-end"><button type="button" id="tb-manage">Retire tags…</button></li>' : '';
   const rows = S.letters && S.vocab.size && (rest.length || S.tags.length);

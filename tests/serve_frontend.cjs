@@ -408,7 +408,7 @@ function tagPanel(saved = {}) {
   const run = (code) => vm.runInContext(code, context);
   run('derive(library); S.shown = S.pages.slice();');
   const cells = (html) => [...html.matchAll(/data-t="[^"]*" aria-pressed="(\w+)"[^>]*><span>([^<]*)<\/span><small>([^<]*)<\/small>/g)]
-    .map(([, on, name, n]) => (on === 'true' ? `${name} ×` : `${name} ${n}`));
+    .map(([, on, name, n]) => `${name} ${n}${on === 'true' ? ' pressed' : ''}`);
   const bar = () => {
     run('tagbar();');
     const html = nodes.tb.innerHTML;
@@ -433,10 +433,12 @@ test('letter rows: one row per first letter, "#" first, A to Z by name whatever 
   assert.match(html, /<li class="tb-row"><span class="tb-l" aria-hidden="true"><\/span><ul class="tb-grid"><li class="tb-end"><button type="button" id="tb-manage">Retire tags…/);
 });
 
-test('letter rows keep a picked tag in its row, pressed', () => {
+test('letter rows keep a picked tag in its row, pressed, with its page count', () => {
   const tags = tagPanel({ tagOrder: 'letters' });
   tags.run('S.tags = ["beta"]; S.shown = S.pages.filter((p) => p.all.has("beta"));');
-  assert.deepEqual(tags.bar().rows.filter(([l]) => l), [['B', ['beta ×']]]);
+  assert.deepEqual(tags.bar().rows.filter(([l]) => l), [['B', ['beta 7 pressed']]]);
+  tags.run('flipOrder();');
+  assert.deepEqual(tags.bar().cells, ['beta × pressed'], 'count order keeps its picked tag display');
 });
 
 test('count order is the default: picked first, then by count, then "N more"', () => {
