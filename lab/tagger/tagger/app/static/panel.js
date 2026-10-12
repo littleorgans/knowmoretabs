@@ -31,8 +31,11 @@
     }
     return [...rows].sort(([a], [b]) => (a < b ? -1 : 1));   // "#" sorts before A
   }
-  /* as many of a one line row's names as its line has columns: none clipped out of sight yet reachable by Tab */
-  const fit = (names, line) => names.slice(0, getComputedStyle(line).gridTemplateColumns.split(" ").filter((w) => w.endsWith("px")).length);
+  /* active names only, in their order, as many as the line has columns: none clipped yet reachable by Tab */
+  const fit = (names, line) => {
+    const active = new Set(K.lib ? K.lib.app_tags : []);
+    return names.filter((t) => active.has(t)).slice(0, getComputedStyle(line).gridTemplateColumns.split(" ").filter((w) => w.endsWith("px")).length);
+  };
   const matching = (q) => (K.lib ? K.lib.app_tags : []).filter((t) => t.toLowerCase().includes(q));
 
   const cell = (t) => {

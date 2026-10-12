@@ -574,6 +574,29 @@ async function addSuggested() {
   assert.deepEqual(row(), ['Trains off', 'Timetables off'], 'back on the page: its suggestions, as many as a narrower line holds');
 }
 
+/* Frozen suggestions follow retirements and revivals without asking the model to rank them again. */
+async function addSuggestedFollowsVocabulary() {
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/one';
+  K.lib.app_tags.push('Canals', 'Timetables');
+  const row = () => [...node('a-sugg').innerHTML.matchAll(/data-tag="([^"]*)"/g)].map(([, t]) => t);
+  const model = ['Trains', 'Timetables', 'Night trains', 'Canals'];
+  f.type(url); f.submit();
+  await f.reply('api/add', f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url, [], model) }));
+  await f.reply('api/library', { ...K.lib, forgotten: [] });
+  assert.deepEqual(row(), model.slice(0, 3), 'Indexed fixes the order');
+  const active = K.lib.app_tags.filter((t) => t !== 'Trains');
+  const retiring = K.loadLibrary();
+  await f.reply('api/library', { ...K.lib, app_tags: active, recent: [], forgotten: [] });
+  await retiring;
+  K.changed();
+  assert.deepEqual(row(), model.slice(1), 'a retired suggestion leaves the frozen row');
+  const reviving = K.loadLibrary();
+  await f.reply('api/library', { ...K.lib, app_tags: [...active, 'Trains'], forgotten: [] });
+  await reviving;
+  K.changed();
+  assert.deepEqual(row(), model.slice(0, 3), 'revival reuses the original order');
+}
+
 /* The final library refresh never holds up a pick: a pick or its Undo during the refresh goes at once, and the read
    it overtook is read again, so an earlier snapshot never replaces a newer recent order. An undone add was a use. */
 async function addLibraryWrites() {
@@ -713,4 +736,4 @@ async function addPollFails() {
   assert.equal(K.lib, lib, 'no reload as if it had finished');
 }
 
-run({ addKeepsNewerTags, addLibraryWrites, addPicksFailure, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true), addFollowUpStalePoll, addRestoreFollowsTheKey, addPollFails });
+run({ addSuggestedFollowsVocabulary, addKeepsNewerTags, addLibraryWrites, addPicksFailure, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true), addFollowUpStalePoll, addRestoreFollowsTheKey, addPollFails });

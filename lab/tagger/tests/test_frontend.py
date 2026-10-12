@@ -59,6 +59,7 @@ CASES = {
         "addPicksStalePoll",
         "addPicksDetour",
         "addSuggested",
+        "addSuggestedFollowsVocabulary",
         "addFollowUpNamesTheKey",
         "addFollowUpPicksBackground",
         "addFollowUpStalePoll",
