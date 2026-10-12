@@ -9,9 +9,11 @@ blocked, behind a login or paywalled (`TRANSIENT` pages find Chrome out of reach
 runs only the stages named, each only where it failed, and reports every other stage as recorded. A text read again
 is kept (`stuck` fails every time) and the third failed run is `unavailable`. A page with no image line gets one once
 its text settles (`none`, without a request, when the text is `unavailable`); when the text runs and the page's
-intake line has no title, the kept text's title joins it. A known URL is `known`; a forgotten one
-is refused as `forgotten`, anything but a public http(s) page as `refused`, and under `--retry` an unknown one as
-`refused`, `not_in_library`, all exiting 1. `--title` or `--no-content` with `--retry` is a usage error: exit 2,
+intake line has no title, the kept text's title joins it. A new page is kept under its link less the fragment, a
+stand in for the real cleaning, and a link resolves to the page the library holds under it, its key or a variant
+of that key, as the real command does; the library `done` line names that key, and every later stage uses it. A
+known URL is `known`; a forgotten one is refused as `forgotten`, anything but a public http(s) page as `refused`, and
+under `--retry` an unknown one as `refused`, `not_in_library`, all exiting 1. `--title` or `--no-content` with `--retry` is a usage error: exit 2,
 nothing on stdout. `forget -- <url>…` and `restore -- <url>…` edit `library.json`'s forgotten list;
 `tag --add=<NAME>|--remove=<NAME> -- <url>…` its tags and vocabulary, `tags --create=<NAME>…` its vocabulary. Each
 URL command refuses the whole call, writing nothing, when one URL is not in the library (for `restore`, neither known
@@ -214,26 +216,43 @@ def relapsed(url: str) -> bool:
     return bool(before) and before[0][2] == "restore" and before[0][-1] == url
 
 
+def clean(url: str) -> str:
+    """A stand in for `page_key::clean`: the fragment alone goes."""
+    return url.split("#", 1)[0]
+
+
+def held(root: Path, url: str) -> tuple[str, str] | None:
+    """How the library holds `url` (`forgotten` or `known`) and under which key, as `add::held` resolves it: the
+    link, then its key, forgotten first; then a variant of the key, a visible one first, the smallest of several."""
+    forgotten, listed = set(library(root).get("forgotten", [])), known(root)
+    for exact in (url, clean(url)):
+        if exact in forgotten:
+            return "forgotten", exact
+        if exact in listed:
+            return "known", exact
+    variants = sorted(k for k in listed | forgotten if clean(k) == clean(url))
+    visible = [k for k in variants if k not in forgotten]
+    return ("known", visible[0]) if visible else ("forgotten", variants[0]) if variants else None
+
+
 def add(root: Path, url: str, args: dict) -> int:
     if relapsed(url):
         print(json.dumps({"error": {"kind": "io", "message": "could not write", "detail": None}}), flush=True)
         return 1
     emit({"stage": "library", "state": "running"})
+    found = held(root, url) if web(url) else None
     if not web(url):
         emit({"stage": "library", "state": "done", "value": "refused", "reason": "not_web"})
         value = "refused"
-    elif url in library(root).get("forgotten", []):
-        emit({"stage": "library", "state": "done", "value": "forgotten"})
-        value = "forgotten"
-    elif args["retry"] and url not in known(root):
+    elif args["retry"] and found is None:
         emit({"stage": "library", "state": "done", "value": "refused", "reason": "not_in_library"})
         value = "refused"
     else:
-        value = "known" if url in known(root) else "added"
+        value, url = found or ("added", clean(url))
         if value == "added":
             title = {"title": args["title"]} if args["title"] else {}
             append(root / "pages" / "added.jsonl", {"schema_version": 1, "url": url, "added_at": AT, **title})
-        emit({"stage": "library", "state": "done", "value": value})
+        emit({"stage": "library", "state": "done", "value": value, "url": url})
     if value not in ("added", "known"):
         emit({"stage": "done", "state": "done", "url": url, "value": value, "content": None, "image": None})
         return 1

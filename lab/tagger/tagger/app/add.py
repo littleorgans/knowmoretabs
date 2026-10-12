@@ -3,8 +3,9 @@ it reports, so the screen can poll it. `add` streams the contract's `--json` sta
 done), with the link's title, `--signed-in` (Try signed in) or `--retry` naming the failed stages (Retry, which runs
 only those); `restore` runs before a plain `add`; `forget` stands alone. Once knowmoretabs lists the page, the job
 brings the app's library in line with the archive under the app's lock (the Search stage: the page embedded and
-indexed, or its files and visibility refreshed). `index` retries Search in the lab only. Roots inside the lab data
-directory are refused before a worker starts. Job state has its own lock, so a poll never waits on the model.
+indexed, or its files and visibility refreshed), by the key knowmoretabs reports holding the page under, which a
+follow up names. `index` retries Search in the lab only. Roots inside the lab data directory are refused before a
+worker starts. Job state has its own lock, so a poll never waits on the model.
 Nothing a job reads from knowmoretabs is printed; its stderr is dropped.
 """
 
@@ -66,11 +67,19 @@ class Job:
         elif event.get("stage") in STAGES[:3]:
             self.stages[event["stage"]] = event
 
+    @property
+    def key(self) -> str:
+        """The page's key, as the library done event names it (cleaned, or a variant the library holds); else the
+        link asked for."""
+        url = self.stages.get("library", {}).get("url")
+        return url if isinstance(url, str) and url else self.url
+
     def view(self) -> dict:
         return deepcopy(
             {
                 "id": self.id,
                 "url": self.url,
+                "key": self.key,
                 "action": self.action,
                 "retry": list(self.retry),
                 "signed_in": self.signed_in,
@@ -185,7 +194,7 @@ class Jobs:
     def _sync(self, job: Job) -> dict | None:
         archive = Archive.load(self.app.lib.root)  # outside the app's lock: file reads only
         with self.app.lock:
-            return self.app.sync(job.url, archive)
+            return self.app.sync(job.key, archive)
 
     def _search(self, job: Job) -> None:
         with self.lock:

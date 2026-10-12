@@ -81,6 +81,7 @@ CASES = {
         "addPicksStalePoll",
         "addPicksDetour",
         "addSuggested",
+        "addFollowUpNamesTheKey",
     ],
 }
 

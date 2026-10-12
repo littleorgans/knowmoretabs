@@ -8,8 +8,10 @@
    link when it is added and are written at Indexed, in one change with one
    Undo; a newer link does not stop an older job writing its own. A refusal
    clears them. At Indexed the model's suggestions for the page fill the
-   Suggested row, less the tags picked, and stay put while it is on screen. A failed stage shows its value and one action, which starts
-   a job of its own: Retry runs only the stages that failed.
+   Suggested row, less the tags picked, and stay put while it is on screen.
+   A failed stage shows its value and one action, which starts a job of its
+   own: Retry runs only the stages that failed. It names the page by the key
+   knowmoretabs reports holding it under, which may be a cleaned form of the link.
    `#add=<encoded link>&title=<encoded title>` fills the box and focuses
    Add, which waits for Enter; the title goes with that link. */
 (function () {
@@ -141,7 +143,7 @@
     }
   }
   function show(j) {
-    if (job && job.url !== j.url) {   // another page: the last one's row and, once it is done, its picks go
+    if (job && job.url !== j.url && job.key !== j.key) {   // another page: the last one's row and, once it is done, its picks go
       row = null;
       if (job.finished) track(job, false);
     }
@@ -229,7 +231,7 @@
     if (opening) { result.classList.remove("in"); void result.offsetWidth; result.classList.add("in"); }
     if (!live) return;
     if (shown !== t.url) { shown = t.url; K.panel.reset(); }
-    render(tile(t.url, s), K.$("a-tile"));
+    render(tile(t.draft ? t.url : job.key, s), K.$("a-tile"));
     const has = (tag) => !t.draft && row !== null && K.has(row, tag);
     const sugg = !t.draft && suggested.url === t.url ? suggested.tags : [];
     K.panel.render({ has, pend: (tag) => (t.draft && draft.has(tag)) || waiting(t.url, tag), pick, sugg });
@@ -275,7 +277,14 @@
     K.$("a-go").disabled = false;
     submit();
   });
-  K.$("a-act").addEventListener("click", () => { if (job && offer) start(job.url, offer); });
+  K.$("a-act").addEventListener("click", () => {   // a follow up names the page's key; picks held for the link go with it
+    if (!job || !offer) return;
+    if (job.key !== job.url && held.has(job.url)) {
+      held.set(job.key, new Set([...(held.get(job.key) || []), ...held.get(job.url)]));
+      held.delete(job.url);
+    }
+    start(job.key, offer);
+  });
   K.$("a-tile").addEventListener("click", (e) => {
     if (K.opens(e)) return;
     const x = e.target.closest("[data-untag]");

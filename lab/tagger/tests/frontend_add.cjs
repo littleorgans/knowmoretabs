@@ -120,7 +120,7 @@ async function addRequests() {
   submit();
   assert.deepEqual(plain(asked.pop()), ['/api/add', { url: 'https://added.example/raw?a=1&b=2', action: 'add', title: null }], 'a link without a title keeps its &');
   const ev = (stage, state, extra = {}) => ({ stage, state, ...extra });
-  const done = { id: 1, url: link, action: 'add', retry: [], signed_in: false, title: null, restored: false, failed: false, finished: true, seconds: 1.2, page: null,
+  const done = { id: 1, url: link, key: link, action: 'add', retry: [], signed_in: false, title: null, restored: false, failed: false, finished: true, seconds: 1.2, page: null,
     stages: { library: ev('library', 'done', { value: 'known' }), content: ev('content', 'done', { status: 'off', tier: 'signed_in' }),
       image: ev('image', 'done', { status: 'error' }), search: ev('search', 'done', { value: 'indexed' }) } };
   reply = (path) => Promise.resolve(path === '/api/library' ? { app_tags: [] } : done);
@@ -269,7 +269,7 @@ function addFixture() {
     throw new Error(`no request to ${route}; sent: ${requests.map((r) => r.route).join(', ')}`);
   };
   f.reply = async (route, out) => { const r = await f.next(route); r.resolve(out); for (let i = 0; i < 4; i++) await turn(); return r; };
-  f.job = (id, url, stages, extra = {}) => ({ id, url, action: 'add', retry: [], signed_in: false, title: null, restored: false, failed: false,
+  f.job = (id, url, stages, extra = {}) => ({ id, url, key: url, action: 'add', retry: [], signed_in: false, title: null, restored: false, failed: false,
     finished: false, seconds: 0.5, page: null, stages, ...extra });
   f.type = (link) => { node('a-link').value = link; node('a-link').input(); };
   f.submit = () => node('a-form').submit({ preventDefault() {} });
@@ -577,4 +577,22 @@ async function addLibraryWrites() {
   assert.deepEqual([f.look('Coffee'), f.look('Trains')], ['off', 'on']);
 }
 
-run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested });
+/* a link the library keeps under a cleaned key: the tile shows the key, and the action names it, its picks with it */
+async function addFollowUpNamesTheKey() {
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/one/#top', key = 'https://added.example/one';
+  f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
+  const listed = { library: ev('library', 'done', { value: 'added', url: key }) };
+  await f.reply('/api/add', f.job(1, url, listed, { key }));
+  assert.match(node('a-tile').innerHTML, /class="ht link">https:\/\/added.example\/one<\/h3>/, 'the tile names the key');
+  await f.reply('/api/add/1', f.job(1, url, { ...done('not_indexed'), ...listed }, { key, finished: true }));
+  await f.reply('/api/library', { ...K.lib });
+  assert.equal(f.look('Trains'), 'pend');
+  assert.equal(node('a-act').textContent, 'Retry');
+  node('a-act').click();
+  const retry = await f.next('/api/add');
+  assert.deepEqual(retry.body, { url: key, action: 'index' }, 'the action names the key');
+  retry.resolve(f.job(2, key, done('indexed'), { action: 'index', finished: true, page: addPage(7, key) }));
+  assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'the link\'s picks follow the key');
+}
+
+run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey });

@@ -582,6 +582,28 @@ class AddJobTests(Served):
         )
         self.assertTrue(self.app.live()[row])
 
+    def test_a_cleaned_link_is_indexed_under_the_key_the_library_kept(self):
+        job = self.add(NEW + "#top")
+        self.assertEqual({"library": "added", "content": "ok", "image": "ok", "search": "indexed"}, self.values(job))
+        self.assertEqual((NEW, NEW), (job["stages"]["library"]["url"], job["key"]))
+        self.assertEqual(NEW, job["page"]["url"])
+        self.assertEqual(NEW + "#top", job["url"], "the link asked for, which the box clears by")
+
+    def test_restore_after_a_forgotten_variant_uses_the_key(self):
+        url = "https://added.example/p"
+        capture(self.root, url + "#x")
+        state = json.loads((self.root / "library.json").read_text())
+        (self.root / "library.json").write_text(json.dumps({**state, "forgotten": [*state["forgotten"], url + "#x"]}))
+        job = self.add(url)
+        self.assertEqual(({"library": "forgotten"}, url + "#x"), (self.values(job), job["key"]))
+        job = self.add(job["key"], "restore")
+        self.assertEqual(
+            ["--root", str(self.root), "restore", "--", url + "#x"],
+            json.loads(self.log.read_text().splitlines()[-2])["argv"],
+        )
+        self.assertEqual(("known", "indexed"), (self.values(job)["library"], self.values(job)["search"]))
+        self.assertEqual(url + "#x", job["page"]["url"])
+
     def test_an_image_failure_still_indexes_add_text(self):
         self.app.lib = replace(self.app.lib, embed_image=Mock(side_effect=RuntimeError("synthetic image failure")))
         job = self.add(NEW)
