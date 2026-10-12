@@ -411,7 +411,8 @@ const cases = {
     check($('#a-link').value === first && document.activeElement === $('#a-go') && !$('#a-go').disabled, 'filled, Add focused');
     check(!document.body.innerText.includes('A deep linked title'), 'the title is not shown before the add');
     await new Promise((r) => setTimeout(r, 600));
-    check($('#a-stages').hidden, 'nothing starts before Enter');
+    check(getComputedStyle($('#a-stages')).visibility === 'hidden' && $('#a-library .val').textContent === '', 'nothing starts before Enter: the bar keeps its room, empty');
+    check(!$('#a-result').hidden && $('#a-tile .ht.link').textContent === first, 'the panel is ready for picks, beside a placeholder tile');
     $('#a-go').click();
     await until(() => $('#a-search .val').textContent === 'Indexed', 'Indexed');
     check($('#a-tile .ht').textContent === 'A deep linked title', `the tile has the link's title (${$('#a-tile .ht').textContent})`);

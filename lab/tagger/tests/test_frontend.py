@@ -66,6 +66,10 @@ CASES = {
         "addRequests",
         "addSignedInStages",
         "panelLetters",
+        "addPicksHeld",
+        "addPicksBackground",
+        "addPicksOutcomes",
+        "addFilterEnter",
     ],
 }
 
