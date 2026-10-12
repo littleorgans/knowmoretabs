@@ -52,9 +52,13 @@ fn key() -> Vec<u8> {
         .collect()
 }
 
-/// The key in a private file beside the archive.
+/// The key in a private file beside the archive, written once: a shell
+/// reads it as it starts.
 fn key_file(fx: &Fixture) -> PathBuf {
     let path = fx.home.path().join("session.key");
+    if path.exists() {
+        return path;
+    }
     std::fs::write(&path, format!("{}\n", hex(&key()))).unwrap();
     #[cfg(unix)]
     {
@@ -495,24 +499,8 @@ fn chunked_html_or_unframed_replies_are_refused() {
 #[test]
 fn a_service_that_is_not_running_is_unavailable() {
     let fx = fixture();
-    // Keep an outgoing connection alive: its local port has no listener,
-    // and ephemeral binds cannot allocate it to another test. Merely
-    // binding without listening times out on macOS instead of refusing.
-    // Windows retries a refused loopback connect for about two seconds
-    // before it reports the refusal, so the check waits longer than that.
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let reserved = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
-    let (_peer, _) = listener.accept().unwrap();
-    let address = reserved.local_addr().unwrap();
-    let port = address.port();
-    assert_eq!(
-        TcpStream::connect_timeout(&address, Duration::from_secs(10))
-            .unwrap_err()
-            .kind(),
-        std::io::ErrorKind::ConnectionRefused,
-        "the reserved model port must refuse connections"
-    );
-    let shell = shell_on(&fx, port);
+    let refusing = Refusing::new();
+    let shell = shell_on(&fx, refusing.port);
     let refused = rank(&shell, "x");
     assert_eq!(refused.status, 503, "{}", refused.text());
     assert!(
@@ -692,6 +680,15 @@ fn every_family_forwards_its_method_and_path_and_comes_back_typed() {
             );
             assert!(policy.contains("script-src 'self';"), "{policy}");
             assert!(policy.ends_with("frame-ancestors 'none'"), "{policy}");
+            let navigated = PAGE.replace(
+                "<!-- nav:start --><!-- nav:end -->",
+                &format!("<!-- nav:start -->{SERVED_NAV}<!-- nav:end -->"),
+            );
+            assert_eq!(
+                answer.text(),
+                navigated,
+                "{path}: the nav, and nothing else"
+            );
         } else {
             assert_eq!(policy, None, "{path}");
             let (.., body) = table.iter().find(|(p, ..)| p == upstream).unwrap();
@@ -798,6 +795,120 @@ fn send_waits_past_the_rank_deadline_for_its_own() {
     let answer = shell.post("/model/api/send", &json!({ "preview": 1 }));
     assert_eq!((answer.status, answer.text()), (200, sent.to_owned()));
     assert!(start.elapsed() >= Duration::from_secs(3));
+}
+
+/// The shell's nav as it serves it, no view marked.
+const SERVED_NAV: &str = r#"<nav class="views" aria-label="Views"><a href="/#pages">Pages</a><a href="/model/#tag" id="nav-tag">Tag</a><a href="/model/#add" id="nav-add">Add link</a><a href="/#snapshots">Snapshots</a></nav>"#;
+
+/// A loopback port nothing listens on, held so no other test is given it.
+/// Merely binding without listening times out on macOS instead of refusing,
+/// so an outgoing connection is kept alive: its local port has no listener,
+/// and ephemeral binds cannot allocate it to another test. Windows retries
+/// a refused loopback connect for about two seconds before it reports the
+/// refusal, so the check waits longer than that.
+struct Refusing {
+    port: u16,
+    _held: (TcpStream, TcpStream),
+}
+
+impl Refusing {
+    fn new() -> Self {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let reserved = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (peer, _) = listener.accept().unwrap();
+        let address = reserved.local_addr().unwrap();
+        assert_eq!(
+            TcpStream::connect_timeout(&address, Duration::from_secs(10))
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::ConnectionRefused,
+            "the reserved model port must refuse connections"
+        );
+        Self {
+            port: address.port(),
+            _held: (reserved, peer),
+        }
+    }
+}
+
+/// Whatever keeps the service's page from the shell, Tag and Add link get
+/// the shell's own page at the same address, with the nav and a reason,
+/// under the Library's policy; the API answers JSON and an unknown path is
+/// still not found.
+#[cfg(unix)]
+#[test]
+fn the_page_is_the_shells_own_when_the_service_cannot_give_it() {
+    let fx = fixture();
+    let refusing = Refusing::new();
+    let unproven = {
+        let fields = vec![
+            "Content-Type: text/html; charset=utf-8".to_owned(),
+            format!("Content-Length: {}", PAGE.len()),
+            format!("X-KMT-Archive: {}", identity(&fx)),
+        ];
+        Service::start(move |_| Some(reply("200 OK", &fields, PAGE)))
+    };
+    let html = "text/html; charset=utf-8";
+    let answering = |kind: &str, body: &str| {
+        let fields = vec![
+            format!("Content-Type: {kind}"),
+            format!("Content-Length: {}", body.len()),
+            format!("X-KMT-Archive: {}", identity(&fx)),
+        ];
+        Service::proving("200 OK", fields, body.to_owned())
+    };
+    let bare = answering(html, "<!doctype html><title>Tag</title>");
+    let typed = answering("text/plain", PAGE);
+    let unkeyed = Server::start_with(&fx, &["--model-port", &bare.port.to_string()]);
+    let shells = [
+        ("no key", unkeyed, 503, "No model service is set"),
+        (
+            "not running",
+            shell_on(&fx, refusing.port),
+            503,
+            "The model service is not answering",
+        ),
+        (
+            "unproven",
+            unproven.shell(&fx),
+            502,
+            "The model service did not prove its answer",
+        ),
+        (
+            "no nav",
+            bare.shell(&fx),
+            502,
+            "a form this server does not take",
+        ),
+        (
+            "not a page",
+            typed.shell(&fx),
+            502,
+            "a form this server does not take",
+        ),
+    ];
+    for (case, shell, status, said) in shells {
+        for path in ["/model/", "/model/index.html", "/model/?x=1"] {
+            let answer = shell.get(path);
+            assert_eq!(answer.status, status, "{case} {path}: {}", answer.text());
+            assert_eq!(answer.header("content-type"), Some(html), "{case}");
+            let policy = answer.header("content-security-policy").unwrap_or_default();
+            assert!(policy.contains("style-src 'self';"), "{case}: {policy}");
+            let text = answer.text();
+            assert!(text.contains(SERVED_NAV), "{case}: {text}");
+            assert!(text.contains(said), "{case}: {text}");
+            assert!(text.contains(r#"<script src="/unavailable.js"></script>"#));
+            assert!(
+                !text.contains("<title>Tag</title>"),
+                "{case}: service bytes"
+            );
+        }
+        let api = shell.get("/model/api/library");
+        assert_eq!(api.status, status, "{case}");
+        assert_eq!(api.header("content-type"), Some("application/json"));
+        assert_eq!(shell.get("/model/nothing").status, 404, "{case}");
+        still_serving(&shell);
+    }
 }
 
 /// What a squatter on the port, a replay, or bytes changed after the proof

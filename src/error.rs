@@ -126,10 +126,8 @@ pub enum Error {
         "cannot forward search to port {port}: it is the port this library is served on; pass --model-port the port the model service listens on"
     )]
     ModelPort { port: u16 },
-    #[error(
-        "cannot embed library data: missing or out-of-order library-data markers in index.html"
-    )]
-    AssetMarkers,
+    #[error("cannot build a page: missing or out-of-order {0} markers in its HTML")]
+    AssetMarkers(String),
     #[error("cannot export into {}; choose a directory outside the archive's source data", .0.display())]
     ExportDestination(PathBuf),
     #[error("cannot read the History record {}: {reason}; remove it and run knowmoretabs history --refresh to rebuild it", path.display())]
@@ -168,7 +166,7 @@ impl Error {
             Self::Import { .. } => "import",
             Self::Bind { .. } => "bind",
             Self::ModelPort { .. } => "model_port",
-            Self::AssetMarkers => "asset_markers",
+            Self::AssetMarkers(_) => "asset_markers",
             Self::ExportDestination(_) => "export_destination",
             Self::HistoryRecord { .. } => "history_record",
             Self::HistoryUnreadable(_) => "history_unreadable",

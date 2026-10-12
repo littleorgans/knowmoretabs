@@ -15,7 +15,7 @@ use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
 use std::time::Instant;
 
-use crate::assets::Policy;
+use crate::assets::{self, Policy, Surface};
 use crate::capture::Log;
 use crate::http::{
     self, DeadlineWriter, Framing, HEAD_LIMIT, Head, Response, ResponseHead, Status,
@@ -66,8 +66,21 @@ enum Failure {
 }
 
 impl Failure {
-    fn response(self) -> Response {
-        let (status, message) = match self {
+    /// JSON for every route but the page, which gets the shell's own page
+    /// saying so, under the same address, nav and all; never the service's
+    /// bytes.
+    fn response(self, kind: Kind) -> Response {
+        let (status, message) = self.said();
+        if kind == Kind::Html
+            && let Some(page) = unavailable(message)
+        {
+            return Response::html(status, page.into_bytes(), Policy::Library);
+        }
+        Response::error(status, message)
+    }
+
+    fn said(self) -> (Status, &'static str) {
+        match self {
             Self::Off => (Status::ServiceUnavailable, "no model service is set"),
             Self::Refused => (
                 Status::ServiceUnavailable,
@@ -92,9 +105,18 @@ impl Failure {
                 Status::ServiceUnavailable,
                 "the model service cannot be asked now",
             ),
-        };
-        Response::error(status, message)
+        }
     }
+}
+
+/// The shell's page for Tag and Add link while the service cannot answer,
+/// saying why.
+fn unavailable(message: &str) -> Option<String> {
+    let page = assets::load("unavailable.html")?;
+    let page = assets::fill(&page, "nav", &assets::nav(Surface::Serve, None)).ok()?;
+    let mut reason = message.to_owned();
+    reason[..1].make_ascii_uppercase();
+    assets::fill(&page, "reason", &reason).ok()
 }
 
 /// Answers a request whose path starts with `PREFIX`: through the service
@@ -124,7 +146,7 @@ pub fn forward(
     };
     answered.unwrap_or_else(|failure| {
         log.note(&format!("model service: {failure:?}"));
-        failure.response()
+        failure.response(route.kind)
     })
 }
 
@@ -247,10 +269,14 @@ impl ModelService {
         {
             return Err(Failure::Unproven);
         }
-        Ok(match kind {
-            Kind::Html => Response::html(status, body, Policy::Service),
-            _ => Response::new(status, kind.content_type(), body),
-        })
+        if kind == Kind::Html {
+            // Only now, the page proven, does it get the shell's nav.
+            let page = String::from_utf8(body).map_err(|_| Failure::Malformed)?;
+            let nav = assets::nav(Surface::Serve, None);
+            let page = assets::fill(&page, "nav", &nav).map_err(|_| Failure::Malformed)?;
+            return Ok(Response::html(status, page.into_bytes(), Policy::Service));
+        }
+        Ok(Response::new(status, kind.content_type(), body))
     }
 }
 

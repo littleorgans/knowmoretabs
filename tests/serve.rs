@@ -1823,6 +1823,45 @@ fn archive_with_history(fx: &Fixture) {
     }
 }
 
+/// One nav for the Library and the model service's screens when served,
+/// Pages marked; an export links only its own two views and holds nothing
+/// of the service's or of the shell's unavailable page.
+#[test]
+fn the_served_page_links_four_views_and_an_export_two() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    let html = server.get("/").text();
+    assert!(html.contains(
+        r#"<!-- nav:start --><nav class="views" aria-label="Views"><a href="/#pages" aria-current="page">Pages</a><a href="/model/#tag" id="nav-tag">Tag</a><a href="/model/#add" id="nav-add">Add link</a><a href="/#snapshots">Snapshots</a></nav><!-- nav:end -->"#
+    ));
+    assert!(
+        !html.contains("onsubmit"),
+        "no inline handler the policy blocks"
+    );
+    let script = server.get("/unavailable.js");
+    assert_eq!(script.status, 200);
+    assert_eq!(
+        script.header("content-type"),
+        Some("text/javascript; charset=utf-8")
+    );
+    assert_eq!(server.get("/unavailable.html").status, 404);
+    let dir = fx.home.path().join("site");
+    let output = fx.run(&["export", dir.to_str().unwrap()]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let mut files: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+        .collect();
+    files.sort();
+    assert_eq!(files, ["app.css", "app.js", "index.html"]);
+    let page = fs::read_to_string(dir.join("index.html")).unwrap();
+    assert!(page.contains(
+        r##"<nav class="views" aria-label="Views"><a href="#pages" aria-current="page">Pages</a><a href="#snapshots">Snapshots</a></nav>"##
+    ));
+    assert!(!page.contains("/model/") && !page.contains("unavailable"));
+}
+
 /// The export's embedded library and every byte of the export as text.
 fn export_to(fx: &Fixture, dir: &str, args: &[&str]) -> (Value, String) {
     let dir = fx.home.path().join(dir);
