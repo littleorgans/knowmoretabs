@@ -267,6 +267,30 @@ fn an_image_retry_ignores_signed_in_and_the_text() {
 }
 
 #[test]
+fn a_failed_image_says_why_in_its_stage_event() {
+    let (fx, stub) = (Fixture::new(), Stub::start());
+    stub.image(503);
+    let output = add(&fx, &stub.site, &[A, "--json"]);
+    assert_success(&output);
+    let recorded = latest(&fx, "images.jsonl", A);
+    assert_eq!(recorded["status"], "error");
+    let image = lines(&output)
+        .into_iter()
+        .find(|line| line["stage"] == "image" && line["state"] == "done")
+        .expect("an image event");
+    assert_eq!(
+        image,
+        json!({"stage": "image", "state": "done", "status": "error",
+            "reason": recorded["reason"]}),
+    );
+    assert!(
+        image["reason"]
+            .as_str()
+            .is_some_and(|reason| !reason.is_empty())
+    );
+}
+
+#[test]
 fn a_retry_does_not_retitle_from_previously_kept_text() {
     for stages in [&["image"][..], &["content"], &["content", "image"]] {
         let (fx, stub) = (Fixture::new(), Stub::start());

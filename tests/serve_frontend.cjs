@@ -251,3 +251,80 @@ test('an export never asks the model', () => {
   assert.equal(lib.requests.length, 0);
   assert.deepEqual(lib.shown(), ['Night train']);
 });
+
+// ---- The drawer's Content tab -----------------------------------------------
+// The renderer over one synthetic page, served or exported, with `document`
+// just deep enough for the top of the script.
+function drawer({ exported = false, fetch, nodes = {} } = {}) {
+  const context = vm.createContext({
+    fetch,
+    document: {
+      getElementById: (id) => (id === 'library-data' ? (exported ? { textContent: '{}' } : null) : nodes[id] || null),
+      documentElement: { style: { setProperty() {} } },
+    },
+    IntersectionObserver: class {},
+    library: { pages: [page(0)], snapshots: [snapshot('2026-01-01-000000Z', '2026-01-01T00:00:00Z', [0])] },
+  });
+  vm.runInContext(renderer, context);
+  vm.runInContext('derive(library);', context);
+  return (code) => vm.runInContext(code, context);
+}
+const capture = (fields) => JSON.stringify({ url: 'https://synthetic.test/page-0', content: null, text: null, image: null, ...fields });
+const fetched = { schema_version: 1, url: 'https://synthetic.test/page-0', attempted_at: '2026-01-01T00:00:00Z', status: 'ok', tier: 'github' };
+
+test('a served drawer has History and Content tabs, History first and picked; an export has neither', () => {
+  const run = drawer();
+  const html = run('histHTML(S.pages[0])');
+  assert.match(html, /role="tablist"/);
+  assert.deepEqual([...html.matchAll(/role="tab"[^>]*aria-selected="(\w+)"[^>]*data-tab="(\w+)">(\w+)</g)].map((m) => m.slice(1)),
+    [['true', 'history', 'History'], ['false', 'content', 'Content']]);
+  assert.match(html, /data-pane="history">/, 'History shows');
+  assert.match(html, /data-pane="content" hidden>/, 'Content waits');
+  assert.match(html, /Copy URL/, "today's drawer is the History tab");
+  run('S.tab = "content"');
+  assert.match(run('histHTML(S.pages[0])'), /data-pane="history" hidden>/, 'the tab picked holds for the next drawer');
+  const exported = drawer({ exported: true })('histHTML(S.pages[0])');
+  assert.doesNotMatch(exported, /role="tab/, 'an export has no server to read text from');
+  assert.match(exported, /Copy URL/);
+});
+
+test('the Content tab says how the fetch went, then the text, escaped', () => {
+  const text = '# Title\n\nOne <script>alert(1)</script> two\nthree &amp;\n\n<img src=x onerror=alert(2)>\n';
+  const html = drawer()(`contentHTML(${capture({ content: fetched, text, image: { status: 'error', reason: 'HTTP 503' } })})`);
+  for (const said of ['Ok · GitHub', 'Fetched ', '10 words', 'Image: Error · HTTP 503', 'Copy text']) assert.ok(html.includes(said), said);
+  assert.match(html, /<span class="bad">Image: Error · HTTP 503<\/span>/, 'a failed image takes the failure tone');
+  assert.doesNotMatch(html, /<script|<img/, 'no markup from the page');
+  const paragraphs = [...html.matchAll(/<p>([\s\S]*?)<\/p>/g)].map((m) => m[1]);
+  assert.deepEqual(paragraphs, ['# Title', 'One &lt;script&gt;alert(1)&lt;/script&gt; two\nthree &amp;amp;', '&lt;img src=x onerror=alert(2)&gt;']);
+});
+
+test('the Content tab of a page never fetched, or fetched with no text, says so', () => {
+  const run = drawer();
+  const never = run(`contentHTML(${capture({})})`);
+  assert.match(never, /Not fetched yet/);
+  assert.doesNotMatch(never, /Copy text|cmeta/);
+  const blocked = run(`contentHTML(${capture({ content: { ...fetched, status: 'behind_login', tier: 'web', reason: 'login form' }, image: { status: 'none', reason: 'no_candidate' } })})`);
+  assert.ok(blocked.includes('Behind login · Web · login form'), blocked);
+  assert.ok(blocked.includes('<span>Image: None · no_candidate</span>'), 'only a failure takes the failure tone');
+  assert.match(blocked, /No text kept/);
+  assert.doesNotMatch(blocked, /Copy text|words/);
+  assert.match(run('contentHTML({ error: "HTTP 500" })'), /Could not load the content: HTTP 500/);
+});
+
+test('a reopened Content tab keeps the newest reply when an earlier request settles last', async () => {
+  for (const lateError of [false, true]) {
+    const requests = [];
+    const pane = { innerHTML: 'Loading…' };
+    const run = drawer({ fetch: () => new Promise((resolve) => requests.push(resolve)),
+      nodes: { list: { querySelector: () => ({ querySelector: () => pane }) } } });
+    const earlier = run('loadContent(0)');
+    const latest = run('loadContent(0)');
+    requests[1]({ ok: true, json: async () => ({ content: fetched, text: 'Newest text' }) });
+    await latest;
+    requests[0]({ ok: !lateError, json: async () => lateError ? { error: 'late failure' } : { content: fetched, text: 'Earlier text' } });
+    await earlier;
+    assert.equal(run('S.content.get(0).text'), 'Newest text');
+    assert.match(pane.innerHTML, /Newest text/);
+    assert.doesNotMatch(pane.innerHTML, /Earlier text|late failure/);
+  }
+});

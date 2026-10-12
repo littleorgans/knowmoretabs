@@ -51,8 +51,12 @@
       : WITH_CODE.includes(e.status) && e.http_status ? `${name} · ${e.http_status}` : name;
     return [text, e.status === "ok" ? "ok" : SOFT.includes(e.status) ? "soft" : "bad"];
   }
-  const image = (e) => (e.state !== "done" ? pending(e, "Fetching")
-    : { ok: ["Ok", "ok"], error: ["Error", "bad"], unavailable: ["Unavailable", "bad"] }[e.status] || ["No image", "soft"]);
+  const IMAGE = { ok: ["Ok", "ok"], error: ["Error", "bad"], unavailable: ["Unavailable", "bad"] };
+  function image(e) {   /* a failed image says the reason it recorded */
+    if (e.state !== "done") return pending(e, "Fetching");
+    const [name, look] = IMAGE[e.status] || ["No image", "soft"];
+    return [look === "bad" && e.reason ? `${name} · ${e.reason}` : name, look];
+  }
   const search = (e) => (e.state !== "done" ? ["Indexing", "run"] : e.value === "indexed" ? ["Indexed", "ok"] : ["Not indexed", "bad"]);
 
   /* the stages Retry runs again (the contract's lab mapping), all in one run: the text after an error or a

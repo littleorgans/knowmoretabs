@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::serve::{A, B, HIDDEN, Reply, Server, archive};
+use common::serve::{A, B, HIDDEN, Reply, Server, archive, kept_image, kept_name};
 use common::{Fixture, fingerprint, stderr, write_snapshot};
 use serde_json::{Value, json};
 
@@ -1035,34 +1035,6 @@ fn assets_have_correct_types_and_no_network_implying_headers() {
 
 // --- Preview images -----------------------------------------------------------
 
-/// The name a page's image is kept and served under: the hex SHA-256 of its URL.
-fn image_name(url: &str) -> String {
-    use sha2::{Digest, Sha256};
-    format!("{:x}", Sha256::digest(url.as_bytes()))
-}
-
-/// Appends an image line for `url` and, given bytes, writes its file.
-fn kept_image(fx: &Fixture, url: &str, status: &str, jpeg: Option<&[u8]>) {
-    let pages = fx.root.join("pages");
-    fs::create_dir_all(pages.join("images")).unwrap();
-    let line = json!({"schema_version": 1, "url": url, "attempted_at": "2026-10-07T09:00:00Z", "status": status});
-    let mut log = fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(pages.join("images.jsonl"))
-        .unwrap();
-    writeln!(log, "{line}").unwrap();
-    if let Some(jpeg) = jpeg {
-        fs::write(
-            pages
-                .join("images")
-                .join(format!("{}.jpg", image_name(url))),
-            jpeg,
-        )
-        .unwrap();
-    }
-}
-
 #[test]
 fn the_library_names_kept_images_and_the_image_route_serves_only_those_names() {
     let fx = Fixture::new();
@@ -1073,7 +1045,7 @@ fn the_library_names_kept_images_and_the_image_route_serves_only_those_names() {
     kept_image(&fx, HIDDEN, "none", None);
     let server = Server::start(&fx);
     let library = server.library();
-    let a = image_name(A);
+    let a = kept_name(A);
     assert_eq!(page(&library, A)["image"], a.as_str());
     assert!(page(&library, B).get("image").is_none(), "ok, but no file");
     assert!(
@@ -1103,7 +1075,7 @@ fn the_library_names_kept_images_and_the_image_route_serves_only_those_names() {
         format!("%2e%2e%2f{}", &a[9..]),
         encoded,
         format!("{}%5C{}", &a[..30], &a[33..]),
-        image_name(B),
+        kept_name(B),
         String::new(),
     ] {
         let reply = server.get(&format!("/api/image/{name}"));
@@ -1126,11 +1098,11 @@ fn the_image_route_does_not_follow_a_symlink_out_of_the_store() {
         outside,
         fx.root
             .join("pages/images")
-            .join(format!("{}.jpg", image_name(A))),
+            .join(format!("{}.jpg", kept_name(A))),
     )
     .unwrap();
     let server = Server::start(&fx);
-    let reply = server.get(&format!("/api/image/{}", image_name(A)));
+    let reply = server.get(&format!("/api/image/{}", kept_name(A)));
     assert_eq!(
         (
             reply.status,
@@ -1157,13 +1129,13 @@ fn the_library_and_image_route_ignore_directories_named_as_images() {
     fs::create_dir(
         fx.root
             .join("pages/images")
-            .join(format!("{}.jpg", image_name(A))),
+            .join(format!("{}.jpg", kept_name(A))),
     )
     .unwrap();
     let server = Server::start(&fx);
     assert!(page(&server.library(), A).get("image").is_none());
     assert_eq!(
-        server.get(&format!("/api/image/{}", image_name(A))).status,
+        server.get(&format!("/api/image/{}", kept_name(A))).status,
         404
     );
 }
@@ -1443,6 +1415,7 @@ fn review_authorities_on_every_route_before_body_read() {
         "/app.css",
         "/app.js",
         "/api/library",
+        "/api/content?url=https%3A%2F%2Fa.test%2Fone",
         "/api/forget",
         "/api/restore",
         "/api/tags",

@@ -176,6 +176,24 @@ impl<T: Serialize> Store<T> {
     }
 }
 
+/// A file a store keeps, read for `serve`: its bytes, or `None` when there
+/// is no regular file at `path`. Symlinks are refused. No lock: a store
+/// replaces a file by a rename, so a read sees the old file or the new one
+/// whole.
+pub fn kept_file(path: &Path) -> Result<Option<Vec<u8>>, Error> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_file() => {}
+        Ok(_) => return Ok(None),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(Error::io("read", path)(err)),
+    }
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(Error::io("read", path)(err)),
+    }
+}
+
 /// A log as its readers see it.
 #[derive(Debug)]
 pub struct Latest<R> {

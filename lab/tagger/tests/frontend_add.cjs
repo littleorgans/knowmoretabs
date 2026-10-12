@@ -34,6 +34,8 @@ async function addStates() {
     ['Not recorded', [L('added'), C('unknown', null, { reason: 'not_recorded' }), I('unknown'), S('indexed')], ['Added', 'Not recorded', 'No image', 'Indexed'], null],
     ['Image retrying', [L('added'), C('ok', 'web'), ev('image', 'retrying', { after_s: 2 })], ['Added', 'Ok · Web', 'Retrying', ''], null],
     ['Image error', [L('added'), C('ok', 'web'), I('error'), S('indexed')], ['Added', 'Ok · Web', 'Error', 'Indexed'], 'Retry'],
+    ['Image error, why', [L('added'), C('ok', 'web'), ev('image', 'done', { status: 'error', reason: 'HTTP 503' }), S('indexed')], ['Added', 'Ok · Web', 'Error · HTTP 503', 'Indexed'], 'Retry'],
+    ['Image unavailable, why', [L('known'), C('ok', 'web'), ev('image', 'done', { status: 'unavailable', reason: 'HTTP 503; failed on 3 runs' }), S('indexed')], ['Already in library', 'Ok · Web', 'Unavailable · HTTP 503; failed on 3 runs', 'Indexed'], null],
     ['Image unavailable', [L('known'), C('ok', 'web'), I('unavailable'), S('indexed')], ['Already in library', 'Ok · Web', 'Unavailable', 'Indexed'], null],
     ['Not in library', [L('refused', { reason: 'not_in_library' })], ['Not in library', '', '', ''], null],
     ['Other tier', [L('known'), C('ok', 'other'), I('ok'), S('indexed')], ['Already in library', 'Ok', 'Ok', 'Indexed'], null],

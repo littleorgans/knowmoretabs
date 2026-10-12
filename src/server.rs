@@ -1,13 +1,14 @@
 //! `knowmoretabs serve`: the library over HTTP/1.1 on 127.0.0.1.
 //!
 //! slice: triage, platforms, tags
-//! why: Routing over the archive: nine routes, one client, each answered
+//! why: Routing over the archive: ten routes, one client, each answered
 //!      from the archive on disk and every write through the same locked
 //!      paths the commands use, plus one prefix forwarded to the model
 //!      service (`model_service`). It binds loopback only; the wire, its
 //!      bounds and the Host and Origin checks are `http`'s. The image
 //!      route's name is checked where the images live
-//!      (`image_store::served`).
+//!      (`image_store::served`); the content route answers only a page the
+//!      library lists (`content_view::served`).
 
 use std::io;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -26,7 +27,10 @@ use crate::http::{
 use crate::library::{self, Shape};
 use crate::model_service::{self, ModelService};
 use crate::triage::{self, Action};
-use crate::{assets, export, image_store, library_history, out, suggestions, tags};
+use crate::{
+    assets, content_store, content_view, export, image_store, library_history, out, suggestions,
+    tags,
+};
 
 pub struct Options {
     pub root: PathBuf,
@@ -191,6 +195,7 @@ impl Server {
             ("GET", "/" | "/index.html") => self.asset("index.html"),
             ("GET", "/app.css" | "/app.js") => self.asset(&path[1..]),
             ("GET", "/api/library") => self.library(),
+            ("GET", "/api/content") => self.content(&head.target),
             ("POST", "/api/forget") => self.triage(head, body, Action::Forget),
             ("POST", "/api/restore") => self.triage(head, body, Action::Restore),
             ("POST", "/api/tags") => self.tags(head, body),
@@ -205,7 +210,7 @@ impl Server {
             _ if path.starts_with(model_service::PREFIX) => {
                 model_service::forward(self.model.as_ref(), &self.root, head, path, body, self.log)
             }
-            (_, "/" | "/index.html" | "/app.css" | "/app.js" | "/api/library") => {
+            (_, "/" | "/index.html" | "/app.css" | "/app.js" | "/api/library" | "/api/content") => {
                 Response::method_not_allowed("GET")
             }
             (_, "/api/forget" | "/api/restore" | "/api/tags" | "/api/vocabulary") => {
@@ -238,6 +243,27 @@ impl Server {
     fn library(&self) -> Response {
         match self.build_library() {
             Ok(json) => Response::ok("application/json", json),
+            Err(err) => self.failure(&err),
+        }
+    }
+
+    /// One page's capture, the page named by `?url=`, percent encoded.
+    fn content(&self, target: &str) -> Response {
+        let Some(url) = query_url(target) else {
+            return Response::error(
+                Status::BadRequest,
+                "name a page: /api/content?url=<address>",
+            );
+        };
+        match content_view::served(&self.root, &url) {
+            Ok(Some(served)) => match serde_json::to_vec(&served) {
+                Ok(json) => Response::ok("application/json", json),
+                Err(source) => self.failure(&Error::Json {
+                    path: content_store::log_path(&self.root),
+                    source,
+                }),
+            },
+            Ok(None) => Response::error(Status::NotFound, "not in your library"),
             Err(err) => self.failure(&err),
         }
     }
@@ -383,6 +409,19 @@ impl Server {
         self.log.warn(&err.to_string());
         Response::error(Status::InternalServerError, &err.to_string())
     }
+}
+
+/// The `url` a request target names in its query, percent decoded, as
+/// `encodeURIComponent` encodes it; `None` when absent, empty or not UTF-8.
+fn query_url(target: &str) -> Option<String> {
+    let (_, query) = target.split_once('?')?;
+    let value = query
+        .split('&')
+        .find_map(|pair| pair.strip_prefix("url="))?;
+    let url = percent_encoding::percent_decode_str(value)
+        .decode_utf8()
+        .ok()?;
+    (!url.is_empty()).then(|| url.into_owned())
 }
 
 /// A request head the wire could not frame.
