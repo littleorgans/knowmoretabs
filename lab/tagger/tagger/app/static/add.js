@@ -7,7 +7,8 @@
    stage. Tags picked before the page has a row wait striped, go with the
    link when it is added and are written at Indexed, in one change with one
    Undo; a newer link does not stop an older job writing its own. A refusal
-   clears them. A failed stage shows its value and one action, which starts
+   clears them. At Indexed the model's suggestions for the page fill the
+   Suggested row, less the tags picked, and stay put while it is on screen. A failed stage shows its value and one action, which starts
    a job of its own: Retry runs only the stages that failed.
    `#add=<encoded link>&title=<encoded title>` fills the box and focuses
    Add, which waits for Enter; the title goes with that link. */
@@ -92,6 +93,7 @@
   let offer = null;    // the request the action button starts
   let titled = null;   // [link, title] from the deep link, sent with that link's Add
   let shown = null;    // the link the panel last showed: another one resets it
+  let suggested = { url: null, tags: [] };   // the model's, for the page last indexed on screen, fixed then: a pick never moves them
   const draft = new Set();     // picks for the box's link, before Add
   const held = new Map();      // link -> picks for a submitted link whose row is not known yet
   const latest = new Map();    // link -> the newest job started for it: only that one writes its picks
@@ -146,6 +148,7 @@
       row = K.know([j.page])[0];
       K.gone.delete(row);
     } else if (j.page) Object.assign(K.pages.get(row), { ...j.page, tags: K.pages.get(row).tags });   // its tags are this tab's
+    if (j.page && suggested.url !== j.url) suggested = { url: j.url, tags: j.page.suggested.filter((t) => !waiting(j.url, t)) };
     job = j;
     const box = K.$("a-link");
     if (LISTED.includes((j.stages.library || {}).value) && cleared !== j.id) {   // listed: the box is ready for the next link
@@ -224,7 +227,8 @@
     if (shown !== t.url) { shown = t.url; K.panel.reset(); }
     render(tile(t.url, s), K.$("a-tile"));
     const has = (tag) => !t.draft && row !== null && K.has(row, tag);
-    K.panel.render({ has, pend: (tag) => (t.draft && draft.has(tag)) || waiting(t.url, tag), pick, sugg: [], recent: [] });
+    const sugg = !t.draft && suggested.url === t.url ? suggested.tags : [];
+    K.panel.render({ has, pend: (tag) => (t.draft && draft.has(tag)) || waiting(t.url, tag), pick, sugg, recent: [] });
   }
 
   /* ---- the deep link: fill the box, focus Add, wait for Enter ---- */

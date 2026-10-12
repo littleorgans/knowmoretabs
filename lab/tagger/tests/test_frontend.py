@@ -77,6 +77,7 @@ CASES = {
         "addPicksBeforeReply",
         "addPicksStalePoll",
         "addPicksDetour",
+        "addSuggested",
     ],
 }
 

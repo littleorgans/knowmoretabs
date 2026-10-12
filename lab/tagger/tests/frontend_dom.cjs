@@ -49,6 +49,8 @@ function setup(...files) {
     window: { KMT: K }, document: { activeElement: null, documentElement: node('root'), querySelector() { return null; }, addEventListener(event, fn) { keys[event] = fn; } },
     location: { hash: '' }, addEventListener(event, fn) { listeners[event] = fn; }, matchMedia: () => ({ matches: false }),
     history, scrollY: 0, setTimeout, clearTimeout, console, performance, URL,
+    getComputedStyle: (el) => ({ gridTemplateColumns: Array(el.columns || 3).fill('10rem').join(' ') }),   // a grid's tracks: 3 unless set
+    ResizeObserver: class { observe() {} },
   });
   context.scrollTo = (x, y) => { context.scrollY = y; };
   let coreFail;
