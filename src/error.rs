@@ -123,6 +123,10 @@ pub enum Error {
         source: std::io::Error,
     },
     #[error(
+        "cannot forward search to port {port}: it is the port this library is served on; pass --model-port the port the model service listens on"
+    )]
+    ModelPort { port: u16 },
+    #[error(
         "cannot embed library data: missing or out-of-order library-data markers in index.html"
     )]
     AssetMarkers,
@@ -163,6 +167,7 @@ impl Error {
             Self::PromptFolder { .. } => "prompt_folder",
             Self::Import { .. } => "import",
             Self::Bind { .. } => "bind",
+            Self::ModelPort { .. } => "model_port",
             Self::AssetMarkers => "asset_markers",
             Self::ExportDestination(_) => "export_destination",
             Self::HistoryRecord { .. } => "history_record",

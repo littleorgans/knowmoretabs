@@ -20,17 +20,25 @@ const host = (() => {
     tag: (urls, add, remove) => post('api/tags', { urls, add, remove }),
     undoTags: (undo) => post('api/tags', { urls: [], undo }),
     vocab: (create, retire) => post('api/vocabulary', { create, retire }),
+    // Every page's address, best first, from the model service serve forwards to.
+    rank: (query) => post('model/api/rank', { query }).then((r) => {
+      if (!Array.isArray(r?.keys) || !r.keys.every((k) => typeof k === 'string')) throw new Error('not a ranking');
+      return r.keys;
+    }),
   };
 })();
 
 // ---- 2. State -------------------------------------------------------------
 const S = { pages: [], snaps: [], stats: {}, groups: new Map(), shown: [], rendered: [], q: '', domain: '', group: '', status: '', sort: 'last',
             openAll: false, preview: false, cur: -1, anchor: -1, sel: new Set(), exp: new Set(), undo: null, view: 'pages',
-            vocab: new Map(), defs: new Map(), tags: [], tagsAll: false };   // vocab: lower-case name → name; tags: the tag filter, lower-case, all must match
+            vocab: new Map(), defs: new Map(), tags: [], tagsAll: false,   // vocab: lower-case name → name; tags: the tag filter, lower-case, all must match
+            rank: null, model: null };   // rank: the model's order for a query, { q, at: address → place }; model: null until it answers or fails
 const FOLD = 10;                                   // rows of "Open now" shown before "show all"
 const EAGER = 300, CHUNK = 200;                    // rows rendered up front; rows per lazy placeholder after that
 const COLS = 12, COL = 4, SROWS = 4;               // the sighting strip: marks to a row, px per mark (--col), rows
 const TAGCH = 80, TAGMAX = 8;                      // a row's chips stop at this many characters or chips, then "+N"
+const RANK_TOP = 50;                               // ranked pages shown, as the model service's MAX_RESULTS pages them
+const RANK_DELAY = 150;                            // ms of quiet typing before the model is asked
 const $ = (id) => document.getElementById(id);
 // ---- theme: light or dark, the OS choice until the switch is used, then remembered here.
 // Runs before first paint (the script is parser-blocking at the end of body) so there is no flash.
@@ -103,7 +111,10 @@ const SORTS = {
   count: (a, b) => b.n - a.n || b.last - a.last || a.lw - b.lw,
   title: (a, b) => collator.compare(a.name, b.name) || b.last - a.last,
   url: (a, b) => collator.compare(a.addr, b.addr),
+  relevance: (a, b) => place(a) - place(b) || SORTS.last(a, b),   // pages the model has not indexed last, by last seen
 };
+const SORT_OPTIONS = [{ value: 'last', label: 'Last seen' }, { value: 'first', label: 'First seen' }, { value: 'count', label: 'Times seen' }, { value: 'title', label: 'Title' }, { value: 'url', label: 'URL' }];
+const RELEVANCE = { value: 'relevance', label: 'Relevance' };
 
 // ---- 3. Derive pages ⇄ snapshots ------------------------------------------
 // The document comes from our own backend, but a hand-edited or half-written
@@ -203,9 +214,9 @@ function degraded(s) {
 // `skip` names the filter a picker must ignore: the Site menu counts what the
 // *other* filters leave, which is the only count that is true when you click
 // it. Its own filter is skipped, or choosing a site would collapse the menu
-// to the site you just chose.
-function matcher(skip) {
-  const words = S.q.trim().toLowerCase().split(/\s+/).filter(Boolean);
+// to the site you just chose. Without `byWords` the query is left to the model.
+function matcher(skip, byWords = true) {
+  const words = byWords ? S.q.trim().toLowerCase().split(/\s+/).filter(Boolean) : [];
   const wantForgotten = S.status === 'forgotten';
   const d = skip === 'domain' ? '' : S.domain.trim().toLowerCase(), exact = d && S.pages.some((p) => p.domain === d);
   const g = skip === 'group' ? '' : S.group.trim().toLowerCase(), gexact = g && S.groups.has(g);
@@ -215,12 +226,34 @@ function matcher(skip) {
     && (!S.preview || S.sel.has(p.i)) && S.tags.every((t) => p.all.has(t))
     && words.every((w) => p.hay.includes(w));
 }
-function compute() { S.shown = S.pages.filter(matcher('')).sort(SORTS[S.sort]); }
+// The model's order, only for the query it answered, so a reply to an older
+// one, or a query cleared or replaced, never orders the list.
+const ranked = () => (S.rank && S.rank.q === S.q.trim() ? S.rank : null);
+const place = (p) => S.rank?.at.get(p.url) ?? Infinity;
+// What the list shows, and what a picker counts. Ranked: the model's best
+// RANK_TOP pages that pass the facets, then the pages it has not indexed yet
+// that the words match, as keyword search would show them.
+function pick(skip) {
+  const r = ranked();
+  if (!r) return S.pages.filter(matcher(skip));
+  const ok = matcher(skip, false), words = matcher(skip);
+  return S.pages.filter((p) => r.at.has(p.url) && ok(p)).sort((a, b) => place(a) - place(b)).slice(0, RANK_TOP)
+    .concat(S.pages.filter((p) => !r.at.has(p.url) && words(p)));
+}
+// "Relevance" is a sort only while the model ranks the query: picked when it
+// appears unless another sort was chosen, and gone with the ranking.
+function syncSort() {
+  const on = !!ranked();
+  if (on === DD.sort.options.includes(RELEVANCE)) return;
+  DD.sort.set(on ? [RELEVANCE, ...SORT_OPTIONS] : SORT_OPTIONS);
+  if (on ? S.sort === DEFAULTS.sort : S.sort === RELEVANCE.value) setSeg('sort', on ? RELEVANCE.value : DEFAULTS.sort);
+}
+function compute() { syncSort(); S.shown = pick('').sort(SORTS[S.sort]); }
 // Built when a menu opens, not on every keystroke: one pass over the pages,
 // and only for the picker you actually reached for.
 function facet(skip, key) {
-  const ok = matcher(skip), n = new Map();
-  for (const p of S.pages) if (ok(p)) for (const t of key(p)) n.set(t, (n.get(t) || 0) + 1);
+  const n = new Map();
+  for (const p of pick(skip)) for (const t of key(p)) n.set(t, (n.get(t) || 0) + 1);
   return [...n].sort((a, b) => b[1] - a[1] || collator.compare(a[0], b[0]));
 }
 const siteOptions = () => facet('domain', (p) => (p.domain ? [p.domain] : []))
@@ -489,6 +522,25 @@ function dropdown(id, { typeahead = false, none = 'No matches', onPick, options 
 }
 let raf = 0;
 const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(render); };
+// A query goes to the model once typing settles, and only the newest reply
+// counts. While the model answers, the list holds still until it does, so a
+// ranked search never flashes keyword results first. When it last failed, or
+// in an export, the list is today's keyword search at once; the next query
+// asks again. Facets never ask: they reorder what the last reply ranked.
+let asked = 0, askTimer = 0;
+function cancelAsk() { clearTimeout(askTimer); return ++asked; }
+function ask() {
+  const n = cancelAsk(), q = S.q.trim();
+  if (!q || !host.rank) return schedule();
+  if (S.model === false) schedule();
+  askTimer = setTimeout(async () => {
+    let keys = null;
+    try { keys = await host.rank(q); } catch { /* keyword search, said nowhere */ }
+    if (n !== asked) return;
+    S.model = !!keys; S.rank = keys && { q, at: new Map(keys.map((k, i) => [k, i])) };
+    render();
+  }, RANK_DELAY);
+}
 
 // ---- 5. Cursor, expand, select ---------------------------------------------
 const rows = () => [...$(S.view === 'pages' ? 'list' : 'view-snapshot').querySelectorAll('.row')];
@@ -830,7 +882,7 @@ function route() {
   else if (view === 'snapshots') showView('snapshots');
   else { showView('pages'); if (a !== undefined && S.pages[a]?.n) reveal(+a); }
 }
-function clearFilters(status = '') { S.preview = false; S.tags = []; S.q = $('q').value = ''; S.domain = $('domain').value = ''; S.group = $('group').value = ''; setSeg('status', status); }
+function clearFilters(status = '') { cancelAsk(); S.preview = false; S.tags = []; S.q = $('q').value = ''; S.domain = $('domain').value = ''; S.group = $('group').value = ''; setSeg('status', status); }
 function reveal(i) {
   const p = S.pages[i];
   if (!S.shown.includes(p)) { clearFilters(p.forgotten ? 'forgotten' : ''); render(); }
@@ -882,12 +934,12 @@ function stepBack(t) {
 }
 function wire() {
   document.body.dataset.mode = host.mode;
-  for (const id of ['q', 'domain', 'group']) $(id).addEventListener('input', (e) => { S[id] = e.target.value; schedule(); });
+  for (const id of ['q', 'domain', 'group']) $(id).addEventListener('input', (e) => { S[id] = e.target.value; if (id === 'q') ask(); else schedule(); });
   dropdown('domain', { typeahead: true, options: siteOptions, onPick: (o) => { S.domain = $('domain').value = o.value; render(); } });
   dropdown('group', { typeahead: true, options: groupOptions, onPick: (o) => { S.group = $('group').value = o.value; render(); } });
   for (const id of ['status', 'sort']) dropdown(id, { onPick: (o) => { setSeg(id, o.value); render(); } });
   DD.status.set([{ value: '', label: 'Everything' }, { value: 'open', label: 'Open now' }, { value: 'closed', label: 'Closed' }]);
-  DD.sort.set([{ value: 'last', label: 'Last seen' }, { value: 'first', label: 'First seen' }, { value: 'count', label: 'Times seen' }, { value: 'title', label: 'Title' }, { value: 'url', label: 'URL' }]);
+  DD.sort.set(SORT_OPTIONS);
   $('help-btn').addEventListener('click', () => $('help').showModal());
   THEME.set(THEME.current(), false);
   $('theme').addEventListener('click', THEME.flip);

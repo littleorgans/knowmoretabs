@@ -78,14 +78,7 @@ pub enum Command {
         with_history: bool,
     },
     /// Serve the library on 127.0.0.1 with live forget, restore and tagging
-    Serve {
-        /// Port to listen on; 0 picks a free one
-        #[arg(long, default_value_t = DEFAULT_PORT, value_name = "N")]
-        port: u16,
-        /// Open the page in your browser once the server is listening
-        #[arg(long)]
-        open: bool,
-    },
+    Serve(ServeArgs),
     /// Add one page to the library by its address
     #[command(
         long_about = "Adds one page to the library by its address, with no session file and no new \
@@ -244,6 +237,21 @@ impl From<FetchArgs> for crate::targets::Options {
             refetch: args.refetch,
         }
     }
+}
+
+/// Where the library is served, and where its search is ranked.
+#[derive(Debug, Clone, Copy, Args)]
+pub struct ServeArgs {
+    /// Port to listen on; 0 picks a free one
+    #[arg(long, default_value_t = DEFAULT_PORT, value_name = "N")]
+    pub port: u16,
+    /// Open the page in your browser once the server is listening
+    #[arg(long)]
+    pub open: bool,
+    /// Rank Library search through the model service on this port of
+    /// 127.0.0.1 (the tagger lab's `tagger app`); keyword search without it
+    #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..))]
+    pub model_port: Option<u16>,
 }
 
 /// One page to add, and how far to capture it.
@@ -434,19 +442,30 @@ mod tests {
         let cli = Cli::try_parse_from(["knowmoretabs", "serve"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Serve {
+            Some(Command::Serve(ServeArgs {
                 port: DEFAULT_PORT,
-                open: false
-            })
+                open: false,
+                model_port: None
+            }))
         ));
         let cli = Cli::try_parse_from(["knowmoretabs", "serve", "--port", "0", "--open"]).unwrap();
         assert!(matches!(
             cli.command,
-            Some(Command::Serve {
+            Some(Command::Serve(ServeArgs {
                 port: 0,
-                open: true
-            })
+                open: true,
+                model_port: None
+            }))
         ));
+        let cli = Cli::try_parse_from(["knowmoretabs", "serve", "--model-port", "41879"]).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Serve(ServeArgs {
+                model_port: Some(41879),
+                ..
+            }))
+        ));
+        assert!(Cli::try_parse_from(["knowmoretabs", "serve", "--model-port", "0"]).is_err());
     }
 
     #[test]

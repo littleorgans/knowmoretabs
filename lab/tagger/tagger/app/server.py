@@ -4,12 +4,14 @@ Static files come from `static/`; page images are served by their hashed name fr
 JSON API runs the engine and the store. API work is serialized; static and image transfers run independently.
 Requests must name this server as Host (no DNS rebinding) and POSTs must be same origin JSON. The process
 prints counts and timings only; the request log is off, since nothing about a page belongs in a terminal.
+`/api/rank` is the Library's search: knowmoretabs `serve` forwards its query here and keeps only replies whose
+archive header names its own archive.
 `--smoke` loads everything, times searches with the owner's tag descriptions as queries, prints numbers, exits.
 """
 
 import json
 import mimetypes
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 import re
 import time
 from http import HTTPStatus
@@ -25,7 +27,12 @@ from . import add, engine, kmt, send
 from .store import Exclusions, Keys, Store, tag_name
 
 STATIC = Path(__file__).with_name("static")
-MAX_RESULTS = 50
+MAX_RESULTS = 50  # web/app.js RANK_TOP shows the same number of ranked pages
+# Every reply names the archive this service loaded; src/model_service.rs reads the same header
+ARCHIVE_HEADER = "X-KMT-Archive"
+# Seconds the Library's rank waits for the model; an Add link index holds it for longer, and the Library then
+# searches by keyword instead of queueing behind it
+RANK_WAIT = 0.5
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; "
     "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -138,6 +145,16 @@ class App:
             **judged,
             "ms": {"encode": round(1000 * (encoded - start), 1), "rank": round(1000 * (done - encoded), 1)},
         }
+
+    def rank(self, body: dict) -> dict:
+        """Every page this service holds, forgotten ones included, best first for `query` by text and keywords:
+        their keys. The Library applies its own filters to the order."""
+        query = str(body.get("query", ""))
+        if not query.strip():
+            raise ValueError("type a search")
+        q = self.encode([query])[0]
+        rows = engine.order(self.lib, q, query, np.ones(len(self.lib.records), bool))
+        return {"keys": [self.lib.records[i]["key"] for i in rows]}
 
     def refined(self, query: str, q: np.ndarray, hits: list[dict]) -> np.ndarray:
         """The query moved toward the plain ranking's included results and away from every excluded page."""
@@ -333,6 +350,10 @@ ROUTES = [
 ]
 
 
+# The Library's rank holds the app's lock like the routes above, but waits for it at most RANK_WAIT
+RANK_ROUTES = [("POST", re.compile(r"/api/rank"), lambda app, m, b: app.rank(b))]
+
+
 # Add link jobs and sends run knowmoretabs; they take the app's lock only around its state, so the screen never
 # waits on a run
 JOB_ROUTES = [
@@ -357,8 +378,31 @@ def _found(value, view):
     return view(value)
 
 
+class Busy(Exception):
+    """The model stayed in use past a route's wait."""
+
+
+@contextmanager
+def bounded(lock: Lock, wait: float):
+    """Hold `lock`, waiting at most `wait` seconds for it, else raise `Busy`."""
+    if not lock.acquire(timeout=wait):
+        raise Busy
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def archive_identity(root: Path) -> str:
+    """`<device>:<inode>` of the archive directory, both unsigned 64 bit as Rust's `MetadataExt` gives them, so a
+    path spelled differently on a case insensitive volume still names the same archive."""
+    st = root.stat()
+    return f"{st.st_dev % (1 << 64)}:{st.st_ino}"
+
+
 def handler(app: App, port: int):
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
+    archive = archive_identity(app.lib.root)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "kmt-tagger"
@@ -375,6 +419,7 @@ def handler(app: App, port: int):
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cache-Control", "private, max-age=3600" if cache else "no-store")
+            self.send_header(ARCHIVE_HEADER, archive)
             self.end_headers()
             self.wfile.write(body)
 
@@ -417,13 +462,16 @@ def handler(app: App, port: int):
             self.api("POST", self.path, body if isinstance(body, dict) else {})
 
         def api(self, method: str, path: str, body) -> None:
-            for routes, lock in ((ROUTES, app.lock), (JOB_ROUTES, nullcontext())):
+            tables = ((ROUTES, app.lock), (RANK_ROUTES, bounded(app.lock, RANK_WAIT)), (JOB_ROUTES, nullcontext()))
+            for routes, lock in tables:
                 for verb, pattern, run in routes:
                     if verb == method and (m := pattern.fullmatch(path)):
                         try:
                             with lock:
                                 result = run(app, m, body)
                             return self.json(HTTPStatus.OK, result)
+                        except Busy:
+                            return self.json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "busy"})
                         except LookupError:
                             return self.json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                         except (ValueError, TypeError) as err:

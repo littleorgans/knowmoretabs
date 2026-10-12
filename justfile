@@ -40,7 +40,9 @@ _apps action mode library_port tagging_port:
     set -euo pipefail
     action="$1"; mode="$2"; ports=("$3" "$4")
     [[ "$mode" == "" || "$mode" == dev ]] || { echo 'usage: just up [dev]' >&2; exit 1; }
-    logs="${KMT_ROOT:-$HOME/.knowmoretabs}/logs"
+    # One archive for both apps, so the Library's search ranks over its own pages.
+    root="${KMT_ROOT:-$HOME/.knowmoretabs}"
+    logs="$root/logs"
     status=0
     listeners() { lsof -nP -t -iTCP:"$1" -sTCP:LISTEN || [[ $? == 1 ]]; }
     live() { kill -0 "$1" 2>/dev/null; }
@@ -52,12 +54,12 @@ _apps action mode library_port tagging_port:
         port="${ports[$i]}"
         if [[ "$i" == 0 ]]; then
             app=library; ours='* serve --port *'
-            command=(knowmoretabs serve --port "$port")
-            [[ "$mode" != dev ]] || command=(cargo run --locked -- serve --port "$port")
+            command=(knowmoretabs --root "$root" serve --port "$port" --model-port "${ports[1]}")
+            [[ "$mode" != dev ]] || command=(cargo run --locked -- --root "$root" serve --port "$port" --model-port "${ports[1]}")
         else
             app=tagger; ours='*tagger app --port *'
-            command=(tagger app --port "$port")
-            [[ "$mode" != dev ]] || command=(uv run --locked --project lab/tagger tagger app --port "$port")
+            command=(tagger app --port "$port" --root "$root")
+            [[ "$mode" != dev ]] || command=(uv run --locked --project lab/tagger tagger app --port "$port" --root "$root")
         fi
         file="$logs/$app.pid"; log="$logs/$app.log"
         pid=""; [[ ! -f "$file" ]] || pid="$(cat "$file")"

@@ -145,7 +145,11 @@ page you came from, its visits and its time on page. Select rows and forget them
 "Forgotten". `/` focuses search, `j` and `k` move, `f` forgets. `--port N`
 picks another port and `--open` opens your browser. A page `content` kept a
 preview image of shows it as a small thumbnail, served from your archive by
-`serve` itself; an export has no thumbnails.
+`serve` itself; an export has no thumbnails. With `--model-port N`, which
+`just up` passes, search ranks by topic and page text through the tagger's
+model service on that port of `127.0.0.1`, over the same archive, and shows
+the best 50; while the service is stopped, loading or busy, search matches
+words as it does without it.
 
 Forgetting hides a page from the library. It never touches a snapshot: every
 page you forget is still in every snapshot it was ever in, and `restore`
@@ -528,7 +532,9 @@ with a `schema_version`; it is the source of truth and readable in any
 editor. Everything under `export/` is derived and can be deleted.
 
 Nothing leaves the machine unless you run `enrich` or `content`. `save`,
-`serve`, `export` and the tag commands make no network requests of any kind;
+`export` and the tag commands make no network requests. `serve` makes none
+unless `--model-port` is set; then it sends each search query to the model
+service over loopback on this machine.
 `enrich` and `content` are the only code that sends your pages' addresses,
 or a video's id to YouTube through yt-dlp, and what each sends is described
 above; `content` also downloads one preview image per page from the address

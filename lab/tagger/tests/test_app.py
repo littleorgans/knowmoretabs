@@ -431,7 +431,9 @@ class ExclusionTests(unittest.TestCase):
             ex.apply("q", self.keys, "forget", "u1")
 
 
-class ServerTests(Fixture):
+class Served(Fixture):
+    """The app on a fresh store, served on a free port, and one HTTP call to it."""
+
     def setUp(self):
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
@@ -442,10 +444,6 @@ class ServerTests(Fixture):
         thread.start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
-
-    def record(self) -> dict:
-        """The export record a send writes first."""
-        return self.app.store.export(self.app.forgotten.keys)
 
     def call(self, method, path, body=None, headers=None):
         conn = http.client.HTTPConnection("127.0.0.1", self.port)
@@ -459,6 +457,12 @@ class ServerTests(Fixture):
         conn.close()
         kind = r.getheader("Content-Type", "")
         return r.status, json.loads(data) if kind.startswith("application/json") else data, r
+
+
+class ServerTests(Served):
+    def record(self) -> dict:
+        """The export record a send writes first."""
+        return self.app.store.export(self.app.forgotten.keys)
 
     def test_api_finishes_while_an_image_transfer_is_blocked(self):
         started, release, answered = threading.Event(), threading.Event(), threading.Event()

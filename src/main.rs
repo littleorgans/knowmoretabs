@@ -43,6 +43,7 @@ mod github_page;
 mod guard;
 mod head;
 mod history;
+mod http;
 mod image_fetch;
 mod image_page;
 mod image_pick;
@@ -58,6 +59,7 @@ mod metadata;
 mod metadata_fetch;
 mod metadata_writer;
 mod model;
+mod model_service;
 mod out;
 mod platform;
 mod process_tree;
@@ -121,13 +123,7 @@ fn main() -> ExitCode {
         Some(Command::Export { dir, with_history }) => {
             library_commands::export(&root, dir.as_deref(), *with_history, cli.json, log)
         }
-        Some(Command::Serve { port, open }) => server::run(&server::Options {
-            root,
-            port: *port,
-            open: *open,
-            json: cli.json,
-            log,
-        }),
+        Some(Command::Serve(args)) => serve(root, *args, cli.json, log),
         Some(Command::Add(args)) => match add(&root, args, &cli, log) {
             Ok(code) => return code,
             Err(err) => Err(err),
@@ -220,6 +216,22 @@ fn add(
 }
 
 /// The three forms of `tag`, which clap has already kept apart.
+fn serve(
+    root: std::path::PathBuf,
+    args: cli::ServeArgs,
+    json: bool,
+    log: Log,
+) -> Result<(), error::Error> {
+    server::run(&server::Options {
+        root,
+        port: args.port,
+        model_port: args.model_port,
+        open: args.open,
+        json,
+        log,
+    })
+}
+
 fn tag(
     root: &std::path::Path,
     args: &cli::TagArgs,

@@ -287,10 +287,12 @@ to record was known; notes earn their place the same way, rather than guessed.
 
 - Prepared by: content
 
-Keyword retrieval over the page text `content` stores. It waits for that store
-to exist and fill, and for a measured query to say what the index should be:
-built in memory from the markdown first, a rebuildable SQLite index if that is
-slow, as `scale-index` says. The files stay the source of truth either way.
+Search over page text ships through the lab's model service:
+`serve --model-port` forwards the Library query, and the Tagger's hybrid ranks
+title, metadata and kept text. A Rust native index over the kept markdown
+stays future, for search without the service (Windows, or the service
+stopped), in memory first, then a rebuildable SQLite index if slow, as
+`scale-index` says. The files stay the source of truth.
 
 ### `scale-index` — Stay instant with years of snapshots
 
