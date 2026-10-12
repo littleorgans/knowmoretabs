@@ -1,6 +1,6 @@
 """Quick add on the synthetic archive: the intake fold, the dataset as a subset of the archive with known pages it
-lacks embedded at load from `--root`, a library with no owner tags, every store tag name loaded, page keyed image
-addresses, the fixed port, and the Add link jobs driven through HTTP against a fake knowmoretabs."""
+lacks embedded at load from `--root`, a library with no owner tags, Recently used from the library's use times, page
+keyed image addresses, the fixed port, and the Add link jobs driven through HTTP against a fake knowmoretabs."""
 
 import json
 import os
@@ -19,12 +19,13 @@ from unittest.mock import Mock, patch
 import fake_knowmoretabs
 import numpy as np
 import signed
-from test_app import DIM, build, fake_embed, fake_encode, fake_image, topic_of
+import synthetic_archive
+from test_app import DIM, build, fake_embed, fake_encode, fake_image
 
 from tagger import cli
 from tagger.app import add, engine, server
-from tagger.app.store import Store
-from tagger.archive import Archive, sha256_hex
+from tagger.archive import STATE_FILE, Archive, sha256_hex, signature
+from tagger.paths import Paths
 
 NEW = "https://added.example/notes/one"
 
@@ -123,7 +124,7 @@ class LoadTests(Synthetic):
         for key in keys:
             capture(self.root, key, "An invented page")
         lib = engine.sync(lib, Archive.load(self.root), keys, fake_embed)
-        app = server.App(lib, Store(self.work / "app"), fake_encode, fake_embed)
+        app = server.App(lib, self.work / "app", fake_encode, fake_embed)
         hits = app.search({"query": "", "n": 5})["hits"]
         self.assertEqual(sorted(keys), [lib.records[h["row"]]["key"] for h in hits[:2]])
 
@@ -143,10 +144,11 @@ class LoadTests(Synthetic):
         self.assertEqual(0, len(lib.rules.heads))
         q = fake_encode(["night train"])[0]
         self.assertEqual(5, len(engine.search(lib, q, "night train", 5)))
-        app = server.App(lib, Store(self.work / "app"), encode, fake_embed)
+        app = server.App(lib, self.work / "app", encode, fake_embed)
         self.assertEqual({"tags": [], "app_tags": []}, {k: app.library()[k] for k in ("tags", "app_tags")})
-        made = app.tag({"name": "Trains"})
-        self.assertTrue(made["created"])
+        synthetic_archive.edit_state(self.root, lambda state: state["vocabulary"]["Trains"].pop("retired_at"))
+        app.follow()
+        self.assertEqual(["Trains"], app.library()["app_tags"])
         self.assertEqual(["Trains"], [s["tag"] for s in engine.suggest(app.lib, [0, 1])])
 
     def test_new_archive_pages_are_embedded_at_load_from_the_running_root(self):
@@ -197,13 +199,32 @@ class LoadTests(Synthetic):
     def test_sync_follows_the_archive_for_one_page(self):
         lib, _ = self.load()
         self.assertIs(lib, engine.sync(lib, Archive.load(self.root), [NEW], fake_embed), "a page the archive lacks")
+        app = server.App(lib, self.work / "app", fake_encode, fake_embed)
         key = lib.records[5]["key"]
-        state = json.loads((self.root / "library.json").read_text())
-        (self.root / "library.json").write_text(json.dumps({**state, "forgotten": [key]}))
-        hidden = engine.sync(lib, Archive.load(self.root), [key], fake_embed)
-        self.assertEqual((False, True), (bool(hidden.live[5]), bool(lib.live[5])))
-        (self.root / "library.json").write_text(json.dumps({**state, "forgotten": []}))
-        self.assertTrue(engine.sync(hidden, Archive.load(self.root), [key], fake_embed).live[5])
+        synthetic_archive.edit_state(self.root, lambda state: state.update(forgotten=[key]))
+        self.assertIsNone(app.sync(key, Archive.load(self.root)), "a forgotten page is not shown")
+        self.assertEqual((False, True), (bool(app.lib.live[5]), bool(lib.live[5])))
+        synthetic_archive.edit_state(self.root, lambda state: state.update(forgotten=[]))
+        self.assertEqual(key, app.sync(key, Archive.load(self.root))["url"])
+        self.assertTrue(app.lib.live[5])
+
+    def test_an_add_shows_the_decisions_made_after_its_archive_read(self):
+        lib, _ = self.load()
+        app = server.App(lib, self.work / "app", fake_encode, fake_embed)
+        capture(self.root, NEW)
+        archive = Archive.load(self.root)  # as the job reads it, outside the app's lock
+        other = lib.records[5]["key"]
+
+        def change(state):
+            synthetic_archive.decide(state, [NEW], "Trains")
+            state["forgotten"].append(other)
+
+        synthetic_archive.edit_state(self.root, change)  # a write lands before the job takes the lock
+        page = app.sync(NEW, archive)
+        self.assertEqual(["Trains"], page["tags"], "the file as it is now, not as the job read it")
+        self.assertNotIn("Trains", page["suggested"])
+        self.assertFalse(app.lib.live[5])
+        self.assertEqual(signature(self.root / STATE_FILE), app.lib.state.signature)
 
     def test_one_sync_follows_the_archive_for_several_pages(self):
         lib, _ = self.load()
@@ -211,8 +232,11 @@ class LoadTests(Synthetic):
         state = json.loads((self.root / "library.json").read_text())
         (self.root / "library.json").write_text(json.dumps({**state, "forgotten": [key]}))
         capture(self.root, NEW)
-        synced = engine.sync(lib, Archive.load(self.root), [key, NEW, "https://absent.example/", key], fake_embed)
+        archive = Archive.load(self.root)
+        synced = engine.sync(lib, archive, [key, NEW, "https://absent.example/", key], fake_embed)
         self.assertEqual(len(lib.records) + 1, len(synced.records), "the new page appended once")
+        self.assertEqual(lib.state, synced.state, "a sync takes no decisions from its archive read")
+        synced = engine.apply_state(synced, archive.state, fake_encode)
         self.assertEqual((False, True), (bool(synced.live[5]), bool(synced.live[synced.rows[NEW]])))
         self.assertEqual((len(synced.records),) * 3, (len(synced.X), len(synced.S), len(synced.live)))
 
@@ -227,72 +251,36 @@ class LoadTests(Synthetic):
         self.assertEqual(0, stats["vectors"]["embedded"])
 
 
-class StoreTagNameTests(Synthetic):
-    def test_every_tag_name_the_store_holds_loads_as_a_tag(self):
-        lib, _ = self.load()
-        store = Store(self.work / "app")
-        store.add_tag("Made here")
-        store.apply([lib.records[0]["key"]], "Retired spelling", True)
-        store.apply([lib.records[1]["key"]], "Taken off", True)
-        store.apply([lib.records[1]["key"]], "Taken off", False)
-        app = server.App(lib, store, fake_encode, fake_embed)
-        names = [t["name"] for t in app.library()["tags"]]
-        self.assertEqual(["Made here", "Retired spelling", "Taken off"], names[len(lib.tags) :])
-        self.assertEqual(
-            ["Retired spelling"], app.apply({"rows": [2], "tag": "Retired spelling", "value": True})["pages"][0]["tags"]
-        )
-
-
 class RecentTests(Synthetic):
-    """Recently used: the app tags by their latest use, in the app or as the library records it."""
+    """Recently used: the active names an add has put on a page, latest first, as the library records it."""
 
     def vocabulary(self, **terms: dict) -> None:
-        state = json.loads((self.root / "library.json").read_text())
-        for name, fields in terms.items():
-            state["vocabulary"][name].update(fields)
-        (self.root / "library.json").write_text(json.dumps(state))
+        def change(state):
+            for name, fields in terms.items():
+                state["vocabulary"][name].update(fields)
+
+        synthetic_archive.edit_state(self.root, change)
 
     @staticmethod
     def at(seconds: float) -> dict:
         return {"used_at": datetime.fromtimestamp(seconds, UTC).isoformat().replace("+00:00", "Z")}
 
-    def test_the_latest_use_on_either_side_orders_them_leaving_out_retired_unused_and_unknown(self):
+    def test_the_librarys_last_uses_order_them_leaving_out_retired_unused_and_untimed(self):
         self.vocabulary(
             Coffee=self.at(3000),
             Rust=self.at(1500),
-            Trains={**self.at(1000), "retired_at": "2026-10-08T00:00:00Z"},
+            Keyboards=self.at(1500),  # a tie: by name
+            Trains={**self.at(9000), "retired_at": "2026-10-08T00:00:00Z"},
             Typography={"used_at": "2026-10-08T00:00:00"},  # no offset: not a time
-            Keyboards=self.at(9000),  # not an app tag
         )
         lib, _ = self.load()
-        store, key = Store(self.work / "app"), lambda i: lib.records[i]["key"]
-        store.add_tag("Made here")
-        for seconds, page, tag, value in (
-            (1000, 0, "Coffee", True),
-            (2000, 0, "Rust", True),
-            (1200, 0, "Typography", True),
-            (900, 1, "Recipes", True),
-            (2500, 0, "Recipes", True),
-            (2600, 0, "Recipes", False),  # taken off one page later: still used at 2500
-            (4000, 0, "Trains", True),
-        ):
-            with patch("time.time", return_value=seconds):
-                store.apply([key(page)], tag, value)
-        app = server.App(lib, store, fake_encode, fake_embed)
-        before = ["Coffee", "Recipes", "Rust", "Typography"]
-        self.assertEqual(before, app.library()["recent"])
-        self.assertIn("Made here", app.library()["app_tags"])
-        with patch("time.time", return_value=5000):
-            out = app.apply({"rows": [2], "tag": "Typography", "value": True})
-        self.assertEqual(["Typography", "Coffee", "Recipes", "Rust"], out["recent"], "a write moves its tag first")
-        self.assertEqual(before, app.undo({"batch": out["batch"]})["recent"], "an undone write was no use")
-
-    def test_a_sync_takes_the_uses_and_retirements_the_archive_holds_now(self):
-        lib, _ = self.load()
-        self.assertEqual(({}, set()), (lib.used, lib.retired))
-        self.vocabulary(Coffee=self.at(3000), Rust={"retired_at": "2026-10-08T00:00:00Z"})
-        lib = engine.sync(lib, Archive.load(self.root), [], fake_embed)
-        self.assertEqual(({"coffee": 3000.0}, {"rust"}), (lib.used, lib.retired))
+        app = server.App(lib, self.work / "app", fake_encode, fake_embed)
+        library = app.library()
+        self.assertEqual(["Coffee", "Keyboards", "Rust"], library["recent"])
+        self.assertEqual(sorted(synthetic_archive.DEFINITIONS.keys() - {"Trains"}, key=str.lower), library["app_tags"])
+        self.vocabulary(Typography=self.at(5000))  # an add put it on a page
+        app.follow()
+        self.assertEqual(["Typography", "Coffee", "Keyboards", "Rust"], app.library()["recent"], "a use moves it first")
 
 
 class PortTests(unittest.TestCase):
@@ -309,7 +297,7 @@ class PortTests(unittest.TestCase):
 
 class Served(Synthetic):
     def serve(self, lib: engine.Library) -> tuple[server.App, int]:
-        app = server.App(lib, Store(self.work / "lab-data" / f"app-{id(lib)}"), fake_encode, fake_embed)
+        app = server.App(lib, self.work / "lab-data" / f"app-{id(lib)}", fake_encode, fake_embed)
         httpd = server.serve(app, 0, signed.KEY)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         self.addCleanup(httpd.server_close)
@@ -380,30 +368,42 @@ class AddJobTests(Served):
         self.assertEqual(200, self.call(self.port, "GET", f"/img/{page['image']}")[0])
         hits = self.call(self.port, "POST", "/api/search", {"query": "zeppelin timetables", "n": 5})[1]["hits"]
         self.assertEqual(page["row"], hits[0]["row"])
-        status, out = self.call(
-            self.port, "POST", "/api/apply", {"rows": [page["row"]], "tag": "Trains", "value": True}
-        )
-        self.assertEqual((200, ["Trains"]), (status, out["pages"][0]["tags"]))
+        synthetic_archive.edit_state(self.root, lambda state: synthetic_archive.decide(state, [NEW], "Trains"))
+        hits = self.call(self.port, "POST", "/api/search", {"query": "zeppelin timetables", "n": 5})[1]["hits"]
+        self.assertEqual((page["row"], ["Trains"]), (hits[0]["row"], hits[0]["tags"]), "the library's tag, at once")
         self.assertEqual(self.app.library()["pages"], self.call(self.port, "GET", "/api/library")[1]["pages"])
         argv = json.loads(self.log.read_text().splitlines()[0])["argv"]
         self.assertEqual(["--root", str(self.root), "add", "--json", "--", NEW], argv)
 
-    def test_an_indexed_page_carries_the_app_tags_the_model_suggests_best_first(self):
-        """App tags only (the library's Read later clears its head's threshold too), each above its threshold, by
-        confidence, none the page holds, at most `engine.SUGGEST`; none for a page the model has nothing for."""
-        for name in ("Canals", "Night trains", "Timetables"):  # new: zero shot, their names as queries
-            self.app.tag({"name": name})
-        live = int(np.flatnonzero(self.app.live())[0])
-        self.app.apply({"rows": [live], "tag": "Trains", "value": True})  # the library's tag, an app tag once decided
+    def test_an_indexed_page_carries_the_tags_the_model_suggests_best_first(self):
+        """Every active name (the library's own, and the ones its vocabulary gained since the app started, zero shot),
+        each above its threshold, by confidence, none the page holds or has turned down, at most `engine.SUGGEST`;
+        none for a page the model has nothing for."""
+
+        def gain(state):
+            for name in ("Canals", "Night trains", "Timetables"):  # new: zero shot, their names as queries
+                state["vocabulary"][name] = {"created_at": synthetic_archive.AT}
+
+        synthetic_archive.edit_state(self.root, gain)
         job = self.add(NEW)
         self.assertEqual(
-            ["Trains", "Night trains", "Timetables"], job["page"]["suggested"], "a head's confidence first"
+            ["Read later", "Trains", "Night trains", "Timetables"], job["page"]["suggested"], "by confidence"
         )
-        self.app.apply({"rows": [job["page"]["row"]], "tag": "Trains", "value": True})
+        decide = lambda name, side: synthetic_archive.edit_state(  # noqa: E731
+            self.root, lambda state: synthetic_archive.decide(state, [NEW], name, side)
+        )
+        decide("Trains", "add")
+        decide("Read later", "remove")  # turned down
+        self.assertEqual(["Night trains", "Timetables"], self.add(NEW)["page"]["suggested"])
         with patch.object(engine, "SUGGEST", 1):
             self.assertEqual(["Night trains"], self.add(NEW)["page"]["suggested"])
-        coffee = next(r["key"] for r in self.lib.records if topic_of(r["key"]) == "coffee")
-        self.assertEqual([], self.add(coffee)["page"]["suggested"])
+        coffee = next(r["key"] for r in self.lib.records if r["tags"] == ["Coffee"] and not r["forgotten"])
+        synthetic_archive.edit_state(
+            self.root, lambda state: synthetic_archive.decide(state, [coffee], "Read later", "remove")
+        )
+        self.assertEqual(
+            [], self.add(coffee)["page"]["suggested"], "it holds its topic's tag and turned down the other"
+        )
 
     def test_a_known_page_is_already_in_the_library_and_not_indexed_twice(self):
         key = self.lib.records[3]["key"]
@@ -731,7 +731,7 @@ class SnapshotWriteTests(Served):
         alias = self.work / "snapshot-alias"
         alias.symlink_to(protected, target_is_directory=True)
         for root in (protected, alias, data):
-            app, port = self.serve(replace(lib, root=root))
+            app, port = self.serve(replace(lib, root=root, paths=Paths(data)))
             with patch("tagger.app.add.subprocess.Popen") as popen, app.lock:
                 for action in add.ACTIONS:
                     with self.subTest(root=root.name, action=action):

@@ -66,7 +66,7 @@ def metadata_lines(title: str, record: dict | None) -> list[str]:
 def record(archive: Archive, url: str) -> dict:
     """One known page's record; content and image paths point under the archive's root."""
     title = collapse(archive.titles.get(url))
-    tags = archive.owner_tags.get(url, [])
+    tags = archive.state.tags(url)
     return {
         "key": url,
         "title": title,
@@ -75,7 +75,7 @@ def record(archive: Archive, url: str) -> dict:
         "has_metadata": url in archive.metadata,
         "tags": tags,
         "labelled": bool(tags),
-        "forgotten": url in archive.forgotten,
+        "forgotten": url in archive.state.forgotten,
         "added": archive.added.get(url),
         "text_ok": url in archive.text_ok,
         "content_path": str(archive.text_ok[url]) if url in archive.text_ok else None,
@@ -100,7 +100,7 @@ def run(paths: Paths) -> None:
     archive = Archive.load(paths.snapshot)
     records = [record(archive, url) for url in archive.known]
     counts = collections.Counter(t for r in records for t in r["tags"])
-    order = sorted(archive.active.values(), key=lambda n: (-counts[n], n.lower()))
+    order = sorted(archive.state.active.values(), key=lambda n: (-counts[n], n.lower()))
     trained = [n for n in order if counts[n] >= MIN_POSITIVES]
     paths.dataset.mkdir(parents=True, exist_ok=True)
     with (paths.dataset / "pages.jsonl").open("w") as f:

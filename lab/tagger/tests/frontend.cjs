@@ -2,396 +2,6 @@
 const assert = require('node:assert/strict');
 const { setup, turn, plain, run } = require('./frontend_dom.cjs');
 
-async function search() {
-  const { K, node } = setup('search.js');
-  const requests = [];
-  K.api = () => new Promise((resolve) => requests.push(resolve));
-  node('s-q').value = 'first';
-  const first = K.search.run();
-  assert.equal(K.results, null, 'pending search must hide old results');
-  K.search.render();
-  assert.equal(node('s-tag').disabled, true);
-  await turn();
-  node('s-q').value = 'second';
-  const second = K.search.run();
-  await turn();
-  requests[1]({ hits: [{ row: 2 }] });
-  await second;
-  requests[0]({ hits: [{ row: 1 }] });
-  await first;
-  assert.equal(K.results.hits[0].row, 2, 'stale search reply must not replace current results');
-}
-
-function resultsFixture(...files) {
-  const { K, node } = setup(...files);
-  K.state.search.query = 'q';
-  K.results = { hits: [1, 2, 3].map((row) => ({ row, fused: 0.1, sources: {}, own: [] })), excluded: [], cut: null, suggested: [], ms: {} };
-  const requests = [];
-  K.api = (route, body) => new Promise((resolve) => requests.push({ route, body, resolve }));
-  const tile = (row) => ({ dataset: { row: String(row) } });
-  const click = (row, act) => node('view-search').click({ target: { closest(selector) {
-    if (selector === '[data-act]') return act ? { dataset: { act }, disabled: false, closest: () => tile(row) } : null;
-    if (selector === '.hit[data-row]') return tile(row);
-    return null;
-  } } });
-  const key = (row, k) => K.search.key({ key: k, target: { closest(selector) { return selector === '.hit[data-row]' ? tile(row) : null; } } });
-  return { K, node, requests, click, key };
-}
-
-async function restore() {
-  const { K, node } = setup('search.js');
-  Object.assign(K.state.search, { query: 'q', images: true, n: 50, refine: true, picked: ['A'] });
-  const sent = [];
-  K.api = async (route, body) => { sent.push(body); return { hits: [], excluded: [], cut: null, suggested: [], ms: {} }; };
-  await K.search.restore();
-  assert.deepEqual(plain(sent), [{ query: 'q', images: true, n: 50, refine: true }], 'a reload must search again as it was left');
-  assert.deepEqual(plain(K.state.search.picked), ['A'], 'a reload must keep the picked tags');
-}
-
-async function exactQuery() {
-  const { K, node } = setup('search.js');
-  const query = ' q ';
-  node('s-q').value = query;
-  let sent;
-  K.api = async (route, body) => { sent = body; return { hits: [], excluded: [], cut: null, suggested: [], ms: {} }; };
-  await K.search.run();
-  assert.equal(sent.query, query, 'search must preserve exact query text');
-  assert.equal(K.state.search.query, query);
-}
-
-async function searchAfterCut() {
-  const { K, node, requests, click } = resultsFixture('search.js');
-  node('s-q').value = 'q';
-  click(1, 'cut');
-  await turn();
-  const searching = K.search.more();
-  await turn();
-  assert.equal(requests.length, 1, 'Show more must wait for the pending cut');
-  requests[0].resolve({ excluded: [2, 3], cut: 1, suggested: [] });
-  await turn(); await turn();
-  assert.equal(requests[1].route, 'api/search');
-  assert.equal(requests[1].body.n, 50);
-  requests[1].resolve({ hits: [], excluded: [], cut: null, suggested: [], ms: {} });
-  await searching;
-}
-
-async function pickAfterCut() {
-  const { K, node, requests, click } = resultsFixture('search.js', 'pick.js');
-  click(1, 'cut');
-  node('view-tag').click({ target: { closest(selector) { return selector === '[data-act]' ? { dataset: { act: 'review' }, disabled: false } : null; } } });
-  await turn();
-  assert.equal(requests.length, 1, 'review must wait for the pending cut');
-  requests[0].resolve({ excluded: [2, 3], cut: 1, suggested: [] });
-  await turn(); await turn();
-  assert.equal(requests[1].route, 'api/sessions');
-  assert.deepEqual(plain(requests[1].body.rows), [1]);
-}
-
-async function exclude() {
-  const { K, node, requests, click, key } = resultsFixture('search.js');
-  K.search.render();
-  assert.match(node('s-pos').innerHTML, /<b>3<\/b> of 3 going to tagging/);
-  click(2);
-  assert.deepEqual(K.results.excluded, [2], 'a click must exclude the tile at once');
-  K.search.render();
-  assert.match(node('s-pos').innerHTML, /<b>2<\/b> of 3 going to tagging/);
-  assert.match(node('s-grid').innerHTML, /class="hit out" data-row="2"/);
-  assert.equal(key(2, 'x'), true, 'x on the focused tile must be handled');
-  assert.deepEqual(K.results.excluded, [], 'x must bring the excluded tile back');
-  await turn();
-  assert.equal(requests.length, 1, 'exclusion requests must go one at a time');
-  assert.deepEqual(plain(requests[0].body), { query: 'q', rows: [1, 2, 3], action: 'exclude', row: 2 });
-  requests[0].resolve({ excluded: [2], cut: null, suggested: [] }); await turn(); await turn();
-  assert.deepEqual(K.results.excluded, [], 'an earlier reply must not undo a later click');
-  assert.equal(requests[1].body.action, 'include');
-  requests[1].resolve({ excluded: [], cut: null, suggested: [{ tag: 'Kept only', z: 1 }] }); await turn(); await turn();
-  assert.equal(K.results.suggested[0].tag, 'Kept only', 'suggestions must follow the kept results');
-  for (const row of [1, 2, 3]) click(row);
-  K.search.render();
-  assert.equal(node('s-tag').disabled, true, 'nothing kept, nothing to tag');
-}
-
-async function cut() {
-  const { K, requests, click } = resultsFixture('search.js');
-  click(1, 'cut');
-  await turn();
-  assert.deepEqual(plain(requests[0].body), { query: 'q', rows: [1, 2, 3], action: 'cut', row: 1 });
-  requests[0].resolve({ excluded: [2, 3], cut: 1, suggested: [] }); await turn(); await turn();
-  assert.match(K.toasted, /Cut below #1: 1 of 3 going to tagging/);
-  click(1, 'uncut');
-  await turn(); await turn();
-  assert.equal(requests[1].body.action, 'uncut');
-}
-
-async function pickIncluded() {
-  const { K, node, requests } = resultsFixture('search.js', 'pick.js');
-  K.results.excluded = [2];
-  node('view-tag').click({ target: { closest(selector) { return selector === '[data-act]' ? { dataset: { act: 'review' }, disabled: false } : null; } } });
-  await turn();
-  assert.equal(requests[0].route, 'api/sessions');
-  assert.deepEqual(plain(requests[0].body.rows), [1, 3], 'excluded results must never reach review');
-}
-
-/* ---- "+ New tag": type a name, Enter picks it, made new by the server only when you lack it ---- */
-function newTagFixture() {
-  const f = resultsFixture('search.js', 'pick.js');
-  f.K.lib.tags = [{ name: 'Coffee', positives: 12, source: 'head' }, { name: 'Trains', positives: 11, source: 'head' }];
-  f.K.results.suggested = [{ tag: 'Coffee', z: 1.5 }];
-  f.K.state.search.picked = [];
-  f.node('t-new').id = 't-new';
-  f.K.pick.render();
-  f.open = () => f.node('view-tag').click({ target: { closest(selector) {
-    return selector === '[data-act]' ? { dataset: { act: 'new-tag' }, disabled: false } : null;
-  } } });
-  f.type = (value, key = 'Enter') => { f.node('t-new').value = value; f.node('view-tag').keydown({ key, preventDefault() {}, target: f.node('t-new') }); };
-  f.row = () => f.node('t-sugg').innerHTML;
-  return f;
-}
-
-async function newTag() {
-  const { K, requests, open, type, row } = newTagFixture();
-  assert.match(row(), /data-act="new-tag"><b>\+ New tag<\/b>/, 'the chip is always in the suggestions row');
-  open();
-  assert.match(row(), /<input id="t-new"/, 'a click opens an inline input');
-  type('  Night trains ');
-  await turn();
-  assert.equal(requests[0].route, 'api/tags');
-  assert.deepEqual(plain(requests[0].body), { name: 'Night trains' }, 'the name goes trimmed');
-  requests[0].resolve({ tag: 'Night trains', created: true, tags: [...K.lib.tags, { name: 'Night trains', positives: 0, source: 'zero shot' }] });
-  await turn(); await turn();
-  assert.deepEqual(plain(K.state.search.picked), ['Night trains']);
-  assert.match(row(), /data-tag="Night trains" aria-pressed="true"><b>Night trains<\/b><small>zero shot/, 'a filled chip in the row');
-  assert.doesNotMatch(row(), /t-new/, 'the input closes');
-  assert.match(row(), /\+ New tag/);
-}
-
-async function newTagExisting() {
-  const { K, requests, open, type, row } = newTagFixture();
-  open(); type('trains');
-  open(); type(' COFFEE ');
-  open(); type('Trains');
-  await turn();
-  assert.equal(requests.length, 0, 'a name you have makes no tag');
-  assert.deepEqual(plain(K.state.search.picked), ['Trains', 'Coffee'], 'it picks your tag once, as you spell it');
-  assert.match(row(), /data-tag="Coffee" aria-pressed="true"/);
-  assert.match(row(), /data-tag="Trains" aria-pressed="true"/);
-}
-
-async function newTagCancelAndRefusal() {
-  const { K, node, open, type, row } = newTagFixture();
-  open(); type('Half typed', 'Escape');
-  assert.doesNotMatch(row(), /t-new/, 'Escape cancels');
-  open(); type('   ');
-  assert.doesNotMatch(row(), /t-new/, 'an empty name cancels');
-  K.api = async () => { throw new Error('cannot use that name as a tag: it is longer than 40 characters'); };
-  open(); type('x'.repeat(41));
-  await turn(); await turn();
-  assert.match(row(), /<li class="msg" role="alert">cannot use that name as a tag: it is longer than 40 characters<\/li>/);
-  assert.match(row(), new RegExp(`<input id="t-new"[^>]*value="${'x'.repeat(41)}"`), 'the name stays to fix');
-  assert.deepEqual(plain(K.state.search.picked), [], 'nothing picked');
-  assert.equal(node('t-filter').value, '', 'the filter box is untouched');
-}
-
-async function newTagKeyboardFocus() {
-  const { K, node, requests, open, type } = newTagFixture();
-  open(); type('Sleeper cars');
-  requests[0].resolve({ tag: 'Sleeper cars', tags: [...K.lib.tags, { name: 'Sleeper cars', positives: 0, source: 'zero shot' }] });
-  await turn(); await turn();
-  assert.equal(node('new-tag-control').focusCalls, 1, 'Enter returns focus to + New tag');
-  open(); type('COFFEE');
-  assert.equal(node('new-tag-control').focusCalls, 2, 'picking an existing tag also returns focus');
-  open(); type('Half typed', 'Escape');
-  assert.equal(node('new-tag-control').focusCalls, 3, 'Escape returns focus to + New tag');
-  open(); type('   ');
-  assert.equal(node('new-tag-control').focusCalls, 4, 'empty Enter returns focus to + New tag');
-}
-
-function reviewFixture() {
-  const { K, node } = setup('review.js');
-  K.set = { id: 1, pages: [{ index: 0, status: 'open', sugg: [
-    { tag: 'A', checked: true }, { tag: 'B', checked: true },
-  ] }] };
-  const requests = [];
-  const saved = { A: true, B: true };
-  K.api = (route, body) => new Promise((resolve) => requests.push(() => {
-    Object.assign(saved, body.marks);
-    resolve({ index: 0, status: body.status || 'open', sugg: Object.entries(saved).map(([tag, checked]) => ({ tag, checked })) });
-  }));
-  const flip = (tag) => node('view-review').click({ target: { closest(selector) {
-    return selector === '.rcard .sg' ? { dataset: { tag }, closest() { return { dataset: { i: '0' } }; } } : null;
-  } } });
-  return { K, requests, saved, flip, node };
-}
-
-async function flips() {
-  const { requests, saved, flip } = reviewFixture();
-  flip('A'); flip('B');
-  await turn();
-  requests.shift()(); await turn();
-  requests.shift()(); await turn();
-  assert.deepEqual(saved, { A: false, B: false }, 'rapid flips must retain both changes');
-}
-
-async function switchedSet() {
-  const { K, requests, flip } = reviewFixture();
-  flip('A');
-  await turn();
-  const other = { id: 2, pages: [{ index: 0, status: 'open', sugg: [{ tag: 'A', checked: true }] }] };
-  K.set = other;
-  requests.shift()(); await turn();
-  assert.equal(other.pages[0].sugg[0].checked, true, 'reply for earlier set must not mutate current set');
-}
-
-async function acceptAfterFlip() {
-  const { K, requests, saved, flip } = reviewFixture();
-  K.state.mode = 'swipe';
-  flip('A');
-  K.review.key({ key: 'ArrowRight', target: { closest() { return null; } } });
-  await turn(); requests.shift()();
-  await turn(); requests.shift()(); await turn();
-  assert.equal(saved.A, false, 'accept must preserve a pending flip');
-  assert.equal(K.set.pages[0].status, 'decided');
-}
-
-async function confirmAllPending() {
-  const { K, node } = setup('review.js');
-  K.set = { id: 1, pages: [0, 1].map((index) => ({ index, status: 'open', sugg: [{ tag: 'A', checked: true }] })) };
-  const requests = [];
-  K.api = (route, body) => new Promise((resolve) => requests.push(() => resolve({
-    index: Number(route.split('/').pop()), status: body.status, sugg: [{ tag: 'A', checked: true }],
-  })));
-  node('view-review').click({ target: { closest(selector) {
-    return selector === '[data-act]' ? { dataset: { act: 'confirm-all' }, disabled: false } : null;
-  } } });
-  let settled = false;
-  K.review.pending.then(() => { settled = true; }); // what a send pressed now waits for
-  await turn(); requests.shift()(); await turn(); await turn();
-  assert.equal(settled, false, 'a send must wait for every page Confirm all is saving');
-  requests.shift()(); await turn(); await turn();
-  assert.deepEqual(K.set.pages.map((p) => p.status), ['decided', 'decided']);
-}
-
-async function sendWait() {
-  const { K } = setup('app.js');
-  await turn();
-  let finish, previews = 0;
-  K.writes = new Promise((resolve) => { finish = resolve; });
-  K.api = async () => { previews++; return { commands: [] }; };
-  const sending = K.sendNow();
-  await turn();
-  assert.equal(previews, 0, 'a send must wait for pending saves');
-  finish(); await sending;
-  assert.equal(previews, 1);
-}
-
-const PLAN = { tags_on: 3, pages_on: 2, tags_off: 4, pages_off: 3, never_tags: 2, never_pages: 1, cleared: 1, dismiss_tags: 2, dismiss_pages: 1,
-  new: ['<Night> trains'], revived: [], forget: 1, kept_forgotten: 0, missing: 0, ready: true, preview: 7,
-  commands: ["knowmoretabs --root /r tag '--add=<Night> trains' -- https://a.example/", 'knowmoretabs --root /r forget -- https://b.example/'] };
-const NOTHING = { ...PLAN, tags_on: 0, pages_on: 0, tags_off: 0, pages_off: 0, never_tags: 0, never_pages: 0, cleared: 0, dismiss_tags: 0, dismiss_pages: 0, new: [], forget: 0, commands: [], ready: false };
-
-async function sendPreview() {
-  const { K, node } = setup('app.js');
-  await turn();
-  const asked = [];
-  K.api = async (route, body) => { asked.push(route); return PLAN; };
-  K.esc = (s) => String(s).replace(/</g, '&lt;');
-  await K.sendNow();
-  const html = node('send-body').innerHTML;
-  assert.deepEqual(asked, ['api/send/preview']);
-  assert.ok(html.includes('<dt>Tags added</dt><dd><b>3</b> tags on <b>2</b> pages</dd>'), html);
-  assert.ok(html.includes('<dt>Tags removed</dt><dd><b>4</b> tags on <b>3</b> pages</dd>'));
-  assert.ok(html.includes('<dt>Removed, never tagged here</dt><dd><b>2</b> tags on <b>1</b> page</dd>'));
-  assert.ok(html.includes('<dt>Pages cleared</dt><dd><b>1</b> page</dd>'));
-  assert.ok(html.includes('<dt>Dismissed</dt><dd><b>2</b> tags on <b>1</b> page</dd>'));
-  assert.ok(html.includes('<dt>New tags</dt><dd>&lt;Night> trains</dd>'), 'names are escaped');
-  assert.ok(html.includes('<dt>Forget</dt><dd><b>1</b> page</dd>'));
-  assert.ok(!html.includes('library only') && !html.includes('Not in library') && !html.includes('Back from retired'), 'empty rows are left out');
-  assert.ok(html.includes('<details><summary>Details</summary><pre>knowmoretabs --root /r tag'), 'commands sit under Details');
-  assert.equal(node('send-go').hidden, false);
-  assert.equal(node('send-close').textContent, 'Cancel');
-}
-
-async function sendNothing() {
-  const { K, node } = setup('app.js');
-  await turn();
-  K.api = async () => NOTHING;
-  await K.sendNow();
-  assert.ok(node('send-body').innerHTML.startsWith('<p class="lede">Nothing to send.</p>'));
-  assert.equal(node('send-go').hidden, true);
-  assert.equal(node('send-close').textContent, 'Done');
-  K.api = async () => ({ ...NOTHING, missing: 2 });
-  await K.sendNow();
-  assert.ok(node('send-body').innerHTML.includes('<dt>Not in library</dt><dd><b>2</b> pages</dd>'), 'skipped pages show without commands');
-  assert.equal(node('send-go').hidden, true);
-}
-
-async function sendRestore() {
-  const { K, node } = setup('app.js');
-  await turn();
-  K.api = async () => ({ ...NOTHING, kept_forgotten: 3, revived: ['Trains'], ready: true, commands: ['knowmoretabs --root /r tag --add=Trains -- https://c.example/'] });
-  await K.sendNow();
-  const html = node('send-body').innerHTML;
-  assert.ok(html.includes('<dt>Forgotten in the library only</dt><dd><b>3</b> pages</dd>') && html.includes('<dt>Back from retired</dt><dd>Trains</dd>'), html);
-  assert.equal(node('send-go').hidden, false);
-}
-
-async function sendUncertain() {
-  const { K, node } = setup('app.js');
-  await turn();
-  K.api = async (route) => route === 'api/send'
-    ? { ...PLAN, ok: false, error: 'knowmoretabs did not finish within 120 seconds',
-      steps: [{ command: PLAN.commands[0], ok: false }], record: null }
-    : PLAN;
-  await K.sendNow();
-  await node('send-go').click();
-  const html = node('send-body').innerHTML;
-  assert.ok(!html.includes('unchanged'), 'a timeout can happen after the library write');
-  assert.ok(html.includes('Stopped. No commands completed successfully.'));
-  assert.equal(node('send-go').hidden, true);
-  assert.equal(node('send-close').textContent, 'Done');
-}
-
-async function sendResult() {
-  const { K, node } = setup('app.js');
-  await turn();
-  const record = { answers: '/d/answers.jsonl', decisions: '/d/decisions.jsonl', forget: '/d/forget.urls' };
-  const steps = PLAN.commands.map((command) => ({ command, ok: true }));
-  K.api = async (route, body) => {
-    if (route === 'api/send') assert.equal(body.preview, PLAN.preview, 'confirm identifies the displayed preview');
-    return route === 'api/send' ? { ...PLAN, ok: true, error: null, steps, record } : PLAN;
-  };
-  await K.sendNow();
-  await node('send-go').click();
-  let html = node('send-body').innerHTML;
-  assert.ok(html.startsWith('<p class="lede">Sent.</p><dl>'), html);
-  assert.ok(html.includes('<dt>Answers</dt><dd><code>/d/answers.jsonl</code></dd>') && html.includes('<dt>Forget</dt><dd><code>/d/forget.urls</code></dd>'));
-  assert.equal(node('send-go').hidden, true);
-
-  K.api = async (route) => (route === 'api/send'
-    ? { ...PLAN, ok: false, error: 'error: not in your library: https://b.example/', steps: [{ command: PLAN.commands[0], ok: true }, { command: PLAN.commands[1], ok: false }], record }
-    : PLAN);
-  await K.sendNow();
-  await node('send-go').click();
-  html = node('send-body').innerHTML;
-  assert.ok(html.startsWith('<p class="lede">Stopped. The commands under Details completed successfully.</p><pre>error: not in your library: https://b.example/</pre>'), html);
-  assert.ok(html.includes(PLAN.commands[0]) && !html.includes(PLAN.commands[1]), 'Details lists what went in');
-
-  K.api = async (route) => (route === 'api/send' ? { ...PLAN, ok: false, error: 'boom', steps: [{ command: PLAN.commands[0], ok: false }], record } : PLAN);
-  await K.sendNow();
-  await node('send-go').click();
-  assert.ok(node('send-body').innerHTML.startsWith('<p class="lede">Stopped. No commands completed successfully.</p><pre>boom</pre>'));
-}
-
-/* ---- open the page: a control on http(s) pages whose click and key change nothing ---- */
-const control = () => ({ clicks: 0, click() { this.clicks++; } });
-const clickOn = (a, at) => {   // a click on the open control inside the element `at` returns for that selector
-  const e = { stopped: false, stopPropagation() { this.stopped = true; }, target: { closest(selector) {
-    if (selector === '[data-open]' || selector === 'a, button') return a;
-    return at[selector] || null;
-  } } };
-  return e;
-};
-
 async function openControl() {
   const { K } = setup();
   const html = K.open({ url: 'https://example.test/a?b=1', host: 'example.test' });
@@ -402,68 +12,67 @@ async function openControl() {
   }
 }
 
-async function openSearch() {
-  const { K, node, requests, key } = resultsFixture('search.js');
-  const tile = { dataset: { row: '2' } };
-  const e = clickOn(control(), { '.hit[data-row]': tile });
-  node('view-search').click(e);
-  assert.equal(e.stopped, true, 'a click on Open must stop at the control');
-  assert.deepEqual(K.results.excluded, [], 'a click on Open must not exclude the result');
-  const a = control();
-  assert.equal(K.search.key({ key: 'o', target: { closest: (s) => (s === '.hit[data-row]' ? { ...tile, querySelector: () => a } : null) } }), true);
-  assert.equal(a.clicks, 1, 'o must open the focused result');
-  assert.deepEqual(K.results.excluded, [], 'o must not exclude the result');
-  await turn();
-  assert.equal(requests.length, 0, 'opening must send no exclusion');
-  assert.equal(key(2, 'x'), true, 'the tile still excludes');
-}
-
-async function openReview() {
-  const { K, node, requests } = reviewFixture();
-  const row = { dataset: { i: '0' } };
-  const e = clickOn(control(), { '[data-i]': row, '.rcard': row });
-  node('view-review').click(e);
-  assert.equal(e.stopped, true, 'a click on Open must stop at the control');
-  K.state.mode = 'swipe';
-  const a = control();
-  node('r-deck').querySelector = () => ({ querySelector: () => a });
-  assert.equal(K.review.key({ key: 'o', target: { closest() { return null; } } }), true);
-  assert.equal(a.clicks, 1, 'o must open the swipe card');
-  await turn();
-  assert.equal(requests.length, 0, 'opening must not count as a decision');
-  assert.equal(K.set.pages[0].status, 'open');
-}
-
-async function openNoDrag() {
-  const { K } = setup('swipe.js');
-  const card = { offsetWidth: 400, dataset: {}, style: { setProperty() {} }, classList: { add() {}, remove() {} },
-    setPointerCapture() {}, addEventListener(event, fn) { this[event] = this[event] || fn; }, removeEventListener() {} };
-  const decided = [];
-  K.swipe(card, { enabled: () => true, commit: (dir) => decided.push(dir) });
-  const on = (sel) => ({ closest: (s) => (s === sel ? {} : null) });
-  const drag = (target) => {
-    card.pointerdown({ button: 0, pointerId: 1, clientX: 0, clientY: 0, target });
-    card.pointermove({ pointerId: 1, clientX: 300, clientY: 0 });
-    card.pointerup({ pointerId: 1, type: 'pointerup' });
-  };
-  drag({ closest: (s) => (s.includes('[data-open]') ? {} : null) });
-  assert.deepEqual(decided, [], 'a press on Open must never drag the card into a decision');
-  drag(on('nothing'));
-  assert.deepEqual(decided, ['yes'], 'the card itself still swipes');
-}
-
 /* ---- one screen: search, select, tag ---- */
 const page = (row, tags = []) => ({ row, title: `Page ${row}`, host: 'example.test', url: `https://example.test/${row}`, image: false, tags });
+
+const url = (row) => `https://example.test/${row}`;
+
+/* The library's own API as the shell answers it: each page's tags by key, the forgotten keys and the names. A tag
+   write answers every page it names with its tags afterwards and the exact record that undoes it; an undo answers
+   with its own inverse. Every https://example.test/ page is in the library; any other key is not. */
+function library(names = ['A']) {
+  const held = new Map(), gone = new Set(), vocabulary = new Set(names);
+  const known = (key) => key.startsWith('https://example.test/');
+  const tags = (key) => [...(held.get(key) || [])].sort();
+  const decide = (key, name, add) => { const t = new Set(held.get(key)); if (add) t.add(name); else t.delete(name); held.set(key, t); };
+  const vocab = () => [...vocabulary].sort().map((name) => ({ name, created_at: '2026-10-01T00:00:00Z' }));
+  const outcome = (urls, undo) => ({
+    undo, urls: urls.filter(known), tags: Object.fromEntries(urls.filter(known).map((key) => [key, tags(key)])), vocabulary: vocab(),
+    counts: { changed: urls.filter(known).length, unchanged: 0, unknown: urls.filter((key) => !known(key)).length },
+  });
+  return {
+    held, gone, vocabulary,
+    know(pages) { for (const p of pages) if (!held.has(p.url)) held.set(p.url, new Set(p.tags)); },
+    '/api/tags'(body) {
+      const undo = { tags: [], vocabulary: {} };
+      if (body.undo) {
+        for (const d of body.undo.tags) {
+          undo.tags.push({ url: d.url, name: d.name, add: tags(d.url).includes(d.name), remove: !d.add });
+          decide(d.url, d.name, d.add);
+        }
+        return outcome([...new Set(body.undo.tags.map((d) => d.url))], undo);
+      }
+      for (const key of body.urls.filter(known)) {
+        for (const name of body.add) {
+          vocabulary.add(name);
+          if (!tags(key).includes(name)) { undo.tags.push({ url: key, name, add: false, remove: false }); decide(key, name, true); }
+        }
+        for (const name of body.remove) { undo.tags.push({ url: key, name, add: tags(key).includes(name), remove: false }); decide(key, name, false); }
+      }
+      return outcome(body.urls, undo);
+    },
+    '/api/forget'(body) { const urls = body.urls.filter((key) => known(key) && !gone.has(key)); urls.forEach((key) => gone.add(key)); return { urls, forgotten: urls, counts: {} }; },
+    '/api/restore'(body) { const urls = body.urls.filter((key) => gone.has(key)); urls.forEach((key) => gone.delete(key)); return { urls, restored: urls, counts: {} }; },
+    '/api/vocabulary'(body) {
+      const resolved = body.create.map((n) => [...vocabulary].find((v) => v.toLowerCase() === n.trim().toLowerCase()) || n.trim());
+      resolved.forEach((n) => vocabulary.add(n));
+      return { vocabulary: vocab(), resolved };
+    },
+  };
+}
 
 /* the search "q" has found pages 1 (tagged A), 2 and 3 */
 async function screenFixture(...more) {
   const f = setup('pages.js', 'views.js', 'strip.js', ...more);
   const { K, node } = f;
   K.changed = () => { K.views.render(); K.strip.render(); };
-  K.lib = { sizes: [20, 50], images: true, pages: 9, app_tags: ['A'] };
+  K.lib = { sizes: [20, 50], images: true, pages: 9, app_tags: ['A'], recent: [], tags: [], forgotten: [] };
   await turn();   // a shell loaded for its keys finishes its unmocked startup before this fixture takes over
-  const requests = [];
-  K.api = (route, body) => new Promise((resolve, reject) => requests.push({ route, body: body && plain(body), resolve, reject }));
+  const requests = [], sent = [];
+  K.api = (route, body) => new Promise((resolve, reject) => {
+    sent.push(route);
+    requests.push({ route, body: body && plain(body), resolve, reject });
+  });
   const loading = K.loadLists();   // the startup load of the selection and the pins, both empty
   for (let i = 0; i < 2; i++) { await turn(); requests.shift().resolve({ pages: [] }); }
   await loading;
@@ -472,8 +81,10 @@ async function screenFixture(...more) {
   await turn();
   requests.shift().resolve({ hits: [page(1, ['A']), page(2), page(3)], offset: 0, total: 3 });
   await searching;
+  const lib = library();
+  lib.know([page(1, ['A']), page(2), page(3)]);
   const tile = (row) => ({ dataset: { row: String(row) }, querySelector: () => f.opened });
-  f.requests = requests;
+  Object.assign(f, { requests, sent, library: lib });
   f.opened = { clicks: 0, click() { this.clicks++; } };
   f.click = (row, at = {}) => {   // a click on tile `row`, on whatever `at` says is under it
     const e = { stopped: false, stopPropagation() { this.stopped = true; }, target: { closest: (s) => (s === '.tile[data-row]' ? tile(row) : at[s] || null) } };
@@ -482,15 +93,20 @@ async function screenFixture(...more) {
   };
   f.key = (row, key) => K.views.key({ key, target: { closest: (s) => (s === '.tile[data-row]' && row !== null ? tile(row) : null) } });
   f.chip = (tag, act) => node('strip').click({ target: { closest: (s) => (s === 'button[data-act]' ? { dataset: { act }, closest: () => ({ dataset: { tag } }) } : null) } });
-  f.settle = async () => { await turn(); while (requests.length) { const r = requests.shift(); r.resolve(reply(r)); await turn(); } };
-  /* what the server answers, from what the page sent */
-  const batches = [];
-  const tags = (rows) => rows.map((row) => ({ row, tags: K.pages.get(row).tags }));
-  const reply = (r) => {
-    if (r.route === 'api/apply') return { pages: tags(r.body.rows), changed: r.body.rows.length, batch: batches.push(r.body.rows), app_tags: ['A'] };
-    if (r.route === 'api/undo') return { pages: tags(batches[r.body.batch - 1]), app_tags: ['A'] };
-    if (r.route === 'api/forget') return { pages: K.lib.pages };
+  /* what the library and the service answer, from what the page sent */
+  f.answer = (r) => {
+    if (lib[r.route]) return lib[r.route](r.body);
+    if (r.route === 'api/library') {
+      const forgotten = [...lib.gone].map((key) => Number(key.split('/').pop()));
+      return { ...K.lib, pages: 9 - forgotten.length, forgotten };
+    }
     return { rows: r.body.rows };
+  };
+  f.settle = async () => { await turn(); while (requests.length) { const r = requests.shift(); r.resolve(f.answer(r)); await turn(); } };
+  f.next = (route) => {
+    const i = requests.findIndex((r) => r.route === route);
+    assert.ok(i >= 0, `a ${route} request among ${requests.map((r) => r.route)}`);
+    return requests.splice(i, 1)[0];
   };
   f.shown = () => [...node('grid').innerHTML.matchAll(/data-row="(\d+)"/g)].map((m) => Number(m[1]));
   f.press = (key, mods = {}) => f.keys.keydown({ key, ...mods, target: { closest: () => null }, preventDefault() {} });
@@ -519,6 +135,8 @@ async function select() {
 }
 
 /* the strip chip [× | name s/n | ≈] acts on the selection only: the name adds, × removes, the count is coverage */
+
+/* the strip chip [× | name s/n | ≈] acts on the selection only: the name adds, × removes, the count is coverage */
 async function chipActsOnSelection() {
   const { K, node, requests, click, chip, settle } = await screenFixture();
   const strip = () => node('strip').innerHTML;
@@ -533,10 +151,11 @@ async function chipActsOnSelection() {
   assert.match(strip(), /data-on="some" data-tag="A" style="--cover: 33.3%"><button type="button" class="rm" data-act="remove"/, 'partial fill, and × as one selected page has it');
   assert.match(strip(), /aria-pressed="mixed"[^>]*>A<span class="ct" title="1 of your 3 selected have A"[^>]*>1\/3<\/span>/, 'the count is selection coverage');
   chip('A', 'add');
-  assert.match(strip(), /data-on="all"/, 'the chip fills at once');
   await turn();
-  assert.deepEqual(requests[0].body, { rows: [2, 3], tag: 'A', value: true }, 'the name adds to the selected pages lacking it');
+  assert.deepEqual(requests[0].body, { urls: [url(2), url(3)], add: ['A'], remove: [] }, 'the name adds to the selected pages lacking it');
+  assert.match(strip(), /data-on="some"/, 'shown as the library holds it until it answers');
   await settle();
+  assert.match(strip(), /data-on="all"/, 'then as it answers');
   assert.match(K.toasted, /^Added A to 2 pages$/);
   chip('A', 'add');
   await turn();
@@ -545,7 +164,7 @@ async function chipActsOnSelection() {
   click(3); await settle();
   chip('A', 'remove');
   await turn();
-  assert.deepEqual(requests[0].body, { rows: [1, 2], tag: 'A', value: false }, '× takes it off the selected pages only');
+  assert.deepEqual(requests[0].body, { urls: [url(1), url(2)], add: [], remove: ['A'] }, '× takes it off the selected pages only');
   await settle();
   assert.match(K.toasted, /^Removed A from 2 pages$/);
   assert.equal(K.has(3, 'A'), true, 'a page outside the selection keeps it');
@@ -555,7 +174,7 @@ async function chipActsOnSelection() {
   assert.doesNotMatch(strip(), /class="ct"/, 'the count hides with no selection');
 }
 
-/* Undo after a strip action: each page exactly as it was */
+/* Undo after a strip action sends the library's own record back: each page exactly as it was */
 async function bulkUndo() {
   const { K, requests, click, chip, settle, press } = await screenFixture('app.js');
   const has = () => [1, 2, 3].map((r) => K.has(r, 'A'));
@@ -563,203 +182,208 @@ async function bulkUndo() {
   chip('A', 'add'); await settle();
   assert.deepEqual(has(), [true, true, true]);
   press('u');
-  assert.deepEqual(has(), [true, false, false], 'Undo takes it off only the pages it was added to');
   await turn();
-  assert.deepEqual(requests[0].body, { batch: 1 }, 'the server retracts that batch');
-  assert.equal(requests[0].route, 'api/undo');
+  const undo = { tags: [{ url: url(2), name: 'A', add: false, remove: false }, { url: url(3), name: 'A', add: false, remove: false }], vocabulary: {} };
+  assert.deepEqual([requests[0].route, requests[0].body], ['/api/tags', { urls: [], undo }], 'Undo sends the record as the library made it');
+  assert.deepEqual(has(), [true, true, true], 'shown as it is until the library answers');
   await settle();
-  assert.deepEqual(has(), [true, false, false], 'and its reply agrees');
+  assert.deepEqual(has(), [true, false, false], 'Undo takes it off only the pages it was added to');
   chip('A', 'remove'); await settle();
   assert.deepEqual(has(), [false, false, false]);
   assert.equal(typeof K.undo, 'function');
   press('z', { ctrlKey: true });
-  assert.deepEqual(has(), [true, false, false], 'Ctrl+Z undoes too: only the page that had it gets it back');
   await turn();
-  assert.deepEqual(requests[0].body, { batch: 2 });
+  assert.deepEqual(requests[0].body.undo.tags.map((d) => [d.url, d.add]), [[url(1), true]], 'the page it came off');
   await settle();
+  assert.deepEqual(has(), [true, false, false], 'Ctrl+Z undoes too: only the page that had it gets it back');
 }
 
-/* tags for one page in one change: one write a tag it lacks, in order, one toast; Undo retracts every batch, and a
-   failed write takes back its own tag only */
+/* the tags picked for one page go in one write, one toast and one Undo; a failed write leaves the page as it was,
+   says so, and is never sent again */
 async function tagPageUndo() {
   const { K, requests, settle, press } = await screenFixture('app.js');
-  const seen = [], api = K.api, toast = K.toast;
   let toasts = 0;
-  K.api = (route, body) => { seen.push([route, body && plain(body)]); return api(route, body); };
+  const toast = K.toast;
   K.toast = (...args) => { toasts++; return toast.apply(K, args); };
   K.title = (p) => p.title;
   K.tagPage(1, ['C', 'A', 'B']);
-  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B', 'C'], 'the tags it lacks show at once');
   await turn();
-  assert.equal(requests.length, 1, 'writes go one at a time');
+  assert.deepEqual([requests[0].route, requests[0].body], ['/api/tags', { urls: [url(1)], add: ['C', 'B'], remove: [] }], 'one write, the tags it lacks');
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'nothing shows before the library answers');
   await settle();
-  assert.deepEqual(seen, [['api/apply', { rows: [1], tag: 'C', value: true }], ['api/apply', { rows: [1], tag: 'B', value: true }]]);
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B', 'C']);
   assert.equal(toasts, 1, 'one toast');
   assert.equal(K.toasted, 'Added “C”, “B” to “Page 1”');
-  seen.length = 0;
   press('u');
-  assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'Undo takes both off at once');
   await settle();
-  assert.deepEqual(seen, [['api/undo', { batch: 1 }], ['api/undo', { batch: 2 }]], 'and the server retracts every batch');
-  assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'and its replies agree');
-  seen.length = 0; toasts = 0;
-  const failure = K.failure;
-  K.tagPage(1, ['B', 'C']);
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'Undo takes both off in one write');
+  toasts = 0;
+  K.tagPage(1, ['B']);
   await turn();
-  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], changed: 1, batch: 3, app_tags: ['A', 'B'] });
+  requests.shift().reject(new Error('synthetic failure'));
   await turn(); await turn();
-  requests.shift().reject(new Error('name pages, one of your tags, and true or false'));
-  await turn(); await turn();
-  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the failed tag goes back, the written one stays');
-  assert.equal(K.failure, failure, 'the result toast reports the failed tag');
-  assert.equal(toasts, 1, 'one toast for what was written');
-  assert.equal(K.toasted, 'Added “B” to “Page 1”. Not added: C');
-  seen.length = 0;
-  K.undo();
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'a failed write leaves the page as it was');
+  assert.match(K.failure.message, /synthetic failure/, 'and says so');
+  assert.equal(toasts, 0, 'no result toast, no Undo');
   await turn();
-  requests.shift().resolve({ pages: [{ row: 1, tags: ['A'] }], app_tags: ['A'] });
-  await turn();
-  assert.deepEqual(seen, [['api/undo', { batch: 3 }]], 'Undo retracts the written batch only');
-  assert.deepEqual(plain(K.pages.get(1).tags), ['A']);
+  assert.equal(requests.length, 0, 'nothing is sent again');
 }
 
-/* A background flush's partial failure still settles its page after another page starts writing. */
-async function tagPageOverlap() {
-  const { K, requests } = await screenFixture();
-  const first = K.tagPage(1, ['B', 'C']);
-  const later = K.tagPage(2, ['D']);
+/* The library's writes go to the shell's own API by key; its answer is the truth for every page it names */
+async function writesAreTheLibrarys() {
+  const { K, next } = await screenFixture();
+  K.title = (p) => p.title;
+  const brought = K.tagSelection('A', [2]);
   await turn();
-  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 1, app_tags: ['A', 'B'] });
-  await turn(); await turn();
-  requests.shift().reject(new Error('synthetic C failure'));
-  await first;
-  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the failed tag clears on the older page');
-  assert.match(K.toasted, /Added “B” .*Not added: C/);
-  const undo = K.undo;
+  const r = next('/api/tags');
+  assert.equal(r.route, '/api/tags', "the shell's own API, at its root");
+  assert.deepEqual(r.body, { urls: [url(2)], add: ['A'], remove: [] }, 'pages by key, never by row');
+  r.resolve({ undo: { tags: [{ url: url(2), name: 'A', add: false, remove: false }], vocabulary: { A: '2026-10-01T00:00:00Z' } },
+    urls: [url(2)], tags: { [url(2)]: ['A'], [url(3)]: ['A'] }, vocabulary: [{ name: 'A' }, { name: 'b' }],
+    counts: { changed: 1, unchanged: 0, unknown: 0 } });
+  await brought;
+  assert.equal(K.has(3, 'A'), true, 'every page the answer names follows it, as a name brought back shows on all');
+  assert.deepEqual(plain(K.lib.app_tags), ['A', 'b'], 'the active names, as the library answers them');
+  const unknown = K.tagSelection('B', [1, 2]);
+  K.pages.get(2).url = 'https://elsewhere.example/2';   // a key the library does not hold
   await turn();
-  requests.shift().resolve({ pages: [{ row: 2, tags: ['D'] }], batch: 2, app_tags: ['A', 'B', 'D'] });
-  await later;
-  const removed = K.untagSelection('B', [1]);
+  next('/api/tags').resolve({ undo: { tags: [{ url: url(1), name: 'B', add: false, remove: false }], vocabulary: {} }, urls: [url(1)],
+    tags: { [url(1)]: ['A', 'B'] }, vocabulary: [{ name: 'A' }, { name: 'B' }], counts: { changed: 1, unchanged: 0, unknown: 1 } });
+  await unknown;
+  assert.equal(K.has(2, 'B'), false, 'a page the answer leaves out stays as it was');
+  assert.equal(K.toasted, 'Added B to 2 pages. 1 page not in your library');
+  const dismissed = K.untag(1, 'B');
   await turn();
-  requests.shift().resolve({ pages: [{ row: 1, tags: ['A'] }], batch: 3, app_tags: ['A', 'B', 'D'] });
-  await removed;
-  const replaced = K.tagSelection('B', [1]);
+  next('/api/tags').resolve({ undo: { tags: [{ url: url(1), name: 'B', add: false, remove: false }], vocabulary: {} }, urls: [],
+    tags: { [url(1)]: ['A'] }, vocabulary: [{ name: 'A' }, { name: 'B' }], counts: { changed: 0, unchanged: 1, unknown: 0 } });
+  await dismissed;
+  assert.equal(typeof K.undo, 'function', 'a write that changed no shown tag still recorded a decision: Undo');
+  const nothing = K.tagSelection('C', [1]);
   await turn();
-  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 4, app_tags: ['A', 'B', 'D'] });
-  await replaced;
-  const undone = undo();
-  assert.equal(K.has(1, 'B'), true, 'Undo preserves the later replacement while waiting for its reply');
-  await turn();
-  assert.deepEqual(requests[0].body, { batch: 1 }, 'Undo names only the older successful batch');
-  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], app_tags: ['A', 'B', 'D'] });
-  await undone;
-  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the server keeps the later batch on the same tag');
-  assert.deepEqual(plain(K.pages.get(2).tags), ['D'], 'the later page keeps its write');
+  next('/api/tags').resolve({ undo: { tags: [], vocabulary: {} }, urls: [], tags: { [url(1)]: ['A', 'C'] }, vocabulary: [{ name: 'A' }, { name: 'C' }],
+    counts: { changed: 0, unchanged: 1, unknown: 0 } });
+  await nothing;
+  assert.equal(K.undo, null, 'nothing recorded, nothing to undo');
 }
 
-async function tagPageSiblingFailure() {
-  const { K, requests } = await screenFixture();
-  const first = K.tagPage(1, ['B', 'C']);
-  const later = K.tagSelection('D', [1]);
-  await turn();
-  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 1, app_tags: ['A', 'B'] });
-  await turn(); await turn();
-  requests.shift().reject(new Error('synthetic C failure'));
-  await first;
-  assert.equal(K.has(1, 'D'), true, 'the first reply keeps the later optimistic pick');
-  await turn();
-  requests.shift().reject(new Error('synthetic D failure'));
-  await later;
-  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'both failed tags clear, including the older change');
-}
-
-/* A write's reply and its Undo's carry the recent order, kept on K.lib for the Add link panel. */
+/* After a library write the service's view is read again for Recently used and the tag counts. A read the write
+   overtook is read again, so an older order never comes back, and a later refresh shares the read in flight */
 async function tagRecent() {
-  const { K } = setup('pages.js');
-  K.title = (p) => p.title;
-  K.know([page(1, ['A'])]);
-  K.lib = { app_tags: ['A', 'B'], recent: ['A'] };
-  K.api = (route) => Promise.resolve(route === 'api/apply'
-    ? { pages: [{ row: 1, tags: ['A', 'B'] }], changed: 1, batch: 1, app_tags: ['A', 'B'], recent: ['B', 'A'] }
-    : { pages: [{ row: 1, tags: ['A'] }], app_tags: ['A', 'B'], recent: ['A'] });
-  await K.tagSelection('B', [1]);
-  assert.deepEqual(plain(K.lib.recent), ['B', 'A'], 'the tag just used comes first');
-  await K.undo();
-  assert.deepEqual(plain(K.lib.recent), ['A'], 'undone, it was no use');
+  const { K, requests, library } = await screenFixture();
+  K.lib.recent = ['A'];
+  const reading = K.loadLibrary();   // one in flight already, as Add link's
+  await turn();
+  const old = requests.shift();
+  assert.equal(old.route, 'api/library');
+  const write = K.tagSelection('B', [1]);
+  await turn();
+  const tag = requests.shift();
+  assert.equal(tag.route, '/api/tags', 'the write goes at once, never behind the service read');
+  tag.resolve(library['/api/tags'](tag.body));
+  await write;
+  old.resolve({ ...K.lib, recent: ['A'], forgotten: [] });   // what the service held before the write
+  await turn(); await turn(); await turn();
+  const fresh = requests.shift();
+  assert.equal(fresh && fresh.route, 'api/library', 'a read the write overtook is read again');
+  fresh.resolve({ ...K.lib, recent: ['B', 'A'], forgotten: [] });
+  await reading;
+  assert.deepEqual(plain(K.lib.recent), ['B', 'A'], 'the newer order stands');
+  assert.equal(requests.length, 0, "the write's own refresh shared that read");
 }
 
-/* Use core's real error reporter: a partial flush presents its result in one toast. */
-async function tagPagePartialToast() {
-  const { K, coreFail } = setup('pages.js');
-  K.fail = coreFail;
-  K.title = (p) => p.title;
-  K.know([page(1, ['A'])]);
-  const toasts = [];
-  K.toast = (msg, undo) => toasts.push({ msg, undo });
-  K.api = (route, body) => body.tag === 'B'
-    ? Promise.resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 1, app_tags: ['A', 'B'] })
-    : Promise.reject(new Error('synthetic C failure'));
-  await K.tagPage(1, ['B', 'C']);
-  assert.equal(toasts.length, 1, 'one result toast, including the partial failure');
-  assert.equal(toasts[0].msg, 'Added “B” to “Page 1”. Not added: C');
-  assert.equal(typeof toasts[0].undo, 'function');
-  toasts.length = 0;
-  await K.tagPage(1, ['C']);
-  assert.equal(toasts.length, 1, 'a fully failed change still reports the error');
-  assert.match(toasts[0].msg, /synthetic C failure/);
-  assert.equal(toasts[0].undo, undefined, 'no Undo for a failed write');
+/* A held service, its list writes and its failed reads never hold up a library write or take one back */
+async function writesNeverWaitOnTheService() {
+  const { K, requests, click, library, next } = await screenFixture();
+  click(2);   // the selection's write to the service, held
+  await turn();
+  const list = next('api/selection');
+  const read = K.loadLibrary().catch((err) => err);
+  await turn();
+  const held = next('api/library');
+  const first = K.tagSelection('A', [2]);
+  await turn();
+  const one = next('/api/tags');
+  one.resolve(library['/api/tags'](one.body));
+  await first;
+  const second = K.untag(2, 'A');
+  await turn();
+  const two = next('/api/tags');
+  two.resolve(library['/api/tags'](two.body));
+  await second;
+  assert.equal(K.has(2, 'A'), false, 'both writes answered while the service held its own');
+  held.reject(new Error('the model service took too long'));
+  assert.match((await read).message, /took too long/);
+  await turn();
+  assert.equal(K.has(2, 'A'), false, 'a failed read takes back no write');
+  assert.equal(typeof K.undo, 'function', 'nor its Undo');
+  list.resolve({ rows: [2] });
 }
 
-/* Forget: out of the grid, the selection, the pins and every count at once; Undo puts it back as it was */
+/* A search the service ranked before a library write answered cannot put back the tags the write replaced; one
+   asked after it shows the service's */
+async function searchKeepsNewerTags() {
+  const { K, requests, library, next } = await screenFixture();
+  const searching = K.views.run();
+  await turn();
+  const search = next('api/search');
+  const write = K.tagSelection('B', [1]);
+  await turn();
+  const tag = next('/api/tags');
+  tag.resolve(library['/api/tags'](tag.body));
+  await write;
+  search.resolve({ hits: [page(1, ['A']), page(2)], offset: 0, total: 2 });
+  await searching;
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the page as the library answered');
+  const again = K.views.run();
+  await turn(); await turn();
+  next('api/search').resolve({ hits: [page(1, ['A', 'B', 'C'])], offset: 0, total: 1 });
+  await again;
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B', 'C'], "a later search's tags are the service's");
+  assert.ok(requests.every((r) => r.route === 'api/library'), 'nothing else waits');
+}
+
+/* Forget: the library forgets the page, then it leaves the grid and every count; the selection and the pins keep
+   it, out of sight, and Undo restores what the forget changed, back in its place */
 async function forgetAndUndo() {
-  const { K, node, requests, click, key, settle, press, shown } = await screenFixture('app.js');
+  const { K, node, requests, sent, click, key, settle, press, shown } = await screenFixture('app.js');
   click(1); click(2); key(2, 'p'); await settle();
+  sent.length = 0;
   const e = click(2, { '[data-forget]': {} });
   assert.equal(e.stopped, false);
-  assert.deepEqual(plain(K.sel), [1], 'the page leaves the selection');
-  assert.deepEqual(plain(K.pins), [], 'and the pins');
-  assert.deepEqual(shown(), [1, 3], 'and the grid');
-  assert.equal(node('n-sel').textContent, 1);
+  assert.deepEqual(shown(), [1, 2, 3], 'shown until the library has forgotten it');
+  await turn();
+  assert.deepEqual([requests[0].route, requests[0].body], ['/api/forget', { urls: [url(2)] }]);
+  await settle();
+  assert.deepEqual(shown(), [1, 3], 'then out of the grid');
+  assert.deepEqual(plain(K.sel), [1, 2], 'the selection keeps its place');
+  assert.deepEqual(plain(K.pins), [2], 'and the pins');
+  assert.equal(node('n-sel').textContent, 1, 'counted in neither');
   assert.equal(node('n-pin').textContent, 0);
   assert.match(node('v-pos').innerHTML, /^<b>1 to 2<\/b> of 2 for “q”$/, 'the counts drop it');
   assert.equal(K.lib.pages, 8);
   assert.match(node('strip').innerHTML, />1\/1<\/span>/);
   assert.equal(K.toasted, 'Forgotten');
-  await turn();
-  assert.deepEqual(requests[0].body, { rows: [2], value: true });
-  assert.equal(requests[0].route, 'api/forget');
-  await settle();
+  assert.deepEqual(sent, ['/api/forget', 'api/library'], 'no list is written');
   press('u');
-  assert.deepEqual(shown(), [1, 2, 3], 'Undo puts it back in its place');
-  assert.deepEqual(plain(K.sel), [1, 2], 'selected as it was');
-  assert.deepEqual(plain(K.pins), [2], 'and pinned');
-  assert.equal(K.lib.pages, 9);
   await turn();
-  assert.deepEqual([requests[0].route, requests[0].body], ['api/forget', { rows: [2], value: false }]);
+  assert.deepEqual([requests[0].route, requests[0].body], ['/api/restore', { urls: [url(2)] }], 'Undo restores what it forgot');
   await settle();
+  assert.deepEqual(shown(), [1, 2, 3], 'back in its place');
+  assert.deepEqual(plain(K.selected()), [1, 2], 'selected as it was');
+  assert.deepEqual(plain(K.pinned()), [2], 'and pinned');
+  assert.equal(K.lib.pages, 9);
   assert.equal(key(3, 'f'), true, 'f forgets the focused page');
   assert.deepEqual(plain(K.sel), [1, 2], 'and selects nothing');
-  assert.deepEqual(shown(), [1, 2]);
   await turn();
-  assert.deepEqual(requests[0].body, { rows: [3], value: true });
-}
-
-/* the undo of a forget writes the page back before the lists that hold it */
-async function forgetUndoOrder() {
-  const { K, requests, click, key, settle, press } = await screenFixture('app.js');
-  click(2); key(2, 'p'); await settle();
-  click(2, { '[data-forget]': {} });
-  press('u');
-  const sent = [];
-  for (let i = 0; i < 8; i++) {
-    await turn();
-    const r = requests.shift();
-    if (!r) continue;
-    sent.push([r.route, r.body]);
-    r.resolve(r.route === 'api/forget' ? { pages: K.lib.pages } : { rows: r.body.rows });
-  }
-  assert.deepEqual(sent, [['api/forget', { rows: [2], value: true }], ['api/forget', { rows: [2], value: false }],
-    ['api/selection', { rows: [2] }], ['api/pins', { rows: [2] }]]);
+  assert.deepEqual(requests[0].body, { urls: [url(3)] });
+  await settle();
+  assert.deepEqual(shown(), [1, 2]);
+  K.forget(1);
+  await turn();
+  requests.shift().reject(new Error('synthetic failure'));
+  await turn(); await turn();
+  assert.deepEqual(shown(), [1, 2], 'a failed forget leaves the page shown');
+  assert.match(K.failure.message, /synthetic failure/);
 }
 
 /* Next after a forget starts at the first hit not shown, so nothing is skipped */
@@ -774,9 +398,11 @@ async function forgetThenNext() {
 }
 
 /* Undo after navigation ranks the current view again, including the restored page and its count. */
+
+/* Undo after navigation ranks the current view again, including the restored page and its count. */
 async function forgetUndoAfterNavigation() {
   for (const navigation of ['search', 'next']) {
-    const { K, node, requests, click, settle, shown, turnTo } = await pagedFixture();
+    const { K, node, requests, click, settle, shown, turnTo, next } = await pagedFixture();
     click(10, { '[data-forget]': {} }); await settle();
     const undo = K.undo;
     if (navigation === 'next') await turnTo('next', 49, rows(51, 99));
@@ -790,12 +416,12 @@ async function forgetUndoAfterNavigation() {
     const offset = K.views.view().offset;
     undo();
     await turn();
-    requests.shift().resolve({ pages: 9 });
+    next('/api/restore').resolve({ urls: [url(10)], restored: [url(10)], counts: {} });
     await turn(); await turn();
-    assert.equal(requests[0]?.route, 'api/search', 'Undo after navigation must rank the current view again');
-    assert.equal(requests[0].body.offset, offset, 'Undo keeps the current result page');
+    const search = next('api/search');
+    assert.equal(search.body.offset, offset, 'Undo after navigation must rank the current view again, on its page');
     const hits = rows(offset + 1, offset + 50);
-    requests.shift().resolve({ hits, offset, total: 120 });
+    search.resolve({ hits, offset, total: 120 });
     await turn(); await turn();
     assert.deepEqual(shown(), hits.map((p) => p.row));
     assert.match(node('v-pos').innerHTML, /of 120 for/, 'the total includes the restored page');
@@ -828,6 +454,8 @@ async function startupDuringPage() {
   await turn(); await turn();
   assert.equal(K.views.view().offset, 50, 'Next finishes on page two');
 }
+
+/* Pin parks a page without touching the selection; Pinned shows them, and leaving returns to the results */
 
 /* Pin parks a page without touching the selection; Pinned shows them, and leaving returns to the results */
 async function pinView() {
@@ -871,10 +499,10 @@ async function untagAndOpenDoNotSelect() {
   const { K, node, requests, click, key, opened, settle } = await screenFixture();
   const e = click(1, { '[data-untag]': { dataset: { untag: 'A' } } });
   assert.deepEqual(plain(K.sel), [], 'a tag chip × does not select');
-  assert.doesNotMatch(node('grid').innerHTML, /data-untag="A"/, 'the tag leaves the tile at once');
   await turn();
-  assert.deepEqual(requests[0].body, { rows: [1], tag: 'A', value: false }, '× takes the tag off that page only');
+  assert.deepEqual(requests[0].body, { urls: [url(1)], add: [], remove: ['A'] }, '× takes the tag off that page only');
   await settle();
+  assert.doesNotMatch(node('grid').innerHTML, /data-untag="A"/, 'the tag leaves the tile once the library answers');
   const open = click(2, { '[data-open]': {}, 'a, button': {} });
   assert.equal(open.stopped, true, 'a click on Open stops at the control');
   assert.deepEqual(plain(K.sel), [], 'Open does not select');
@@ -929,26 +557,30 @@ async function likeToggle() {
 }
 
 async function newTagApplies() {
-  const { K, node, requests, click, settle } = await screenFixture();
+  const { node, requests, click, settle, next, library, answer } = await screenFixture();
+  library.vocabulary.add('Night trains');
   const submit = (name) => { node('new-tag').value = name; node('newtag').submit({ preventDefault() {} }); };
   submit('Night trains');
   await turn();
   assert.equal(requests.length, 0, 'no selection, no tag made');
   assert.match(node('new-msg').textContent, /Select pages first/);
   click(2); click(3); await settle();
-  submit('  Night trains ');
+  submit('  night  TRAINS ');
   await turn();
-  assert.deepEqual(requests[0].body, { name: 'Night trains' }, 'the name goes trimmed, through the tag rules');
-  requests.shift().resolve({ tag: 'Night trains', created: true, tags: [] });
-  await turn(); await turn();
-  assert.deepEqual(requests[0].body, { rows: [2, 3], tag: 'Night trains', value: true }, 'it goes on every selected page');
+  const made = next('/api/vocabulary');
+  assert.deepEqual(made.body, { create: ['night  TRAINS'] }, 'the name goes trimmed, for the library to spell');
+  made.resolve({ vocabulary: [{ name: 'A' }, { name: 'Night trains' }], resolved: ['Night trains'] });
+  await turn(); await turn(); await turn();
+  const tag = next('/api/tags');
+  assert.deepEqual(tag.body, { urls: [url(2), url(3)], add: ['Night trains'], remove: [] }, "it goes on every selected page, in the library's spelling");
   assert.equal(node('new-tag').value, '', 'the box empties for the next one');
+  tag.resolve(answer(tag));
   await settle();
   submit('a');
   await turn();
-  requests.shift().reject(new Error('cannot use that name as a tag: it is empty'));
+  next('/api/vocabulary').reject(new Error('cannot use "a" as a tag name: it is empty'));
   await turn(); await turn();
-  assert.match(node('new-msg').textContent, /cannot use that name as a tag/, 'a refusal shows inline');
+  assert.match(node('new-msg').textContent, /cannot use "a" as a tag name/, 'a refusal shows inline');
   assert.equal(node('new-tag').value, 'a', 'the name stays to fix');
 }
 
@@ -1013,6 +645,8 @@ async function likeNaming() {
 }
 
 /* ---- pages of hits: Previous and Next replace them; the search "q" ranks 120 pages, 50 at a time ---- */
+
+/* ---- pages of hits: Previous and Next replace them; the search "q" ranks 120 pages, 50 at a time ---- */
 const rows = (from, to) => Array.from({ length: to - from + 1 }, (_, i) => page(from + i));
 async function pagedFixture() {
   const f = await screenFixture();
@@ -1064,6 +698,8 @@ async function pages() {
 }
 
 /* Clearing the search box lists every page, newest first, and pages through them as a search does. */
+
+/* Clearing the search box lists every page, newest first, and pages through them as a search does. */
 async function clearShowsAll() {
   const { K, node, requests, click, settle, shown } = await screenFixture();
   click(2); await settle();
@@ -1086,6 +722,8 @@ async function clearShowsAll() {
   node('s-q').input();
   assert.equal(requests.length, 0, 'clearing an empty box asks again for nothing');
 }
+
+/* Searching for nothing, or only spaces, lists every page too. */
 
 /* Searching for nothing, or only spaces, lists every page too. */
 async function emptySearchShowsAll() {
@@ -1140,17 +778,16 @@ async function likeBackToPage() {
 }
 
 async function likeWaitsForTag() {
-  const { K, requests, click, chip, settle } = await screenFixture();
+  const { K, requests, click, chip, settle, next, library } = await screenFixture();
   click(2); await settle();
   chip('A', 'add');
   chip('A', 'like');
   await turn();
-  assert.equal(requests.length, 1, 'the ranking must wait for the pending tag decision');
-  assert.equal(requests[0].route, 'api/apply');
-  requests.shift().resolve({ pages: [{ row: 2, tags: ['A'] }], app_tags: ['A'] });
-  await turn();
-  assert.equal(requests[0].route, 'api/like');
-  requests.shift().resolve({ hits: [page(3)], offset: 0, total: 1 });
+  assert.equal(requests.length, 1, 'the ranking waits for the pending library write');
+  const tag = next('/api/tags');
+  tag.resolve(library['/api/tags'](tag.body));
+  await turn(); await turn();
+  next('api/like').resolve({ hits: [page(3)], offset: 0, total: 1 });
   await turn();
   assert.deepEqual(plain(K.views.view().rows), [3], 'the newly tagged page is absent from the ranking');
   assert.equal(K.has(2, 'A'), true);
@@ -1171,44 +808,38 @@ async function backDuringPage() {
 
 /* Startup GETs snapshot the saved lists, but their replies are held. Writes replace whole lists and forgetting
    prunes both lists, as server.py does; forgotten rows cannot be selected or pinned. */
+
+/* Startup GETs snapshot the saved lists, but their replies are held. Writes replace whole lists; the library's
+   forget and restore leave them as they are, the forgotten page out of sight. */
 function startupFixture(saved = [1]) {
   const f = setup('pages.js', 'views.js', 'strip.js');
   const { K } = f;
   const server = { selection: [...saved], pins: [...saved] }, loaded = new Set(), late = [], sent = [];
-  const gone = new Set(), tags = new Map();
-  K.lib = { pages: 9, sizes: [20, 50], app_tags: ['A'] };
+  const lib = library();
+  K.lib = { pages: 9, sizes: [20, 50], app_tags: ['A'], forgotten: [] };
   K.state.search.query = '';
   K.know([page(1), page(2), page(3)]);
   K.changed = () => { K.views.render(); K.strip.render(); };
   K.api = (route, body) => {
+    if (lib[route]) { sent.push([route, plain(body)]); return Promise.resolve(lib[route](body)); }
     const name = route.replace('api/', '');
+    if (name === 'library') {
+      const forgotten = [...lib.gone].map((key) => Number(key.split('/').pop()));
+      return Promise.resolve({ ...K.lib, pages: 9 - forgotten.length, forgotten });
+    }
     if (body === undefined) {
-      const pages = server[name].map((row) => page(row, tags.get(row) || []));
+      const pages = server[name].map((row) => page(row, [...(lib.held.get(url(row)) || [])]));
       return new Promise((resolve) => late.push(() => { loaded.add(name); resolve({ pages }); }));
     }
     sent.push([name, plain(body)]);
-    if (name === 'apply') {
-      for (const row of body.rows) tags.set(row, [body.tag]);
-      return Promise.resolve({ pages: body.rows.map((row) => ({ row, tags: tags.get(row) })),
-        app_tags: [body.tag], changed: body.rows.length, batch: 1 });
-    }
-    if (name === 'forget') {
-      for (const row of body.rows) {
-        if (body.value) {
-          gone.add(row);
-          for (const list of Object.keys(server)) server[list] = server[list].filter((r) => r !== row);
-        } else gone.delete(row);
-      }
-      return Promise.resolve({ pages: 9 - gone.size });
-    }
-    if (body.rows.some((row) => gone.has(row))) return Promise.reject(new Error('forgotten row'));
     server[name] = [...body.rows];
     return Promise.resolve({ rows: body.rows });
   };
   f.finish = async () => {
     while (late.length) { late.shift()(); await turn(); }
     await K.writes;
-    await turn();
+    await K.mutations;
+    await turn(); await turn();
   };
   return Object.assign(f, { server, loaded, late, sent });
 }
@@ -1235,29 +866,23 @@ async function startupEdits() {
 }
 
 async function startupForgetAndUndo() {
-  for (const local of [false, true]) {
-    for (const undoAt of ['never', 'early', 'loaded']) {
-      const { K, server, sent, finish } = startupFixture([1, 2, 3]);
-      const loading = K.loadLists();
-      if (local) { K.select(2); K.pin(2); }
-      K.forget(2);
-      const undo = K.undo;
-      if (undoAt === 'early') undo();
-      await turn();
-      await finish(); await loading;
-      if (undoAt === 'loaded') { undo(); await K.writes; await turn(); }
-      const expected = undoAt === 'never' ? [1, 3] : [1, 2, 3];
-      assert.deepEqual(plain(K.sel), expected, `${local}/${undoAt}: selection, including saved membership and order`);
-      assert.deepEqual(plain(K.pins), expected, `${local}/${undoAt}: pins, including saved membership and order`);
-      assert.deepEqual(server, { selection: expected, pins: expected }, `${local}/${undoAt}: persisted lists`);
-      assert.equal(K.failure, undefined, `${local}/${undoAt}: no rejected writes`);
-      for (const name of ['selection', 'pins']) {
-        const writes = sent.filter(([n]) => n === name);
-        assert.ok(writes.length <= (undoAt === 'loaded' ? 2 : 1), 'each startup list sends once');
-      }
-      K.views.showPinned();
-      assert.deepEqual(plain(K.views.shown(K.views.view())), expected, 'Pinned shows the restored list');
-    }
+  for (const undoAt of ['never', 'early', 'loaded']) {
+    const { K, server, sent, finish } = startupFixture([1, 2, 3]);
+    const loading = K.loadLists();
+    const forgotten = K.forget(2);
+    if (undoAt === 'early') { await forgotten; K.undo(); }
+    await turn();
+    await finish(); await loading;
+    if (undoAt === 'loaded') { K.undo(); await K.mutations; await turn(); await turn(); }
+    const shown = undoAt === 'never' ? [1, 3] : [1, 2, 3];
+    assert.deepEqual(plain(K.sel), [1, 2, 3], `${undoAt}: the selection keeps its saved membership and order`);
+    assert.deepEqual(plain(K.pins), [1, 2, 3], `${undoAt}: the pins too`);
+    assert.deepEqual(plain(K.selected()), shown, `${undoAt}: the forgotten page counted nowhere`);
+    assert.deepEqual(server, { selection: [1, 2, 3], pins: [1, 2, 3] }, `${undoAt}: persisted lists untouched`);
+    assert.deepEqual(sent.map(([name]) => name), undoAt === 'never' ? ['/api/forget'] : ['/api/forget', '/api/restore'], `${undoAt}: no list write`);
+    assert.equal(K.failure, undefined, `${undoAt}: no rejected writes`);
+    K.views.showPinned();
+    assert.deepEqual(plain(K.views.shown(K.views.view())), shown, `${undoAt}: Pinned shows what is not forgotten`);
   }
 }
 
@@ -1297,12 +922,15 @@ async function startupListsKeepChanges() {
 
 /* the service stops answering: one line says so for good, both screens and Send stop taking actions, and
    nothing is sent again; a refusal the service itself makes is not an outage */
+
+/* the service stops answering: one line says so for good, both screens stop taking actions, and nothing is sent
+   again, the library's writes included; a refusal the service itself makes is not an outage */
 async function outage() {
   const reply = (status, body) => () => Promise.resolve({ status, ok: status < 300, json: async () => body });
   {
     const { K, context } = setup();
     context.fetch = reply(404, { error: 'not found' });
-    await assert.rejects(K.api('api/sessions/9'), /not found/);
+    await assert.rejects(K.api('api/add/9'), /not found/);
     assert.equal(K.down, false, 'a refusal is not an outage');
   }
   const failures = {
@@ -1315,39 +943,17 @@ async function outage() {
     const { K, node, context, coreFail } = setup();
     const sent = [];
     context.fetch = (path, init) => { sent.push([path, init.method]); return failure(); };
-    await assert.rejects(K.api('api/apply', { rows: [1], tag: 'A', value: true }));
+    await assert.rejects(K.api('api/search', { query: 'q' }));
     assert.equal(K.down, true, name);
     assert.equal(node('outage').hidden, false, `${name}: the line shows`);
     assert.equal(node('tag-screen').inert && node('add-screen').inert, true, `${name}: no control acts`);
-    assert.equal(node('send-btn').disabled, true, `${name}: no Send`);
     assert.equal(node('toast-undo').disabled, true, `${name}: no Undo outside the inert screens`);
-    await assert.rejects(K.api('api/undo', { batch: 1 }), /Reload/);
+    await assert.rejects(K.shell('tags', { urls: [], undo: { tags: [], vocabulary: {} } }), /Reload/);
     await turn(); await turn();
-    assert.deepEqual(plain(sent), [['api/apply', 'POST']], `${name}: sent once, never again`);
+    assert.deepEqual(plain(sent), [['api/search', 'POST']], `${name}: sent once, never again`);
     coreFail(new Error('the model service is not answering'));
     assert.equal(K.toasted, undefined, `${name}: the line says it, not a toast as well`);
   }
 }
 
-async function outageDuringSend() {
-  const { K, node, context } = setup('app.js');
-  await K.ready;
-  const sent = [];
-  let finish;
-  context.fetch = (path) => {
-    sent.push(path);
-    return new Promise((resolve) => { finish = resolve; });
-  };
-  const previewing = K.sendNow();
-  await turn();
-  K.outage();
-  assert.equal(node('send-go').disabled, true, 'an open Send dialog stops taking actions');
-  finish({ status: 200, ok: true, json: async () => PLAN });
-  await previewing;
-  assert.equal(node('send-go').disabled, true, 'a pending preview cannot enable Send again');
-  await node('send-go').click();
-  assert.deepEqual(sent, ['api/send/preview'], 'no Send reaches the service after an outage');
-  assert.match(node('send-body').innerHTML, /Reload/);
-}
-
-run({ clearShowsAll, emptySearchShowsAll, tagRecent, tagPagePartialToast, tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult, outage, outageDuringSend });
+run({ clearShowsAll, emptySearchShowsAll, tagRecent, writesNeverWaitOnTheService, searchKeepsNewerTags, writesAreTheLibrarys, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, openControl, outage });

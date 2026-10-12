@@ -615,7 +615,7 @@ fn a_retired_tag_leaves_the_library_but_not_the_state_file() {
     );
     assert_eq!(reply.status, 200, "{}", reply.text());
     assert_eq!(names(&reply.json()["vocabulary"]), ["Harness", "Old tag"]);
-    assert_eq!(reply.json().as_object().unwrap().len(), 1);
+    assert_eq!(reply.json().as_object().unwrap().len(), 2);
     assert_eq!(
         server
             .post(
@@ -645,6 +645,46 @@ fn a_retired_tag_leaves_the_library_but_not_the_state_file() {
     let reply = server.post("/api/vocabulary", &json!({"create": ["old tag"]}));
     assert_eq!(names(&reply.json()["vocabulary"]), ["Harness", "Old tag"]);
     assert_eq!(tags_of(&server.library(), B), json!(["Harness", "Old tag"]));
+}
+
+#[test]
+fn creating_names_answers_the_vocabularys_spelling_of_each() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let server = Server::start(&fx);
+    let reply = server.post(
+        "/api/vocabulary",
+        &json!({"create": ["Harness", "Old tag"]}),
+    );
+    assert_eq!(reply.json()["resolved"], json!(["Harness", "Old tag"]));
+    server.post("/api/vocabulary", &json!({"retire": ["Old tag"]}));
+
+    // Made, already there and brought back; a repeat in any case counts once.
+    let reply = server.post(
+        "/api/vocabulary",
+        &json!({"create": [" new   name ", "HARNESS", "old TAG", "harness", "New Name"]}),
+    );
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    assert_eq!(
+        reply.json()["resolved"],
+        json!(["new name", "Harness", "Old tag"])
+    );
+    assert_eq!(
+        names(&reply.json()["vocabulary"]),
+        ["Harness", "new name", "Old tag"]
+    );
+    let again = server.post("/api/vocabulary", &json!({"create": ["NEW NAME"]}));
+    assert_eq!(again.json()["resolved"], json!(["new name"]));
+
+    let before = fs::read(fx.root.join("library.json")).unwrap();
+    let refused = server.post("/api/vocabulary", &json!({"create": ["Fine", "  "]}));
+    assert_eq!(refused.status, 400, "{}", refused.text());
+    assert!(refused.json().get("resolved").is_none());
+    assert_eq!(
+        fs::read(fx.root.join("library.json")).unwrap(),
+        before,
+        "a refused create writes nothing, not even its valid names"
+    );
 }
 
 #[test]

@@ -88,8 +88,8 @@ def test_cli_passes_resolved_root_and_default_data(tmp_path, monkeypatch, positi
 
 
 def test_serving_runs_the_launchs_knowmoretabs_and_proves_with_its_key(tmp_path):
-    """`just up` passes the binary it serves the Library with and its key file: Add link and Send run that binary,
-    and the server proves every exchange with that key."""
+    """`just up` passes the binary it serves the Library with and its key file: Add link runs that binary, and the
+    server proves every exchange with that key."""
     served = {}
 
     class Stopped:
@@ -109,7 +109,6 @@ def test_serving_runs_the_launchs_knowmoretabs_and_proves_with_its_key(tmp_path)
         patch("tagger.embed.load_text", return_value=(None, {"load_s": 0})),
         patch("tagger.app.engine.require_vectors"),
         patch("tagger.app.engine.load", return_value=(None, {})),
-        patch("tagger.app.server.Store"),
         patch("tagger.app.server.App"),
         patch("tagger.app.server.serve", side_effect=serve),
         patch("builtins.print"),

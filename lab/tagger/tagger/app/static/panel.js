@@ -2,7 +2,7 @@
    Suggested and Recently used, one line each whatever they hold (Recently
    used: the tags last put on a page, latest first, as many as its line
    has columns, so none sits clipped out of sight); a box
-   that filters the app tags or names a new one; then every app tag,
+   that filters the tags or names a new one; then every tag,
    folded under one button, in letter rows ("#" first, then A to Z,
    letters without tags left out) of same width cells. A cell is one tag
    on one page: filled when the page has it, striped when picked and not
@@ -31,8 +31,11 @@
     }
     return [...rows].sort(([a], [b]) => (a < b ? -1 : 1));   // "#" sorts before A
   }
-  /* as many of a one line row's names as its line has columns: none clipped out of sight yet reachable by Tab */
-  const fit = (names, line) => names.slice(0, getComputedStyle(line).gridTemplateColumns.split(" ").filter((w) => w.endsWith("px")).length);
+  /* active names only, in their order, as many as the line has columns: none clipped yet reachable by Tab */
+  const fit = (names, line) => {
+    const active = new Set(K.lib ? K.lib.app_tags : []);
+    return names.filter((t) => active.has(t)).slice(0, getComputedStyle(line).gridTemplateColumns.split(" ").filter((w) => w.endsWith("px")).length);
+  };
   const matching = (q) => (K.lib ? K.lib.app_tags : []).filter((t) => t.toLowerCase().includes(q));
 
   const cell = (t) => {
@@ -91,7 +94,7 @@
     making = true;
     const mine = target;
     try {
-      const made = await K.strip.make(name);
+      const made = await K.newTag(name);
       if (mine === target) { clear(); view.pick(made); }
     } catch (err) { tell(err.message); }
     finally { making = false; }

@@ -80,12 +80,13 @@
     K.changed();
     const at = { offset, n: per(), images: S.images };
     try {
-      await K.writes;  // rankings and tags must include decisions queued before this page was requested
+      await K.mutations;  // rankings and tags must include the library's writes sent before this page was asked for
       if (mine !== asked[v.kind]) return false;
+      const sent = K.generation;
       const out = await (v.kind === "like" ? K.api("api/like", { tag: v.tag, ...at })
                                            : K.api("api/search", { query: S.query, untagged: S.untagged, ...at }));
       if (mine !== asked[v.kind]) return false;
-      Object.assign(v, { rows: K.know(out.hits), offset: out.offset, total: out.total, tags: new Set() });
+      Object.assign(v, { rows: K.know(out.hits, true, sent), offset: out.offset, total: out.total, tags: new Set() });
       if (v.kind === "search") { S.offset = v.offset; K.save(); }
       done = true;
     } catch (err) { if (mine !== asked[v.kind]) return false; K.fail(err); }
@@ -212,7 +213,7 @@
     /* Esc leaves ≈ or Pinned first; with neither open it clears the selection (and leaves Show selection) */
     escape() {
       if (over && over.kind !== "selection") { leave(); return true; }
-      const had = K.sel.length > 0 || !!over;
+      const had = K.selected().length > 0 || !!over;
       K.clearSel();
       leave();
       return had;

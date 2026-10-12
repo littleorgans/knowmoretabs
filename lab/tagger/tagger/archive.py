@@ -4,9 +4,10 @@ Known pages: public tab URLs across readable snapshots (`library::known_urls`, `
 added one at a time (`pages/added.jsonl`, folded by `intake::snapshot` as one more snapshot after the dated ones).
 Title: the most recent non blank tab title, snapshots ascending (`library::build`); an added page's comes from the
 latest intake line for its URL.
-Owner labels: `library.json` tags[url].add resolved through active vocabulary (`State::page_tags`).
-Last use: an active term's `used_at`, when an add last put it on a page (`tags::apply`); a time that does not parse
-is no use.
+Decisions: `library.json` read as `State::read` reads it (`LibraryState`): a missing file is an empty library, a
+damaged or unsupported one an error. A page's tags are its `add` names the vocabulary holds active, in tag order
+(`State::page_tags`); its dismissals, its `remove` names. Retired names keep their decisions. Last use: an active
+term's `used_at`, when an add last put it on a page (`tags::apply`); a time that does not parse is no use.
 Capture ok: the latest valid schema 1 log line is `ok` and its hash named file exists
 (`content_store::file_name`, `image_store::read_kept`). Latest follows file order (`jsonl::parse`).
 Page metadata: latest `pages/metadata.jsonl` record, used only when status is ok (`prompt::PageLine::enrich`).
@@ -17,8 +18,9 @@ Added: when a page entered the library, the earliest of its snapshots' `captured
 import hashlib
 import ipaddress
 import json
+import os
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -55,6 +57,123 @@ def instant(raw) -> float | None:
     return at.timestamp() if at.tzinfo else None
 
 
+STATE_FILE = "library.json"  # `library::STATE_FILE`
+READS = 3  # reads of a file replaced while it was read, before giving up
+
+
+class Unreadable(Exception):
+    """`library.json` is damaged, of another schema, or kept changing while it was read: nothing may be shown from it."""
+
+
+def signature(path: Path) -> tuple | None:
+    """What changes whenever the file is replaced or written: device, inode, size and nanosecond mtime; None while it
+    is missing."""
+    try:
+        return _signature(os.stat(path))
+    except FileNotFoundError:
+        return None
+
+
+def _signature(st: os.stat_result) -> tuple:
+    return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def _strings(value, what: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise Unreadable(f"{what} is not a list of names")
+    return value
+
+
+def tag_key(name: str) -> tuple[str, str]:
+    """`library::tag_order`: alphabetical ignoring case, the exact spelling only to break a tie."""
+    return name.lower(), name
+
+
+@dataclass(frozen=True)
+class LibraryState:
+    """The owner's decisions in `library.json`, read only: what each page's `add` and `remove` lists hold (retired
+    names included, in the file's spelling), the forgotten pages, the active and retired vocabulary by folded name,
+    and each active name's last use. `signature` names the bytes it was parsed from."""
+
+    signature: tuple | None = None
+    adds: dict = field(default_factory=dict)  # url -> names its `add` list holds
+    removes: dict = field(default_factory=dict)  # url -> names its `remove` list holds
+    forgotten: frozenset = frozenset()
+    active: dict = field(default_factory=dict)  # folded name -> spelling
+    retired: dict = field(default_factory=dict)  # folded name -> spelling
+    used: dict = field(default_factory=dict)  # folded active name -> its last use, epoch seconds
+
+    @classmethod
+    def read(cls, root: Path) -> "LibraryState":
+        """The file as one consistent read: its bytes and the signature they came with, read again while the path
+        names another file by the time the read ends."""
+        path = root / STATE_FILE
+        for _ in range(READS):
+            try:
+                with path.open("rb") as f:
+                    seen, raw = _signature(os.fstat(f.fileno())), f.read()
+            except FileNotFoundError:
+                if signature(path) is None:
+                    return cls()
+                continue
+            except OSError as err:
+                raise Unreadable(f"cannot read {STATE_FILE}: {err.strerror}") from None
+            if signature(path) == seen:
+                return cls.parse(raw, seen)
+        raise Unreadable(f"{STATE_FILE} kept changing while it was read")
+
+    @classmethod
+    def parse(cls, raw: bytes, seen: tuple | None = None) -> "LibraryState":
+        """The fields `State` reads, checked as strictly as serde checks them but never more: a term's times need only
+        be text, since `jiff` reads spellings `instant` does not, and refusing one would hide a library Rust reads.
+        Any other field is not read."""
+        try:
+            state = json.loads(raw)
+        except ValueError:
+            raise Unreadable(f"{STATE_FILE} is not JSON") from None
+        if not isinstance(state, dict) or type(state.get("schema_version")) is not int:
+            raise Unreadable(f"{STATE_FILE} has no schema_version")
+        if state["schema_version"] != 1:
+            raise Unreadable(f"{STATE_FILE} has an unsupported schema_version")
+        forgotten = frozenset(_strings(state.get("forgotten"), "forgotten"))
+        pages, vocabulary = state.get("tags", {}), state.get("vocabulary", {})
+        if not isinstance(pages, dict) or not all(isinstance(p, dict) for p in pages.values()):
+            raise Unreadable("tags is not a map of pages")
+        if not isinstance(vocabulary, dict) or not all(isinstance(t, dict) for t in vocabulary.values()):
+            raise Unreadable("vocabulary is not a map of terms")
+        active, retired, used = {}, {}, {}
+        for name, term in vocabulary.items():
+            if (
+                not isinstance(term.get("created_at"), str)
+                or not isinstance(term.get("retired_at"), str | None)
+                or not isinstance(term.get("definition"), str | None)
+            ):
+                raise Unreadable(f"vocabulary term {name!r} is malformed")
+            if term.get("retired_at") is not None:
+                retired[name.lower()] = name
+                continue
+            active[name.lower()] = name
+            if (at := instant(term.get("used_at"))) is not None:
+                used[name.lower()] = at
+        return cls(
+            signature=seen,
+            adds={url: _strings(p.get("add", []), "a page's add list") for url, p in pages.items()},
+            removes={url: _strings(p.get("remove", []), "a page's remove list") for url, p in pages.items()},
+            forgotten=forgotten,
+            active=active,
+            retired=retired,
+            used=used,
+        )
+
+    def tags(self, url: str) -> list[str]:
+        """The page's tags as the library shows them: its `add` names the vocabulary holds active, in its spelling."""
+        return sorted({self.active[n.lower()] for n in self.adds.get(url, ()) if n.lower() in self.active}, key=tag_key)
+
+    def dismissed(self, url: str) -> set[str]:
+        """Folded names the page's `remove` list holds: taken off it, or a suggestion the owner turned down."""
+        return {n.lower() for n in self.removes.get(url, ())}
+
+
 def latest_log(path: Path, required=("url",)) -> dict:
     result = {}
     if not path.is_file():
@@ -80,29 +199,14 @@ class Archive:
     known: list  # page keys, sorted
     added: dict  # url -> when it entered the library, epoch seconds
     titles: dict
-    forgotten: set
-    active: dict  # folded name -> spelling
-    retired: set  # folded names the vocabulary holds retired
-    used: dict  # folded active name -> its last use, epoch seconds
-    owner_tags: dict  # url -> sorted active tags
-    tag_adds: dict  # url -> the names its `add` list holds, retired ones included
-    tag_removes: dict  # url -> the names its `remove` list holds (dismissed), retired ones included
+    state: LibraryState
     metadata: dict
     text_ok: dict  # url -> content path
     image_ok: dict  # url -> image path
 
     @classmethod
     def load(cls, root: Path) -> "Archive":
-        state = json.loads((root / "library.json").read_bytes())
-        assert state["schema_version"] == 1
-        vocab = state.get("vocabulary", {})
-        active = {name.lower(): name for name, term in vocab.items() if term.get("retired_at") is None}
-        retired = {name.lower() for name, term in vocab.items() if term.get("retired_at") is not None}
-        used = {
-            name.lower(): at
-            for name, term in vocab.items()
-            if term.get("retired_at") is None and (at := instant(term.get("used_at"))) is not None
-        }
+        state = LibraryState.read(root)
         titles: dict = {}
         known: set = set()
         added: dict = {}
@@ -138,13 +242,6 @@ class Archive:
             title = row.get("title")
             if isinstance(title, str) and title.strip():
                 titles[url] = title
-        owner_tags = {}
-        for url, page in state.get("tags", {}).items():
-            if url not in known:
-                continue
-            tags = sorted({active[n.lower()] for n in page.get("add", []) if n.lower() in active})
-            if tags:
-                owner_tags[url] = tags
         status = ("url", "status", "attempted_at")
         text_ok = {}
         for url, row in latest_log(root / "pages/content.jsonl", status).items():
@@ -166,13 +263,7 @@ class Archive:
             known=sorted(known),
             added=added,
             titles=titles,
-            forgotten=set(state.get("forgotten", [])),
-            active=active,
-            retired=retired,
-            used=used,
-            owner_tags=owner_tags,
-            tag_adds={url: page.get("add", []) for url, page in state.get("tags", {}).items()},
-            tag_removes={url: page.get("remove", []) for url, page in state.get("tags", {}).items()},
+            state=state,
             metadata=metadata,
             text_ok=text_ok,
             image_ok=image_ok,

@@ -123,8 +123,8 @@ jobs:
       - name: Check slice metadata and the generated matrix
         run: cargo run --locked --package xtask -- slices --check
 
-  # The Tagger lab's pytest suite, with its Send tests also run against the
-  # binary built here (KMT_BIN). Windows is out: the lab's vector store needs
+  # The Tagger lab's pytest suite, with its shell and end to end tests run
+  # against the binary built here (KMT_BIN). Windows is out: the lab's vector store needs
   # `fcntl`. linux-arm is out to bound cost: the locked torch pulls about
   # 3.1 GB of CUDA wheels on x86-64 Linux and about 0.2 GB on macOS, cached
   # by the lock. The tests load no model weights; the offline variables make

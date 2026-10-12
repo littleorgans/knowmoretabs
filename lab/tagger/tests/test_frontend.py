@@ -10,42 +10,16 @@ import pytest
 
 CASES = {
     "frontend.cjs": [
-        "search",
-        "restore",
-        "exactQuery",
-        "searchAfterCut",
-        "pickAfterCut",
-        "exclude",
-        "cut",
-        "pickIncluded",
-        "flips",
-        "switchedSet",
-        "acceptAfterFlip",
-        "confirmAllPending",
-        "sendWait",
-        "sendPreview",
-        "sendNothing",
-        "sendRestore",
-        "sendUncertain",
-        "sendResult",
         "openControl",
-        "openSearch",
-        "openReview",
-        "openNoDrag",
-        "newTag",
-        "newTagExisting",
-        "newTagCancelAndRefusal",
-        "newTagKeyboardFocus",
         "select",
         "chipActsOnSelection",
         "bulkUndo",
         "tagPageUndo",
+        "writesAreTheLibrarys",
         "tagRecent",
-        "tagPageOverlap",
-        "tagPageSiblingFailure",
-        "tagPagePartialToast",
+        "writesNeverWaitOnTheService",
+        "searchKeepsNewerTags",
         "forgetAndUndo",
-        "forgetUndoOrder",
         "forgetThenNext",
         "forgetUndoAfterNavigation",
         "startupDuringPage",
@@ -68,7 +42,6 @@ CASES = {
         "startupForgetAndUndo",
         "startupTagsKeepChanges",
         "outage",
-        "outageDuringSend",
     ],
     "frontend_add.cjs": [
         "addStates",
@@ -86,11 +59,14 @@ CASES = {
         "addPicksStalePoll",
         "addPicksDetour",
         "addSuggested",
+        "addSuggestedFollowsVocabulary",
         "addFollowUpNamesTheKey",
         "addFollowUpPicksBackground",
         "addFollowUpStalePoll",
         "addRestoreFollowsTheKey",
         "addPollFails",
+        "addPicksFailure",
+        "addKeepsNewerTags",
     ],
 }
 
@@ -107,13 +83,19 @@ def test_frontend_round_trips(script, case):
 
 
 def test_every_service_path_is_relative_to_the_page():
-    """The Library serves this page below /model/: a root path there would reach the Library, not the service.
-    Both thumbnail emitters and the dormant scripts included; only the shell's nav names root paths."""
+    """The Library serves this page below /model/: a root path there would reach the Library, not the service. The
+    one root path is core's `K.shell`, the library's own writes, and every write to the library goes through it;
+    only the shell's nav names other root paths."""
     static = Path(__file__).parents[1] / "tagger" / "app" / "static"
-    scripts = [f for f in sorted(static.glob("*.js")) if f.name != "lit-html.js"]
-    assert len(scripts) == 12
-    for script in scripts:
-        assert not re.search(r"""["'`]/(api|img)/""", script.read_text()), script.name
-    for emitter in ("core.js", "review.js"):
-        assert 'src="img/${p.image}"' in (static / emitter).read_text(), emitter
+    scripts = {f.name: f.read_text() for f in sorted(static.glob("*.js")) if f.name != "lit-html.js"}
+    assert sorted(scripts) == ["add.js", "app.js", "core.js", "lit.js", "pages.js", "panel.js", "strip.js", "views.js"]
+    shell = "  K.shell = (route, body) => K.api(`/api/${route}`, body);"
+    assert [line for line in scripts["core.js"].splitlines() if re.search(r"""["'`]/(api|img)/""", line)] == [shell]
+    for name, text in scripts.items():
+        if name != "core.js":
+            assert not re.search(r"""["'`]/(api|img)/""", text), name
+        assert not re.search(r"""K\.api\(["'`]api/(tags|vocabulary|forget|restore|apply|undo)""", text), name
+    writes = re.findall(r'mutate\("(\w+)"', scripts["pages.js"])
+    assert sorted(set(writes)) == ["forget", "restore", "tags", "vocabulary"]
+    assert 'src="img/${p.image}"' in scripts["core.js"]
     assert "<!-- nav:start --><!-- nav:end -->" in (static / "index.html").read_text()

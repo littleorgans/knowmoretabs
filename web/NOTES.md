@@ -489,7 +489,7 @@ Serve API, all same-origin, all JSON but the image:
 | POST | `api/restore` | `{ "urls": ["…"] }` | `{ "urls": ["…"], "counts": {…}, "restored": ["…"] }` |
 | POST | `api/tags` | `{ "urls": ["…"], "add": ["…"], "remove": ["…"] }` | `{ "urls": ["…"], "tags": { "<url>": ["…"] }, "vocabulary": […], "counts": {…}, "undo": {…} }` |
 | POST | `api/tags` | `{ "urls": [], "undo": {…} }` | the same response, including an inverse `undo` |
-| POST | `api/vocabulary` | `{ "create": ["…"], "retire": ["…"] }` | `{ "vocabulary": [ {"name": "…", "created_at": "…"} ] }` |
+| POST | `api/vocabulary` | `{ "create": ["…"], "retire": ["…"] }` | `{ "vocabulary": [ {"name": "…", "created_at": "…"} ], "resolved": ["…"] }` |
 
 For forget and restore, `urls` contains only URLs whose flag actually
 changed, in request order with repeats removed. The compatibility key
@@ -539,7 +539,9 @@ its changed URLs are sorted by URL.
 
 `api/vocabulary` takes `create` and `retire` lists, not both empty. Creating a
 retired name brings it back; retiring an unknown name is ignored. Retirement
-records a time and never alters a page's decisions.
+records a time and never alters a page's decisions. `resolved` is the
+vocabulary's spelling of each name to create, in request order without
+repeats, whether it was made, brought back or already there.
 
 All POSTs require `application/json` and use the same loopback bind, Host and
 Origin defenses. Forget and restore change the page at once, and a non-2xx

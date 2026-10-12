@@ -1,7 +1,9 @@
 """`tagger app`: search, select and tag on one screen, as a local web app on 127.0.0.1.
 
 Static files come from `static/`; page images are served by their hashed name from the resolved archive; the
-JSON API runs the engine and the store. API work is serialized; static and image transfers run independently.
+JSON API runs the engine on the archive's decisions, followed from `library.json` before every request that shows
+them; only knowmoretabs writes that file (the screens through the Library shell's own API, Add link through its
+CLI). API work is serialized; static and image transfers run independently.
 Only the Library shell talks to this server, under its `/model/` prefix: every request must name this server as
 Host (no DNS rebinding), come from no other origin, be bounded (JSON for a POST, empty for a GET) and carry the
 shell's proof (`service_auth`) before anything routes; every reply to a proven request is signed. The process
@@ -23,10 +25,11 @@ from threading import Lock
 
 import numpy as np
 
+from ..archive import STATE_FILE, LibraryState, Unreadable, signature
 from ..paths import Paths, read_json
 from ..zeroshot import prototype, query_variants
-from . import add, engine, kmt, send, service_auth
-from .store import Exclusions, Keys, Store, tag_name
+from . import add, engine, kmt, service_auth
+from .store import Exclusions, Keys
 
 STATIC = Path(__file__).with_name("static")
 MAX_RESULTS = 50  # web/app.js RANK_TOP shows the same number of ranked pages
@@ -44,52 +47,54 @@ CSP = (
 
 
 class App:
-    def __init__(self, lib: engine.Library, store: Store, encode: engine.Encode, embed: engine.Embed):
-        # every tag name the store holds: made here, or decided (a name the archive since retired included)
-        names = [*store.tags(), *dict.fromkeys(tag for _, tag in store.decisions())]
-        self.lib, self.store, self.encode, self.embed = engine.add_tags(lib, names, encode), store, encode, embed
+    def __init__(self, lib: engine.Library, folder: Path, encode: engine.Encode, embed: engine.Embed):
+        """`folder`: the app's own lists, `<data>/app`."""
+        self.lib, self.encode, self.embed = lib, encode, embed
         self.lock = Lock()  # the model and mutable app state have one caller at a time
         self.binary = kmt.BINARY
         self.adds = add.Jobs(self)
-        self.sends = send.Send(self)
-        self.exclusions = Exclusions(store.root)
-        self.selection = Keys(store.root, "selection.json")
-        self.pins = Keys(store.root, "pinned.json")
-        self.forgotten = Keys(store.root, "forgotten.json")
+        self.exclusions = Exclusions(folder)
+        self.selection = Keys(folder, "selection.json")
+        self.pins = Keys(folder, "pinned.json")
+        self.follow()  # the file may have changed while the heads were fitted
+
+    def follow(self) -> None:
+        """The library in line with `library.json` as it is now: read again, and applied, only once its signature
+        moved from the one the library follows. A damaged file raises `Unreadable`, leaving the library as it was,
+        and is read again on the next call. Hold the lock."""
+        if signature(self.lib.root / STATE_FILE) != self.lib.state.signature:
+            self.lib = engine.apply_state(self.lib, LibraryState.read(self.lib.root), self.encode)
 
     def gone(self) -> list[int]:
-        """Rows of the pages forgotten in the app."""
-        return [self.lib.rows[k] for k in self.forgotten.keys if k in self.lib.rows]
+        """Rows of the forgotten pages."""
+        return np.flatnonzero(~self.lib.live).tolist()
 
     def live(self) -> np.ndarray:
-        """Rows the screen shows: the library's live pages less those forgotten in the app."""
-        mask = self.lib.live.copy()
-        mask[self.gone()] = False
-        return mask
-
-    def own(self, row: int) -> list[str]:
-        return [t for j, t in enumerate(self.lib.tags) if self.lib.Y[row, j]]
+        """Rows the screen shows: the pages the library has not forgotten."""
+        return self.lib.live.copy()
 
     def sync(self, url: str, archive) -> dict | None:
         """After knowmoretabs changed one page: the library in line with the archive for it, and the page as the
         screen shows it with the tags `suggested` for it, or None when the screen does not show it. Hold the lock."""
         self.lib = engine.sync(self.lib, archive, [url], self.embed)
+        self.follow()
         row = self.lib.rows.get(url)
-        if row is None or not self.live()[row]:
+        if row is None or not self.lib.live[row]:
             return None
         page = self.page(row)
         return {**page, "suggested": self.suggested(row, page["tags"])}
 
     def suggested(self, row: int, held: list[str]) -> list[str]:
-        """The app tags the page lacks that the model would put on it, best first: each whose score clears its
-        threshold (`engine.prechecks`: a head's, or zero shot for a tag with too few positives or made here), by
-        confidence; at most `engine.SUGGEST`."""
-        tags = [t for t in self.tag_lists()["app_tags"] if t not in held]
+        """The active tags the page neither holds nor has turned down that the model would put on it, best first:
+        each whose score clears its threshold (`engine.prechecks`: a head's, or zero shot for a tag with too few
+        positives or made since the app started), by confidence; at most `engine.SUGGEST`."""
+        dismissed = self.lib.state.dismissed(self.lib.records[row]["key"])
+        tags = [t for t in self.names() if t not in held and t.lower() not in dismissed]
         checked = [s for s in engine.prechecks(self.lib, [row], tags)[0] if s["checked"]]
         return [s["tag"] for s in sorted(checked, key=lambda s: -s["p"])[: engine.SUGGEST]]
 
     def page(self, row: int) -> dict:
-        """A page as the views show it: `tags` are its app tags; `own`, its archive tags, only the review shows."""
+        """A page as the views show it, with its tags as the library holds them."""
         r = self.lib.records[row]
         return {
             "row": row,
@@ -97,24 +102,23 @@ class App:
             "host": r["host"],
             "url": r["key"],
             "image": Path(r["image_path"]).stem if r["image_ok"] else None,  # its address: `/img/<hashed name>`
-            "own": self.own(row),
-            "tags": self.store.app_tags().get(r["key"], []),
+            "tags": r["tags"],
         }
 
+    def names(self) -> list[str]:
+        """Every name the vocabulary holds active, by name."""
+        return sorted(self.lib.state.active.values(), key=str.lower)
+
     def tag_lists(self) -> dict:
-        """`app_tags`: tags made or applied in the app, by name. `recent`: those used, latest first, a use being a
-        direct decision putting one on a page or an add the archive records doing so; names it holds retired are
-        left out."""
-        held = {t for tags in self.store.app_tags().values() for t in tags}
-        names = sorted(held | set(self.store.tags()), key=str.lower)
-        direct = self.store.used()
-        when = {t: max(direct.get(t, 0), self.lib.used.get(t.lower(), 0)) for t in names}
-        recent = [t for t in names if when[t] and t.lower() not in self.lib.retired]
-        return {"app_tags": names, "recent": sorted(recent, key=lambda t: -when[t])}
+        """`app_tags`: every active name, by name. `recent`: those an add has put on a page, latest first (`used_at`:
+        removing a tag or undoing an add leaves it as it was)."""
+        names, used = self.names(), self.lib.state.used
+        recent = [t for t in names if t.lower() in used]
+        return {"app_tags": names, "recent": sorted(recent, key=lambda t: -used[t.lower()])}
 
     def library(self) -> dict:
         return {
-            "pages": int(self.live().sum()),
+            "pages": int(self.lib.live.sum()),
             "forgotten": self.gone(),
             "tags": engine.tag_info(self.lib),
             **self.tag_lists(),
@@ -124,20 +128,13 @@ class App:
         }
 
     def untagged(self, tag: str | None = None) -> np.ndarray:
-        """Shown pages without any app tag, or without the given app tag."""
-        mask = self.live()
-        mask[
-            [
-                self.lib.rows[k]
-                for k, tags in self.store.app_tags().items()
-                if k in self.lib.rows and (tag is None or tag in tags)
-            ]
-        ] = False
-        return mask
+        """Shown pages without any tag, or without the given tag."""
+        held = self.lib.Y.any(axis=1) if tag is None else self.lib.Y[:, self.lib.tags.index(tag)].astype(bool)
+        return self.live() & ~held
 
     def search(self, body: dict) -> dict:
-        """One page of ranked results for `query`, from rank `offset`; with `untagged`, among pages without an app
-        tag only. `total` counts the pages ranked. An empty query lists every page, newest first."""
+        """One page of ranked results for `query`, from rank `offset`; with `untagged`, among pages without a tag
+        only. `total` counts the pages ranked. An empty query lists every page, newest first."""
         query = str(body.get("query", ""))
         n, offset = _size(body), _offset(body)
         among = self.untagged() if body.get("untagged") else self.live()
@@ -216,159 +213,45 @@ class App:
         self.exclusions.apply(query, keys, str(body.get("action")), key)
         return self.judged(query, rows)
 
-    def tag(self, body: dict) -> dict:
-        """The tag named `name`: the library's own in any case, else made and kept as a new zero shot tag."""
-        name = tag_name(str(body.get("name", "")))
-        have = engine.find_tag(self.lib, name)
-        if have is None:
-            self.store.add_tag(name)
-            self.lib = engine.add_tags(self.lib, [name], self.encode)
-        return {"tag": have or name, "created": have is None, "tags": engine.tag_info(self.lib)}
-
     def like(self, body: dict) -> dict:
-        """The tag's name as a query moved toward the pages holding it and away from those it was taken off
-        (refine's prototype), ranked among pages without that app tag: one page from rank `offset`, and `total`."""
+        """The tag's name as a query moved toward the pages holding it and away from those it was taken off or turned
+        down on (refine's prototype), ranked among pages without that tag: one page from rank `offset`, and `total`."""
         tag = str(body.get("tag", ""))
-        if tag not in self.lib.tags:
+        if tag not in self.names():
             raise ValueError("name one of your tags")
-        held: dict[bool, list[int]] = {True: [], False: []}
-        for (key, t), d in self.store.decisions().items():
-            if t == tag and key in self.lib.rows:
-                held[d["value"]].append(self.lib.rows[key])
-        q = prototype(self.encode([tag])[0], self.lib.X[held[True]], self.lib.X[held[False]])
+        held = np.flatnonzero(self.lib.Y[:, self.lib.tags.index(tag)])
+        off = [
+            self.lib.rows[k]
+            for k in self.lib.state.removes
+            if k in self.lib.rows and tag.lower() in self.lib.state.dismissed(k)
+        ]
+        q = prototype(self.encode([tag])[0], self.lib.X[held], self.lib.X[off])
         among, offset = self.untagged(tag), _offset(body)
         hits = engine.search(self.lib, q, tag, _size(body), bool(body.get("images")), among, offset)
         return {"tag": tag, "hits": [self.page(h["row"]) for h in hits], "offset": offset, "total": int(among.sum())}
 
-    def apply(self, body: dict) -> dict:
-        """Add one tag to (`value` true) or take it off the given pages, as direct decisions."""
-        rows, tag, value = self.rows(body), str(body.get("tag", "")), body.get("value")
-        if not rows or tag not in self.lib.tags or not isinstance(value, bool):
-            raise ValueError("name pages, one of your tags, and true or false")
-        changed, batch = self.store.apply([self.lib.records[r]["key"] for r in rows], tag, value)
-        pages = [{"row": r, "tags": self.page(r)["tags"]} for r in rows]
-        return {"pages": pages, "changed": len(changed), "batch": batch, **self.tag_lists()}
-
-    def undo(self, body: dict) -> dict:
-        """Retract one apply's decisions (its `batch`): each page it changed back as it was."""
-        keys = self.store.undo(int(body.get("batch", 0)))
-        rows = [self.lib.rows[k] for k in dict.fromkeys(keys) if k in self.lib.rows]
-        return {"pages": [{"row": r, "tags": self.page(r)["tags"]} for r in rows], **self.tag_lists()}
-
     def listed(self, keys: Keys) -> dict:
-        """The selected or pinned pages this library still shows, in the order added."""
-        live = self.live()
-        rows = [self.lib.rows[k] for k in keys.keys if k in self.lib.rows]
-        return {"pages": [self.page(r) for r in rows if live[r]]}
+        """The selected or pinned pages this library holds, in the order added; a forgotten one stays listed for the
+        screen to leave out, so restoring it puts it back in its place."""
+        return {"pages": [self.page(self.lib.rows[k]) for k in keys.keys if k in self.lib.rows]}
 
     def replace(self, keys: Keys, body: dict) -> dict:
-        """Replace the selection or the pins with the given pages (none clears them)."""
-        rows = self.rows(body)
+        """Replace the selection or the pins with the given pages (none clears them), forgotten ones included."""
+        rows = self.rows(body, np.ones(len(self.lib.records), bool))
         keys.set([self.lib.records[r]["key"] for r in rows])
         return {"rows": rows}
 
-    def forget(self, body: dict) -> dict:
-        """Forget the given pages (`value` true): they leave every search, ≈, the selection and the pins, and the
-        next Send to library forgets them in the library. `value` false brings them back (Undo puts back the
-        selection and pins)."""
-        value = body.get("value")
-        if not isinstance(value, bool):
-            raise ValueError("name pages, and true or false")
-        among = self.lib.live.copy()
-        if not value:
-            among[self.gone()] = True
-        rows = self.rows(body, None if value else among)
-        if not rows:
-            raise ValueError("name pages, and true or false")
-        keys = {self.lib.records[r]["key"] for r in rows}
-        if value:
-            self.forgotten.set(self.forgotten.keys + sorted(keys))
-            for kept in (self.selection, self.pins):
-                if keys & set(kept.keys):
-                    kept.set([k for k in kept.keys if k not in keys])
-        else:
-            self.forgotten.set([k for k in self.forgotten.keys if k not in keys])
-            self.lib.live[rows] = True  # Undo shows app pages immediately; Send leaves the library forgotten.
-        return {"pages": int(self.live().sum())}
 
-    def create(self, body: dict) -> dict:
-        """A result set of the given rows less any excluded for the query, so excluded pages never reach review."""
-        query = str(body.get("query", ""))
-        out = self.exclusions.keys(query)
-        rows = [r for r in self.rows(body) if self.lib.records[r]["key"] not in out]
-        picked = [str(t) for t in body.get("picked", [])]
-        if not rows or not picked:
-            raise ValueError("pick at least one tag for at least one included page")
-        if unknown := set(picked) - set(self.lib.tags):
-            raise ValueError(f"{len(unknown)} picked tag(s) are not in the vocabulary")
-        keys = [self.lib.records[r]["key"] for r in rows]
-        session = self.store.create(
-            query, bool(body.get("images")), keys, picked, engine.prechecks(self.lib, rows, picked)
-        )
-        return self.session_view(session)
-
-    def page_view(self, page: dict) -> dict | None:
-        row = self.lib.rows.get(page["key"])
-        if row is None:
-            return None
-        sugg = [
-            {
-                "tag": t,
-                "checked": page["marks"][t],
-                "model": page["model"][t],
-                "p": page["p"][t],
-                "source": page["source"][t],
-            }
-            for t in page["marks"]
-        ]
-        return {**self.page(row), "sugg": sugg, "status": page["status"], "at": page["at"]}
-
-    def session_view(self, s: dict) -> dict:
-        pages = [{"index": i, **v} for i, p in enumerate(s["pages"]) if (v := self.page_view(p)) is not None]
-        return {k: s[k] for k in ("id", "created_at", "query", "images", "picked")} | {"pages": pages}
-
-    def sessions(self) -> list[dict]:
-        return [
-            {
-                "id": s["id"],
-                "created_at": s["created_at"],
-                "query": s["query"],
-                "picked": s["picked"],
-                "pages": sum(bool(p["marks"]) for p in s["pages"]),
-                "decided": sum(p["status"] == "decided" and bool(p["marks"]) for p in s["pages"]),
-            }
-            for s in reversed(self.store.sessions())
-        ]
-
-    def update(self, sid: int, index: int, body: dict) -> dict:
-        s = self.store.session(sid)
-        if s is None or not 0 <= index < len(s["pages"]):
-            raise LookupError
-        page = self.store.update(sid, index, body.get("marks"), body.get("status"))
-        return {"index": index, **self.page_view(page)}
-
-
+# Each takes the app's lock, and follows `library.json` before it runs
 ROUTES = [
     ("GET", re.compile(r"/api/library"), lambda app, m, b: app.library()),
-    ("GET", re.compile(r"/api/sessions"), lambda app, m, b: app.sessions()),
-    (
-        "GET",
-        re.compile(r"/api/sessions/(\d+)"),
-        lambda app, m, b: _found(app.store.session(int(m[1])), app.session_view),
-    ),
     ("POST", re.compile(r"/api/search"), lambda app, m, b: app.search(b)),
     ("POST", re.compile(r"/api/exclusions"), lambda app, m, b: app.exclude(b)),
     ("GET", re.compile(r"/api/selection"), lambda app, m, b: app.listed(app.selection)),
     ("POST", re.compile(r"/api/selection"), lambda app, m, b: app.replace(app.selection, b)),
     ("GET", re.compile(r"/api/pins"), lambda app, m, b: app.listed(app.pins)),
     ("POST", re.compile(r"/api/pins"), lambda app, m, b: app.replace(app.pins, b)),
-    ("POST", re.compile(r"/api/forget"), lambda app, m, b: app.forget(b)),
-    ("POST", re.compile(r"/api/undo"), lambda app, m, b: app.undo(b)),
-    ("POST", re.compile(r"/api/tags"), lambda app, m, b: app.tag(b)),
-    ("POST", re.compile(r"/api/apply"), lambda app, m, b: app.apply(b)),
     ("POST", re.compile(r"/api/like"), lambda app, m, b: app.like(b)),
-    ("POST", re.compile(r"/api/sessions"), lambda app, m, b: app.create(b)),
-    ("POST", re.compile(r"/api/sessions/(\d+)/pages/(\d+)"), lambda app, m, b: app.update(int(m[1]), int(m[2]), b)),
 ]
 
 
@@ -376,13 +259,10 @@ ROUTES = [
 RANK_ROUTES = [("POST", re.compile(r"/api/rank"), lambda app, m, b: app.rank(b))]
 
 
-# Add link jobs and sends run knowmoretabs; they take the app's lock only around its state, so the screen never
-# waits on a run
+# Add link jobs run knowmoretabs; they take the app's lock only around its state, so the screen never waits on a run
 JOB_ROUTES = [
     ("POST", re.compile(r"/api/add"), lambda app, m, b: app.adds.start(b)),
     ("GET", re.compile(r"/api/add/(\d+)"), lambda app, m, b: app.adds.view(int(m[1]))),
-    ("POST", re.compile(r"/api/send/preview"), lambda app, m, b: app.sends.preview()),
-    ("POST", re.compile(r"/api/send"), lambda app, m, b: app.sends.apply(b.get("preview"))),
 ]
 
 
@@ -392,12 +272,6 @@ def _size(body: dict) -> int:
 
 def _offset(body: dict) -> int:
     return max(int(body.get("offset", 0)), 0)
-
-
-def _found(value, view):
-    if value is None:
-        raise LookupError
-    return view(value)
 
 
 class Busy(Exception):
@@ -501,16 +375,26 @@ def handler(app: App, port: int, key: bytes):
             self.api("POST", self.path, body if isinstance(body, dict) else {})
 
         def api(self, method: str, path: str, body) -> None:
-            tables = ((ROUTES, app.lock), (RANK_ROUTES, bounded(app.lock, RANK_WAIT)), (JOB_ROUTES, nullcontext()))
-            for routes, lock in tables:
+            tables = (
+                (ROUTES, app.lock, True),
+                (RANK_ROUTES, bounded(app.lock, RANK_WAIT), True),
+                (JOB_ROUTES, nullcontext(), False),
+            )
+            for routes, lock, follows in tables:
                 for verb, pattern, run in routes:
                     if verb == method and (m := pattern.fullmatch(path)):
                         try:
                             with lock:
+                                if follows:
+                                    app.follow()
                                 result = run(app, m, body)
                             return self.json(HTTPStatus.OK, result)
                         except Busy:
                             return self.json(HTTPStatus.SERVICE_UNAVAILABLE, {"error": "busy"})
+                        except Unreadable as err:  # nothing shown as fresh from a file that cannot be read
+                            return self.json(
+                                HTTPStatus.SERVICE_UNAVAILABLE, {"error": f"the library cannot be read: {err}"}
+                            )
                         except LookupError:
                             return self.json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                         except (ValueError, TypeError) as err:
@@ -563,8 +447,8 @@ def smoke(paths: Paths, app: App) -> dict:
 def run(
     paths: Paths, root: Path, port: int, smoke_only: bool, secret_file: str | None = None, kmt_bin: str | None = None
 ) -> None:
-    """Serving needs the launch's key before any model loads; `--smoke` serves nothing and needs none. Add link and
-    Send run `kmt_bin`, the launch's own knowmoretabs, else the one on PATH."""
+    """Serving needs the launch's key before any model loads; `--smoke` serves nothing and needs none. Add link runs
+    `kmt_bin`, the launch's own knowmoretabs, else the one on PATH."""
     key = None
     if not smoke_only:
         if secret_file is None:
@@ -596,7 +480,7 @@ def run(
             release(image_st)
 
     lib, stats = engine.load(paths, root.resolve(), encode, embed, embed_image=embed_image)
-    app = App(lib, Store(paths.data / "app"), encode, embed)
+    app = App(lib, paths.data / "app", encode, embed)
     app.binary = kmt_bin or app.binary
     stats |= {"model_load_s": model["load_s"], "startup_s": round(time.perf_counter() - start, 2)}
     print(json.dumps(stats))

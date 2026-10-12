@@ -1,15 +1,14 @@
 /* knowmoretabs · tagger app · core
-   The server keeps every decision; this browser keeps only where you are:
-   the last search (query, images, untagged only, size; the review's picked
-   tags, open set and mode), theme and motion. Results are fetched again
-   after a reload. */
+   The library keeps every tag and forgotten page, and the service the
+   selection and pins; this browser keeps only where you are: the last
+   search (query, images, untagged only, size), theme and motion. Results
+   are fetched again after a reload. */
 (function () {
   const KEY = "kmt-tagger-app-v1";
   const K = (window.KMT = window.KMT || {});
 
   K.$ = (id) => document.getElementById(id);
   K.esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-  K.pct = (p) => Math.round(p * 100) + "%";
   K.plural = (n, word) => `<b>${n}</b> ${word}${n === 1 ? "" : "s"}`;
   K.short = (t) => (t.length > 44 ? t.slice(0, 42).trimEnd() + "…" : t);
   K.title = (p) => p.title || "Untitled page";
@@ -19,20 +18,16 @@
   let saved = {};
   try { saved = JSON.parse(localStorage.getItem(KEY)) || {}; } catch { /* a fresh start */ }
   K.state = {
-    search: saved.search || { query: "", images: false, untagged: false, n: 20, picked: [] },
-    session: saved.session || null,
-    mode: saved.mode || "grid",
+    search: saved.search || { query: "", images: false, untagged: false, n: 20 },
     theme: saved.theme || null,
     motion: saved.motion !== undefined ? saved.motion : !matchMedia("(prefers-reduced-motion: reduce)").matches
   };
   K.save = () => { try { localStorage.setItem(KEY, JSON.stringify(K.state)); } catch { /* private mode: the session still works */ } };
 
-  /* what this tab holds from the server: the library, the last results, the open set */
+  /* what this tab holds from the service: its view of the library */
   K.lib = null;
-  K.results = null;
-  K.set = null;
 
-  /* every path is relative: the Library serves this page and its API below its own /model/ */
+  /* every service path is relative: the Library serves this page and its API below its own /model/ */
   K.api = async (path, body) => {
     if (K.down) throw new Error("Tag and Add link stopped answering. Reload before trying again.");
     let r;
@@ -44,11 +39,13 @@
     if (!r.ok) throw new Error(out.error || `HTTP ${r.status}`);
     return out;
   };
+  /* the library's own writes go to the shell that serves this page, at its root (`web/NOTES.md`) */
+  K.shell = (route, body) => K.api(`/api/${route}`, body);
   K.fail = (err) => { if (!K.down) K.toast(`Something went wrong: ${err.message}`); };   // the outage line says it once
 
   /* ---- the service stopped answering (the Library answers 502, 503 or 504 for it, or is gone itself): one line
-     says so for good, both screens and Send stop taking actions, and only Reload goes on. Nothing is retried or
-     queued; what was in flight may have been done ---- */
+     says so for good, both screens stop taking actions, and only Reload goes on. Nothing is retried or queued;
+     what was in flight may have been done ---- */
   const OUTAGE = [502, 503, 504];
   K.down = false;
   K.outage = () => {
@@ -56,8 +53,6 @@
     K.down = true;
     K.$("outage").hidden = false;
     K.$("tag-screen").inert = K.$("add-screen").inert = true;
-    K.$("send-btn").disabled = true;
-    K.$("send-go").disabled = true;
     K.$("toast-undo").disabled = true;
   };
 
@@ -67,7 +62,6 @@
     return p.image ? `<div class="${cls}"><img src="img/${p.image}" alt="" loading="lazy" decoding="async">${inner}</div>`
                    : `<div class="${cls} none" aria-label="No image captured"><b aria-hidden="true">${initial}</b>${inner}</div>`;
   };
-  K.own = (p) => (p.own.length ? p.own.map((t) => `<li class="tag">${K.esc(t)}</li>`).join("") : `<li class="none">None yet</li>`);
 
   /* ---- open the page: a control for http and https pages only. Its click
      stays its own: no exclusion, drag or decision (the views call K.opens) ---- */

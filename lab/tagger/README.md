@@ -58,50 +58,39 @@ The CLI sets umask 077, so every output is private (0600).
 
 `just up` runs the prototype on 127.0.0.1:41879 (`tagger app --port 0` picks a free one) behind the Library, which
 serves it below `http://127.0.0.1:41878/model/` with Tag and Add link in its nav. The app answers only requests the
-Library proves with the launch's key (`--secret-file`), so a browser never reaches it directly; Add link and Send run
-the knowmoretabs `--kmt-bin` names, which `just up` sets to the one serving the Library. Needs `tagger embed --model eg2` done; runs offline (`HF_HUB_OFFLINE`). No `dataset/`
+Library proves with the launch's key (`--secret-file`), so a browser never reaches it directly; Add link runs the
+knowmoretabs `--kmt-bin` names, which `just up` sets to the one serving the Library. Needs `tagger embed --model eg2` done; runs offline (`HF_HUB_OFFLINE`). No `dataset/`
 directory is needed. Page records come from the resolved archive; matching keyed vectors are reused, and
-changed or missing inputs are embedded at startup. With no owner vocabulary the app starts with no owner tags; every tag name `state.json`
-holds (made in the app, or in any decision) loads as a zero shot tag.
+changed or missing inputs are embedded at startup. With no owner vocabulary the app starts with no owner tags.
+Every tag, dismissal, name and forgotten page is the library's: the screens write them through the Library's own API
+(`POST /api/tags`, `/api/vocabulary`, `/api/forget`, `/api/restore`), and the app follows `library.json` before each
+request that shows them, reading it again only when its inode, size or mtime moved. A name the vocabulary gains joins
+as a zero shot tag, its name as the query; a retired one leaves every list and comes back in its own column. Vectors,
+the keyword index and the fitted heads are never touched by a decision. A file it cannot read answers 503 and is read
+again on the next request.
 One screen: search (EG2 cosine over B, else A, fused by reciprocal rank with TF-IDF over title, metadata and text;
-images on request; "Untagged only" keeps pages with no app tag), click results to select them, tag the selection.
+images on request; "Untagged only" keeps pages with no tag), click results to select them, tag the selection.
 Results come 50 at a time ("51 to 100 of 240", of every page the search ranks); Previous and Next replace them.
-App tags are the tags made in this app, applied directly or kept in an earlier review; archive tags stay out of the
-screen. The sticky strip above the grid lists the app tags in view, each `[× | Trains 26/38 | ≈]`, acting on the
-selection only: the name adds the tag to every selected page (filled when all have it, filled in part when some do);
-× takes it off every selected page that has it (shown when one does); the count is how many of the selection have
-it (hidden with none selected); ≈ ("pages like this, without this tag") ranks pages without that app tag by refine's
-prototype (the tag's name as the query, toward its pages, away from pages it was taken off) and is a toggle: ≈
-again, Esc or Back returns to the search, page, scroll and selection intact. "+ New tag" applies a tag to the selection,
-picking yours in any case or making one by knowmoretabs' tag name rules (kept in `state.json`). A tile chip's ×
-takes that tag off that page. A tag change offers Undo ("Added Trains to 38 pages"), which retracts that action's
-decisions, so every page is exactly as before. Over a tile's picture (hover, focus, always on touch): Forget (red,
-`f`), Open (`o`, an http or https page in a new tab) and Pin (`p`); none selects. Forget takes the page out of every
-search, ≈, the selection, the pins and the counts at once ("Forgotten", Undo puts it back in its place, selected and
-pinned as it was). Pin parks a page for later; "Pinned N" beside the selection shows the pinned pages as a view (again,
-Esc or Back returns to the results). Keys: `/` search, space or `x` select, `o` open, `f` forget, `p` pin, `u` or
-Ctrl+Z undo while the message shows, Esc leaves ≈ or Pinned (else clears the selection), `?` help.
-Decisions live in `<data>/app/state.json` (review sessions, and direct decisions: page, tag, kept, time, batch); the
-selection, the pins and the forgotten pages in `selection.json`, `pinned.json` and `forgotten.json` beside it.
-Send to library (`e`) makes the archive the app runs on match the app, through knowmoretabs
-(`tagger/app/send.py`). The app is the source of truth: every name made or decided on here joins the library's
-vocabulary unless it holds the name, active or retired; every library page ends with exactly the app's tags for it,
-as the owner's own (a page the app holds no tag for ends with none; a Library edit is overwritten); a "no" here
-becomes a dismissal where the library holds that name on neither list for the page (a retired name stays retired);
-pages forgotten here are forgotten in the library. Send never restores: pages the library forgot stay forgotten,
-including pages undone here after a send; restore them in the Library. Pages the app holds that the library does not
-are skipped. Its dialog first shows what will change, computed from the archive and writing nothing: tags added,
-tags removed (and of those, on pages never tagged here), pages cleared, dismissals, new tag names, names back from
-retirement, pages to forget, pages forgotten in the library only, pages not in the library. Send then writes the
-record, `<data>/app/exports/<UTC time>/`: `answers.jsonl` (source `kmt-tagger-app`, kept tags per page, forgotten
-pages left out), `decisions.jsonl` (page, tag, answer, the model's precheck and session, both null for a direct
-decision) and, when pages were forgotten, `forget.urls` (exact addresses, each ended by a NUL). Then it runs
-`knowmoretabs --root <archive> tags --create=<name>…`, then `tag --add=<name> -- <urls>` per tag, then
-`tag --remove=<name> -- <urls>` for tags coming off and for dismissals, then `forget -- <urls>`, each call atomic,
-with a 120 s timeout. A failed call stops the send and shows knowmoretabs' error: the calls before it stay applied.
-Nothing is remembered between sends, so sending again plans afresh and converges. The record's paths and the
-commands sit under Details. Refused on a snapshot copy inside the data directory.
-`knowmoretabs serve` reads the archive on every request: reload the Library to see a send. Pins are not sent.
+The sticky strip above the grid lists the tags in view, each `[× | Trains 26/38 | ≈]`, acting on the selection only:
+the name adds the tag to every selected page (filled when all have it, filled in part when some do); × takes it off
+every selected page that has it (shown when one does); the count is how many of the selection have it (hidden with
+none selected); ≈ ("pages like this, without this tag") ranks pages without that tag by refine's prototype (the tag's
+name as the query, toward its pages, away from pages it was taken off or turned down on) and is a toggle: ≈ again,
+Esc or Back returns to the search, page, scroll and selection intact. "+ New tag" puts a tag on the selection, the
+library making the name or finding it in any case and answering its spelling. A tile chip's × takes that tag off that
+page. A tag change shows once the library answers, with Undo ("Added Trains to 38 pages"), which sends the library's
+own record of that write back, so every page it touched is exactly as before, whatever was written since; a write
+that fails is said and leaves every page as it was. Over a tile's picture (hover, focus, always on touch): Forget
+(red, `f`), Open (`o`, an http or https page in a new tab) and Pin (`p`); none selects. Forget has the library forget
+the page, which then leaves every search, ≈ and count; it keeps its place in the selection and the pins, out of
+sight, and Undo restores it there ("Forgotten"). Pin parks a page for later; "Pinned N" beside the selection shows
+the pinned pages as a view (again, Esc or Back returns to the results). Keys: `/` search, space or `x` select, `o`
+open, `f` forget, `p` pin, `u` or Ctrl+Z undo while the message shows, Esc leaves ≈ or Pinned (else clears the
+selection), `?` help.
+The selection and the pins live in `<data>/app/selection.json` and `pinned.json`, results marked not relevant in
+`not-relevant.json`. An earlier app kept its own decisions in `state.json`, its forgotten pages in `forgotten.json`
+and Send to library records in `exports/`: those files stay where they are, unread; Send to library is gone.
+`knowmoretabs serve` reads the archive on every request: reload the Library to see a change made here.
 Add link (`#add`; `#add=<encoded link>&title=<encoded title>` fills the box and focuses Add, which waits for Enter):
 Add, Enter, or a paste of a web address into the empty box starts a job that runs
 `knowmoretabs --root <archive> add --json [--title=<title>] -- <link>` (the binary from PATH; the title only for the
@@ -121,19 +110,20 @@ tab's address and title filled in; a page that is not on the web (`chrome://`, `
 for `activeTab`, to read the clicked tab, and for `http://127.0.0.1:41878/*`, to find the Library tab, nothing else.
 From the moment the box holds a web address the page's tile (a placeholder until the library lists the page) and its
 tag panel show (`static/panel.js`): Suggested and Recently used rows of one line each, a box that
-filters the app tags or, on Enter with no match, makes one, and every app tag folded under "All N tags" in letter rows
+filters the tags or, on Enter with no match, has the library make one, and every active name folded under "All N tags" in letter rows
 (`#` first, letters without tags hidden, case and accents folded) of same width cells. A cell is that page's tag, on or
-off; no stage, pick or write moves a cell. At Indexed, Suggested fills with the app tags the model would put on the
-page (`App.suggested`: `engine.prechecks`, those clearing their threshold, by confidence), less those picked, as many
-as its line holds, and stays put while the page is on screen. Recently used holds the app tags by last use, latest first, as many as its
-line fits: a use is the app putting the tag on a page, or an add the library records as the term's `used_at`; a name
-the library holds retired is left out, and a write moves its tag to the front. Tags picked before the page has a row show striped, go with the link when
-it is added and are written once Indexed gives it a row, as one change with one Undo; a newer link does not stop an
-older job writing its own. A Library refusal (forgotten, not a web page, a snapshot) clears them; Not indexed keeps
+off; no stage, pick or write moves a cell. At Indexed, Suggested fills with the active names the model would put on
+the page (`App.suggested`: `engine.prechecks`, those clearing their threshold, by confidence), less those it holds,
+has turned down or was picked for, as many as its line holds, and stays put while the page is on screen. Recently used
+holds the active names by last use, latest first, as many as its line fits: a use is an add the library records as
+the term's `used_at`, which removing the tag or undoing the add leaves as it was; a write moves its tag to the front.
+Tags picked before the page has a row show striped, go with the link when it is added and are written once Indexed
+gives it a row, as one library write for the key Indexed names with one Undo; a newer link does not stop an older
+job writing its own, and a write that fails is said and never sent again. A Library refusal (forgotten, not a web page, a snapshot) clears them; Not indexed keeps
 them for Retry. They live in this tab: a reload before Indexed loses them. knowmoretabs is the only writer of the archive, so the app must run on the archive `add` should
 change. Page images are addressed by their hashed name (`/img/<sha256>`), so a cached image stays with its page.
-The P1 to P4 review, swipe, tag picker, suggestions and query exclusions (`<data>/app/not-relevant.json`) keep
-their code, API and tests but are not on this screen; their decisions still count as app tags.
+The query exclusions (`/api/exclusions`, `<data>/app/not-relevant.json`) and refine keep their API and tests but have
+no control on this screen; the P1 to P4 review, swipe and tag picker are gone.
 `--smoke` prints load and query timings, then exits.
 The grid renders with lit-html (keyed by page, so a tile keeps its node across updates), and so does the Add link
 panel (keyed by tag name, so a clicked cell keeps the focus); the other parts of the screen are plain DOM. `static/lit-html.js` is lit-html 3.3.3 (BSD-3-Clause, licence comments kept), from the npm
