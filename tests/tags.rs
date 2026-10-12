@@ -410,11 +410,53 @@ fn export_shows_tags_and_the_active_vocabulary() {
         "untagged is an empty list"
     );
     assert_eq!(vocabulary(&library), ["Alpha", "beta", "zeta"]);
+    let alpha = library["vocabulary"][0].as_object().unwrap();
     assert_eq!(
-        library["vocabulary"][0].as_object().unwrap().len(),
-        2,
-        "name and created_at, nothing else"
+        alpha.keys().collect::<Vec<_>>(),
+        ["created_at", "name", "used_at"],
+        "name, created_at and used_at, nothing else"
     );
+}
+
+/// The time a tag was last put on a page, for a recently used list: set by
+/// an add that changes a page, kept by everything else.
+#[test]
+fn an_add_records_when_the_tag_was_last_used() {
+    const OLD: &str = "2026-01-02T00:00:00Z";
+    let used = |fx: &Fixture, name: &str| state(fx)["vocabulary"][name].get("used_at").cloned();
+    let fx = Fixture::new();
+    archive(&fx);
+    assert_success(&fx.run(&["tags", "--create", "Unused"]));
+    assert_eq!(used(&fx, "Unused"), None, "creating is not using");
+
+    assert_success(&fx.run(&["tag", A, "--add", "X"]));
+    let mut written = state(&fx);
+    assert_eq!(
+        written["vocabulary"]["X"]["used_at"], written["vocabulary"]["X"]["created_at"],
+        "one request, one time"
+    );
+    written["vocabulary"]["X"]["used_at"] = json!(OLD);
+    fs::write(
+        fx.root.join("library.json"),
+        serde_json::to_vec(&written).unwrap(),
+    )
+    .unwrap();
+    for args in [
+        vec!["tag", A, "--add", "x"],
+        vec!["tag", A, "--remove", "X"],
+        vec!["tag", A, "--clear", "X"],
+        vec!["tag", B, "--remove", "X", "--add", "Other"],
+    ] {
+        assert_success(&fx.run(&args));
+        assert_eq!(used(&fx, "X"), Some(json!(OLD)), "{args:?}");
+    }
+    assert!(used(&fx, "Other").is_some());
+
+    // Putting it back on a page from its remove list is a use.
+    assert_success(&fx.run(&["tag", B, "--add", "X"]));
+    let now = used(&fx, "X").unwrap();
+    assert!(now.as_str().unwrap() > OLD, "{now}");
+    assert_eq!(exported(&fx)["vocabulary"][2]["used_at"], now);
 }
 
 #[test]

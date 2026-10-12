@@ -198,6 +198,8 @@ pub struct Outcome {
 /// vocabulary without regard to case and are stored in its spelling; adding
 /// an unknown name creates it, adding a retired one brings it back, and
 /// removing or clearing a name the vocabulary has never held changes nothing.
+/// A name an add puts on at least one page records the request's time as its
+/// `used_at`; a page that already had it does not count.
 /// With `strict`, an unknown URL is an error and nothing is written, as for
 /// `forget`.
 pub fn apply(
@@ -246,12 +248,17 @@ pub fn apply(
     let mut dirty = false;
     // A request whose every URL went stale tags nothing, so it creates nothing.
     if !pages.is_empty() {
-        let targets = targets(&mut state, &add, &remove, &clear, &mut outcome);
+        let now = archive::now();
+        let targets = targets(&mut state, &add, &remove, &clear, now, &mut outcome);
         dirty |= !(outcome.created.is_empty() && outcome.revived.is_empty());
+        let mut used = HashSet::new();
         for url in &pages {
             for (name, target) in &targets {
                 let before = Decision::read(&state, url, name);
                 if (before.add, before.remove) != target.lists() {
+                    if *target == Target::Add && !before.add {
+                        used.insert(name);
+                    }
                     outcome.undo.tags.push(before);
                 }
             }
@@ -264,6 +271,10 @@ pub fn apply(
             if page.is_empty() {
                 state.tags.remove(url);
             }
+        }
+        for name in used {
+            let term = state.vocabulary.get_mut(name).expect("admitted term");
+            term.used_at = Some(now);
         }
     }
     let spellings = state.spellings(false);
@@ -292,9 +303,9 @@ fn targets(
     add: &[String],
     remove: &[String],
     clear: &[String],
+    now: Timestamp,
     outcome: &mut Outcome,
 ) -> Vec<(String, Target)> {
-    let now = archive::now();
     let mut targets = Vec::new();
     for name in add {
         if let Some((spelling, term)) = state.term(name)
@@ -473,8 +484,8 @@ fn definition(name: &str, raw: &str) -> Result<Option<String>, Error> {
 /// start of the SHA-256 of the active tags in tag order, each with its
 /// definition. Computed, never stored, so two prompts from the same
 /// vocabulary carry the same version and any change a tagger could act on
-/// (a tag or a definition) gives a new one. Retired tags and creation times
-/// are not part of it.
+/// (a tag or a definition) gives a new one. Retired tags, creation times and
+/// use times are not part of it.
 pub fn vocabulary_version(state: &State) -> String {
     use sha2::{Digest, Sha256};
     let canonical: Vec<serde_json::Value> = state

@@ -112,6 +112,10 @@ pub struct Term {
     /// What the tag means, in the owner's words: what a tagging agent reads.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub definition: Option<String>,
+    /// When a request last put the tag on a page. Absent until then; removing,
+    /// clearing and undo leave it as it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used_at: Option<Timestamp>,
     #[serde(flatten)]
     extra: serde_json::Map<String, serde_json::Value>,
 }
@@ -125,6 +129,7 @@ impl Term {
             created_at,
             retired_at: None,
             definition: None,
+            used_at: None,
             extra: serde_json::Map::new(),
         }
     }
@@ -138,6 +143,9 @@ pub struct VocabularyEntry {
     /// Absent when the owner has not defined the tag.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub definition: Option<String>,
+    /// Absent when the tag has never been put on a page since uses were kept.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub used_at: Option<Timestamp>,
 }
 
 /// Tag names compare without regard to case, so "mcp" finds "MCP".
@@ -211,6 +219,7 @@ impl State {
                 name: name.clone(),
                 created_at: term.created_at,
                 definition: term.definition.clone(),
+                used_at: term.used_at,
             })
             .collect();
         entries.sort_by(|a, b| tag_order(&a.name, &b.name));
