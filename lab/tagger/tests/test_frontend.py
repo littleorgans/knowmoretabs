@@ -7,9 +7,8 @@ from pathlib import Path
 import pytest
 
 
-@pytest.mark.parametrize(
-    "case",
-    [
+CASES = {
+    "frontend.cjs": [
         "search",
         "restore",
         "exactQuery",
@@ -39,6 +38,10 @@ import pytest
         "select",
         "chipActsOnSelection",
         "bulkUndo",
+        "tagPageUndo",
+        "tagPageOverlap",
+        "tagPageSiblingFailure",
+        "tagPagePartialToast",
         "forgetAndUndo",
         "forgetUndoOrder",
         "forgetThenNext",
@@ -56,20 +59,34 @@ import pytest
         "likeBackToPage",
         "likeWaitsForTag",
         "backDuringPage",
-        "addSignedInStages",
         "startupListsKeepChanges",
         "startupEdits",
         "startupForgetAndUndo",
         "startupTagsKeepChanges",
+    ],
+    "frontend_add.cjs": [
         "addStates",
         "addRequests",
+        "addSignedInStages",
+        "panelLetters",
+        "addPicksHeld",
+        "addPicksBackground",
+        "addPicksOutcomes",
+        "addFilterEnter",
+        "addPicksAddress",
+        "addPicksBeforeReply",
+        "addPicksStalePoll",
+        "addPicksDetour",
     ],
-)
-def test_frontend_round_trips(case):
+}
+
+
+@pytest.mark.parametrize(("script", "case"), [(script, case) for script, cases in CASES.items() for case in cases])
+def test_frontend_round_trips(script, case):
     node = shutil.which("node")
     if node is None:
         pytest.skip("Node is needed to execute the frontend scripts")
     result = subprocess.run(
-        [node, str(Path(__file__).with_name("frontend.cjs")), case], capture_output=True, text=True, timeout=10
+        [node, str(Path(__file__).with_name(script)), case], capture_output=True, text=True, timeout=10
     )
     assert result.returncode == 0, result.stderr

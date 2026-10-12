@@ -1,65 +1,6 @@
 // Run the shipped scripts with a small DOM and controlled API round trips.
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
-const path = require('node:path');
-const vm = require('node:vm');
-
-/* lit-html's API over this string DOM: a template renders as its markup with the values in place */
-const nothing = Symbol('nothing');
-const markup = (v) => (v === nothing || v == null ? '' : Array.isArray(v) ? v.map(markup).join('')
-  : v.strings ? v.strings.reduce((out, s, i) => out + markup(v.values[i - 1]) + s) : String(v));
-const lit = { nothing, html: (strings, ...values) => ({ strings, values }), repeat: (items, key, each) => items.map(each),
-  unsafeHTML: String, render(v, el) { el.innerHTML = markup(v); } };
-
-function setup(...files) {
-  const overrides = typeof files[0] === 'object' ? files.shift() : {};
-  const nodes = new Map();
-  const node = (id) => {
-    if (!nodes.has(id)) nodes.set(id, {
-      value: '', checked: false, disabled: false, innerHTML: '', textContent: '',
-      dataset: {}, classList: { add() {}, remove() {}, toggle() {} },
-      addEventListener(event, fn) { this[event] = fn; },
-      querySelectorAll() { return []; }, querySelector() {
-        if (id === 't-sugg') return node('new-tag-control');
-        return id === 'r-acts' ? node('action') : null;
-      },
-      getBoundingClientRect() { return {}; },
-      focus() { this.focusCalls = (this.focusCalls || 0) + 1; }, setAttribute() {}, removeAttribute() {}, showModal() {},
-    });
-    return nodes.get(id);
-  };
-  const K = {};
-  const mocks = {
-    $: node, esc: String, short: String, title: () => '', pct: String,
-    own: () => '', thumb: () => '', save() {}, changed() {},
-    fail(err) { this.failure = err; }, toast(msg, undo) { this.toasted = msg; this.undo = undo || null; }, flyIn() {}, flyOut(c, d, done) { done(); }, refreshSets() {},
-    state: { search: { query: 'old', images: false, n: 20, picked: ['A'] }, mode: 'grid' },
-    lib: { sizes: [20, 50], images: true }, results: { hits: [{ row: 9 }] },
-    search: { render() {}, restore: async () => {} }, pick: { render() {} }, review: { render() {}, left: () => 0 },
-    views: { render() {}, key: () => false, restore: async () => {}, refresh: async () => {} }, strip: { render() {} }, add: { render() {}, enter() {} }, lit, ...overrides,
-  };
-  const listeners = {}, keys = {};   // the window's and the document's, by event
-  const history = {       // one tab's entries; back() delivers popstate a turn later, as browsers do
-    entries: [null], pushes: 0,
-    get state() { return this.entries[this.entries.length - 1]; },
-    pushState(state) { this.entries.push(structuredClone(state)); this.pushes++; },
-    replaceState(state) { this.entries[this.entries.length - 1] = structuredClone(state); },
-    back() { if (this.entries.length > 1) this.entries.pop(); setImmediate(() => listeners.popstate && listeners.popstate({ state: this.state })); },
-  };
-  const context = vm.createContext({
-    window: { KMT: K }, document: { activeElement: null, documentElement: node('root'), querySelector() { return null; }, addEventListener(event, fn) { keys[event] = fn; } },
-    location: { hash: '' }, addEventListener(event, fn) { listeners[event] = fn; }, matchMedia: () => ({ matches: false }),
-    history, scrollY: 0, setTimeout, clearTimeout, console, performance, URL,
-  });
-  context.scrollTo = (x, y) => { context.scrollY = y; };
-  for (const file of ['core.js', ...files]) {   // the real open helpers, everything else mocked
-    vm.runInContext(fs.readFileSync(path.join(__dirname, '../tagger/app/static', file), 'utf8'), context);
-    if (file === 'core.js') Object.assign(K, mocks);
-  }
-  return { K, node, history, context, keys };
-}
-const turn = () => new Promise((resolve) => setImmediate(resolve));
-const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made inside the scripts' realm
+const { setup, turn, plain, run } = require('./frontend_dom.cjs');
 
 async function search() {
   const { K, node } = setup('search.js');
@@ -636,6 +577,122 @@ async function bulkUndo() {
   await settle();
 }
 
+/* tags for one page in one change: one write a tag it lacks, in order, one toast; Undo retracts every batch, and a
+   failed write takes back its own tag only */
+async function tagPageUndo() {
+  const { K, requests, settle, press } = await screenFixture('app.js');
+  const seen = [], api = K.api, toast = K.toast;
+  let toasts = 0;
+  K.api = (route, body) => { seen.push([route, body && plain(body)]); return api(route, body); };
+  K.toast = (...args) => { toasts++; return toast.apply(K, args); };
+  K.title = (p) => p.title;
+  K.tagPage(1, ['C', 'A', 'B']);
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B', 'C'], 'the tags it lacks show at once');
+  await turn();
+  assert.equal(requests.length, 1, 'writes go one at a time');
+  await settle();
+  assert.deepEqual(seen, [['/api/apply', { rows: [1], tag: 'C', value: true }], ['/api/apply', { rows: [1], tag: 'B', value: true }]]);
+  assert.equal(toasts, 1, 'one toast');
+  assert.equal(K.toasted, 'Added “C”, “B” to “Page 1”');
+  seen.length = 0;
+  press('u');
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'Undo takes both off at once');
+  await settle();
+  assert.deepEqual(seen, [['/api/undo', { batch: 1 }], ['/api/undo', { batch: 2 }]], 'and the server retracts every batch');
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'and its replies agree');
+  seen.length = 0; toasts = 0;
+  const failure = K.failure;
+  K.tagPage(1, ['B', 'C']);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], changed: 1, batch: 3, app_tags: ['A', 'B'] });
+  await turn(); await turn();
+  requests.shift().reject(new Error('name pages, one of your tags, and true or false'));
+  await turn(); await turn();
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the failed tag goes back, the written one stays');
+  assert.equal(K.failure, failure, 'the result toast reports the failed tag');
+  assert.equal(toasts, 1, 'one toast for what was written');
+  assert.equal(K.toasted, 'Added “B” to “Page 1”. Not added: C');
+  seen.length = 0;
+  K.undo();
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A'] }], app_tags: ['A'] });
+  await turn();
+  assert.deepEqual(seen, [['/api/undo', { batch: 3 }]], 'Undo retracts the written batch only');
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A']);
+}
+
+/* A background flush's partial failure still settles its page after another page starts writing. */
+async function tagPageOverlap() {
+  const { K, requests } = await screenFixture();
+  const first = K.tagPage(1, ['B', 'C']);
+  const later = K.tagPage(2, ['D']);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 1, app_tags: ['A', 'B'] });
+  await turn(); await turn();
+  requests.shift().reject(new Error('synthetic C failure'));
+  await first;
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the failed tag clears on the older page');
+  assert.match(K.toasted, /Added “B” .*Not added: C/);
+  const undo = K.undo;
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 2, tags: ['D'] }], batch: 2, app_tags: ['A', 'B', 'D'] });
+  await later;
+  const removed = K.untagSelection('B', [1]);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A'] }], batch: 3, app_tags: ['A', 'B', 'D'] });
+  await removed;
+  const replaced = K.tagSelection('B', [1]);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 4, app_tags: ['A', 'B', 'D'] });
+  await replaced;
+  const undone = undo();
+  assert.equal(K.has(1, 'B'), true, 'Undo preserves the later replacement while waiting for its reply');
+  await turn();
+  assert.deepEqual(requests[0].body, { batch: 1 }, 'Undo names only the older successful batch');
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], app_tags: ['A', 'B', 'D'] });
+  await undone;
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the server keeps the later batch on the same tag');
+  assert.deepEqual(plain(K.pages.get(2).tags), ['D'], 'the later page keeps its write');
+}
+
+async function tagPageSiblingFailure() {
+  const { K, requests } = await screenFixture();
+  const first = K.tagPage(1, ['B', 'C']);
+  const later = K.tagSelection('D', [1]);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 1, app_tags: ['A', 'B'] });
+  await turn(); await turn();
+  requests.shift().reject(new Error('synthetic C failure'));
+  await first;
+  assert.equal(K.has(1, 'D'), true, 'the first reply keeps the later optimistic pick');
+  await turn();
+  requests.shift().reject(new Error('synthetic D failure'));
+  await later;
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'both failed tags clear, including the older change');
+}
+
+/* Use core's real error reporter: a partial flush presents its result in one toast. */
+async function tagPagePartialToast() {
+  const { K, coreFail } = setup('pages.js');
+  K.fail = coreFail;
+  K.title = (p) => p.title;
+  K.know([page(1, ['A'])]);
+  const toasts = [];
+  K.toast = (msg, undo) => toasts.push({ msg, undo });
+  K.api = (route, body) => body.tag === 'B'
+    ? Promise.resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 1, app_tags: ['A', 'B'] })
+    : Promise.reject(new Error('synthetic C failure'));
+  await K.tagPage(1, ['B', 'C']);
+  assert.equal(toasts.length, 1, 'one result toast, including the partial failure');
+  assert.equal(toasts[0].msg, 'Added “B” to “Page 1”. Not added: C');
+  assert.equal(typeof toasts[0].undo, 'function');
+  toasts.length = 0;
+  await K.tagPage(1, ['C']);
+  assert.equal(toasts.length, 1, 'a fully failed change still reports the error');
+  assert.match(toasts[0].msg, /synthetic C failure/);
+  assert.equal(toasts[0].undo, undefined, 'no Undo for a failed write');
+}
+
 /* Forget: out of the grid, the selection, the pins and every count at once; Undo puts it back as it was */
 async function forgetAndUndo() {
   const { K, node, requests, click, key, settle, press, shown } = await screenFixture('app.js');
@@ -1056,150 +1113,6 @@ async function backDuringPage() {
   assert.equal(K.state.search.offset, 0, 'an abandoned page reply must not change the page saved for reload');
 }
 
-/* ---- Add link: every state of design section 9, read off the job the server reports ---- */
-async function addStates() {
-  const { K } = setup({ lit, strip: { render() {}, sayIn: () => () => {} } }, 'add.js');
-  const ev = (stage, state, extra = {}) => ({ stage, state, ...extra });
-  const L = (value, extra) => ev('library', 'done', { value, ...extra }), C = (status, tier, extra) => ev('content', 'done', { status, tier, ...extra });
-  const I = (status) => ev('image', 'done', { status }), S = (value) => ev('search', 'done', { value });
-  const job = (stages, extra = {}) => ({ action: 'add', failed: false, page: null, stages: Object.fromEntries(stages.map((e) => [e.stage, e])), ...extra });
-  const cases = [
-    ['Adding', [ev('library', 'running')], ['Adding', '', '', ''], null],
-    ['Content, web', [L('added'), ev('content', 'running', { tier: 'web' })], ['Added', 'Web', '', ''], null],
-    ['Content, rendering', [L('added'), ev('content', 'running', { tier: 'headless' })], ['Added', 'Rendering', '', ''], null],
-    ['Image', [L('added'), C('ok', 'headless'), ev('image', 'running')], ['Added', 'Ok · Headless', 'Fetching', ''], null],
-    ['Search', [L('added'), C('ok', 'headless'), I('ok'), ev('search', 'running')], ['Added', 'Ok · Headless', 'Ok', 'Indexing'], null],
-    ['Done', [L('added'), C('ok', 'headless'), I('ok'), S('indexed')], ['Added', 'Ok · Headless', 'Ok', 'Indexed'], null],
-    ['Already in library', [L('known'), C('ok', 'web'), I('ok'), S('indexed')], ['Already in library', 'Ok · Web', 'Ok', 'Indexed'], null],
-    ['Forgotten', [L('forgotten')], ['Forgotten', '', '', ''], 'Restore'],
-    ['Not a web page', [L('refused', { reason: 'not_web' })], ['Not a web page', '', '', ''], null],
-    ['Waiting', [ev('library', 'waiting')], ['Waiting', '', '', ''], null],
-    ['Retrying', [L('added'), ev('content', 'retrying', { after_s: 2 })], ['Added', 'Retrying', '', ''], null],
-    ['Blocked', [L('added'), C('blocked', 'web', { http_status: 403 }), I('none'), S('indexed')], ['Added', 'Blocked · 403', 'No image', 'Indexed'], 'Try signed in'],
-    ['Behind login', [L('added'), C('behind_login', 'web', { http_status: 401 }), I('none'), S('indexed')], ['Added', 'Behind login', 'No image', 'Indexed'], 'Try signed in'],
-    ['Paywalled', [L('added'), C('paywalled', 'web'), I('ok'), S('indexed')], ['Added', 'Paywalled', 'Ok', 'Indexed'], 'Try signed in'],
-    ['Signed in, running', [L('known'), ev('content', 'running', { tier: 'signed_in' })], ['Already in library', 'Signed in', '', ''], null],
-    ['Signed in, off', [L('known'), C('off', 'signed_in'), I('none'), S('indexed')], ['Already in library', 'Chrome not reachable', 'No image', 'Indexed'], 'Retry'],
-    ['Signed in, not running', [L('known'), C('not_running', 'signed_in'), I('none'), S('indexed')], ['Already in library', 'Chrome not reachable', 'No image', 'Indexed'], 'Retry'],
-    ['Signed in, not allowed', [L('known'), C('not_allowed', 'signed_in'), I('none'), S('indexed')], ['Already in library', 'Not allowed', 'No image', 'Indexed'], 'Retry'],
-    ['Timed out', [L('added'), C('error', 'web', { reason: 'timeout' }), I('unknown'), S('indexed')], ['Added', 'Timed out', 'No image', 'Indexed'], 'Retry'],
-    ['HTTP error', [L('added'), C('error', 'web', { http_status: 503 }), I('unknown'), S('indexed')], ['Added', 'Error · 503', 'No image', 'Indexed'], 'Retry'],
-    ['Unavailable', [L('known'), C('unavailable', 'web', { reason: 'failed on 3 runs' }), I('unknown'), S('indexed')], ['Already in library', 'Unavailable', 'No image', 'Indexed'], null],
-    ['Not recorded', [L('added'), C('unknown', null, { reason: 'not_recorded' }), I('unknown'), S('indexed')], ['Added', 'Not recorded', 'No image', 'Indexed'], null],
-    ['Image retrying', [L('added'), C('ok', 'web'), ev('image', 'retrying', { after_s: 2 })], ['Added', 'Ok · Web', 'Retrying', ''], null],
-    ['Image error', [L('added'), C('ok', 'web'), I('error'), S('indexed')], ['Added', 'Ok · Web', 'Error', 'Indexed'], 'Retry'],
-    ['Image unavailable', [L('known'), C('ok', 'web'), I('unavailable'), S('indexed')], ['Already in library', 'Ok · Web', 'Unavailable', 'Indexed'], null],
-    ['Not in library', [L('refused', { reason: 'not_in_library' })], ['Not in library', '', '', ''], null],
-    ['Other tier', [L('known'), C('ok', 'other'), I('ok'), S('indexed')], ['Already in library', 'Ok', 'Ok', 'Indexed'], null],
-    ['Not found', [L('added'), C('not_found', 'web', { http_status: 404 }), I('none'), S('indexed')], ['Added', 'Not found · 404', 'No image', 'Indexed'], 'Remove'],
-    ['Thin', [L('added'), C('thin', 'headless'), I('ok'), S('indexed')], ['Added', 'Thin · Headless', 'Ok', 'Indexed'], null],
-    ['Skipped', [L('added'), C('skipped', 'web'), I('none'), S('indexed')], ['Added', 'Skipped', 'No image', 'Indexed'], null],
-    ['No image', [L('added'), C('ok', 'web'), I('none'), S('indexed')], ['Added', 'Ok · Web', 'No image', 'Indexed'], null],
-    ['Not indexed', [L('added'), C('ok', 'web'), I('ok'), S('not_indexed')], ['Added', 'Ok · Web', 'Ok', 'Not indexed'], 'Retry'],
-  ];
-  for (const [name, stages, values, act] of cases) {
-    const s = K.add.say(job(stages));
-    assert.deepEqual(plain(s.segs.map(([v]) => v)), values, name);
-    assert.equal(s.act && s.act[0], act, `${name}: action`);
-  }
-  const looks = (stages) => plain(K.add.say(job(stages)).segs.map(([, k]) => k));
-  assert.deepEqual(looks([ev('library', 'running')]), ['run', '', '', '']);
-  assert.deepEqual(looks([L('added'), C('thin', 'headless'), I('none'), S('not_indexed')]), ['ok', 'soft', 'soft', 'bad']);
-  assert.deepEqual(looks([L('forgotten')]), ['bad', '', '', '']);
-  assert.deepEqual(looks([L('added'), C('unknown', null, { reason: 'not_recorded' }), I('error')]), ['ok', 'soft', 'bad', '']);
-  assert.deepEqual(looks([L('known'), C('unavailable', 'web'), I('unavailable')]), ['ok', 'bad', 'bad', '']);
-  const retry = (action, stages, extra) => K.add.say(job(stages, { action, ...extra })).act;
-  const again = (retry, signed_in = false) => ['Retry', { action: 'add', retry, signed_in }];
-  /* the contract's lab mapping, row by row: only the failed stages, every one in one run */
-  assert.deepEqual(plain(retry('add', [L('added'), C('error', 'web', { http_status: 503 }), I('unknown'), S('indexed')])), again(['content']), 'an error');
-  assert.deepEqual(plain(retry('add', [L('added'), C('error', 'web', { reason: 'timeout' }), I('ok'), S('indexed')])), again(['content']), 'a timeout');
-  for (const status of ['off', 'not_running', 'not_allowed'])
-    assert.deepEqual(plain(retry('add', [L('known'), C(status, 'signed_in'), I('ok'), S('indexed')], { signed_in: true })), again(['content'], true), status);
-  assert.deepEqual(plain(retry('add', [L('known'), C('ok', 'web'), I('error'), S('indexed')])), again(['image']), 'an image error');
-  assert.deepEqual(plain(retry('add', [L('known'), C('error', 'web'), I('error'), S('indexed')])), again(['content', 'image']), 'both');
-  assert.deepEqual(plain(retry('add', [L('known'), C('off', 'signed_in'), I('error'), S('indexed')])), again(['content', 'image'], true), 'signed in and the image');
-  assert.deepEqual(plain(retry('add', [L('known'), C('not_found', 'web'), I('error'), S('indexed')])), again(['image']), 'a failed image still retries after Not found');
-  assert.deepEqual(plain(retry('add', [L('known'), C('unavailable', 'web'), I('error'), S('indexed')])), again(['image']), 'a failed image even after unavailable');
-  for (const [status, tier] of [['unavailable', 'web'], ['unknown', null], ['thin', 'headless'], ['skipped', null], ['media', 'web'], ['not_html', 'web'], ['empty_shell', 'headless']])
-    for (const img of ['ok', 'none', 'unknown', 'unavailable'])
-      assert.equal(retry('add', [L('known'), C(status, tier), I(img), S('indexed')]), null, `no Retry for ${status} and image ${img}`);
-  /* Try signed in: a public baseline that was blocked, behind a login or paywalled */
-  for (const status of ['blocked', 'behind_login', 'paywalled'])
-    for (const tier of ['web', 'github', 'x', 'youtube', 'headless'])
-      assert.deepEqual(plain(retry('add', [L('added'), C(status, tier), S('indexed')])), ['Try signed in', { action: 'add', retry: ['content'], signed_in: true }], `${status} · ${tier}`);
-  for (const tier of ['signed_in', null, 'other'])
-    assert.equal(retry('add', [L('known'), C('blocked', tier), I('none'), S('indexed')]), null, `no signed in read from ${tier}`);
-  assert.deepEqual(plain(retry('add', [L('known'), C('behind_login', null), I('error'), S('indexed')])), again(['image']), 'its image still retries');
-  assert.deepEqual(plain(retry('add', [L('added'), C('not_found', 'web'), S('indexed')])), ['Remove', { action: 'forget' }]);
-  assert.deepEqual(plain(retry('add', [L('forgotten')])), ['Restore', { action: 'restore' }]);
-  assert.deepEqual(plain(retry('add', [L('added'), C('ok', 'web'), I('ok'), S('not_indexed')])), ['Retry', { action: 'index' }], 'an index failure retries the lab only');
-  assert.deepEqual(plain(retry('add', [L('added'), C('blocked', 'web'), S('not_indexed')])), ['Try signed in', { action: 'add', retry: ['content'], signed_in: true }], 'a content action also indexes');
-  assert.deepEqual(plain(retry('add', [L('added'), C('ok', 'web'), I('error'), S('not_indexed')])), again(['image']), 'an image Retry also indexes');
-  /* a job that ended without a result is asked again, a Restore that held as an add */
-  const ask = { retry: [], signed_in: false, title: null };
-  assert.deepEqual(plain(retry('forget', [], { failed: true, ...ask })), ['Retry', { action: 'forget', ...ask }], 'Retry repeats a failed Remove');
-  assert.deepEqual(plain(retry('add', [L('known'), C('error', 'web')], { failed: true, ...ask, retry: ['content', 'image'], signed_in: true })),
-    ['Retry', { action: 'add', ...ask, retry: ['content', 'image'], signed_in: true }], 'a failed Retry runs the same stages');
-  assert.deepEqual(plain(retry('restore', [ev('library', 'running')], { failed: true, ...ask })), ['Retry', { action: 'restore', ...ask }], 'a failed Restore');
-  assert.deepEqual(plain(retry('restore', [ev('library', 'running')], { failed: true, restored: true, ...ask })), ['Retry', { action: 'add' }], 'never a second Restore');
-  const failed = K.add.say(job([ev('library', 'running')], { failed: true, ...ask, title: 'One note' }));
-  assert.deepEqual([failed.segs[0][0], plain(failed.act)], ['Not added', ['Retry', { action: 'add', ...ask, title: 'One note' }]], 'knowmoretabs could not run');
-  const tile = (stages, page) => { const s = K.add.say(job(stages, { page })); return plain([s.framed, s.indexed, s.title, s.picture]); };
-  assert.deepEqual(tile([ev('library', 'running')]), [false, false, '', '']);
-  assert.deepEqual(tile([L('added'), C('ok', 'web', { title: 'One note' }), ev('image', 'running')]), [true, false, 'One note', 'wait'], 'framed after Library, title as it lands');
-  assert.deepEqual(tile([L('known'), C('not_running', 'signed_in'), S('indexed')], { title: 'Kept' }), [true, true, 'Kept', 'none'], 'settled with no image');
-}
-
-/* what the screen asks the server: the deep link's title with its own link only, and the action's request */
-async function addRequests() {
-  const { K, node, context } = setup({ lit, strip: { render() {}, sayIn: () => () => {} }, lib: { app_tags: [] } }, 'add.js');
-  const asked = [];
-  let reply = () => new Promise(() => {});
-  K.api = (path, body) => { asked.push([path, body]); return reply(path, body); };
-  const submit = () => node('a-form').submit({ preventDefault() {} });
-  const link = 'https://added.example/a b?x=1&y=2';
-  context.location.hash = `#add=${encodeURIComponent(link)}&title=${encodeURIComponent('One & two · é')}`;
-  K.add.enter();
-  assert.equal(node('a-link').value, link);
-  submit();
-  assert.deepEqual(plain(asked.pop()), ['/api/add', { url: link, action: 'add', title: 'One & two · é' }], 'the title goes with its link');
-  node('a-link').value = 'https://added.example/other';
-  submit();
-  assert.deepEqual(plain(asked.pop()), ['/api/add', { url: 'https://added.example/other', action: 'add', title: null }], 'never with another link');
-  context.location.hash = '#add=https://added.example/raw?a=1&b=2';
-  K.add.enter();
-  submit();
-  assert.deepEqual(plain(asked.pop()), ['/api/add', { url: 'https://added.example/raw?a=1&b=2', action: 'add', title: null }], 'a link without a title keeps its &');
-  const ev = (stage, state, extra = {}) => ({ stage, state, ...extra });
-  const done = { id: 1, url: link, action: 'add', retry: [], signed_in: false, title: null, restored: false, failed: false, finished: true, seconds: 1.2, page: null,
-    stages: { library: ev('library', 'done', { value: 'known' }), content: ev('content', 'done', { status: 'off', tier: 'signed_in' }),
-      image: ev('image', 'done', { status: 'error' }), search: ev('search', 'done', { value: 'indexed' }) } };
-  for (const k of ['library', 'content', 'image', 'search']) node(`a-${k}`).querySelector = () => node(`a-${k}-val`);
-  reply = (path) => Promise.resolve(path === '/api/library' ? { app_tags: [] } : done);
-  await K.add.start(link, { action: 'add', signed_in: true });
-  await turn();
-  assert.equal(K.failure, undefined);
-  assert.equal(node('a-act').textContent, 'Retry');
-  asked.length = 0;
-  node('a-act').click();
-  assert.deepEqual(plain(asked[0]), ['/api/add', { url: link, action: 'add', retry: ['content', 'image'], signed_in: true }], 'Retry starts the failed stages');
-}
-
-async function addSignedInStages() {
-  const { K } = setup({ lit, strip: { render() {}, sayIn: () => () => {} } }, 'add.js');
-  const refused = { http_status: 200, reason: 'short text; not rendered: HTTP 403' };   // the baseline's code, the render's refusal
-  for (const value of ['added', 'known']) for (const tier of ['web', 'github', 'x', 'youtube', 'headless'])
-    for (const status of ['blocked', 'behind_login', 'paywalled', 'thin', 'empty_shell']) for (const image of ['error', 'ok', 'none', 'unavailable', 'unknown']) {
-      const stages = { library: { state: 'done', value }, content: { state: 'done', status, tier, ...(['thin', 'empty_shell'].includes(status) ? refused : { http_status: 403 }) }, image: { state: 'done', status: image } };
-      const action = K.add.say({ stages }).act;
-      assert.deepEqual(plain(action), ['Try signed in', { action: 'add', retry: image === 'error' ? ['content', 'image'] : ['content'], signed_in: true }]);
-    }
-  for (const tier of ['signed_in', 'other', null])
-    assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier, reason: 'not rendered: HTTP 403' } } }).act, null);
-  for (const reason of ['short text', 'short text; not rendered: HTTP 404', undefined])
-    assert.equal(K.add.say({ stages: { library: { value: 'known' }, content: { state: 'done', status: 'thin', tier: 'web', http_status: 403, reason } } }).act, null, `${reason}`);
-}
-
 /* Startup GETs snapshot the saved lists, but their replies are held. Writes replace whole lists and forgetting
    prunes both lists, as server.py does; forgotten rows cannot be selected or pinned. */
 function startupFixture(saved = [1]) {
@@ -1326,6 +1239,4 @@ async function startupListsKeepChanges() {
   }
 }
 
-const cases = { startupEdits, startupForgetAndUndo, startupTagsKeepChanges, addSignedInStages, startupListsKeepChanges, addStates, addRequests, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult };
-const timeout = setTimeout(() => { console.error('frontend round trip did not settle'); process.exit(1); }, 5000);
-cases[process.argv[2]]().catch((err) => { console.error(err); process.exitCode = 1; }).finally(() => clearTimeout(timeout));
+run({ tagPagePartialToast, tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });

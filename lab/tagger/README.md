@@ -109,14 +109,20 @@ stand. Retry after a job that ended without a result asks for the same again, ex
 repeated; Retry after Not indexed indexes the page in the lab only. Remove is `forget`, Restore is `restore` then `add`.
 Bookmarklet (Chrome's bookmarks bar):
 `javascript:void(window.open('http://127.0.0.1:41879/#add='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'kmt-tagger'))`.
-The tile is framed once the library lists the page and opens at Indexed with every app tag in the strip, acting on
-that page only. knowmoretabs is the only writer of the archive, so the app must run on the archive `add` should
+From the moment the box holds a web address the page's tile (a placeholder until the library lists the page) and its
+tag panel show (`static/panel.js`): Suggested and Recently used rows of one line each (empty for now), a box that
+filters the app tags or, on Enter with no match, makes one, and every app tag folded under "All N tags" in letter rows
+(`#` first, letters without tags hidden, case and accents folded) of same width cells. A cell is that page's tag, on or
+off; no stage, pick or write moves a cell. Tags picked before the page has a row show striped, go with the link when
+it is added and are written once Indexed gives it a row, as one change with one Undo; a newer link does not stop an
+older job writing its own. A Library refusal (forgotten, not a web page, a snapshot) clears them; Not indexed keeps
+them for Retry. They live in this tab: a reload before Indexed loses them. knowmoretabs is the only writer of the archive, so the app must run on the archive `add` should
 change. Page images are addressed by their hashed name (`/img/<sha256>`), so a cached image stays with its page.
 The P1 to P4 review, swipe, tag picker, suggestions and query exclusions (`<data>/app/not-relevant.json`) keep
 their code, API and tests but are not on this screen; their decisions still count as app tags.
 `--smoke` prints load and query timings, then exits.
-The grid renders with lit-html (keyed by page, so a tile keeps its node across updates); the other parts of the
-screen are plain DOM. `static/lit-html.js` is lit-html 3.3.3 (BSD-3-Clause, licence comments kept), from the npm
+The grid renders with lit-html (keyed by page, so a tile keeps its node across updates), and so does the Add link
+panel (keyed by tag name, so a clicked cell keeps the focus); the other parts of the screen are plain DOM. `static/lit-html.js` is lit-html 3.3.3 (BSD-3-Clause, licence comments kept), from the npm
 tarball `lit-html-3.3.3.tgz` (sha512 matches the registry's integrity), bundled to one ES module of `html`, `render`,
 `nothing`, `repeat` and `unsafeHTML` with `esbuild@0.28.2 --bundle --format=esm --minify --legal-comments=inline`;
 10,129 bytes, sha256 `afcf956778ba22a4d5f62b2192746610a89216ed391088073f9bd10ff748187f`. No eval, so it runs under
@@ -141,5 +147,5 @@ Every head (`heads.fit_lr`, `fit_knn`, `fit_prior`) sees only its fit rows and t
 `zeroshot.run` takes its input choice from `cv_summary.json` and can run before test scoring.
 
 Synthetic regression checks: `uv run --locked pytest`. `tests/test_frontend.py` runs the scripts in Node with a
-string DOM; `tests/test_browser.py` runs the screens in headless Chrome (`tests/browser.cjs`), skipped without one.
+string DOM (`tests/frontend_dom.cjs`; the Add link cases in `tests/frontend_add.cjs`); `tests/test_browser.py` runs the screens in headless Chrome (`tests/browser.cjs`), skipped without one.
 Add link tests drive a fake knowmoretabs (`tests/fake_knowmoretabs.py`) on a copy of the synthetic archive.

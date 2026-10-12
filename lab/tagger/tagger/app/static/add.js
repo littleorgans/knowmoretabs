@@ -1,13 +1,16 @@
 /* knowmoretabs · tagger app · Add link
    A link in, Add (or Enter, or a paste of a web address into the empty
    box), then four segments fill as the server's job reports knowmoretabs'
-   stages, polled every 250 ms: Library, Content, Image, Search. Once the
-   library lists the page its tile is framed; title and picture fill in as
-   they land; at Indexed the tile and the strip (every app tag, by name)
-   open, acting on this page only. A failed stage shows its value and one
-   action, which starts a job of its own: Retry runs only the stages that
-   failed. `#add=<encoded link>&title=<encoded title>` fills the box and
-   focuses Add, which waits for Enter; the title goes with that link. */
+   stages, polled every 250 ms: Library, Content, Image, Search. From the
+   moment the box holds a web address the page's tile (a placeholder until
+   the library lists it) and its tag panel show, and stay put through every
+   stage. Tags picked before the page has a row wait striped, go with the
+   link when it is added and are written at Indexed, in one change with one
+   Undo; a newer link does not stop an older job writing its own. A refusal
+   clears them. A failed stage shows its value and one action, which starts
+   a job of its own: Retry runs only the stages that failed.
+   `#add=<encoded link>&title=<encoded title>` fills the box and focuses
+   Add, which waits for Enter; the title goes with that link. */
 (function () {
   const K = window.KMT;
   const { html, nothing, render, unsafeHTML } = K.lit;
@@ -81,25 +84,34 @@
              picture: st.image ? st.image.state !== "done" ? "wait" : st.image.status === "ok" ? "ok" : "none" : indexed ? "none" : "" };
   }
 
-  /* ---- the job shown, and the polls ---- */
+  /* ---- the job shown, the polls, and the picks held for a page without a row ---- */
   let job = null;      // the job on screen
-  let asked = 0;       // the latest job started; a poll for an older one stops
-  let row = null;      // the indexed page's row (in K.pages)
+  let asked = 0;       // the latest job started, the one drawn
+  let row = null;      // the on screen page's row (in K.pages), kept while the jobs drawn share its link
   let cleared = 0;     // the job whose link left the box once the library listed it
   let offer = null;    // the request the action button starts
   let titled = null;   // [link, title] from the deep link, sent with that link's Add
+  let shown = null;    // the link the panel last showed: another one resets it
+  const draft = new Set();     // picks for the box's link, before Add
+  const held = new Map();      // link -> picks for a submitted link whose row is not known yet
+  const latest = new Map();    // link -> the newest job started for it: only that one writes its picks
   const pause = (ms) => new Promise((r) => setTimeout(r, ms));
   const web = (s) => { try { return ["http:", "https:"].includes(new URL(s).protocol); } catch { return false; } };
 
+  /* a job polls while drawn, and after that while it is its link's newest and picks wait for its row */
   async function start(url, ask = { action: "add" }) {
     const mine = ++asked;
+    latest.set(url, mine);
     try {
       let j = await K.api("/api/add", { url, ...ask });
-      while (mine === asked) {
-        if (j.action !== "forget" || j.finished) show(j);   // a Remove shows its outcome only
+      for (;;) {
+        if (latest.get(url) !== mine) return;   // a reply already in flight may belong to a superseded job
+        const drawn = mine === asked;
+        if (drawn && (j.action !== "forget" || j.finished)) show(j);   // a Remove shows its outcome only
+        track(j, drawn);
         if (j.finished) return settle(j);
         await pause(POLL);
-        if (mine !== asked) return;
+        if (mine !== asked && !(latest.get(url) === mine && held.has(url))) return;
         j = await K.api(`/api/add/${j.id}`);
       }
     } catch (err) { if (mine === asked) K.fail(err); }
@@ -108,64 +120,111 @@
     if (j.stages.library && [...LISTED, "forgotten"].includes(j.stages.library.value)) K.lib = await K.api("/api/library");
     K.changed();
   }
+  /* every poll's job, drawn or not: picks held for its link are written once the page has a row, and dropped
+     when it will not get one from this job */
+  function track(j, drawn) {
+    const picks = held.get(j.url), lib = j.stages.library;
+    if (!picks) return;
+    if (j.page) {
+      held.delete(j.url);
+      K.tagPage(K.know([j.page], false)[0], [...picks]);
+    } else if (lib && lib.state === "done" && !LISTED.includes(lib.value)) held.delete(j.url);   // refused: the segment says why
+    else if (j.finished && !drawn) {   // drawn, Retry is offered and its success writes them
+      held.delete(j.url);
+      if (!j.failed) K.toast(`Tags for ${K.short(j.url)} not added: the page is not indexed`);
+    }
+  }
   function show(j) {
-    if (!j.page) {
-      if (j.action === "forget" && !j.failed && row !== null) K.gone.add(row);   // removed: out of every view
+    if (job && job.url !== j.url) {   // another page: the last one's row and, once it is done, its picks go
       row = null;
-    } else if (row === null) {   // indexed: the page is known as Indexed shows, so the tile and the strip open with it
+      if (job.finished) track(job, false);
+    }
+    if (j.action === "forget" && !j.failed && row !== null) {   // removed: out of every view
+      K.gone.add(row);
+      row = null;
+    } else if (j.page && row === null) {   // indexed: the page is known as Indexed shows
       row = K.know([j.page])[0];
       K.gone.delete(row);
-    }
+    } else if (j.page) Object.assign(K.pages.get(row), { ...j.page, tags: K.pages.get(row).tags });   // its tags are this tab's
     job = j;
-    const box = K.$("a-link"), s = say(j);
-    if (s.framed && cleared !== j.id) {   // listed: the box is ready for the next link
+    const box = K.$("a-link");
+    if (LISTED.includes((j.stages.library || {}).value) && cleared !== j.id) {   // listed: the box is ready for the next link
       cleared = j.id;
       if (box.value.trim() === j.url) {
         box.value = "";
+        draft.clear();
         K.$("a-go").disabled = true;
         box.focus({ preventScroll: true });
       }
     }
-    draw(s);
+    draw();
+  }
+
+  /* ---- what the panel acts on: the box's link before it is added, else the job on screen ---- */
+  function target() {
+    const link = K.$("a-link").value.trim();
+    if (web(link) && (!job || link !== job.url)) return { url: link, draft: true };
+    return job && { url: job.url, draft: false };
+  }
+  const waiting = (url, tag) => !!held.get(url) && held.get(url).has(tag);
+  /* a pick: written at once for a page with a row (with Undo), else held for the row */
+  function pick(tag) {
+    const t = target();
+    if (!t) return;
+    if (!t.draft && row !== null) {
+      if (K.has(row, tag)) K.untagSelection(tag, [row]); else K.tagSelection(tag, [row]);
+      return;
+    }
+    const on = (t.draft && draft.has(tag)) || waiting(t.url, tag);
+    draft.delete(tag);
+    if (held.has(t.url)) held.get(t.url).delete(tag);
+    if (held.has(t.url) && !held.get(t.url).size) held.delete(t.url);
+    if (!on) {
+      if (t.draft && latest.get(t.url) !== asked) draft.add(tag);
+      else held.set(t.url, (held.get(t.url) || new Set()).add(tag));
+    }
+    draw();
   }
 
   /* ---- drawing ---- */
   const host = (url) => { try { return new URL(url).hostname.replace(/^www\./, ""); } catch { return ""; } };
-  function thumb(s, page) {
-    if (s.picture === "ok" && page) return unsafeHTML(K.thumb(page, "th"));
-    if (s.picture === "none") return unsafeHTML(K.thumb({ host: host(job.url), image: null }, "th"));
-    return html`<div class="th${s.picture === "wait" ? " wait" : ""}"></div>`;
+  function thumb(s, page, url) {
+    if (s && s.picture === "ok" && page) return unsafeHTML(K.thumb(page, "th"));
+    if (s && s.picture === "none") return unsafeHTML(K.thumb({ host: host(url), image: null }, "th"));
+    return html`<div class="th${s && s.picture === "wait" ? " wait" : ""}"></div>`;
   }
-  function tile(s) {
-    const page = row !== null ? K.pages.get(row) : null;
-    const tags = page ? page.tags : [];
-    return html`<article class="hit tile${s.indexed ? " sel" : ""}">${thumb(s, page)}${page ? html`<div class="ctl">${unsafeHTML(K.open(page))}</div>` : nothing}<div class="hb">
-      <h3 class="ht${s.title ? "" : " link"}">${s.title || job.url}</h3><p class="host">${host(job.url)}</p>
+  /* the page's tile; for a link not yet added (`s` null) its placeholder, the same size */
+  function tile(url, s) {
+    const page = s && row !== null ? K.pages.get(row) : null;
+    const tags = page ? page.tags : [], title = s && s.title;
+    return html`<article class="hit tile${s && s.indexed ? " sel" : ""}">${thumb(s, page, url)}${page ? html`<div class="ctl">${unsafeHTML(K.open(page))}</div>` : nothing}<div class="hb">
+      <h3 class="ht${title ? "" : " link"}">${title || url}</h3><p class="host">${host(url)}</p>
       <ul class="tags">${tags.length ? tags.map(K.views.chip) : html`<li class="none">Untagged</li>`}</ul></div></article>`;
   }
-  function draw(s = job && say(job)) {
-    K.$("a-stages").hidden = !s;
-    if (!s) return;
-    s.segs.forEach(([value, look], i) => {
+  function draw() {
+    const t = target(), s = t && !t.draft ? say(job) : null, lib = job && job.stages.library;
+    K.$("a-stages").hidden = !t;
+    K.$("a-stages").classList.toggle("draft", !s);   // a link not yet added keeps the bar's room, empty
+    (s ? s.segs : SEGS.map(() => ["", ""])).forEach(([value, look], i) => {
       const seg = K.$(`a-${SEGS[i]}`);
       seg.dataset.k = look;
       seg.querySelector(".val").textContent = value;
     });
-    K.$("a-secs").textContent = `${job.seconds.toFixed(1)} s`;
+    K.$("a-secs").textContent = s ? `${job.seconds.toFixed(1)} s` : "";
     const act = K.$("a-act");
-    act.hidden = !s.act;
-    act.textContent = s.act ? s.act[0] : "";
-    offer = s.act ? s.act[1] : null;
-    const result = K.$("a-result"), opening = result.hidden && s.framed;
-    result.hidden = !s.framed;
+    act.hidden = !(s && s.act);
+    act.textContent = s && s.act ? s.act[0] : "";
+    offer = s && s.act ? s.act[1] : null;
+    /* shown from the link until the library refuses it, or knowmoretabs could not run */
+    const live = !!t && (t.draft || s.framed || !job.failed && !(lib && lib.state === "done"));
+    const result = K.$("a-result"), opening = result.hidden && live;
+    result.hidden = !live;
     if (opening) { result.classList.remove("in"); void result.offsetWidth; result.classList.add("in"); }
-    if (!s.framed) return;
-    render(tile(s), K.$("a-tile"));
-    const open = s.indexed && row !== null;
-    K.$("a-tagrow").classList.toggle("off", !open);
-    K.$("a-tagrow").setAttribute("aria-disabled", String(!open));
-    const rows = open ? [row] : [];
-    K.$("a-strip").innerHTML = (K.lib ? K.lib.app_tags : []).map((t) => K.strip.chip(t, rows, false)).join("");
+    if (!live) return;
+    if (shown !== t.url) { shown = t.url; K.panel.reset(); }
+    render(tile(t.url, s), K.$("a-tile"));
+    const has = (tag) => !t.draft && row !== null && K.has(row, tag);
+    K.panel.render({ has, pend: (tag) => (t.draft && draft.has(tag)) || waiting(t.url, tag), pick, sugg: [], recent: [] });
   }
 
   /* ---- the deep link: fill the box, focus Add, wait for Enter ---- */
@@ -176,21 +235,30 @@
     titled = m && m[2] ? [link.trim(), decode(m[2])] : null;
     if (link !== null) {
       K.$("a-link").value = link;
+      draft.clear();
       K.$("a-go").disabled = !link.trim();
       K.$("a-go").focus();
     } else K.$("a-link").focus();
+    draw();
   }
 
-  K.add = { say, start, enter, render: () => draw() };
+  K.add = { say, start, enter, render: draw };
 
   /* ---- wiring ---- */
   const box = K.$("a-link");
-  const submit = () => {
+  const submit = () => {   // the draft's picks go with the link, held for its row
     const url = box.value.trim();
-    if (url) start(url, { action: "add", title: titled && titled[0] === url ? titled[1] : null });
+    if (!url) return;
+    if (draft.size) held.set(url, new Set([...(held.get(url) || []), ...draft]));
+    draft.clear();
+    start(url, { action: "add", title: titled && titled[0] === url ? titled[1] : null });
   };
   K.$("a-form").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
-  box.addEventListener("input", () => { K.$("a-go").disabled = !box.value.trim(); });
+  box.addEventListener("input", () => {   // a web address shows the panel at once
+    K.$("a-go").disabled = !box.value.trim();
+    if (box.value.trim() !== shown) draft.clear();   // a draft's picks belong to its exact address
+    draw();
+  });
   box.addEventListener("paste", (e) => {   // a web address pasted into the empty box starts at once
     const text = (e.clipboardData ? e.clipboardData.getData("text") : "").trim();
     if (box.value.trim() || !web(text)) return;
@@ -205,21 +273,4 @@
     const x = e.target.closest("[data-untag]");
     if (x && row !== null) K.untag(row, x.dataset.untag);
   });
-  K.$("a-strip").addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-act]");
-    if (!b || row === null) return;
-    const tag = b.closest("[data-tag]").dataset.tag;
-    if (b.dataset.act === "add") K.tagSelection(tag, [row]);
-    else if (b.dataset.act === "remove") K.untagSelection(tag, [row]);
-    else { location.hash = "#tag"; K.views.like(tag); }
-  });
-  const tellNew = K.strip.sayIn("a-new-msg");
-  const closeNew = () => { K.$("a-newtag").hidden = true; K.$("a-new").hidden = false; K.$("a-new-tag").value = ""; tellNew(""); };
-  K.$("a-new").addEventListener("click", () => { K.$("a-new").hidden = true; K.$("a-newtag").hidden = false; K.$("a-new-tag").focus(); });
-  K.$("a-newtag").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    if (row !== null && await K.strip.create(K.$("a-new-tag"), tellNew, [row])) closeNew();
-  });
-  K.$("a-new-tag").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.preventDefault(); closeNew(); K.$("a-new").focus(); } });
-  K.$("a-new-tag").addEventListener("input", () => tellNew(""));
 })();

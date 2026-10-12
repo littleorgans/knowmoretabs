@@ -14,7 +14,8 @@
   K.pins = [];                     // pinned rows, in the order pinned
   K.gone = new Set();              // forgotten rows (the server's, then this tab's): out of every view
   K.writes = Promise.resolve();    // every write, queued; a send waits for them
-  let tagging = 0;                 // the latest tag change, whose reply wins
+  let tagging = 0;                 // each tag change's serial
+  const changing = new Map();      // row -> tag -> latest change, so independent picks settle independently
 
   K.know = (pages, replace = true) => { for (const p of pages) if (replace || !K.pages.has(p.row)) K.pages.set(p.row, p); return pages.map((p) => p.row); };
   K.has = (row, tag) => K.pages.get(row).tags.includes(tag);
@@ -91,35 +92,59 @@
     });
   };
 
-  /* ---- app tags: add `tag` to (value true) or take it off `rows`; Undo retracts the server's batch ---- */
-  const set = (rows, tag, value) => {
+  /* ---- app tags: add `tags` to (value true) or take them off `rows`, one write a tag; one toast, whose Undo
+     retracts every batch the server made ---- */
+  const set = (rows, tag, value, mine) => {
     for (const r of rows) {
+      if (mine !== undefined) {
+        if (!changing.has(r)) changing.set(r, new Map());
+        changing.get(r).set(tag, mine);
+      }
       const tags = K.pages.get(r).tags.filter((t) => t !== tag);
       K.pages.get(r).tags = value ? tags.concat(tag).sort() : tags;
     }
   };
-  function settle(path, body, mine, onError) {
+  /* each reply settles its own tag, preserving newer picks on that tag and pending picks on other tags */
+  function settle(path, body, rows, tag, mine, onError) {
+    const current = (r) => changing.get(r).get(tag) === mine;
     return write(path, body).then((out) => {
-      if (mine === tagging) for (const p of out.pages) K.pages.get(p.row).tags = p.tags;
+      for (const p of out.pages) if (current(p.row)) set([p.row], tag, p.tags.includes(tag));
       K.lib.app_tags = out.app_tags;
       K.changed();
       return out;
-    }, (err) => { onError(); K.fail(err); K.changed(); });
+    }, (err) => { onError(rows.filter(current), err); K.changed(); });
   }
-  function change(tag, value, rows, say) {
-    const before = new Map(rows.map((r) => [r, K.pages.get(r).tags]));
-    set(rows, tag, value);
+  /* each of `tags` on (or off) `rows` at once, then written in order; a failed write puts back its tag only.
+     `say(done)` reads the toast for the tags written */
+  function change(tags, value, rows, say) {
     const mine = ++tagging;
+    for (const tag of tags) set(rows, tag, value, mine);
     K.changed();
-    return settle("/api/apply", { rows, tag, value }, mine, () => {
-      if (mine === tagging) for (const [r, tags] of before) K.pages.get(r).tags = tags;
-    }).then((out) => { if (out) K.toast(say, out.batch ? () => undo(out.batch, rows, tag, value) : null); });
+    let failure;
+    const sent = tags.map((tag) => settle("/api/apply", { rows, tag, value }, rows, tag, mine, (current, err) => {
+      set(current, tag, !value);
+      failure ||= err;
+    }));
+    return Promise.all(sent).then((outs) => {
+      const done = tags.filter((_, i) => outs[i]), lost = tags.filter((_, i) => !outs[i]).map(K.short);
+      const batches = tags.map((tag, i) => [tag, outs[i] && outs[i].batch]).filter(([, batch]) => batch);
+      if (done.length) K.toast(say(done) + (lost.length ? `. Not ${value ? "added" : "removed"}: ${lost.join(", ")}` : ""),
+        batches.length ? () => undo(batches, rows, value, mine) : null);
+      else K.fail(failure);
+    });
   }
-  function undo(batch, rows, tag, value) {
-    set(rows, tag, !value);
+  /* `batches`: [tag, batch] for each write to retract */
+  function undo(batches, rows, value, was) {
+    const before = new Map(rows.map((r) => [r, new Set(K.pages.get(r).tags)]));
     const mine = ++tagging;
+    for (const [tag] of batches) for (const r of rows) {
+      set([r], tag, changing.get(r).get(tag) === was ? !value : K.has(r, tag), mine);
+    }
     K.changed();
-    return settle("/api/undo", { batch }, mine, () => { if (mine === tagging) set(rows, tag, value); });
+    return Promise.all(batches.map(([tag, batch]) => settle("/api/undo", { batch }, rows, tag, mine, (current, err) => {
+      for (const r of current) set([r], tag, before.get(r).has(tag));
+      K.fail(err);
+    })));
   }
   const nothing = (msg) => { K.toast(msg); return Promise.resolve(); };
 
@@ -128,14 +153,21 @@
     if (!on.length) return nothing(`Select pages first, then click a tag to add it to them`);
     const rows = on.filter((r) => !K.has(r, tag));
     if (!rows.length) return nothing(`Every selected page has ${K.short(tag)}`);
-    return change(tag, true, rows, `Added ${K.short(tag)} to ${count(rows.length)}`);
+    return change([tag], true, rows, () => `Added ${K.short(tag)} to ${count(rows.length)}`);
   };
   /* the strip's ×: take the tag off every selected page (or page of `on`) that has it */
   K.untagSelection = (tag, on = K.sel) => {
     const rows = on.filter((r) => K.has(r, tag));
     if (!rows.length) return nothing(`No selected page has ${K.short(tag)}`);
-    return change(tag, false, rows, `Removed ${K.short(tag)} from ${count(rows.length)}`);
+    return change([tag], false, rows, () => `Removed ${K.short(tag)} from ${count(rows.length)}`);
   };
+  const named = (row) => `“${K.short(K.title(K.pages.get(row)))}”`;
   /* a tile chip's ×: this page only */
-  K.untag = (row, tag) => change(tag, false, [row], `Took “${K.short(tag)}” off “${K.short(K.title(K.pages.get(row)))}”`);
+  K.untag = (row, tag) => change([tag], false, [row], () => `Took “${K.short(tag)}” off ${named(row)}`);
+  /* the tags picked for one page before it had a row, those it lacks in one change: one toast, one Undo */
+  K.tagPage = (row, tags) => {
+    const lack = tags.filter((t) => !K.has(row, t));
+    if (!lack.length) return Promise.resolve();
+    return change(lack, true, [row], (done) => `Added ${done.map((t) => `“${K.short(t)}”`).join(", ")} to ${named(row)}`);
+  };
 })();

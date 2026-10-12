@@ -8,11 +8,9 @@
    when they all have it, filled in part when some do, beside how many of
    the selection have it. ≈ shows pages without this tag like the tag's,
    and pressed again goes back. "+ New tag" makes a tag, or finds yours in
-   any case, and puts it on every selected page. The Add link screen shares
-   the chip and New tag, acting on its one page. */
+   any case, and puts it on every selected page. */
 (function () {
   const K = window.KMT;
-  const byName = (a, b) => a.localeCompare(b, undefined, { sensitivity: "base" });
   let making = false;
 
   /* a chip acting on `rows`; `like`: its ≈ is the open view */
@@ -34,6 +32,13 @@
 
   const sayIn = (id) => (msg) => { K.$(id).textContent = msg; K.$(id).hidden = !msg; };
   const say = sayIn("new-msg");
+  /* the tag `name` made (or found as yours in any case), listed among the app tags; its name as the server keeps it */
+  async function make(name) {
+    const made = await K.api("/api/tags", { name });
+    K.lib.tags = made.tags;
+    if (!K.lib.app_tags.includes(made.tag)) K.lib.app_tags = [...K.lib.app_tags, made.tag].sort(K.byName);
+    return made.tag;
+  }
   /* the name in `box` made a tag (or found as yours in any case) and put on `rows`; true when it was */
   async function create(box, tell, rows) {
     const name = box.value.trim();
@@ -41,11 +46,10 @@
     if (!rows.length) { tell("Select pages first: a new tag goes on the selected pages."); return false; }
     making = true;
     try {
-      const made = await K.api("/api/tags", { name });
-      K.lib.tags = made.tags;
+      const tag = await make(name);
       box.value = "";
       tell("");
-      await K.tagSelection(made.tag, rows);
+      await K.tagSelection(tag, rows);
       return true;
     } catch (err) { tell(err.message); return false; }
     finally { making = false; }
@@ -53,6 +57,7 @@
 
   K.strip = {
     chip,
+    make,
     create,
     sayIn,
     render() {
@@ -68,7 +73,7 @@
       const names = v.tags;
       for (const r of K.views.shown(v).concat(K.sel)) for (const t of K.pages.get(r).tags) names.add(t);
       if (v.kind === "like") names.add(v.tag);
-      K.$("strip").innerHTML = [...names].sort(byName).map((t) => chip(t, K.sel, v.kind === "like" && v.tag === t)).join("");
+      K.$("strip").innerHTML = [...names].sort(K.byName).map((t) => chip(t, K.sel, v.kind === "like" && v.tag === t)).join("");
       K.$("app-tags").innerHTML = (K.lib ? K.lib.app_tags : []).map((t) => `<option value="${K.esc(t)}"></option>`).join("");
     }
   };
