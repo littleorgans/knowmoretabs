@@ -6,7 +6,8 @@
 //!      crossing that boundary is bounded and checked here. The request is
 //!      built from constants, so nothing the browser sent but the body
 //!      reaches the service, and a reply is used only when it names this
-//!      archive, frames cleanly within its bounds and is JSON.
+//!      archive, frames cleanly within its bounds, is JSON and carries the
+//!      service's proof for this very request (`service_auth`).
 
 use std::io::Write as _;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
@@ -17,6 +18,7 @@ use crate::capture::Log;
 use crate::http::{
     self, DeadlineWriter, Framing, HEAD_LIMIT, Head, Response, ResponseHead, Status,
 };
+use crate::service_auth::{self, Key, Reply, Request, Unusable};
 
 /// Every path the shell forwards starts with this; the rest is the service's.
 pub const PREFIX: &str = "/model/";
@@ -33,9 +35,11 @@ const FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
 /// byte of the body is read.
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 
-/// The model service's loopback port, from `serve --model-port`.
+/// The model service's loopback port, from `serve --model-port`, and the
+/// key that proves each exchange with it.
 pub struct ModelService {
-    pub port: u16,
+    port: u16,
+    key: Key,
 }
 
 /// Why a forward got no usable answer. Logged by name only, never with a
@@ -56,6 +60,11 @@ enum Failure {
     OtherArchive,
     /// A status the Library has no use for.
     Upstream(u16),
+    /// No reply MAC, or not this key's for this request and these bytes:
+    /// whatever answered is not the service this launch started.
+    Unproven,
+    /// The system gave no randomness for a nonce.
+    Entropy,
 }
 
 impl Failure {
@@ -77,6 +86,14 @@ impl Failure {
                 "the model service is serving another archive",
             ),
             Self::Upstream(_) => (Status::BadGateway, "the model service failed"),
+            Self::Unproven => (
+                Status::BadGateway,
+                "the model service did not prove its answer",
+            ),
+            Self::Entropy => (
+                Status::ServiceUnavailable,
+                "the model service cannot be asked now",
+            ),
         };
         Response::error(status, message)
     }
@@ -116,9 +133,39 @@ pub fn forward(
 }
 
 impl ModelService {
+    /// The service on `port` when `key_file` holds a usable key. Otherwise
+    /// nothing is forwarded, said once here without the file's bytes, and
+    /// the Library searches by keyword.
+    pub fn new(port: u16, key_file: Option<&Path>, log: Log) -> Option<Self> {
+        let why = match key_file.map(Key::read) {
+            Some(Ok(key)) => return Some(Self { port, key }),
+            None => "no --model-secret-file was given",
+            Some(Err(Unusable::Unreadable)) => "its key file cannot be read",
+            Some(Err(Unusable::Unsafe)) => {
+                "its key file is a link, someone else's, or readable by others"
+            }
+            Some(Err(Unusable::Malformed)) => "its key file does not hold a key",
+        };
+        log.warn(&format!(
+            "the model service is off: {why}; search is by keyword"
+        ));
+        None
+    }
+
     /// One request on its own connection, closed after the reply.
     fn exchange(&self, path: &str, body: &[u8], root: &Path) -> Result<Response, Failure> {
         let archive = archive_identity(root);
+        let nonce = service_auth::nonce().ok_or(Failure::Entropy)?;
+        let time = service_auth::now();
+        let (method, content_type, target) = ("POST", "application/json", format!("/{path}"));
+        let mac = self.key.sign(&Request {
+            nonce: &nonce,
+            time: &time,
+            method,
+            path: &target,
+            content_type,
+            body,
+        });
         let deadline = Instant::now() + FORWARD_TIMEOUT;
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, self.port));
         // A loopback connect that does not complete is a service not
@@ -127,10 +174,14 @@ impl ModelService {
         let mut stream =
             TcpStream::connect_timeout(&address, FORWARD_TIMEOUT).map_err(|_| Failure::Refused)?;
         let request = format!(
-            "POST /{path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n",
+            "{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: {content_type}\r\n\
+             Content-Length: {}\r\n{}: {nonce}\r\n{}: {time}\r\n{}: {mac}\r\n\
+             Connection: close\r\n\r\n",
             self.port,
-            body.len()
+            body.len(),
+            service_auth::NONCE,
+            service_auth::TIME,
+            service_auth::REQUEST_MAC,
         );
         let mut writer = DeadlineWriter {
             stream: &mut stream,
@@ -164,6 +215,22 @@ impl ModelService {
                 Framing::TooLarge => Failure::TooLarge,
                 _ => late(deadline, Failure::Malformed),
             })?;
+        let proven = Reply {
+            nonce: &nonce,
+            method,
+            path: &target,
+            status: reply.code,
+            content_type: reply.fields.get("content-type").unwrap_or(""),
+            archive: reply.fields.get(ARCHIVE_HEADER).unwrap_or(""),
+            body: &body,
+        };
+        if !reply
+            .fields
+            .get(service_auth::RESPONSE_MAC)
+            .is_some_and(|mac| self.key.verify(&proven, mac))
+        {
+            return Err(Failure::Unproven);
+        }
         Ok(Response::json(status, body))
     }
 }

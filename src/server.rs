@@ -37,6 +37,9 @@ pub struct Options {
     pub port: u16,
     /// Where Library search is forwarded; `None` keeps it keyword only.
     pub model_port: Option<u16>,
+    /// The key that proves each forward and each reply; forwarding is off
+    /// without a usable one.
+    pub model_secret_file: Option<PathBuf>,
     pub open: bool,
     pub json: bool,
     pub log: Log,
@@ -85,7 +88,9 @@ pub fn run(options: &Options) -> Result<(), Error> {
     let server = Arc::new(Server {
         root: options.root.clone(),
         port,
-        model: options.model_port.map(|port| ModelService { port }),
+        model: options.model_port.and_then(|port| {
+            ModelService::new(port, options.model_secret_file.as_deref(), options.log)
+        }),
         log: options.log,
     });
     for stream in listener.incoming() {

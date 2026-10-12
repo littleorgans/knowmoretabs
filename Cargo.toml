@@ -42,6 +42,9 @@ clap = { version = "4.5", features = ["derive"] }
 # MIT OR Apache-2.0; on Unix it is built on the same `nix` as below.
 ctrlc = { version = "3.5", features = ["termination"] }
 directories = "6"
+# The model service's per exchange nonce (src/service_auth.rs): the version
+# `tempfile` already locks, so the tree gains no crate. MIT OR Apache-2.0.
+getrandom = "0.4"
 # The DOM `dom_smoothie` builds on, used directly for what readability does
 # not do: the whole-page markdown when readability picks the wrong part of a
 # page, and the classifier's look at scripts, forms and app mounts. The same
@@ -53,6 +56,10 @@ dom_query = { version = "0.28", default-features = false, features = ["markdown"
 # which have no markdown output, and over `html2md`, whose GPL does not fit
 # this crate's licence. Pure Rust, no network, no async.
 dom_smoothie = "0.18"
+# HMAC-SHA256 for the proof the shell and the model service exchange
+# (src/service_auth.rs), over the `sha2` below rather than written by hand.
+# MIT OR Apache-2.0; adds only itself, on the `digest` already locked.
+hmac = "0.12"
 # Decodes the one preview image `content` keeps of a page and writes it
 # again as a small JPEG (src/image_fetch.rs). Pure Rust, no thread pool and
 # no C: only the four formats the web serves images in, so AVIF (C or
@@ -97,9 +104,10 @@ url = "2.5"
 
 # Ends a program's whole process group, not only the program, so what it
 # started goes with it (src/process_tree.rs). Only the signal module; the
-# version `ctrlc` already brings, so the tree gains no crate. MIT.
+# version `ctrlc` already brings, so the tree gains no crate. MIT. `user`
+# for the owner check on the model service's key file (src/service_auth.rs).
 [target.'cfg(unix)'.dependencies]
-nix = { version = "0.31", default-features = false, features = ["signal"] }
+nix = { version = "0.31", default-features = false, features = ["signal", "user"] }
 
 [dev-dependencies]
 proptest = "1"

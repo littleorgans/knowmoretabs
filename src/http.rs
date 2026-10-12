@@ -162,10 +162,14 @@ impl Head {
         {
             return Err(bad());
         }
+        // These fields have one meaning per request. Never let the security
+        // check and framing silently choose the first value.
+        let single =
+            |name: &str| matches!(name, "host" | "origin" | "content-length" | "content-type");
         Ok(Self {
             method: method.to_owned(),
             target: target.to_owned(),
-            fields: Fields::parse(lines).ok_or_else(bad)?,
+            fields: Fields::parse(lines, single).ok_or_else(bad)?,
         })
     }
 
@@ -182,7 +186,9 @@ pub(crate) struct ResponseHead {
 
 impl ResponseHead {
     /// `HTTP/1.0` or `HTTP/1.1`, a three digit code and any reason, then
-    /// fields by the same rules as a request's.
+    /// fields by the same rules as a request's, except that no field may
+    /// repeat: the model service never repeats one, and its identity and
+    /// proof must each have one value.
     pub(crate) fn parse(text: &[u8]) -> Option<Self> {
         let text = std::str::from_utf8(text).ok()?;
         let mut lines = text.split("\r\n");
@@ -197,7 +203,7 @@ impl ResponseHead {
         }
         Some(Self {
             code: code.parse().ok()?,
-            fields: Fields::parse(lines)?,
+            fields: Fields::parse(lines, |_| true)?,
         })
     }
 }
@@ -207,8 +213,8 @@ impl ResponseHead {
 pub(crate) struct Fields(Vec<(String, String)>);
 
 impl Fields {
-    /// `None` for a malformed line or a repeated field that has one meaning.
-    fn parse<'a>(lines: impl Iterator<Item = &'a str>) -> Option<Self> {
+    /// `None` for a malformed line or a repeated field that is `single`.
+    fn parse<'a>(lines: impl Iterator<Item = &'a str>, single: fn(&str) -> bool) -> Option<Self> {
         let mut fields: Vec<(String, String)> = Vec::new();
         for line in lines.filter(|line| !line.is_empty()) {
             let (name, value) = line.split_once(':')?;
@@ -219,13 +225,7 @@ impl Fields {
                 return None;
             }
             let name = name.to_ascii_lowercase();
-            // These fields have one meaning per message. Never let the
-            // security check and framing silently choose the first value.
-            if matches!(
-                name.as_str(),
-                "host" | "origin" | "content-length" | "content-type"
-            ) && fields.iter().any(|(n, _)| n == &name)
-            {
+            if single(&name) && fields.iter().any(|(n, _)| n == &name) {
                 return None;
             }
             fields.push((name, value.trim_matches([' ', '\t']).to_owned()));
@@ -233,10 +233,11 @@ impl Fields {
         Some(Self(fields))
     }
 
+    /// By name in any case.
     pub(crate) fn get(&self, name: &str) -> Option<&str> {
         self.0
             .iter()
-            .find(|(n, _)| n == name)
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
             .map(|(_, v)| v.as_str())
     }
 }
