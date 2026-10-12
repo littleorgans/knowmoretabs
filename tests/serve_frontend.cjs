@@ -271,7 +271,7 @@ function drawer({ exported = false } = {}) {
 const capture = (fields) => JSON.stringify({ url: 'https://synthetic.test/page-0', content: null, text: null, image: null, ...fields });
 const fetched = { schema_version: 1, url: 'https://synthetic.test/page-0', attempted_at: '2026-01-01T00:00:00Z', status: 'ok', tier: 'github' };
 
-test('a served drawer has History and Content tabs, History first and picked', () => {
+test('a served drawer has History and Content tabs, History first and picked; an export has neither', () => {
   const run = drawer();
   const html = run('histHTML(S.pages[0])');
   assert.match(html, /role="tablist"/);
@@ -282,12 +282,9 @@ test('a served drawer has History and Content tabs, History first and picked', (
   assert.match(html, /Copy URL/, "today's drawer is the History tab");
   run('S.tab = "content"');
   assert.match(run('histHTML(S.pages[0])'), /data-pane="history" hidden>/, 'the tab picked holds for the next drawer');
-});
-
-test('an exported drawer is the history alone', () => {
-  const html = drawer({ exported: true })('histHTML(S.pages[0])');
-  assert.doesNotMatch(html, /role="tab/);
-  assert.match(html, /Copy URL/);
+  const exported = drawer({ exported: true })('histHTML(S.pages[0])');
+  assert.doesNotMatch(exported, /role="tab/, 'an export has no server to read text from');
+  assert.match(exported, /Copy URL/);
 });
 
 test('the Content tab says how the fetch went, then the text, escaped', () => {

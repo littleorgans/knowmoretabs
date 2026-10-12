@@ -123,6 +123,7 @@ fn an_address_the_library_does_not_list_is_not_found() {
     let elsewhere = "https://elsewhere.test/page";
     kept_text(&fx, elsewhere, &ok_line(elsewhere), Some(BODY));
     let server = Server::start(&fx);
+    assert_eq!(content(&server, A).status, 200, "a listed page is answered");
     for url in [
         elsewhere,
         "http://localhost:3000/",
@@ -131,8 +132,11 @@ fn an_address_the_library_does_not_list_is_not_found() {
     ] {
         let reply = content(&server, url);
         assert_eq!(reply.status, 404, "{url}");
-        assert_eq!(reply.header("content-type"), Some("application/json"));
-        assert!(!reply.text().contains("Sandbox"), "{url}");
+        assert_eq!(
+            reply.json(),
+            json!({"error": "not in your library"}),
+            "{url}"
+        );
     }
 }
 
