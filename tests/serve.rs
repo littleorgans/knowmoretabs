@@ -575,7 +575,12 @@ fn names(vocabulary: &Value) -> Vec<&str> {
         .iter()
         .map(|entry| {
             assert!(entry["created_at"].is_string(), "{entry}");
-            assert_eq!(entry.as_object().unwrap().len(), 2, "{entry}");
+            let keys = entry.as_object().unwrap().keys();
+            assert!(
+                keys.into_iter()
+                    .all(|key| ["name", "created_at", "used_at"].contains(&key.as_str())),
+                "{entry}"
+            );
             entry["name"].as_str().unwrap()
         })
         .collect()
@@ -638,11 +643,24 @@ fn suggested_tags_are_served_and_the_tag_endpoint_confirms_and_dismisses_them() 
     let decided = server.library();
     assert_eq!(tags_of(&decided, A), json!(["Agent"]));
     assert_eq!(page(&decided, A)["suggested"], json!([]));
+    // Confirming is a use; dismissing is not.
+    let used = decided["vocabulary"][0]["used_at"].clone();
+    assert!(used.is_string(), "{}", decided["vocabulary"]);
+    assert!(decided["vocabulary"][1].get("used_at").is_none());
 
     let reply = server.post("/api/tags", &json!({"undo": undo, "urls": []}));
     assert_eq!(reply.status, 200, "{}", reply.text());
+    let mut undone = without_generated_at(server.library());
     assert_eq!(
-        without_generated_at(server.library()),
+        undone["vocabulary"][0]["used_at"], used,
+        "the undo keeps the use"
+    );
+    undone["vocabulary"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("used_at");
+    assert_eq!(
+        undone,
         without_generated_at(library),
         "the undo brings both suggestions back"
     );
@@ -762,7 +780,10 @@ fn a_bulk_tag_reports_the_pages_to_undo() {
         &json!({"urls": body["urls"], "remove": ["skills"]}),
     );
     assert_eq!(reply.status, 200);
-    assert_eq!(without_generated_at(server.library()), before);
+    // Tagging B was a use, and removing it again keeps that.
+    let mut expected = before;
+    expected["vocabulary"][0]["used_at"] = body["vocabulary"][0]["used_at"].clone();
+    assert_eq!(without_generated_at(server.library()), expected);
 }
 
 #[test]
@@ -1862,6 +1883,7 @@ fn exact_tag_undo_restores_mixed_decisions_without_overwriting_other_tags() {
             &json!({"urls": [A, B, HIDDEN], "add": ["x", "y"]}),
         )
         .json();
+    let used = state(&fx)["vocabulary"].clone();
     server.post("/api/tags", &json!({"urls": [A], "add": ["Unrelated"]}));
     let undone = server.post("/api/tags", &json!({"urls": [], "undo": edited["undo"]}));
     assert_eq!(undone.status, 200, "{}", undone.text());
@@ -1869,6 +1891,10 @@ fn exact_tag_undo_restores_mixed_decisions_without_overwriting_other_tags() {
     expected["tags"][A]["add"] = json!(["Unrelated", "X"]);
     let after = state(&fx);
     expected["vocabulary"]["Unrelated"] = after["vocabulary"]["Unrelated"].clone();
+    // The edit's use of both names outlives its undo.
+    for name in ["X", "Y"] {
+        expected["vocabulary"][name]["used_at"] = used[name]["used_at"].clone();
+    }
     assert_eq!(
         after, expected,
         "undo restores both decision lists, including forgotten pages"
@@ -1893,12 +1919,15 @@ fn exact_tag_undo_restores_retirement_and_historical_page_membership() {
         .post("/api/tags", &json!({"urls": [A, B], "add": ["OLD"]}))
         .json();
     assert_eq!(tags_of(&server.library(), HIDDEN), json!(["Old"]));
+    let used = state(&fx)["vocabulary"]["Old"]["used_at"].clone();
     let undone = server.post("/api/tags", &json!({"urls": [], "undo": revived["undo"]}));
     assert_eq!(undone.status, 200, "{}", undone.text());
+    let mut expected = before;
+    expected["vocabulary"]["Old"]["used_at"] = used;
     assert_eq!(
         state(&fx),
-        before,
-        "retirement time and historical assignments survive undo"
+        expected,
+        "retirement time and historical assignments survive undo; the use does too"
     );
     server.post("/api/vocabulary", &json!({"create": ["Old"]}));
     assert_eq!(tags_of(&server.library(), A), json!(["Old"]));
