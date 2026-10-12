@@ -13,8 +13,9 @@ intake line has no title, the kept text's title joins it. A known URL is `known`
 is refused as `forgotten`, anything but a public http(s) page as `refused`, and under `--retry` an unknown one as
 `refused`, `not_in_library`, all exiting 1. `--title` or `--no-content` with `--retry` is a usage error: exit 2,
 nothing on stdout. `forget -- <url>…` and `restore -- <url>…` edit `library.json`'s forgotten list;
-`tag --add=<NAME>|--remove=<NAME> -- <url>…` its tags and vocabulary. Each refuses the whole call, writing nothing,
-when one URL is not in the library (for `restore`, neither known nor forgotten). `FAKE_KMT_DELAY` (seconds) paces
+`tag --add=<NAME>|--remove=<NAME> -- <url>…` its tags and vocabulary, `tags --create=<NAME>…` its vocabulary. Each
+URL command refuses the whole call, writing nothing, when one URL is not in the library (for `restore`, neither known
+nor forgotten). `FAKE_KMT_DELAY` (seconds) paces
 the lines; `FAKE_KMT_FAIL` names an argument whose calls fail with an error on stderr; `FAKE_KMT_LOG` names a file that gets each argument list, and with it the add right after a `restore`
 of a `relapse` page fails with the error document. Every page, title and text here is invented.
 """
@@ -274,25 +275,28 @@ def main(argv: list[str]) -> int:
         append(Path(log), {"argv": argv})
     assert argv[0] == "--root", argv
     root, command, rest = Path(argv[1]), argv[2], argv[3:]
-    url = rest[rest.index("--") + 1]
     if command == "add":
         args = parse(rest[: rest.index("--")])
         if args is None:
             print("error: usage", file=sys.stderr)
             return 2
         assert args["json"] and not args["no_content"], rest
-        return add(root, url, args)
-    urls = rest[rest.index("--") + 1 :]
+        return add(root, rest[rest.index("--") + 1], args)
     if fail := os.environ.get("FAKE_KMT_FAIL"):  # a call whose arguments hold this word fails
         if fail in (command, *rest):
             print(f"error: {fail} failed", file=sys.stderr)
             return 1
     state = library(root)
+    urls = rest[rest.index("--") + 1 :] if command != "tags" else []
     held = known(root) | (set(state.get("forgotten", [])) if command == "restore" else set())
     if unknown := [u for u in urls if u not in held]:
         print(f"error: not in your library: {unknown[0]}", file=sys.stderr)
         return 1
-    if command == "tag":
+    if command == "tags":
+        for flag in rest:
+            assert flag.startswith("--create="), rest
+            admit(state, flag.removeprefix("--create="))
+    elif command == "tag":
         tag(state, rest[0], urls)
     else:
         forgotten = [u for u in state.get("forgotten", []) if u not in urls]
@@ -301,15 +305,23 @@ def main(argv: list[str]) -> int:
     return 0
 
 
+def term(state: dict, name: str) -> str | None:
+    """The vocabulary's spelling of `name`, active or retired (`State::term`)."""
+    return next((n for n in state.get("vocabulary", {}) if n.lower() == name.lower()), None)
+
+
+def admit(state: dict, name: str) -> str:
+    """`tags::admit`: the name in the vocabulary, created or brought back from retirement; its spelling."""
+    spelling = term(state, name) or name
+    state.setdefault("vocabulary", {}).setdefault(spelling, {"created_at": AT}).pop("retired_at", None)
+    return spelling
+
+
 def tag(state: dict, flag: str, urls: list[str]) -> None:
-    """`--add=NAME` or `--remove=NAME` on every page, as `tags::apply` does: adding admits the name to the
-    vocabulary (created, or brought back from retirement) and takes it off the page's `remove` list."""
+    """`--add=NAME` or `--remove=NAME` on every page, as `tags::apply` does: adding admits the name and takes it
+    off the page's `remove` list; removing a name the vocabulary never held does nothing."""
     verb, name = flag.removeprefix("--").split("=", 1)
-    vocab = state.setdefault("vocabulary", {})
-    spelling = next((n for n in vocab if n.lower() == name.lower()), None)
-    if verb == "add":
-        spelling = spelling or name
-        vocab.setdefault(spelling, {"created_at": AT}).pop("retired_at", None)
+    spelling = admit(state, name) if verb == "add" else term(state, name)
     if spelling is None:
         return
     for url in urls:
