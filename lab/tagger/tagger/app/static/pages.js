@@ -29,7 +29,7 @@
   }
 
   /* A library snapshot shares the writes' order, so it cannot replace a later tag reply's recent list. */
-  K.loadLibrary = () => write("/api/library").then((out) => {
+  K.loadLibrary = () => write("api/library").then((out) => {
     K.lib = out;
   });
 
@@ -38,7 +38,7 @@
   const lists = { selection: () => K.sel, pins: () => K.pins };
   const early = { selection: [], pins: [] };   // changes made before the list loaded; null once it has
   const edit = (name, change) => { change(lists[name]()); if (early[name]) early[name].push(change); };
-  const keep = (name) => (early[name] ? Promise.resolve() : write(`/api/${name}`, () => ({ rows: lists[name]() })).catch(K.fail));
+  const keep = (name) => (early[name] ? Promise.resolve() : write(`api/${name}`, () => ({ rows: lists[name]() })).catch(K.fail));
   const put = (row, on) => (list) => {   // `row` in (on) or out of the list; again changes nothing
     const i = list.indexOf(row);
     if (on && i < 0) list.push(row);
@@ -54,7 +54,7 @@
   };
   K.loadLists = () => (K.listsReady = (async () => {
     for (const [name, field] of [["selection", "sel"], ["pins", "pins"]]) {
-      const out = await K.api(`/api/${name}`);
+      const out = await K.api(`api/${name}`);
       K[field] = K.know(out.pages, false);   // startup data cannot replace a page already shown or changed
       const changes = early[name];
       early[name] = null;
@@ -86,7 +86,7 @@
       K.changed();
     };
     // Forget prunes the server's lists: first load their membership so replay and Undo can preserve it.
-    const send = (value) => write("/api/forget", { rows: [row], value }, K.listsReady).then((reply) => { K.lib.pages = reply.pages; K.changed(); });
+    const send = (value) => write("api/forget", { rows: [row], value }, K.listsReady).then((reply) => { K.lib.pages = reply.pages; K.changed(); });
     out();
     send(true).catch((err) => { back(); K.fail(err); });
     K.toast("Forgotten", () => {
@@ -127,7 +127,7 @@
     for (const tag of tags) set(rows, tag, value, mine);
     K.changed();
     let failure;
-    const sent = tags.map((tag) => settle("/api/apply", { rows, tag, value }, rows, tag, mine, (current, err) => {
+    const sent = tags.map((tag) => settle("api/apply", { rows, tag, value }, rows, tag, mine, (current, err) => {
       set(current, tag, !value);
       failure ||= err;
     }));
@@ -147,7 +147,7 @@
       set([r], tag, changing.get(r).get(tag) === was ? !value : K.has(r, tag), mine);
     }
     K.changed();
-    return Promise.all(batches.map(([tag, batch]) => settle("/api/undo", { batch }, rows, tag, mine, (current, err) => {
+    return Promise.all(batches.map(([tag, batch]) => settle("api/undo", { batch }, rows, tag, mine, (current, err) => {
       for (const r of current) set([r], tag, before.get(r).has(tag));
       K.fail(err);
     })));

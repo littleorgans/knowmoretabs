@@ -1,7 +1,7 @@
-// The one screen in headless Chrome, on a running app: the real DOM, lit-html and the server's CSP.
-// usage: node browser.cjs <chrome> <profile dir> <app url> <case>
+// The one screen in headless Chrome, on a running app behind the Library shell: the real DOM, lit-html and the
+// shell's CSP. usage: node browser.cjs <chrome> <profile dir> <the page's url below /model/> <case>
 // Chrome speaks the DevTools protocol over a pipe (fds 3 and 4), so no port and no package is needed.
-// Any console error, page exception or CSP report fails the case.
+// Any console error, page exception or CSP report fails the case, as does a request anywhere but the shell's /model/.
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 
@@ -10,7 +10,7 @@ const [chrome, profile, url, name] = process.argv.slice(2);
 function launch() {
   const proc = spawn(chrome, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`, '--no-first-run',
     '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic', '--window-size=1280,900', 'about:blank'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
-  const waiting = new Map(), errors = [];
+  const waiting = new Map(), errors = [], requests = [];
   let id = 0, buffer = '', loaded = null;
   proc.stdio[4].on('data', (chunk) => {
     buffer += chunk;
@@ -23,6 +23,7 @@ function launch() {
         waiting.delete(msg.id);
         if (msg.error) reject(new Error(msg.error.message)); else resolve(msg.result);
       } else if (msg.method === 'Page.loadEventFired' && loaded) loaded();
+      else if (msg.method === 'Network.requestWillBeSent') requests.push(msg.params.request.url);
       else if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails.exception?.description || 'exception');
       else if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') errors.push(msg.params.args.map((a) => a.value).join(' '));
       else if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
@@ -35,7 +36,7 @@ function launch() {
     waiting.set(++id, { resolve, reject });
     proc.stdio[3].write(JSON.stringify({ id, method, params, sessionId }) + '\0');
   });
-  return { proc, send, errors, load: () => new Promise((resolve) => { loaded = resolve; }) };
+  return { proc, send, errors, requests, load: () => new Promise((resolve) => { loaded = resolve; }) };
 }
 
 /* ---- in the page: each case is a function run there, given helpers; it throws on a failed check ---- */
@@ -93,13 +94,13 @@ const cases = {
     await K.ready;
     await search('night train');
     const before = K.lib.pages;
-    await K.api('/api/forget', { rows: [Number(tiles()[0].dataset.row)], value: true }); // as another tab would
+    await K.api('api/forget', { rows: [Number(tiles()[0].dataset.row)], value: true }); // as another tab would
     $('#send-btn').click();
     await until(() => $('#send').open && !$('#send-go').hidden, 'send preview ready');
     $('#send-go').click();
     await until(() => $('#send-close').textContent === 'Done', 'partial send finished');
     check($('#send-body').textContent.startsWith('Stopped.'), 'uncertain forget reports failure');
-    const library = await K.api('/api/library');
+    const library = await K.api('api/library');
     check(library.pages < before, 'the forget is not yet shown here');
     check(K.lib.pages === library.pages, 'failed send refreshes the browser library count');
     check(K.views.view().total === library.pages, 'failed send refreshes the search count');
@@ -117,7 +118,7 @@ const cases = {
     await until(() => $('#send-close').textContent === 'Done', 'send finished');
     check($('#send-body').textContent.startsWith('Sent.'), 'send succeeded');
     check($('#send-go').hidden, 'completed send cannot be submitted twice');
-    const library = await K.api('/api/library');
+    const library = await K.api('api/library');
     check(K.lib.pages === library.pages, 'send keeps the browser library count');
     check(K.views.view().total === library.pages, 'send keeps the search count');
     $('#send-close').click();
@@ -178,7 +179,7 @@ const cases = {
     await page('#next', 50);
     $('#toast-undo').click();
     await until(() => Number(pos().match(/of (\d+)/)?.[1]) === all, 'Undo updates page two count');
-    const expected = await window.KMT.api('/api/search', { query: 'night train', offset: 49, n: 50 });
+    const expected = await window.KMT.api('api/search', { query: 'night train', offset: 49, n: 50 });
     check(tiles().map((t) => Number(t.dataset.row)).join() === expected.hits.map((p) => p.row).join(), 'Undo refreshes page two to the real ranking');
   },
   newSearch: async ({ $, pos, check, search, page }) => {
@@ -379,7 +380,7 @@ const cases = {
     window.releaseLibrary();
     const img = $('#a-tile .th img');
     await until(() => img && img.complete && img.naturalWidth > 0, 'the picture');
-    check(/^\/img\/[0-9a-f]{64}$/.test(new URL(img.src).pathname), 'addressed by page');
+    check(/^\/model\/img\/[0-9a-f]{64}$/.test(new URL(img.src).pathname), 'addressed by page, below the shell\'s /model/');
     $('#a-tag').value = 'Sleeper cars';
     $('#a-tag').dispatchEvent(new Event('input'));
     check($('#a-fold').getAttribute('aria-expanded') === 'true' && $('#a-rows .nil'), 'typing opens the fold: nothing matches');
@@ -531,7 +532,7 @@ const cases = {
     $('#a-act').click();
     await until(() => seg('library') === 'Already in library' && seg('search') === 'Indexed', 'restored');
     check(!$('#a-result').hidden && $('#a-act').textContent === 'Remove', 'the tile is back');
-    const actual = await window.KMT.api('/api/library');
+    const actual = await window.KMT.api('api/library');
     await until(() => window.KMT.lib.pages === actual.pages, 'the library count after Restore');
     await add('https://added.example/timeout');
     await until(() => seg('search') === 'Indexed', 'timed out');
@@ -643,22 +644,22 @@ const afterReload = {
 async function main() {
   const run = cases[name];
   assert.ok(run, `no case ${name}`);
-  const { proc, send, errors, load } = launch();
+  const { proc, send, errors, requests, load } = launch();
   try {
     const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-    for (const domain of ['Page', 'Runtime', 'Log']) await send(`${domain}.enable`, {}, sessionId);
+    for (const domain of ['Page', 'Runtime', 'Log', 'Network']) await send(`${domain}.enable`, {}, sessionId);
     if (name.startsWith('startupForgetUndo') || name === 'startupTags') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
       window.startupUndoEarly = ${name.endsWith('Early')};
       const fetchNormally = window.fetch;
       window.fetch = async (...args) => {
         const response = await fetchNormally(...args);
-        if (!args[1]?.method && ['/api/selection', '/api/pins'].includes(args[0])) {
+        if (!args[1]?.method && ['api/selection', 'api/pins'].includes(args[0])) {
           const read = response.json.bind(response);
           response.json = async () => {
             const out = await read();
-            if (args[0] === '/api/selection') window.startupSaved = out.pages.map((p) => p.row);
-            await new Promise((resolve) => { window[args[0] === '/api/selection' ? 'releaseSelection' : 'releasePins'] = resolve; });
+            if (args[0] === 'api/selection') window.startupSaved = out.pages.map((p) => p.row);
+            await new Promise((resolve) => { window[args[0] === 'api/selection' ? 'releaseSelection' : 'releasePins'] = resolve; });
             return out;
           };
         }
@@ -668,7 +669,7 @@ async function main() {
     if (name === 'addFlow') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
       const fetchNormally = window.fetch;
       window.fetch = async (...args) => {
-        if (window.holdLibrary && args[0] === '/api/library' && !args[1]?.method) {
+        if (window.holdLibrary && args[0] === 'api/library' && !args[1]?.method) {
           window.holdLibrary = false;
           await new Promise((resolve) => { window.releaseLibrary = resolve; });
         }
@@ -679,14 +680,14 @@ async function main() {
       const fetchNormally = window.fetch;
       window.searchRequests = 0;
       window.fetch = async (...args) => {
-        if (args[0] === '/api/search') {
+        if (args[0] === 'api/search') {
           window.searchRequests++;
           if (JSON.parse(args[1].body).offset === 50) {
             window.nextWaiting = true;
             await new Promise((resolve) => { window.releaseNext = resolve; });
           }
         }
-        if (args[0] === '/api/pins') {
+        if (args[0] === 'api/pins') {
           window.pinsWaiting = true;
           await new Promise((resolve) => { window.releasePins = resolve; });
           const response = await fetchNormally(...args);
@@ -713,6 +714,12 @@ async function main() {
       if (restored.exceptionDetails) throw new Error(restored.exceptionDetails.exception?.description || restored.exceptionDetails.text);
     }
     assert.deepEqual(errors, [], `no console error, exception or CSP report: ${errors.join(' | ')}`);
+    const page = new URL(url), strays = requests.filter((at) => {
+      const to = new URL(at);
+      return to.origin !== page.origin || !(to.pathname.startsWith('/model/') || to.pathname === '/favicon.ico');
+    });
+    assert.ok(requests.length > 0, 'requests are seen');
+    assert.deepEqual(strays, [], `every request goes to the shell's /model/: ${strays.join(' | ')}`);
   } finally {
     proc.kill();
   }

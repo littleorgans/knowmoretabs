@@ -19,6 +19,7 @@ use std::time::Instant;
 use serde::Deserialize;
 
 use crate::archive::Archive;
+use crate::assets::{Policy, Surface};
 use crate::capture::Log;
 use crate::error::Error;
 use crate::http::{
@@ -37,6 +38,9 @@ pub struct Options {
     pub port: u16,
     /// Where Library search is forwarded; `None` keeps it keyword only.
     pub model_port: Option<u16>,
+    /// The key that proves each forward and each reply; forwarding is off
+    /// without a usable one.
+    pub model_secret_file: Option<PathBuf>,
     pub open: bool,
     pub json: bool,
     pub log: Log,
@@ -64,6 +68,10 @@ pub fn run(options: &Options) -> Result<(), Error> {
     // A damaged History record only costs the signals it held, so it is a
     // warning, given once here rather than on every request.
     library_history::for_library(&options.root, options.log);
+    // Settled, and said, before the banner announces the library.
+    let model = options.model_port.and_then(|port| {
+        ModelService::new(port, options.model_secret_file.as_deref(), options.log)
+    });
     let url = format!("http://127.0.0.1:{port}/");
     // Through `out`: the banner is written after the port is bound and
     // accepting, and on the main thread, so a `println!` that panicked on a
@@ -85,7 +93,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
     let server = Arc::new(Server {
         root: options.root.clone(),
         port,
-        model: options.model_port.map(|port| ModelService { port }),
+        model,
         log: options.log,
     });
     for stream in listener.incoming() {
@@ -193,7 +201,7 @@ impl Server {
         let path = head.target.split('?').next().unwrap_or("");
         match (head.method.as_str(), path) {
             ("GET", "/" | "/index.html") => self.asset("index.html"),
-            ("GET", "/app.css" | "/app.js") => self.asset(&path[1..]),
+            ("GET", "/app.css" | "/app.js" | "/unavailable.js") => self.asset(&path[1..]),
             ("GET", "/api/library") => self.library(),
             ("GET", "/api/content") => self.content(&head.target),
             ("POST", "/api/forget") => self.triage(head, body, Action::Forget),
@@ -207,12 +215,16 @@ impl Server {
                     Err(err) => self.failure(&err),
                 }
             }
+            // Below the prefix, so the page's relative files are the service's.
+            ("GET", "/model") => Response::redirect(model_service::PREFIX),
             _ if path.starts_with(model_service::PREFIX) => {
                 model_service::forward(self.model.as_ref(), &self.root, head, path, body, self.log)
             }
-            (_, "/" | "/index.html" | "/app.css" | "/app.js" | "/api/library" | "/api/content") => {
-                Response::method_not_allowed("GET")
-            }
+            (
+                _,
+                "/" | "/index.html" | "/app.css" | "/app.js" | "/unavailable.js" | "/api/library"
+                | "/api/content",
+            ) => Response::method_not_allowed("GET"),
             (_, "/api/forget" | "/api/restore" | "/api/tags" | "/api/vocabulary") => {
                 Response::method_not_allowed("POST")
             }
@@ -220,18 +232,19 @@ impl Server {
         }
     }
 
-    /// The same files `export` writes; the data element is served empty so
-    /// the page knows to fetch.
+    /// The same files `export` writes, and the unavailable page's script;
+    /// the data element is served empty so the page knows to fetch.
     fn asset(&self, name: &str) -> Response {
-        let loaded = assets::load();
-        let Some((_, content)) = loaded.iter().find(|(asset, _)| *asset == name) else {
+        if name == "index.html" {
+            return match export::page(Surface::Serve, "") {
+                Ok(html) => Response::html(Status::Ok, html.into_bytes(), Policy::Library),
+                Err(err) => self.failure(&err),
+            };
+        }
+        let Some(content) = assets::load(name) else {
             return Response::error(Status::NotFound, "no such page");
         };
         match name {
-            "index.html" => match export::embed(content, "") {
-                Ok(html) => Response::ok("text/html; charset=utf-8", html.into_bytes()),
-                Err(err) => self.failure(&err),
-            },
             "app.css" => Response::ok("text/css; charset=utf-8", content.as_bytes().to_vec()),
             _ => Response::ok(
                 "text/javascript; charset=utf-8",

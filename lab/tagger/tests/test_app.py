@@ -2,7 +2,6 @@
 persistence and export, and the HTTP guards and flow."""
 
 import dataclasses
-import http.client
 import json
 import os
 import shutil
@@ -16,6 +15,7 @@ from unittest.mock import patch
 
 import numpy as np
 import synthetic_archive
+import signed
 
 from tagger import cli, dataset
 from tagger.embed import CHAR_CAP, IMAGE_MODEL, MAX_TOKENS, MODELS, model_identity, page_texts
@@ -433,31 +433,21 @@ class ExclusionTests(unittest.TestCase):
 
 
 class Served(Fixture):
-    """The app on a fresh store, served on a free port, and one HTTP call to it."""
+    """The app on a fresh store, served on a free port, and one HTTP call to it as the shell makes it."""
 
     def setUp(self):
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
         self.app = server.App(self.lib, Store(self.data), fake_encode, fake_embed)
-        self.server = server.serve(self.app, 0)
+        self.server = server.serve(self.app, 0, signed.KEY)
         self.port = self.server.server_address[1]
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
-    def call(self, method, path, body=None, headers=None):
-        conn = http.client.HTTPConnection("127.0.0.1", self.port)
-        sent = {"Host": f"127.0.0.1:{self.port}"}
-        if body is not None:
-            sent["Content-Type"] = "application/json"
-        sent |= headers or {}
-        conn.request(method, path, None if body is None else json.dumps(body), sent)
-        r = conn.getresponse()
-        data = r.read()
-        conn.close()
-        kind = r.getheader("Content-Type", "")
-        return r.status, json.loads(data) if kind.startswith("application/json") else data, r
+    def call(self, method, path, body=None, headers=None, prove=True):
+        return signed.call(self.port, method, path, body, headers, prove)
 
 
 class ServerTests(Served):

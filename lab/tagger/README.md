@@ -9,8 +9,8 @@ weights in the default Hugging Face cache.
 
 ## Run
 
-From the repository root, run `just install` after each pull, then `tagger app --port 41879` from any
-folder. Archive precedence is `--root` > `KMT_ROOT` > `~/.knowmoretabs`;
+From the repository root, run `just install` after each pull, then `just up`; `tagger app --port 41879
+--secret-file <key>` runs from any folder, for a Library given the same key. Archive precedence is `--root` > `KMT_ROOT` > `~/.knowmoretabs`;
 data precedence is `--data` > `KMT_TAGGER_DATA` > `<resolved root>/tagger`.
 The app requires prepared text vectors in that data directory and cached
 model weights. Missing or empty data fails before model loading or writes.
@@ -56,8 +56,10 @@ The CLI sets umask 077, so every output is private (0600).
 
 ## Search, select and tag app (P1, one screen since P5)
 
-`just up` serves the prototype on 127.0.0.1:41879 (`tagger app --port 0` picks a free one)
-and prints its address. Needs `tagger embed --model eg2` done; runs offline (`HF_HUB_OFFLINE`). No `dataset/`
+`just up` runs the prototype on 127.0.0.1:41879 (`tagger app --port 0` picks a free one) behind the Library, which
+serves it below `http://127.0.0.1:41878/model/` with Tag and Add link in its nav. The app answers only requests the
+Library proves with the launch's key (`--secret-file`), so a browser never reaches it directly; Add link and Send run
+the knowmoretabs `--kmt-bin` names, which `just up` sets to the one serving the Library. Needs `tagger embed --model eg2` done; runs offline (`HF_HUB_OFFLINE`). No `dataset/`
 directory is needed. Page records come from the resolved archive; matching keyed vectors are reused, and
 changed or missing inputs are embedded at startup. With no owner vocabulary the app starts with no owner tags; every tag name `state.json`
 holds (made in the app, or in any decision) loads as a zero shot tag.
@@ -111,7 +113,8 @@ reach or not allowed, `--retry image` after an image error (`--retry` needs know
 stand. Retry after a job that ended without a result asks for the same again, except that a Restore that held is not
 repeated; Retry after Not indexed indexes the page in the lab only. Remove is `forget`, Restore is `restore` then `add`.
 Bookmarklet (Chrome's bookmarks bar):
-`javascript:void(window.open('http://127.0.0.1:41879/#add='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'kmt-tagger'))`.
+`javascript:void(window.open('http://127.0.0.1:41878/#add='+encodeURIComponent(location.href)+'&title='+encodeURIComponent(document.title),'kmt-tagger'))`
+(the Library hands the fragment, whole, to Add link).
 From the moment the box holds a web address the page's tile (a placeholder until the library lists the page) and its
 tag panel show (`static/panel.js`): Suggested and Recently used rows of one line each, a box that
 filters the app tags or, on Enter with no match, makes one, and every app tag folded under "All N tags" in letter rows

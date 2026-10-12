@@ -1,18 +1,19 @@
-"""The screens in headless Chrome (`browser.cjs`) on the app serving the synthetic archive: lit-html under the
-server's CSP, tile nodes kept across updates, result pages, ≈ back to the same page, Forget, Undo and Pin, and
-Add link driven against a fake knowmoretabs on a fresh copy of the archive."""
+"""The screens in headless Chrome (`browser.cjs`) on the app serving the synthetic archive, through the real Library
+shell (`KMT_BIN`) as `just up` runs them: lit-html under the shell's CSP, every request to the shell's /model/, tile
+nodes kept across updates, result pages, ≈ back to the same page, Forget, Undo and Pin, and Add link driven against
+a fake knowmoretabs on a fresh copy of the archive."""
 
 import json
 import os
 import shutil
 import subprocess
 import tempfile
-import threading
 from pathlib import Path
 from unittest.mock import patch
 from urllib.parse import quote
 
 import pytest
+import shell
 from test_add import Synthetic, fake_binary
 from test_app import DIM, Fixture, fake_embed, fake_encode, fake_image
 
@@ -32,18 +33,18 @@ class Browser:
     def start(self, lib) -> server.App:
         if shutil.which("node") is None or chrome() is None:
             pytest.skip("Node and Chrome are needed to run the screen in a browser")
+        # Not a skip: the app answers only the shell, so without it these cases would test nothing.
+        assert shell.binary(), "set KMT_BIN to a knowmoretabs build (cargo build --locked): the screens run behind it"
         self.data = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, self.data)
         app = server.App(lib, Store(self.data / "app"), fake_encode, fake_embed)
-        self.server = server.serve(app, 0)
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-        self.addCleanup(self.server.server_close)
-        self.addCleanup(self.server.shutdown)
+        self.shell = shell.Shell(app, self.data, shell.binary())
+        self.addCleanup(self.shell.close)
         return app
 
     def run_case(self, case: str, fragment: str = "") -> str:
-        """Run the case; what it returns, as JSON (empty when it returns nothing)."""
-        url = f"http://127.0.0.1:{self.server.server_address[1]}/{fragment}"
+        """Run the case on the shell's /model/ page; what it returns, as JSON (empty when it returns nothing)."""
+        url = f"{self.shell.url}model/{fragment}"
         with tempfile.TemporaryDirectory() as profile:
             script = str(Path(__file__).with_name("browser.cjs"))
             result = subprocess.run(

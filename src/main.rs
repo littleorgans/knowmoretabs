@@ -60,6 +60,7 @@ mod metadata;
 mod metadata_fetch;
 mod metadata_writer;
 mod model;
+mod model_routes;
 mod model_service;
 mod out;
 mod page_key;
@@ -67,6 +68,7 @@ mod platform;
 mod process_tree;
 mod prompt;
 mod server;
+mod service_auth;
 mod session;
 mod snss;
 mod socks;
@@ -125,7 +127,7 @@ fn main() -> ExitCode {
         Some(Command::Export { dir, with_history }) => {
             library_commands::export(&root, dir.as_deref(), *with_history, cli.json, log)
         }
-        Some(Command::Serve(args)) => serve(root, *args, cli.json, log),
+        Some(Command::Serve(args)) => serve(root, args, cli.json, log),
         Some(Command::Add(args)) => match add(&root, args, &cli, log) {
             Ok(code) => return code,
             Err(err) => Err(err),
@@ -220,7 +222,7 @@ fn add(
 /// The three forms of `tag`, which clap has already kept apart.
 fn serve(
     root: std::path::PathBuf,
-    args: cli::ServeArgs,
+    args: &cli::ServeArgs,
     json: bool,
     log: Log,
 ) -> Result<(), error::Error> {
@@ -228,6 +230,7 @@ fn serve(
         root,
         port: args.port,
         model_port: args.model_port,
+        model_secret_file: args.model_secret_file.clone(),
         open: args.open,
         json,
         log,

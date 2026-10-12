@@ -2,7 +2,9 @@
 
 Static files come from `static/`; page images are served by their hashed name from the resolved archive; the
 JSON API runs the engine and the store. API work is serialized; static and image transfers run independently.
-Requests must name this server as Host (no DNS rebinding) and POSTs must be same origin JSON. The process
+Only the Library shell talks to this server, under its `/model/` prefix: every request must name this server as
+Host (no DNS rebinding), come from no other origin, be bounded (JSON for a POST, empty for a GET) and carry the
+shell's proof (`service_auth`) before anything routes; every reply to a proven request is signed. The process
 prints counts and timings only; the request log is off, since nothing about a page belongs in a terminal.
 `/api/rank` is the Library's search: knowmoretabs `serve` forwards its query here and keeps only replies whose
 archive header names its own archive.
@@ -23,7 +25,7 @@ import numpy as np
 
 from ..paths import Paths, read_json
 from ..zeroshot import prototype, query_variants
-from . import add, engine, kmt, send
+from . import add, engine, kmt, send, service_auth
 from .store import Exclusions, Keys, Store, tag_name
 
 STATIC = Path(__file__).with_name("static")
@@ -33,6 +35,8 @@ ARCHIVE_HEADER = "X-KMT-Archive"
 # Seconds the Library's rank waits for the model; an Add link index holds it for longer, and the Library then
 # searches by keyword instead of queueing behind it
 RANK_WAIT = 0.5
+# The largest request body read; the shell forwards nothing larger (src/http.rs BODY_LIMIT)
+BODY_LIMIT = 4 * 1024 * 1024
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; "
     "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -418,13 +422,14 @@ def archive_identity(root: Path) -> str:
     return f"{st.st_dev % (1 << 64)}:{st.st_ino}"
 
 
-def handler(app: App, port: int):
+def handler(app: App, port: int, key: bytes):
     hosts = {f"127.0.0.1:{port}", f"localhost:{port}"}
     archive = archive_identity(app.lib.root)
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "kmt-tagger"
         sys_version = ""
+        proof = None  # (nonce, method, path) once the request is proven: every reply to it is signed
 
         def log_message(self, format, *args):  # noqa: A002 (the base class's name)
             pass
@@ -438,20 +443,41 @@ def handler(app: App, port: int):
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header("Cache-Control", "private, max-age=3600" if cache else "no-store")
             self.send_header(ARCHIVE_HEADER, archive)
+            if self.proof:
+                mac = service_auth.response_mac(key, *self.proof, int(status), kind, archive, body)
+                self.send_header(service_auth.RESPONSE_MAC, mac)
             self.end_headers()
             self.wfile.write(body)
 
         def json(self, status: int, value) -> None:
             self.send(status, json.dumps(value, ensure_ascii=False).encode(), "application/json; charset=utf-8")
 
-        def allowed(self) -> bool:
+        def admitted(self, method: str) -> bytes | None:
+            """The body of a request that names this server, comes from no other origin, is bounded (JSON for a
+            POST, empty for a GET) and is proven; else None, once an unsigned refusal is sent. Nothing routes, and
+            no app state is touched, before this."""
             if self.headers.get("Host") not in hosts:
-                self.json(HTTPStatus.MISDIRECTED_REQUEST, {"error": "unknown host"})
-                return False
-            return True
+                return self.json(HTTPStatus.MISDIRECTED_REQUEST, {"error": "unknown host"})
+            origin = self.headers.get("Origin")
+            if origin is not None and origin.removeprefix("http://") not in hosts:
+                return self.json(HTTPStatus.FORBIDDEN, {"error": "cross origin"})
+            if method == "POST" and self.headers.get("Content-Type", "").split(";")[0] != "application/json":
+                return self.json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "send JSON"})
+            lengths = self.headers.get_all("Content-Length") or ["0"]
+            if len(lengths) != 1 or not re.fullmatch(r"[0-9]{1,10}", lengths[0]):
+                return self.json(HTTPStatus.BAD_REQUEST, {"error": "bad Content-Length"})
+            length = int(lengths[0])
+            if length > BODY_LIMIT or (method == "GET" and length):
+                return self.json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "body too large"})
+            body = self.rfile.read(length)
+            nonce = service_auth.proven(key, self.headers, method, self.path, body, time.time_ns() // 1_000_000)
+            if nonce is None:
+                return self.json(HTTPStatus.FORBIDDEN, {"error": "unproven request"})
+            self.proof = (nonce, method, self.path)
+            return body
 
         def do_GET(self):
-            if not self.allowed():
+            if self.admitted("GET") is None:
                 return
             path = self.path.split("?", 1)[0]
             if path.startswith("/api/"):
@@ -466,15 +492,10 @@ def handler(app: App, port: int):
             self.send(HTTPStatus.OK, file.read_bytes(), kind + ("; charset=utf-8" if kind.startswith("text/") else ""))
 
         def do_POST(self):
-            if not self.allowed():
+            if (raw := self.admitted("POST")) is None:
                 return
-            origin = self.headers.get("Origin")
-            if origin is not None and origin.removeprefix("http://") not in hosts:
-                return self.json(HTTPStatus.FORBIDDEN, {"error": "cross origin"})
-            if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
-                return self.json(HTTPStatus.UNSUPPORTED_MEDIA_TYPE, {"error": "send JSON"})
             try:
-                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+                body = json.loads(raw or b"{}")
             except ValueError:
                 return self.json(HTTPStatus.BAD_REQUEST, {"error": "malformed JSON"})
             self.api("POST", self.path, body if isinstance(body, dict) else {})
@@ -511,10 +532,10 @@ class Server(ThreadingHTTPServer):
     request_queue_size = 128
 
 
-def serve(app: App, port: int) -> HTTPServer:
-    """Bound to the loopback interface only; port 0 picks a free one."""
+def serve(app: App, port: int, key: bytes) -> HTTPServer:
+    """Bound to the loopback interface only; port 0 picks a free one. `key` proves the shell's requests."""
     server = Server(("127.0.0.1", port), None)
-    server.RequestHandlerClass = handler(app, server.server_address[1])
+    server.RequestHandlerClass = handler(app, server.server_address[1], key)
     return server
 
 
@@ -539,7 +560,21 @@ def smoke(paths: Paths, app: App) -> dict:
     }
 
 
-def run(paths: Paths, root: Path, port: int, smoke_only: bool) -> None:
+def run(
+    paths: Paths, root: Path, port: int, smoke_only: bool, secret_file: str | None = None, kmt_bin: str | None = None
+) -> None:
+    """Serving needs the launch's key before any model loads; `--smoke` serves nothing and needs none. Add link and
+    Send run `kmt_bin`, the launch's own knowmoretabs, else the one on PATH."""
+    key = None
+    if not smoke_only:
+        if secret_file is None:
+            raise SystemExit(
+                "tagger app: pass --secret-file, the key `just up` writes; the app answers only the Library"
+            )
+        try:
+            key = service_auth.read(Path(secret_file))
+        except service_auth.UnsafeKey as err:
+            raise SystemExit(f"tagger app: {err}") from None
     engine.require_vectors(paths)
     from ..embed import IMAGE_MODEL, MODELS, embed_image_rows, embed_input, load, load_text, release
     from ..zeroshot import encode_queries
@@ -562,13 +597,14 @@ def run(paths: Paths, root: Path, port: int, smoke_only: bool) -> None:
 
     lib, stats = engine.load(paths, root.resolve(), encode, embed, embed_image=embed_image)
     app = App(lib, Store(paths.data / "app"), encode, embed)
+    app.binary = kmt_bin or app.binary
     stats |= {"model_load_s": model["load_s"], "startup_s": round(time.perf_counter() - start, 2)}
     print(json.dumps(stats))
     if smoke_only:
         print(json.dumps(smoke(paths, app)))
         return
-    server = serve(app, port)
-    print(f"serving http://127.0.0.1:{server.server_address[1]}/ (ctrl-c stops)", flush=True)
+    server = serve(app, port, key)
+    print(f"serving the Library on 127.0.0.1:{server.server_address[1]} (ctrl-c stops)", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

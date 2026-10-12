@@ -34,6 +34,8 @@ def main() -> None:
     app = steps.add_parser("app", help="the search then tag prototype, served on 127.0.0.1")
     app.add_argument("--port", type=int, default=APP_PORT, help=f"port (default: {APP_PORT}; 0 picks a free one)")
     app.add_argument("--smoke", action="store_true", help="load, time searches, print numbers only, exit")
+    app.add_argument("--secret-file", help="the key file `just up` writes; required to serve, not for --smoke")
+    app.add_argument("--kmt-bin", help="the knowmoretabs Add link and Send run (default: knowmoretabs on PATH)")
     compare = steps.add_parser("compare", help="compare metric outputs with another data directory")
     compare.add_argument("other")
     for step in (embed, app):
@@ -89,7 +91,7 @@ def main() -> None:
         os.environ["HF_HUB_OFFLINE"] = "1"  # the model is cached; the app never goes online
         from .app import server
 
-        server.run(paths, root, args.port, args.smoke)
+        server.run(paths, root, args.port, args.smoke, secret_file=args.secret_file, kmt_bin=args.kmt_bin)
     elif args.step == "report":
         from . import report
 

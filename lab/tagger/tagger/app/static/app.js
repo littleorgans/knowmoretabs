@@ -70,14 +70,14 @@
   const show = (html, go) => {
     K.$("send-body").innerHTML = html;
     K.$("send-go").hidden = !go;
-    K.$("send-go").disabled = false;
+    K.$("send-go").disabled = K.down;
     K.$("send-close").textContent = go ? "Cancel" : "Done";
   };
   let preview;
   K.sendNow = async () => {
     try {
       await K.writes;
-      const x = await K.api("/api/send/preview", {});
+      const x = await K.api("api/send/preview", {});
       preview = x.preview;
       show((x.ready ? "" : `<p class="lede">Nothing to send.</p>`) + summary(x) + (x.commands.length ? details(x.commands) : ""), x.ready);
     } catch (err) { show(`<p class="lede">${K.esc(err.message)}</p>`, false); }
@@ -87,7 +87,7 @@
   K.$("send-go").addEventListener("click", async () => {
     K.$("send-go").disabled = true;
     try {
-      const x = await K.api("/api/send", { preview });
+      const x = await K.api("api/send", { preview });
       const done = x.steps.filter((s) => s.ok).map((s) => s.command);
       if (x.forget) {
         try {
@@ -104,11 +104,13 @@
   });
 
   K.$("send-btn").addEventListener("click", K.sendNow);
+  K.$("outage-reload").addEventListener("click", () => location.reload());
   K.$("help-btn").addEventListener("click", () => K.$("help").showModal());
   for (const d of ["help", "send"]) K.$(`${d}-close`).addEventListener("click", () => K.$(d).close());
 
   /* ---- keys ---- */
   document.addEventListener("keydown", (e) => {
+    if (K.down) return;   // the service stopped answering: no key acts, as no control does
     if (document.querySelector("dialog[open]")) return;   // the dialog's own keys; esc closes it
     if (e.target.closest("input:not([type=checkbox]), textarea")) {   // typing; a ticked box keeps the keys
       if (e.key === "Escape") e.target.blur();   // Esc leaves the box only; the next one acts on the view

@@ -242,7 +242,7 @@ impl From<FetchArgs> for crate::targets::Options {
 }
 
 /// Where the library is served, and where its search is ranked.
-#[derive(Debug, Clone, Copy, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct ServeArgs {
     /// Port to listen on; 0 picks a free one
     #[arg(long, default_value_t = DEFAULT_PORT, value_name = "N")]
@@ -254,6 +254,11 @@ pub struct ServeArgs {
     /// 127.0.0.1 (the tagger lab's `tagger app`); keyword search without it
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..))]
     pub model_port: Option<u16>,
+    /// The key file `just up` writes, which proves each request to the
+    /// model service and each of its replies; without it nothing is
+    /// forwarded
+    #[arg(long, value_name = "FILE", requires = "model_port")]
+    pub model_secret_file: Option<PathBuf>,
 }
 
 /// One page to add, and how far to capture it.
@@ -447,7 +452,8 @@ mod tests {
             Some(Command::Serve(ServeArgs {
                 port: DEFAULT_PORT,
                 open: false,
-                model_port: None
+                model_port: None,
+                model_secret_file: None,
             }))
         ));
         let cli = Cli::try_parse_from(["knowmoretabs", "serve", "--port", "0", "--open"]).unwrap();
@@ -456,7 +462,8 @@ mod tests {
             Some(Command::Serve(ServeArgs {
                 port: 0,
                 open: true,
-                model_port: None
+                model_port: None,
+                model_secret_file: None,
             }))
         ));
         let cli = Cli::try_parse_from(["knowmoretabs", "serve", "--model-port", "41879"]).unwrap();
@@ -468,6 +475,16 @@ mod tests {
             }))
         ));
         assert!(Cli::try_parse_from(["knowmoretabs", "serve", "--model-port", "0"]).is_err());
+        let key = ["knowmoretabs", "serve", "--model-secret-file", "k"];
+        assert!(Cli::try_parse_from(key).is_err(), "a key with no port");
+        let cli = Cli::try_parse_from([&key[..], &["--model-port", "41879"]].concat()).unwrap();
+        assert!(matches!(
+            cli.command,
+            Some(Command::Serve(ServeArgs {
+                model_secret_file: Some(ref path),
+                ..
+            })) if path == std::path::Path::new("k")
+        ));
     }
 
     #[test]

@@ -350,8 +350,8 @@ button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
 .hist dd a.x:only-child code { color: var(--ink); }
 .hist dd a.x:hover code { color: var(--ink); text-decoration: underline; text-underline-offset: 0.2em; }
 .hist .acts { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: -0.5rem 0 0.25rem; align-items: center; }
-.hist .acts button, #tg-done, .tray-end button, #toast button, dialog button { height: 2.125rem; padding: 0 0.875rem; background: none; border: 1px solid var(--ink); font-size: 0.8125rem; font-weight: 500; color: var(--ink); transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease); }
-.hist .acts button:hover, #tg-done:hover, .tray-end button:hover, #toast button:hover, dialog button:hover { background: var(--ink); color: var(--bg); }
+.hist .acts button, #tg-done, .tray-end button, #toast button, dialog button, #retry { height: 2.125rem; padding: 0 0.875rem; background: none; border: 1px solid var(--ink); font-size: 0.8125rem; font-weight: 500; color: var(--ink); transition: background-color 0.15s var(--ease), color 0.15s var(--ease), border-color 0.15s var(--ease); }
+.hist .acts button:hover, #tg-done:hover, .tray-end button:hover, #toast button:hover, dialog button:hover, #retry:hover { background: var(--ink); color: var(--bg); }
 /* forgetting is the one action that takes the colour, and only under the
    pointer: the old hover emptied the button out, which read as "don't" */
 .hist .acts button[data-act="forget"]:hover, .tray-end .primary.forget:hover { background: var(--forget); border-color: var(--forget); color: var(--bg); }

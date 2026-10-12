@@ -929,7 +929,15 @@ function showView(name) {
   for (const a of document.querySelectorAll('.views a')) a.toggleAttribute('aria-current', a.hash === '#' + (name === 'snapshot' ? 'snapshots' : name));
   if (name !== 'snapshot') scrollTo(0, 0);
 }
+// Tag and Add link are the model service's screens, served below /model/: their fragments, the bookmarklet's
+// `#add=<link>&title=<title>` too, go there whole and unread, and Back skips this page. An export has neither.
+function handOff() {
+  if (host.mode !== 'serve' || !/^#(?:tag|add)(?:[=&]|$)/.test(location.hash)) return false;
+  location.replace('/model/' + location.hash);
+  return true;
+}
 function route() {
+  if (handOff()) return;
   const [view, a, b] = location.hash.slice(1).split('/');
   if (view === 'snapshot' && a) { showView('snapshot'); renderSnapshot(decodeURIComponent(a), b); }
   else if (view === 'snapshots') showView('snapshots');
@@ -1099,6 +1107,7 @@ function wire() {
   window.addEventListener('hashchange', route);
 }
 async function main() {
+  if (handOff()) return;   // before the library loads, which that page does not need
   wire();
   let lib;
   try { lib = await host.load(); derive(lib); } catch (e) { $('card').textContent = `Could not load the library (${e.message}).`; return; }

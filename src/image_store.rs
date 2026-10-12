@@ -255,10 +255,17 @@ fn read_kept(root: &Path) -> Result<HashMap<String, String>, Error> {
         .collect())
 }
 
-/// A kept image's bytes by its name: exactly 64 lowercase hex characters,
-/// else `None`, as for a name with no regular file (`jsonl::kept_file`).
+/// Whether `name` could name a kept image: exactly 64 lowercase hex
+/// characters, a page address's SHA-256, as the model service names its
+/// images too.
+pub fn is_name(name: &str) -> bool {
+    name.len() == 64 && name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// A kept image's bytes by its name (`is_name`), else `None`, as for a name
+/// with no regular file (`jsonl::kept_file`).
 pub fn served(root: &Path, name: &str) -> Result<Option<Vec<u8>>, Error> {
-    if name.len() != 64 || !name.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')) {
+    if !is_name(name) {
         return Ok(None);
     }
     jsonl::kept_file(&dir(root).join(named(name)))

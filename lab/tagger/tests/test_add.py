@@ -2,7 +2,6 @@
 lacks embedded at load from `--root`, a library with no owner tags, every store tag name loaded, page keyed image
 addresses, the fixed port, and the Add link jobs driven through HTTP against a fake knowmoretabs."""
 
-import http.client
 import json
 import os
 import shutil
@@ -19,6 +18,7 @@ from unittest.mock import Mock, patch
 
 import fake_knowmoretabs
 import numpy as np
+import signed
 from test_app import DIM, build, fake_embed, fake_encode, fake_image, topic_of
 
 from tagger import cli
@@ -310,20 +310,14 @@ class PortTests(unittest.TestCase):
 class Served(Synthetic):
     def serve(self, lib: engine.Library) -> tuple[server.App, int]:
         app = server.App(lib, Store(self.work / "lab-data" / f"app-{id(lib)}"), fake_encode, fake_embed)
-        httpd = server.serve(app, 0)
+        httpd = server.serve(app, 0, signed.KEY)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         self.addCleanup(httpd.server_close)
         self.addCleanup(httpd.shutdown)
         return app, httpd.server_address[1]
 
     def call(self, port: int, method: str, path: str, body=None):
-        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
-        headers = {"Host": f"127.0.0.1:{port}", **({"Content-Type": "application/json"} if body is not None else {})}
-        conn.request(method, path, None if body is None else json.dumps(body), headers)
-        r = conn.getresponse()
-        data = r.read()
-        conn.close()
-        return r.status, json.loads(data) if r.getheader("Content-Type", "").startswith("application/json") else data
+        return signed.call(port, method, path, body)[:2]
 
 
 class ImageAddressTests(Served):

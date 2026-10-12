@@ -43,7 +43,7 @@
     const mine = ++judgment;
     K.changed();
     const body = { query: S.query, rows: r.hits.map((h) => h.row), action, row };
-    const next = judging.then(() => K.api("/api/exclusions", body));
+    const next = judging.then(() => K.api("api/exclusions", body));
     judging = next.catch(() => {});
     return next.then((reply) => {
       if (K.results === r && mine === judgment) { Object.assign(r, reply); K.changed(); }
@@ -73,7 +73,7 @@
     try {
       await judging;
       if (current !== request) return;
-      const results = await K.api("/api/search", { query: S.query, images: S.images, n: S.n, refine: !!S.refine });
+      const results = await K.api("api/search", { query: S.query, images: S.images, n: S.n, refine: !!S.refine });
       if (current !== request) return;
       K.results = results;
     } catch (err) { if (current !== request) return; K.fail(err); }

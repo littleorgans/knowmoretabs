@@ -4,6 +4,7 @@ import os
 from unittest.mock import patch
 
 import pytest
+import signed
 
 from tagger import cli
 from tagger.app import engine, server
@@ -39,7 +40,7 @@ def test_missing_or_empty_data_fails_before_model_load(tmp_path, present):
     if present:
         paths.data.mkdir()
     with patch("tagger.embed.load_text") as load, pytest.raises(SystemExit) as error:
-        server.run(paths, tmp_path / "archive", 0, False)
+        server.run(paths, tmp_path / "archive", 0, False, signed.key_file(tmp_path))
     assert str(error.value) == f"missing tagger vectors at {paths.data}; run tagger embed --model eg2"
     load.assert_not_called()
     assert paths.data.exists() == present
@@ -81,6 +82,37 @@ def test_cli_passes_resolved_root_and_default_data(tmp_path, monkeypatch, positi
             patch.dict(os.environ),
         ):
             cli.main()
-        run.assert_called_once_with(Paths(root / "tagger"), root, cli.APP_PORT, True)
+        run.assert_called_once_with(Paths(root / "tagger"), root, cli.APP_PORT, True, secret_file=None, kmt_bin=None)
     finally:
         os.umask(old_umask)
+
+
+def test_serving_runs_the_launchs_knowmoretabs_and_proves_with_its_key(tmp_path):
+    """`just up` passes the binary it serves the Library with and its key file: Add link and Send run that binary,
+    and the server proves every exchange with that key."""
+    served = {}
+
+    class Stopped:
+        server_address = ("127.0.0.1", 1)
+
+        def serve_forever(self):
+            raise KeyboardInterrupt
+
+        def server_close(self):
+            pass
+
+    def serve(app, port, key):
+        served.update(binary=app.binary, key=key)
+        return Stopped()
+
+    with (
+        patch("tagger.embed.load_text", return_value=(None, {"load_s": 0})),
+        patch("tagger.app.engine.require_vectors"),
+        patch("tagger.app.engine.load", return_value=(None, {})),
+        patch("tagger.app.server.Store"),
+        patch("tagger.app.server.App"),
+        patch("tagger.app.server.serve", side_effect=serve),
+        patch("builtins.print"),
+    ):
+        server.run(Paths(tmp_path), tmp_path, 0, False, signed.key_file(tmp_path), "/launch/knowmoretabs")
+    assert served == {"binary": "/launch/knowmoretabs", "key": signed.KEY}

@@ -94,6 +94,7 @@ fn response_heads_parse_a_status_line_and_reject_garbage() {
     .unwrap();
     assert_eq!(head.code, 200);
     assert_eq!(head.fields.get("x-kmt-archive"), Some("1:2"));
+    assert_eq!(head.fields.get("X-KMT-Archive"), Some("1:2"));
     for line in [
         &b"HTTP/1.0 503 Service Unavailable"[..],
         b"HTTP/1.1 400 ",
@@ -114,6 +115,9 @@ fn response_heads_parse_a_status_line_and_reject_garbage() {
         b"HTTP/1.1 200 O\x07K",
         b"200 OK",
         b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 1",
+        b"HTTP/1.1 200 OK\r\nX-KMT-Archive: 1:2\r\nx-kmt-archive: 1:2",
+        b"HTTP/1.1 200 OK\r\nX-KMT-Response-MAC: a\r\nX-KMT-Response-MAC: b",
+        b"HTTP/1.1 200 OK\r\nX-Other: a\r\nX-Other: a",
         b"HTTP/1.1 200 OK\r\nno colon",
         b"\xff 200 OK",
         b"",
@@ -175,7 +179,7 @@ fn framing_names_why_a_message_could_not_be_read() {
     let body_of = |fields: &str, rest: &[u8], limit: usize| {
         let (mut socket, client) = socket_pair();
         drop(client);
-        let fields = Fields::parse(fields.split("\r\n")).unwrap();
+        let fields = Fields::parse(fields.split("\r\n"), |_| false).unwrap();
         read_body(&mut socket, &fields, rest.to_vec(), alive(), limit)
     };
     assert_eq!(

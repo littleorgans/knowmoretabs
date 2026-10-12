@@ -11,10 +11,7 @@
 <body>
 <header class="top">
   <span class="brand">knowmoretabs <small>tagger</small></span>
-  <nav class="views" aria-label="Screens">
-    <a href="#tag" id="nav-tag">Tag</a>
-    <a href="#add" id="nav-add">Add link</a>
-  </nav>
+  <!-- nav:start --><!-- nav:end -->
   <button type="button" id="send-btn" class="pill" title="Make your library match these tags and forgotten pages (e)">Send to library</button>
   <button type="button" id="help-btn" class="sq" aria-label="Keyboard shortcuts" title="Keyboard shortcuts (?)">?</button>
   <button type="button" id="theme" class="sq theme" aria-label="Switch theme" title="Switch theme (t)">
@@ -24,6 +21,7 @@
 </header>
 
 <div class="frame">
+<p class="bar outage" id="outage" role="alert" hidden><span>Tag and Add link stopped answering. What you did last may not be saved, and a link being added may be in your library already.</span><button type="button" id="outage-reload">Reload</button></p>
 <main id="tag-screen">
   <form id="s-form" class="sform" role="search">
     <input id="s-q" type="search" placeholder="Search your library" autocomplete="off" aria-label="Search">

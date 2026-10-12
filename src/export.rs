@@ -9,21 +9,27 @@ use std::io::Write;
 use std::path::Path;
 
 use crate::archive::{self, SNAPSHOTS_DIR};
-use crate::assets;
+use crate::assets::{self, Surface};
 use crate::error::Error;
 use crate::library::Library;
 
-const START: &str = "<!-- library-data:start -->";
-const END: &str = "<!-- library-data:end -->";
+/// The page `export` writes, whose files are `assets::EXPORTED`.
+const PAGE: &str = "index.html";
 
 /// Caller holds the archive lock through reading inputs and publication.
 pub fn write(root: &Path, destination: &Path, library: &Library) -> Result<(), Error> {
     let json = serde_json::to_string(library).map_err(|source| Error::Json {
-        path: destination.join("index.html"),
+        path: destination.join(PAGE),
         source,
     })?;
-    let [(index_name, index), (css_name, css), (js_name, js)] = assets::load();
-    let html = embed(&index, &json)?;
+    let html = page(Surface::Export, &json)?;
+    let mut files: Vec<(&str, std::borrow::Cow<'static, str>)> = assets::EXPORTED
+        .iter()
+        .filter_map(|&name| Some((name, assets::load(name)?)))
+        .collect();
+    // Each file is replaced atomically; the page referencing the assets goes last.
+    // This is a rebuildable site, not an atomic multi-file snapshot publication.
+    files.push((PAGE, html.into()));
     check_destination(root, destination)?;
     archive::create_private_dir(destination)
         .map_err(Error::io("create export directory", destination))?;
@@ -31,21 +37,14 @@ pub fn write(root: &Path, destination: &Path, library: &Library) -> Result<(), E
         .prefix(".export-")
         .tempdir_in(destination)
         .map_err(Error::io("stage export in", destination))?;
-    let files = [
-        (css_name, css.as_ref()),
-        (js_name, js.as_ref()),
-        (index_name, html.as_str()),
-    ];
-    for (name, content) in files {
+    for (name, content) in &files {
         let path = stage.path().join(name);
         let mut file = fs::File::create(&path).map_err(Error::io("create", &path))?;
         file.write_all(content.as_bytes())
             .map_err(Error::io("write", &path))?;
         file.sync_all().map_err(Error::io("sync", &path))?;
     }
-    // Each file is replaced atomically; the page referencing the assets goes last.
-    // This is a rebuildable site, not an atomic multi-file snapshot publication.
-    for (name, _) in files {
+    for (name, _) in &files {
         let path = destination.join(name);
         fs::rename(stage.path().join(name), &path)
             .map_err(Error::io("publish export file", &path))?;
@@ -53,16 +52,19 @@ pub fn write(root: &Path, destination: &Path, library: &Library) -> Result<(), E
     archive::sync_dir(destination)
 }
 
+/// The Library's page for `surface`: its nav, and `json` as its data.
+pub fn page(surface: Surface, json: &str) -> Result<String, Error> {
+    let html = assets::load(PAGE).ok_or_else(|| Error::AssetMarkers(PAGE.to_owned()))?;
+    let html = assets::fill(&html, "nav", &assets::nav(surface, Some("pages")))?;
+    embed(&html, json)
+}
+
 /// An empty `json` yields the serve host's page: the element present, nothing in it.
 pub fn embed(html: &str, json: &str) -> Result<String, Error> {
-    let start = html.find(START).ok_or(Error::AssetMarkers)? + START.len();
-    let end = html[start..].find(END).ok_or(Error::AssetMarkers)? + start;
     let safe = json.replace("</", "<\\/");
-    Ok(format!(
-        "{}\n<script id=\"library-data\" type=\"application/json\">{safe}</script>\n{}",
-        &html[..start],
-        &html[end..]
-    ))
+    let element =
+        format!("\n<script id=\"library-data\" type=\"application/json\">{safe}</script>\n");
+    assets::fill(html, "library-data", &element)
 }
 
 fn check_destination(root: &Path, destination: &Path) -> Result<(), Error> {
@@ -113,6 +115,9 @@ pub fn resolve_destination(path: &Path) -> Result<std::path::PathBuf, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const START: &str = "<!-- library-data:start -->";
+    const END: &str = "<!-- library-data:end -->";
 
     #[test]
     fn embedding_replaces_the_fixture_and_escapes_script_terminators() {

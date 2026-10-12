@@ -1,5 +1,6 @@
 """Controlled round trips through the shipped frontend scripts, without browser data."""
 
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -66,6 +67,8 @@ CASES = {
         "startupEdits",
         "startupForgetAndUndo",
         "startupTagsKeepChanges",
+        "outage",
+        "outageDuringSend",
     ],
     "frontend_add.cjs": [
         "addStates",
@@ -87,6 +90,7 @@ CASES = {
         "addFollowUpPicksBackground",
         "addFollowUpStalePoll",
         "addRestoreFollowsTheKey",
+        "addPollFails",
     ],
 }
 
@@ -100,3 +104,16 @@ def test_frontend_round_trips(script, case):
         [node, str(Path(__file__).with_name(script)), case], capture_output=True, text=True, timeout=10
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_every_service_path_is_relative_to_the_page():
+    """The Library serves this page below /model/: a root path there would reach the Library, not the service.
+    Both thumbnail emitters and the dormant scripts included; only the shell's nav names root paths."""
+    static = Path(__file__).parents[1] / "tagger" / "app" / "static"
+    scripts = [f for f in sorted(static.glob("*.js")) if f.name != "lit-html.js"]
+    assert len(scripts) == 12
+    for script in scripts:
+        assert not re.search(r"""["'`]/(api|img)/""", script.read_text()), script.name
+    for emitter in ("core.js", "review.js"):
+        assert 'src="img/${p.image}"' in (static / emitter).read_text(), emitter
+    assert "<!-- nav:start --><!-- nav:end -->" in (static / "index.html").read_text()

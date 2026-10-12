@@ -328,3 +328,55 @@ test('a reopened Content tab keeps the newest reply when an earlier request sett
     assert.doesNotMatch(pane.innerHTML, /Earlier text|late failure/);
   }
 });
+
+// ---- Tag and Add link from the Library's address -------------------------
+test('Tag and Add link fragments go to the model page whole, only when served', () => {
+  const deep = '#add=https%3A%2F%2Fadded.example%2Fa%20b%3Fx%3D1%26y%3D%C3%A9&title=A%20%26%20B';
+  for (const [exported, hash, to] of [
+    [false, deep, `/model/${deep}`],
+    [false, '#add', '/model/#add'],
+    [false, '#tag', '/model/#tag'],
+    [false, '#add&title=x', '/model/#add&title=x'],
+    [false, '#pages', null],
+    [false, '#pages/3', null],
+    [false, '#snapshots', null],
+    [false, '#snapshot/2026-01-01-000000Z/4', null],
+    [false, '#additions', null],
+    [false, '', null],
+    [true, '#add', null],
+    [true, '#tag', null],
+  ]) {
+    const replaced = [];
+    const context = vm.createContext({
+      document: {
+        getElementById: (id) => (id === 'library-data' && exported ? { textContent: '{}' } : null),
+        documentElement: { style: { setProperty() {} } },
+      },
+      IntersectionObserver: class {},
+      location: { hash, replace: (url) => replaced.push(url) },
+    });
+    vm.runInContext(renderer, context);
+    assert.equal(vm.runInContext('handOff()', context), to !== null, hash);
+    assert.deepEqual(replaced, to === null ? [] : [to], hash);
+  }
+});
+
+test('in the shared nav the Library marks only its own view', () => {
+  const links = ['/#pages', '/model/#tag', '/model/#add', '/#snapshots'].map((href) => ({
+    href, hash: href.slice(href.indexOf('#')), current: false, toggleAttribute(_, on) { this.current = on; },
+  }));
+  const context = vm.createContext({
+    document: {
+      getElementById: (id) => (id === 'library-data' ? null : {}),
+      querySelectorAll: (selector) => (selector === '.views a' ? links : []),
+      documentElement: { style: { setProperty() {} } },
+    },
+    IntersectionObserver: class {},
+    scrollTo() {},
+  });
+  vm.runInContext(renderer, context);
+  for (const [view, marked] of [['pages', '/#pages'], ['snapshots', '/#snapshots'], ['snapshot', '/#snapshots']]) {
+    vm.runInContext(`showView(${JSON.stringify(view)})`, context);
+    assert.deepEqual(links.filter((l) => l.current).map((l) => l.href), [marked], view);
+  }
+});

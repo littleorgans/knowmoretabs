@@ -1,41 +1,43 @@
-//! The Library's search through the model service on this machine: one
-//! forwarding rule for one path prefix, to one loopback port.
+//! The model service on this machine through the shell: one path prefix,
+//! one loopback port, one exchange per request.
 //!
 //! slice: library, triage
-//! why: The Library ranks through a model it does not own, and every byte
-//!      crossing that boundary is bounded and checked here. The request is
-//!      built from constants, so nothing the browser sent but the body
+//! why: The Library ranks, and Tag and Add link run, through a service the
+//!      shell does not own, and every byte crossing that boundary is bounded
+//!      and checked here. A request the route table admits (`model_routes`)
+//!      is built from constants, so nothing the browser sent but a JSON body
 //!      reaches the service, and a reply is used only when it names this
-//!      archive, frames cleanly within its bounds and is JSON.
+//!      archive, frames cleanly within its bounds, has its route's type and
+//!      carries the service's proof for this very request (`service_auth`).
 
 use std::io::Write as _;
 use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
+use crate::assets::{self, Policy, Surface};
 use crate::capture::Log;
 use crate::http::{
     self, DeadlineWriter, Framing, HEAD_LIMIT, Head, Response, ResponseHead, Status,
 };
+use crate::model_routes::{self, Kind, Route};
+use crate::service_auth::{self, Key, Reply, Request, Unusable};
 
 /// Every path the shell forwards starts with this; the rest is the service's.
 pub const PREFIX: &str = "/model/";
-/// What the service answers below the prefix, by method and path. Anything
-/// else under the prefix is refused here, without contacting the service.
-const ROUTES: &[(&str, &str)] = &[("POST", "api/rank")];
 /// The service names the archive it loaded in this header on every reply
 /// (`ARCHIVE_HEADER` in `lab/tagger/tagger/app/server.py`).
-const ARCHIVE_HEADER: &str = "x-kmt-archive";
-/// One deadline over connect, write and read: the Library searches by
-/// keyword rather than wait on a busy or stuck model.
-const FORWARD_TIMEOUT: Duration = Duration::from_secs(2);
-/// About 80,000 page keys, checked against the declared length before a
-/// byte of the body is read.
+const ARCHIVE_HEADER: &str = "X-KMT-Archive";
+/// About 80,000 page keys, and far more than any of the service's files or
+/// images, checked against the declared length before a byte of the body is
+/// read.
 const RESPONSE_LIMIT: usize = 8 * 1024 * 1024;
 
-/// The model service's loopback port, from `serve --model-port`.
+/// The model service's loopback port, from `serve --model-port`, and the
+/// key that proves each exchange with it.
 pub struct ModelService {
-    pub port: u16,
+    port: u16,
+    key: Key,
 }
 
 /// Why a forward got no usable answer. Logged by name only, never with a
@@ -50,17 +52,35 @@ enum Failure {
     Timeout,
     /// A declared body over `RESPONSE_LIMIT`.
     TooLarge,
-    /// Not a framed JSON reply.
+    /// Not a framed reply of its route's type, or an error that is not JSON.
     Malformed,
     /// The reply names another archive, or none, or this one has no identity.
     OtherArchive,
     /// A status the Library has no use for.
     Upstream(u16),
+    /// No reply MAC, or not this key's for this request and these bytes:
+    /// whatever answered is not the service this launch started.
+    Unproven,
+    /// The system gave no randomness for a nonce.
+    Entropy,
 }
 
 impl Failure {
-    fn response(self) -> Response {
-        let (status, message) = match self {
+    /// JSON for every route but the page, which gets the shell's own page
+    /// saying so, under the same address, nav and all; never the service's
+    /// bytes.
+    fn response(self, kind: Kind) -> Response {
+        let (status, message) = self.said();
+        if kind == Kind::Html
+            && let Some(page) = unavailable(message)
+        {
+            return Response::html(status, page.into_bytes(), Policy::Library);
+        }
+        Response::error(status, message)
+    }
+
+    fn said(self) -> (Status, &'static str) {
+        match self {
             Self::Off => (Status::ServiceUnavailable, "no model service is set"),
             Self::Refused => (
                 Status::ServiceUnavailable,
@@ -77,14 +97,31 @@ impl Failure {
                 "the model service is serving another archive",
             ),
             Self::Upstream(_) => (Status::BadGateway, "the model service failed"),
-        };
-        Response::error(status, message)
+            Self::Unproven => (
+                Status::BadGateway,
+                "the model service did not prove its answer",
+            ),
+            Self::Entropy => (
+                Status::ServiceUnavailable,
+                "the model service cannot be asked now",
+            ),
+        }
     }
 }
 
+/// The shell's page for Tag and Add link while the service cannot answer,
+/// saying why.
+fn unavailable(message: &str) -> Option<String> {
+    let page = assets::load("unavailable.html")?;
+    let page = assets::fill(&page, "nav", &assets::nav(Surface::Serve, None)).ok()?;
+    let mut reason = message.to_owned();
+    reason[..1].make_ascii_uppercase();
+    assets::fill(&page, "reason", &reason).ok()
+}
+
 /// Answers a request whose path starts with `PREFIX`: through the service
-/// when the path is one of `ROUTES`, a POST is JSON, the service is set and
-/// it answers for this archive.
+/// when the route table admits it, a POST is JSON and a GET has no body, the
+/// service is set and it answers for this archive.
 pub fn forward(
     service: Option<&ModelService>,
     root: &Path,
@@ -93,44 +130,83 @@ pub fn forward(
     body: &[u8],
     log: Log,
 ) -> Response {
-    let below = &path[PREFIX.len()..];
-    let Some(&(method, upstream)) = ROUTES
-        .iter()
-        .find(|&&(method, route)| method == head.method && route == below)
-    else {
+    let Some(route) = model_routes::classify(&head.method, &path[PREFIX.len()..]) else {
         return Response::error(Status::NotFound, "no such page");
     };
-    if method == "POST"
-        && let Err(response) = http::require_json(head)
-    {
-        return response;
+    if route.method == "POST" {
+        if let Err(response) = http::require_json(head) {
+            return response;
+        }
+    } else if !body.is_empty() {
+        return Response::error(Status::BadRequest, "a GET carries no body");
     }
     let answered = match service {
         None => Err(Failure::Off),
-        Some(service) => service.exchange(upstream, body, root),
+        Some(service) => service.exchange(&route, body, root),
     };
     answered.unwrap_or_else(|failure| {
         log.note(&format!("model service: {failure:?}"));
-        failure.response()
+        failure.response(route.kind)
     })
 }
 
 impl ModelService {
+    /// The service on `port` when `key_file` holds a usable key. Otherwise
+    /// nothing is forwarded, said once here without the file's bytes, and
+    /// the Library searches by keyword.
+    pub fn new(port: u16, key_file: Option<&Path>, log: Log) -> Option<Self> {
+        let why = match key_file.map(Key::read) {
+            Some(Ok(key)) => return Some(Self { port, key }),
+            None => "no --model-secret-file was given",
+            Some(Err(Unusable::Unreadable)) => "its key file cannot be read",
+            Some(Err(Unusable::Unsafe)) => {
+                "its key file is a link, someone else's, or readable by others"
+            }
+            Some(Err(Unusable::Malformed)) => "its key file does not hold a key",
+        };
+        log.warn(&format!(
+            "the model service is off: {why}; search is by keyword"
+        ));
+        None
+    }
+
     /// One request on its own connection, closed after the reply.
-    fn exchange(&self, path: &str, body: &[u8], root: &Path) -> Result<Response, Failure> {
+    fn exchange(&self, route: &Route, body: &[u8], root: &Path) -> Result<Response, Failure> {
         let archive = archive_identity(root);
-        let deadline = Instant::now() + FORWARD_TIMEOUT;
+        let nonce = service_auth::nonce().ok_or(Failure::Entropy)?;
+        let time = service_auth::now();
+        let (method, target) = (route.method, route.path.as_str());
+        let (content_type, framing) = if method == "POST" {
+            let framing = format!(
+                "Content-Type: application/json\r\nContent-Length: {}\r\n",
+                body.len()
+            );
+            ("application/json", framing)
+        } else {
+            ("", String::new())
+        };
+        let mac = self.key.sign(&Request {
+            nonce: &nonce,
+            time: &time,
+            method,
+            path: target,
+            content_type,
+            body,
+        });
+        let deadline = Instant::now() + route.deadline;
         let address = SocketAddr::from((Ipv4Addr::LOCALHOST, self.port));
         // A loopback connect that does not complete is a service not
         // accepting, whatever the error: Windows retries a refused connect
         // for about two seconds, so this deadline can expire first.
         let mut stream =
-            TcpStream::connect_timeout(&address, FORWARD_TIMEOUT).map_err(|_| Failure::Refused)?;
+            TcpStream::connect_timeout(&address, route.deadline).map_err(|_| Failure::Refused)?;
         let request = format!(
-            "POST /{path} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nContent-Type: application/json\r\n\
-             Content-Length: {}\r\nConnection: close\r\n\r\n",
+            "{method} {target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\n{framing}\
+             {}: {nonce}\r\n{}: {time}\r\n{}: {mac}\r\nConnection: close\r\n\r\n",
             self.port,
-            body.len()
+            service_auth::NONCE,
+            service_auth::TIME,
+            service_auth::REQUEST_MAC,
         );
         let mut writer = DeadlineWriter {
             stream: &mut stream,
@@ -151,10 +227,23 @@ impl ModelService {
         let status = match reply.code {
             200 => Status::Ok,
             400 => Status::BadRequest,
+            403 => Status::Forbidden,
+            404 => Status::NotFound,
+            409 => Status::Conflict,
+            415 => Status::UnsupportedMediaType,
             503 => Status::ServiceUnavailable,
             code => return Err(Failure::Upstream(code)),
         };
-        if !reply.fields.get("content-type").is_some_and(http::is_json)
+        // Only a success has its route's type; every refusal is JSON.
+        let kind = if status == Status::Ok {
+            route.kind
+        } else {
+            Kind::Json
+        };
+        if !reply
+            .fields
+            .get("content-type")
+            .is_some_and(|t| kind.takes(t))
             || reply.fields.get("content-length").is_none()
         {
             return Err(Failure::Malformed);
@@ -164,7 +253,30 @@ impl ModelService {
                 Framing::TooLarge => Failure::TooLarge,
                 _ => late(deadline, Failure::Malformed),
             })?;
-        Ok(Response::json(status, body))
+        let proven = Reply {
+            nonce: &nonce,
+            method,
+            path: target,
+            status: reply.code,
+            content_type: reply.fields.get("content-type").unwrap_or(""),
+            archive: reply.fields.get(ARCHIVE_HEADER).unwrap_or(""),
+            body: &body,
+        };
+        if !reply
+            .fields
+            .get(service_auth::RESPONSE_MAC)
+            .is_some_and(|mac| self.key.verify(&proven, mac))
+        {
+            return Err(Failure::Unproven);
+        }
+        if kind == Kind::Html {
+            // Only now, the page proven, does it get the shell's nav.
+            let page = String::from_utf8(body).map_err(|_| Failure::Malformed)?;
+            let nav = assets::nav(Surface::Serve, None);
+            let page = assets::fill(&page, "nav", &nav).map_err(|_| Failure::Malformed)?;
+            return Ok(Response::html(status, page.into_bytes(), Policy::Service));
+        }
+        Ok(Response::new(status, kind.content_type(), body))
     }
 }
 

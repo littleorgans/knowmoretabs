@@ -34,7 +34,7 @@
   const say = sayIn("new-msg");
   /* the tag `name` made (or found as yours in any case), listed among the app tags; its name as the server keeps it */
   async function make(name) {
-    const made = await K.api("/api/tags", { name });
+    const made = await K.api("api/tags", { name });
     K.lib.tags = made.tags;
     if (!K.lib.app_tags.includes(made.tag)) K.lib.app_tags = [...K.lib.app_tags, made.tag].sort(K.byName);
     return made.tag;
