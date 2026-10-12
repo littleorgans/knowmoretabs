@@ -1,7 +1,7 @@
-// The one screen in headless Chrome, on a running app: the real DOM, lit-html and the server's CSP.
-// usage: node browser.cjs <chrome> <profile dir> <app url> <case>
+// The one screen in headless Chrome, on a running app behind the Library shell: the real DOM, lit-html and the
+// shell's CSP. usage: node browser.cjs <chrome> <profile dir> <the page's url below /model/> <case>
 // Chrome speaks the DevTools protocol over a pipe (fds 3 and 4), so no port and no package is needed.
-// Any console error, page exception or CSP report fails the case.
+// Any console error, page exception or CSP report fails the case, as does a request anywhere but the shell's /model/.
 const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 
@@ -10,7 +10,7 @@ const [chrome, profile, url, name] = process.argv.slice(2);
 function launch() {
   const proc = spawn(chrome, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`, '--no-first-run',
     '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic', '--window-size=1280,900', 'about:blank'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
-  const waiting = new Map(), errors = [];
+  const waiting = new Map(), errors = [], requests = [];
   let id = 0, buffer = '', loaded = null;
   proc.stdio[4].on('data', (chunk) => {
     buffer += chunk;
@@ -23,6 +23,7 @@ function launch() {
         waiting.delete(msg.id);
         if (msg.error) reject(new Error(msg.error.message)); else resolve(msg.result);
       } else if (msg.method === 'Page.loadEventFired' && loaded) loaded();
+      else if (msg.method === 'Network.requestWillBeSent') requests.push(msg.params.request.url);
       else if (msg.method === 'Runtime.exceptionThrown') errors.push(msg.params.exceptionDetails.exception?.description || 'exception');
       else if (msg.method === 'Runtime.consoleAPICalled' && msg.params.type === 'error') errors.push(msg.params.args.map((a) => a.value).join(' '));
       else if (msg.method === 'Log.entryAdded' && msg.params.entry.level === 'error') {
@@ -35,7 +36,7 @@ function launch() {
     waiting.set(++id, { resolve, reject });
     proc.stdio[3].write(JSON.stringify({ id, method, params, sessionId }) + '\0');
   });
-  return { proc, send, errors, load: () => new Promise((resolve) => { loaded = resolve; }) };
+  return { proc, send, errors, requests, load: () => new Promise((resolve) => { loaded = resolve; }) };
 }
 
 /* ---- in the page: each case is a function run there, given helpers; it throws on a failed check ---- */
@@ -379,7 +380,7 @@ const cases = {
     window.releaseLibrary();
     const img = $('#a-tile .th img');
     await until(() => img && img.complete && img.naturalWidth > 0, 'the picture');
-    check(/^\/img\/[0-9a-f]{64}$/.test(new URL(img.src).pathname), 'addressed by page');
+    check(/^\/model\/img\/[0-9a-f]{64}$/.test(new URL(img.src).pathname), 'addressed by page, below the shell\'s /model/');
     $('#a-tag').value = 'Sleeper cars';
     $('#a-tag').dispatchEvent(new Event('input'));
     check($('#a-fold').getAttribute('aria-expanded') === 'true' && $('#a-rows .nil'), 'typing opens the fold: nothing matches');
@@ -643,11 +644,11 @@ const afterReload = {
 async function main() {
   const run = cases[name];
   assert.ok(run, `no case ${name}`);
-  const { proc, send, errors, load } = launch();
+  const { proc, send, errors, requests, load } = launch();
   try {
     const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
-    for (const domain of ['Page', 'Runtime', 'Log']) await send(`${domain}.enable`, {}, sessionId);
+    for (const domain of ['Page', 'Runtime', 'Log', 'Network']) await send(`${domain}.enable`, {}, sessionId);
     if (name.startsWith('startupForgetUndo') || name === 'startupTags') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
       window.startupUndoEarly = ${name.endsWith('Early')};
       const fetchNormally = window.fetch;
@@ -713,6 +714,12 @@ async function main() {
       if (restored.exceptionDetails) throw new Error(restored.exceptionDetails.exception?.description || restored.exceptionDetails.text);
     }
     assert.deepEqual(errors, [], `no console error, exception or CSP report: ${errors.join(' | ')}`);
+    const page = new URL(url), strays = requests.filter((at) => {
+      const to = new URL(at);
+      return to.origin !== page.origin || !(to.pathname.startsWith('/model/') || to.pathname === '/favicon.ico');
+    });
+    assert.ok(requests.length > 0, 'requests are seen');
+    assert.deepEqual(strays, [], `every request goes to the shell's /model/: ${strays.join(' | ')}`);
   } finally {
     proc.kill();
   }
