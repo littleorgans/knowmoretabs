@@ -26,9 +26,14 @@ just up
 ```
 
 `just up` first checks that the installed apps match this checkout; when they
-do not, it starts nothing and asks for `just install`. Run `just down` to stop
-both apps and remove their logs. `just up dev` runs from this checkout, with no
-install check; refresh the browser after editing frontend files. The
+do not, it starts nothing and asks for `just install`. It prints one address,
+the Library's: Tag and Add link sit in its nav, served by the Library from the
+Tagger, which answers only the Library. Each request and reply between them is
+proven with a key `just up` writes once to `<resolved root>/logs/session.key`
+(mode 0600) and passes both apps as a file. Run `just down` to stop both apps
+and remove their logs and the key. `just up dev` runs from this checkout, with
+no install check, and Add link and Send run its debug build; refresh the
+browser after editing frontend files. The
 Library uses port 41878 and Tagger 41879; override them with
 `just lib_port=42078 tagger_port=42079 up` (use the same overrides for `down`).
 Logs and pid files live under `<resolved root>/logs`. Startup waits up to
@@ -41,7 +46,8 @@ Both tools resolve the archive as `--root` > `KMT_ROOT` > `~/.knowmoretabs`
 resolves as `--data` > `KMT_TAGGER_DATA` > `<resolved root>/tagger`.
 Empty environment variables mean unset. To prepare vectors for the app,
 run `tagger embed --model eg2`; a `dataset/` directory is unnecessary.
-`tagger app --port 41879` runs from any folder. See [the tagger guide](lab/tagger/README.md)
+`tagger app --port 41879 --secret-file <key>` runs from any folder, for a
+Library given the same key. See [the tagger guide](lab/tagger/README.md)
 for preparing data and the experiment workflows.
 
 With a Rust toolchain (1.89 or newer), one command builds it from the
@@ -148,10 +154,12 @@ page you came from, its visits and its time on page. Select rows and forget them
 picks another port and `--open` opens your browser. A page `content` kept a
 preview image of shows it as a small thumbnail, served from your archive by
 `serve` itself; an export has no thumbnails. With `--model-port N`, which
-`just up` passes, search ranks by topic and page text through the tagger's
-model service on that port of `127.0.0.1`, over the same archive, and shows
-the best 50; while the service is stopped, loading or busy, search matches
-words as it does without it.
+`just up` passes with `--model-secret-file`, search ranks by topic and page
+text through the tagger's model service on that port of `127.0.0.1`, over the
+same archive, and shows the best 50; while the service is stopped, loading or
+busy, search matches words as it does without it. The same service's Tag and
+Add link are served below `/model/`, and say so when the service is not
+answering.
 
 Forgetting hides a page from the library. It never touches a snapshot: every
 page you forget is still in every snapshot it was ever in, and `restore`

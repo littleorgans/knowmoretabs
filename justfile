@@ -36,7 +36,7 @@ tagger *args:
 # Start both apps; `just up dev` runs from this checkout.
 up mode="": (_apps "up" mode lib_port tagger_port)
 
-# Stop apps started by up and remove their logs.
+# Stop apps started by up and remove their logs and key.
 down: (_apps "down" "" lib_port tagger_port)
 
 [private]
@@ -54,23 +54,32 @@ _apps action mode library_port tagging_port:
     # One archive for both apps, so the Library's search ranks over its own pages.
     root="${KMT_ROOT:-$HOME/.knowmoretabs}"
     logs="$root/logs"
+    # The launch's key: the Library proves each request to the Tagger with it, and the Tagger each reply. Made
+    # once, kept while it exists, removed by down (lab/tagger/tagger/app/service_auth.py).
+    key="$logs/session.key"
     status=0
     listeners() { lsof -nP -t -iTCP:"$1" -sTCP:LISTEN || [[ $? == 1 ]]; }
     live() { kill -0 "$1" 2>/dev/null; }
     # Build in the foreground so the startup wait below never covers compilation.
     [[ "$mode" != dev ]] || cargo build --locked
+    # Add link and Send run the knowmoretabs this launch serves the Library with: the one the receipt vouches
+    # for, or this checkout's debug build.
+    [[ "$mode" != dev ]] || kmt="${CARGO_TARGET_DIR:-$PWD/target}/debug/knowmoretabs"
+    [[ "$action" != up ]] || python3 -I lab/tagger/tagger/app/service_auth.py ensure "$key"
     # Separate process groups let down stop uv and the app's worker processes together.
     set -m
     for i in 0 1; do
         port="${ports[$i]}"
         if [[ "$i" == 0 ]]; then
             app=library; ours='* serve --port *'
-            command=("$kmt" --root "$root" serve --port "$port" --model-port "${ports[1]}")
-            [[ "$mode" != dev ]] || command=(cargo run --locked -- --root "$root" serve --port "$port" --model-port "${ports[1]}")
+            args=(--root "$root" serve --port "$port" --model-port "${ports[1]}" --model-secret-file "$key")
+            command=("$kmt" "${args[@]}")
+            [[ "$mode" != dev ]] || command=(cargo run --locked -- "${args[@]}")
         else
             app=tagger; ours='*tagger app --port *'
-            command=("$tagger" app --port "$port" --root "$root")
-            [[ "$mode" != dev ]] || command=(uv run --locked --project lab/tagger tagger app --port "$port" --root "$root")
+            args=(app --port "$port" --root "$root" --secret-file "$key" --kmt-bin "$kmt")
+            command=("$tagger" "${args[@]}")
+            [[ "$mode" != dev ]] || command=(uv run --locked --project lab/tagger tagger "${args[@]}")
         fi
         file="$logs/$app.pid"; log="$logs/$app.log"
         pid=""; [[ ! -f "$file" ]] || pid="$(cat "$file")"
@@ -125,9 +134,11 @@ _apps action mode library_port tagging_port:
         fi
     done
     if [[ "$action" == up ]]; then
+        # One address: the Library serves Tag and Add link too.
         echo "Library: http://127.0.0.1:${ports[0]}/"
-        echo "Tagger: http://127.0.0.1:${ports[1]}/"
-    elif [[ -d "$logs" ]]; then
-        rmdir "$logs" 2>/dev/null || true
+    else
+        # Both apps are stopped, so the key goes; a failed stop keeps it for the app still running.
+        [[ "$status" != 0 ]] || rm -f -- "$key"
+        [[ ! -d "$logs" ]] || rmdir "$logs" 2>/dev/null || true
     fi
     exit "$status"

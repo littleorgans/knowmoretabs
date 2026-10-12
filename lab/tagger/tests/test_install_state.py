@@ -95,6 +95,7 @@ class Site:
         (self.checkout / "scripts").mkdir()
         shutil.copy(REPO / "justfile", self.checkout)
         shutil.copy(REPO / "scripts/installation.py", self.checkout / "scripts")
+        shutil.copy(REPO / "lab/tagger/tagger/app/service_auth.py", self.checkout / "lab/tagger/tagger/app")
         home, tools, self.root, self.calls = base / "home", base / "tools", base / "root", base / "calls"
         executable(tools / "python3", f'#!/bin/sh\nexec "{os.path.realpath(sys.executable)}" "$@"\n')
         executable(tools / "cargo", CARGO)
@@ -156,13 +157,15 @@ def test_current_install_launches_the_pair_it_names(site):
     assert site.install().returncode == 0
     up = site.just("up")
     assert up.returncode == 0, up.stdout + up.stderr
+    key, kmt = site.root / "logs/session.key", f"{site.cargo_bin}/knowmoretabs"
     assert site.launches() == [
-        f"{site.cargo_bin}/knowmoretabs --root {site.root} serve --port {site.ports[0]} --model-port {site.ports[1]}",
-        f"{site.local_bin}/tagger app --port {site.ports[1]} --root {site.root}",
+        f"{kmt} --root {site.root} serve --port {site.ports[0]} --model-port {site.ports[1]} --model-secret-file {key}",
+        f"{site.local_bin}/tagger app --port {site.ports[1]} --root {site.root} --secret-file {key} --kmt-bin {kmt}",
     ]
     receipt = json.loads(site.receipt.read_text())
-    assert receipt["knowmoretabs"]["path"] == f"{site.cargo_bin}/knowmoretabs"
+    assert receipt["knowmoretabs"]["path"] == kmt
     assert site.just("down").returncode == 0
+    assert not key.exists()
 
 
 @pytest.mark.parametrize(
@@ -286,4 +289,27 @@ def test_dev_mode_needs_no_install(site):
     calls = site.calls.read_text()
     assert "cargo build --locked\n" in calls
     assert "cargo run --locked -- " in calls and "uv run --locked --project lab/tagger tagger app " in calls
+    assert f" --kmt-bin {site.checkout}/target/debug/knowmoretabs" in calls, "Add link and Send run the dev build"
     assert len(site.launches()) == 2
+
+
+def test_the_launch_key_is_made_once_kept_while_it_exists_and_removed_by_down(site):
+    assert site.install().returncode == 0
+    key = site.root / "logs/session.key"
+    first = site.just("up")
+    assert first.returncode == 0, first.stdout + first.stderr
+    made = key.read_bytes()
+    assert (len(made), oct(key.stat().st_mode & 0o777)) == (65, "0o600")
+    assert first.stdout.count("http://") == 1 and f"Library: http://127.0.0.1:{site.ports[0]}/" in first.stdout
+    assert made.strip().decode() not in first.stdout + first.stderr + site.calls.read_text()
+    assert site.just("up").returncode == 0
+    assert key.read_bytes() == made, "a running pair keeps its key"
+    assert site.just("down").returncode == 0
+    assert not key.exists() and not key.parent.exists()
+    key.parent.mkdir(parents=True)
+    key.write_bytes(made)
+    key.chmod(0o644)
+    site.calls.unlink()
+    refused = site.just("up")
+    assert refused.returncode != 0 and "just down" in refused.stderr
+    assert site.launches() == [], "nothing starts on an unsafe key"
