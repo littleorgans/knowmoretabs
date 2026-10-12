@@ -578,7 +578,7 @@ async function addLibraryWrites() {
 }
 
 /* a link the library keeps under a cleaned key: the tile shows the key, and the action names it, its picks with it */
-async function addFollowUpNamesTheKey() {
+async function addFollowUpNamesTheKey(background = false) {
   const f = addFixture(), { K, node } = f, url = 'https://added.example/one/#top', key = 'https://added.example/one';
   f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
   const listed = { library: ev('library', 'done', { value: 'added', url: key }) };
@@ -591,8 +591,29 @@ async function addFollowUpNamesTheKey() {
   node('a-act').click();
   const retry = await f.next('/api/add');
   assert.deepEqual(retry.body, { url: key, action: 'index' }, 'the action names the key');
+  K.add.render();
+  assert.equal(f.look('Trains'), 'pend', 'the pick stays held while the follow up reply is delayed');
+  f.click('Coffee');
+  assert.equal(f.look('Coffee'), 'pend', 'another pick during the follow up waits with the first');
+  if (background) { f.type('https://added.example/next'); f.submit(); }
   retry.resolve(f.job(2, key, done('indexed'), { action: 'index', finished: true, page: addPage(7, key) }));
-  assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'the link\'s picks follow the key');
+  for (let i = 0; i < 4; i++) await turn();
+  assert.equal(K.has(7, 'Trains'), true, 'the follow up writes its picks even when another link is now drawn');
+  assert.deepEqual((await f.applied(7, ['Trains', 'Coffee'])).map((b) => b.tag), ['Trains', 'Coffee'], 'the link\'s picks follow the key');
+  await f.reply('/api/library', { ...K.lib });
+  if (background) return;
+  f.type(url); f.submit();
+  await f.reply('/api/add', f.job(3, url, {
+    ...done('indexed'), ...listed, content: ev('content', 'done', { status: 'not_found', http_status: 404 }),
+  }, { key, finished: true, page: addPage(7, key) }));
+  await f.reply('/api/library', { ...K.lib });
+  assert.equal(node('a-act').textContent, 'Remove');
+  node('a-act').click();
+  const remove = await f.next('/api/add');
+  assert.deepEqual(remove.body, { url: key, action: 'forget' }, 'Remove names the key too');
+  remove.resolve(f.job(4, key, { library: ev('library', 'done', { value: 'forgotten' }) }, { action: 'forget', finished: true }));
+  await f.reply('/api/library', { ...K.lib });
+  assert.equal(K.gone.has(7), true, 'Remove hides the indexed row when the link and key differ');
 }
 
-run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey });
+run({ addLibraryWrites, addStates, addRequests, addSignedInStages, panelLetters, panelRecent, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour, addSuggested, addFollowUpNamesTheKey, addFollowUpPicksBackground: () => addFollowUpNamesTheKey(true) });

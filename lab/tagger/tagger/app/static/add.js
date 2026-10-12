@@ -107,13 +107,18 @@
   const web = (s) => { try { return ["http:", "https:"].includes(new URL(s).protocol); } catch { return false; } };
 
   /* a job polls while drawn, and after that while it is its link's newest and picks wait for its row */
-  async function start(url, ask = { action: "add" }) {
+  async function start(url, ask = { action: "add" }, link = url) {
     const mine = ++asked;
     latest.set(url, mine);
     try {
       let j = await K.api("/api/add", { url, ...ask });
       for (;;) {
         if (latest.get(url) !== mine) return;   // a reply already in flight may belong to a superseded job
+        if (link !== url && held.has(link)) {   // the first reply moves picks, including ones made while it waited
+          held.set(url, new Set([...(held.get(url) || []), ...held.get(link)]));
+          held.delete(link);
+        }
+        link = url;   // a background follow up owns its picks too, even when it is never shown
         const drawn = mine === asked;
         if (drawn && (j.action !== "forget" || j.finished)) show(j);   // a Remove shows its outcome only
         track(j, drawn);
@@ -277,13 +282,9 @@
     K.$("a-go").disabled = false;
     submit();
   });
-  K.$("a-act").addEventListener("click", () => {   // a follow up names the page's key; picks held for the link go with it
+  K.$("a-act").addEventListener("click", () => {   // a follow up names the page's key
     if (!job || !offer) return;
-    if (job.key !== job.url && held.has(job.url)) {
-      held.set(job.key, new Set([...(held.get(job.key) || []), ...held.get(job.url)]));
-      held.delete(job.url);
-    }
-    start(job.key, offer);
+    start(job.key, offer, job.url);
   });
   K.$("a-tile").addEventListener("click", (e) => {
     if (K.opens(e)) return;

@@ -82,6 +82,7 @@ CASES = {
         "addPicksDetour",
         "addSuggested",
         "addFollowUpNamesTheKey",
+        "addFollowUpPicksBackground",
     ],
 }
 
