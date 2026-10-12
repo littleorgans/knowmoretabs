@@ -70,6 +70,8 @@ CASES = {
         "addPicksBackground",
         "addPicksOutcomes",
         "addFilterEnter",
+        "addPicksAddress",
+        "addPicksBeforeReply",
     ],
 }
 

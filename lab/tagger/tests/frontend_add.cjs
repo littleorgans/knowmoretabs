@@ -398,4 +398,34 @@ async function addFilterEnter() {
   assert.equal(requests.filter((r) => r.route === '/api/tags').length, 0);
 }
 
-run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter });
+/* Draft picks belong to one address, including while the initial Add reply is delayed. */
+async function addPicksAddress() {
+  const f = addFixture(), { K, node } = f;
+  const one = 'https://added.example/one', two = 'https://added.example/two';
+  f.type(one); node('a-fold').click(); f.click('Trains');
+  f.type(two); node('a-fold').click();
+  assert.equal(f.look('Trains'), 'off', 'editing to another address drops the old draft picks');
+  f.click('Coffee'); f.submit();
+  await f.reply('/api/add', f.job(1, two, done('indexed'), { finished: true, page: addPage(8, two) }));
+  assert.deepEqual((await f.applied(8, ['Coffee'])).map((b) => b.tag), ['Coffee']);
+  await f.reply('/api/library', { ...K.lib });
+  assert.equal(K.has(8, 'Trains'), false, 'the other address never inherits the old picks');
+}
+
+async function addPicksBeforeReply() {
+  const f = addFixture(), { K, node } = f, url = 'https://added.example/delayed';
+  f.type(url); node('a-fold').click(); f.submit();
+  const add = await f.next('/api/add');
+  f.click('Trains');
+  assert.equal(f.look('Trains'), 'pend', 'a pick while Add is waiting stays visible');
+  f.type('https://added.example/next');
+  add.resolve(f.job(1, url, STAGES.added));
+  for (let i = 0; i < 4; i++) await turn();
+  await f.reply('/api/add/1', f.job(1, url, done('indexed'), { finished: true, page: addPage(7, url) }));
+  assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'the submitted address keeps the pick');
+  await f.reply('/api/library', { ...K.lib });
+  node('a-fold').click();
+  assert.equal(f.look('Trains'), 'off', 'the next draft does not inherit it');
+}
+
+run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply });

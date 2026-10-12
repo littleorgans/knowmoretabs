@@ -179,7 +179,7 @@
     if (held.has(t.url)) held.get(t.url).delete(tag);
     if (held.has(t.url) && !held.get(t.url).size) held.delete(t.url);
     if (!on) {
-      if (t.draft) draft.add(tag);
+      if (t.draft && latest.get(t.url) !== asked) draft.add(tag);
       else held.set(t.url, (held.get(t.url) || new Set()).add(tag));
     }
     draw();
@@ -255,7 +255,7 @@
   K.$("a-form").addEventListener("submit", (e) => { e.preventDefault(); submit(); });
   box.addEventListener("input", () => {   // a web address shows the panel at once
     K.$("a-go").disabled = !box.value.trim();
-    if (!box.value.trim()) draft.clear();
+    if (box.value.trim() !== shown) draft.clear();   // a draft's picks belong to its exact address
     draw();
   });
   box.addEventListener("paste", (e) => {   // a web address pasted into the empty box starts at once
