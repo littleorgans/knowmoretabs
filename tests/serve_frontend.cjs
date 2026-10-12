@@ -182,6 +182,18 @@ test('only the newest reply orders the list', async () => {
   assert.deepEqual(lib.shown(), ['Page 3', 'Page 2', 'Page 1', 'Page 0']);
 });
 
+test('the same query asked again keeps its order while the model answers', async () => {
+  const pages = Array.from({ length: 4 }, (_, i) => page(i));
+  const lib = searchable(pages);
+  lib.type('night');
+  lib.settle();
+  await lib.answer(0, { keys: urls(pages).reverse() });
+  lib.type('night ');
+  lib.run('render();');
+  assert.deepEqual(lib.shown(), ['Page 3', 'Page 2', 'Page 1', 'Page 0']);
+  assert.equal(lib.run('S.sort'), 'relevance');
+});
+
 test('a burst of typing asks once', () => {
   const lib = searchable([page(0)]);
   for (const q of ['n', 'ni', 'nig', 'nigh', 'night']) lib.type(q);

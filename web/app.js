@@ -528,11 +528,7 @@ const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(
 // in an export, the list is today's keyword search at once; the next query
 // asks again. Facets never ask: they reorder what the last reply ranked.
 let asked = 0, askTimer = 0;
-function cancelAsk() {
-  clearTimeout(askTimer);
-  S.rank = null;
-  return ++asked;
-}
+function cancelAsk() { clearTimeout(askTimer); return ++asked; }
 function ask() {
   const n = cancelAsk(), q = S.q.trim();
   if (!q || !host.rank) return schedule();
