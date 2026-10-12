@@ -72,6 +72,7 @@ CASES = {
         "addFilterEnter",
         "addPicksAddress",
         "addPicksBeforeReply",
+        "addPicksStalePoll",
     ],
 }
 

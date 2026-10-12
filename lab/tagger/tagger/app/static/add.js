@@ -105,6 +105,7 @@
     try {
       let j = await K.api("/api/add", { url, ...ask });
       for (;;) {
+        if (latest.get(url) !== mine) return;   // a reply already in flight may belong to a superseded job
         const drawn = mine === asked;
         if (drawn && (j.action !== "forget" || j.finished)) show(j);   // a Remove shows its outcome only
         track(j, drawn);
