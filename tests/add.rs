@@ -35,7 +35,7 @@ fn json_streams_the_library_stage_and_ends_with_done() {
         lines(&output),
         [
             json!({"stage": "library", "state": "running"}),
-            json!({"stage": "library", "state": "done", "value": "added"}),
+            json!({"stage": "library", "state": "done", "value": "added", "url": A}),
             json!({"stage": "done", "state": "done", "url": A, "value": "added",
                 "content": null, "image": null}),
         ]
@@ -51,6 +51,55 @@ fn json_streams_the_library_stage_and_ends_with_done() {
     let output = fx.run(&["--json", "content", "--url", A, "--dry-run", "--no-browser"]);
     assert_success(&output);
     assert_eq!(fingerprint(&fx.root.join("snapshots")), before);
+}
+
+#[test]
+fn json_names_the_cleaned_key() {
+    let fx = Fixture::new();
+    let asked = "http://a.test/one/?utm_source=n#top";
+    let output = fx.run(&["add", asked, "--no-content", "--json"]);
+    assert_success(&output);
+    let lines = lines(&output);
+    assert_eq!(lines[1]["url"], A);
+    assert_eq!(lines.last().unwrap()["url"], A);
+    let intake = intake(&fx);
+    assert_eq!(intake.len(), 1);
+    assert_eq!(intake[0]["url"], A);
+
+    let output = fx.run(&["add", asked, "--no-content"]);
+    assert_success(&output);
+    assert_eq!(
+        stdout(&output),
+        format!("already in your library: {A}; nothing changed\n")
+    );
+}
+
+#[test]
+fn content_is_kept_under_the_cleaned_key() {
+    use sha2::{Digest, Sha256};
+
+    let fx = Fixture::new();
+    let site = Site::start(|_, path, _| match path {
+        "/one" => Reply::html(article("One note")),
+        _ => Reply::status(404),
+    });
+    let output = add(
+        &fx,
+        &site,
+        &["http://a.test/one/?utm_source=n#top", "--json"],
+    );
+    assert_success(&output);
+    assert_eq!(lines(&output).last().unwrap()["content"], "ok");
+    assert_eq!(site.paths(), ["a.test/one"], "the key is what is read");
+    let pages = fx.root.join("pages");
+    let log = std::fs::read_to_string(pages.join("content.jsonl")).unwrap();
+    let urls: Vec<Value> = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap()["url"].clone())
+        .collect();
+    assert_eq!(urls, [A]);
+    let file = format!("{:x}.md", Sha256::digest(A.as_bytes()));
+    assert!(pages.join("content").join(file).is_file());
 }
 
 #[test]
@@ -94,7 +143,7 @@ fn json_follows_the_text_and_the_image_and_titles_the_page() {
         lines(&output),
         [
             json!({"stage": "library", "state": "running"}),
-            json!({"stage": "library", "state": "done", "value": "added"}),
+            json!({"stage": "library", "state": "done", "value": "added", "url": A}),
             json!({"stage": "content", "state": "running", "tier": "web"}),
             json!({"stage": "content", "state": "done", "status": "ok", "tier": "web",
                 "http_status": 200, "title": "One note"}),
@@ -117,7 +166,7 @@ fn json_follows_the_text_and_the_image_and_titles_the_page() {
     assert_eq!(
         lines(&output)[1..],
         [
-            json!({"stage": "library", "state": "done", "value": "known"}),
+            json!({"stage": "library", "state": "done", "value": "known", "url": A}),
             json!({"stage": "content", "state": "done", "status": "ok", "tier": "web",
                 "http_status": 200, "title": "One note"}),
             json!({"stage": "image", "state": "running"}),
