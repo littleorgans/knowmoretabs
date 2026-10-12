@@ -3,7 +3,8 @@ change and writes nothing; a send creates the app's names first, leaves every li
 tags (none for a page the app never tagged), dismisses the app's "no" where the library is undecided, forgets the
 app's forgotten pages and leaves the library's own forgotten, skips pages the library lacks, and a resend after a
 partial failure converges. A failed call stops the send with the error on screen; a snapshot root is never
-written."""
+written. `RealSendTests` runs them against the real knowmoretabs named by KMT_BIN, each on its own scratch root,
+except those that make the fake fail a call."""
 
 import json
 import errno
@@ -12,6 +13,7 @@ import shlex
 import subprocess
 import sys
 import threading
+import unittest
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +25,26 @@ from test_add import Served, fake_binary
 from tagger.app import send
 from tagger.app.store import Store
 from tagger.archive import Archive
+
+
+def fake_only(test):
+    """A test that makes the fake knowmoretabs fail a call (`FAKE_KMT_FAIL`), which the real one cannot."""
+    test.fake_only = True
+    return test
+
+
+def logged(folder: Path, binary: str) -> str:
+    """`binary` behind a script that logs each argument list to `FAKE_KMT_LOG`, as the fake does."""
+    path = folder / "knowmoretabs-logged"
+    path.write_text(
+        f"#!{sys.executable}\nimport json, os, sys\n"
+        "if log := os.environ.get('FAKE_KMT_LOG'):\n"
+        "    with open(log, 'a') as f:\n"
+        "        f.write(json.dumps({'argv': sys.argv[1:]}) + '\\n')\n"
+        f"os.execv({binary!r}, [{binary!r}, *sys.argv[1:]])\n"
+    )
+    path.chmod(0o700)
+    return str(path)
 
 
 class SendTests(Served):
@@ -283,6 +305,7 @@ class SendTests(Served):
         self.assertEqual(([], {"kept_forgotten": 1}), (again["commands"], self.counts(again)))
         self.assert_mirrored()
 
+    @fake_only
     def test_a_failed_create_stops_the_send_and_a_resend_converges(self):
         self.settle()
         self.no(self.rows[:1], "Sleeper cars")
@@ -347,6 +370,7 @@ class SendTests(Served):
         self.assertTrue(self.post("/api/send")["ok"])
         self.assert_mirrored()
 
+    @fake_only
     def test_a_failed_first_call_leaves_the_library_unchanged_and_the_error_on_screen(self):
         self.tag(self.rows[:2], "Trains")
         before = (self.root / "library.json").read_bytes()
@@ -484,3 +508,12 @@ class SendTests(Served):
         self.assertNotIn("sent", Store(store.root).state)
         self.app.store = Store(store.root)
         self.assertEqual(1, self.post("/api/send/preview")["tags_on"])
+
+
+@unittest.skipUnless(os.environ.get("KMT_BIN"), "KMT_BIN names no knowmoretabs build")
+class RealSendTests(SendTests):
+    def setUp(self):
+        if getattr(getattr(self, self._testMethodName), "fake_only", False):
+            self.skipTest("makes the fake knowmoretabs fail a call")
+        super().setUp()
+        self.app.binary = logged(self.work, os.environ["KMT_BIN"])
