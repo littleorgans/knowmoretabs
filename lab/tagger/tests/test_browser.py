@@ -216,7 +216,8 @@ class SendBrowserTests(Browser, Synthetic):
     def test_send_dialog_applies_once_and_remains_dismissible(self):
         self.app.tag({"name": "Browser send"})
         self.run_case("sendFlow")
-        tagged = [key for key, tags in Archive.load(self.root).owner_tags.items() if "Browser send" in tags]
+        archive = Archive.load(self.root)
+        tagged = [key for key in archive.known if "Browser send" in archive.state.tags(key)]
         self.assertEqual(list(self.app.store.app_tags()), tagged)
 
     def test_send_refreshes_the_view_after_a_forget_reports_failure(self):

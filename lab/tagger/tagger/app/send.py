@@ -107,32 +107,32 @@ def plan(store, forgotten: list[str], archive: Archive) -> Plan:
         if not d["value"]:
             no.setdefault(key, set()).add(tag.lower())
     pages = [
-        (key, {t.lower(): t for t in app_tags.get(key, ())}, {n.lower(): n for n in archive.tag_adds.get(key, ())})
+        (key, {t.lower(): t for t in app_tags.get(key, ())}, {n.lower(): n for n in archive.state.adds.get(key, ())})
         for key in archive.known
     ]
     for key, want, has in pages:
-        for folded in sorted(want.keys() - (has.keys() & archive.active.keys())):
+        for folded in sorted(want.keys() - (has.keys() & archive.state.active.keys())):
             p.on.setdefault(want[folded], []).append(key)
-    after = archive.active.keys() | {tag.lower() for tag in p.on}  # names shown once the adds ran
+    after = archive.state.active.keys() | {tag.lower() for tag in p.on}  # names shown once the adds ran
     for key, want, has in pages:
         for folded in sorted((has.keys() & after) - want.keys()):
             p.off.setdefault(has[folded], []).append(key)
             if key not in decided:
                 p.never.setdefault(has[folded], []).append(key)
-        p.cleared += bool(has.keys() & archive.active.keys() and not want)
-        dismissed = {n.lower() for n in archive.tag_removes.get(key, ())}
+        p.cleared += bool(has.keys() & archive.state.active.keys() and not want)
+        dismissed = {n.lower() for n in archive.state.removes.get(key, ())}
         for folded in sorted(no.get(key, set()) - want.keys() - has.keys() - dismissed):
             p.dismiss.setdefault(named[folded], []).append(key)
     adding = {tag.lower() for tag in p.on}
     for folded, tag in sorted(named.items()):
-        if folded not in archive.active:
-            if folded not in archive.retired:
+        if folded not in archive.state.active:
+            if folded not in archive.state.retired:
                 p.new.append(tag)
             elif folded in adding:
                 p.revived.append(tag)
     gone = set(forgotten)
-    p.forget = [key for key in forgotten if key in known and key not in archive.forgotten]
-    p.kept_forgotten = len(archive.forgotten - gone)
+    p.forget = [key for key in forgotten if key in known and key not in archive.state.forgotten]
+    p.kept_forgotten = len(archive.state.forgotten - gone)
     p.missing = len(({key for key, _ in decisions} | gone) - known)
     return p
 

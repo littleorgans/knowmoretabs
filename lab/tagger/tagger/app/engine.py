@@ -19,7 +19,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from .. import dataset
-from ..archive import Archive
+from ..archive import Archive, LibraryState
 from ..embed import CHAR_CAP, MAX_TOKENS, MODELS, page_texts, persist_text, persist_images
 from ..vector_store import VectorStore
 from ..guided.search_tag import Rules, fit_rules
@@ -59,8 +59,7 @@ class Library:
     threshold: np.ndarray
     spread: np.ndarray  # per tag SD of S over the library
     root: Path  # the archive the records point into
-    used: dict  # folded active tag -> its last use the archive records, epoch seconds (`Archive.used`)
-    retired: set  # folded names the archive holds retired
+    state: LibraryState  # the decisions the records' tags, labels and visibility follow (`Archive.state`)
     paths: Paths  # durable document stores
     embed_image: Callable | None  # lazy image encoder, shared by startup and sync
     dim: int
@@ -113,13 +112,12 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
     start = time.perf_counter()
     archive = Archive.load(root)
     legacy, records = dataset.app_records(paths, archive)
-    order = {n: i for i, n in enumerate(archive.active.values())}
-    counts = {n: 0 for n in order}
-    for tags in archive.owner_tags.values():
-        for t in tags:
+    counts = {n: 0 for n in archive.state.active.values()}
+    for r in records:
+        for t in r["tags"]:
             counts[t] += 1
     tags = sorted(counts, key=lambda n: (-counts[n], n.lower()))
-    Y = np.array([[t in archive.owner_tags.get(r["key"], ()) for t in tags] for r in records], np.int8)
+    Y = np.array([[t in r["tags"] for t in tags] for r in records], np.int8)
     input_name = next((name for name in TEXT_INPUTS if VectorStore(paths.emb / MODEL, name).exists), TEXT_INPUTS[0])
     X, image, has_image, vector_counts = _vectors(
         paths,
@@ -167,8 +165,7 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
         threshold=threshold,
         spread=_spread(S),
         root=root,
-        used=archive.used,
-        retired=archive.retired,
+        state=archive.state,
         paths=paths,
         embed_image=embed_image,
         dim=dim,
@@ -235,8 +232,8 @@ def add_tags(lib: Library, names: list[str], encode: Encode) -> Library:
 def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Library:
     """Refresh and persist the given known pages, preserving all other keyed cache rows; tag uses and retirements
     as the archive holds them."""
-    if (lib.used, lib.retired) != (archive.used, archive.retired):
-        lib = replace(lib, used=archive.used, retired=archive.retired)
+    if lib.state != archive.state:
+        lib = replace(lib, state=archive.state)
     known = set(archive.known)
     urls = [url for url in dict.fromkeys(urls) if url in known]
     if not urls:

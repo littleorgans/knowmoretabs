@@ -108,8 +108,8 @@ class App:
         held = {t for tags in self.store.app_tags().values() for t in tags}
         names = sorted(held | set(self.store.tags()), key=str.lower)
         direct = self.store.used()
-        when = {t: max(direct.get(t, 0), self.lib.used.get(t.lower(), 0)) for t in names}
-        recent = [t for t in names if when[t] and t.lower() not in self.lib.retired]
+        when = {t: max(direct.get(t, 0), self.lib.state.used.get(t.lower(), 0)) for t in names}
+        recent = [t for t in names if when[t] and t.lower() not in self.lib.state.retired]
         return {"app_tags": names, "recent": sorted(recent, key=lambda t: -when[t])}
 
     def library(self) -> dict:

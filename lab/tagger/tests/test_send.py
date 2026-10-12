@@ -124,8 +124,8 @@ class SendTests(Served):
         app_tags = self.app.store.app_tags()
         for key in archive.known:
             fold = lambda tags: sorted(t.lower() for t in tags)  # noqa: E731
-            self.assertEqual(fold(app_tags.get(key, [])), fold(archive.owner_tags.get(key, [])), "tags differ")
-        self.assertLessEqual(set(self.app.forgotten.keys) & set(archive.known), archive.forgotten)
+            self.assertEqual(fold(app_tags.get(key, [])), fold(archive.state.tags(key)), "tags differ")
+        self.assertLessEqual(set(self.app.forgotten.keys) & set(archive.known), archive.state.forgotten)
         self.assertFalse(self.post("/api/send/preview")["ready"])
 
     def test_the_preview_counts_the_mirror_and_writes_nothing(self):
@@ -169,10 +169,11 @@ class SendTests(Served):
         self.assertEqual(runs, len(self.runs()))
 
     def test_a_library_with_its_own_tags_ends_equal_to_the_app(self):
-        tagged = [self.lib.rows[k] for k in sorted(self.start.owner_tags) if k not in self.start.forgotten][:4]
-        names = [self.start.owner_tags[self.lib.records[r]["key"]][0] for r in tagged]
+        owned = [k for k in self.start.known if self.start.state.tags(k) and k not in self.start.state.forgotten]
+        tagged = [self.lib.rows[k] for k in owned][:4]
+        names = [self.start.state.tags(self.lib.records[r]["key"])[0] for r in tagged]
         self.tag(tagged[:1], names[0].upper())  # the library's tag, typed in another case: no change
-        self.tag(tagged[1:2], next(n for n in self.start.active.values() if n != names[1]))  # another known name
+        self.tag(tagged[1:2], next(n for n in self.start.state.active.values() if n != names[1]))  # another known name
         self.tag(tagged[2:3], "Sleeper cars")  # a new name
         self.tag(tagged[3:4], names[3], False)  # off here: the page ends with none
         self.post("/api/forget", {"rows": tagged[:1], "value": True})
@@ -217,7 +218,7 @@ class SendTests(Served):
         self.assert_mirrored()
 
     def test_a_page_forgotten_only_in_the_library_stays_forgotten(self):
-        kept = next(iter(self.start.forgotten))
+        kept = next(iter(self.start.state.forgotten))
         self.settle()
         self.assertFalse(self.app.live()[self.lib.rows[kept]], "the library's own forgotten page stays hidden")
         self.kmt("forget", "--", self.keys[1])  # in the Library only, as its view and Add link's Remove forget

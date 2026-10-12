@@ -289,10 +289,10 @@ class RecentTests(Synthetic):
 
     def test_a_sync_takes_the_uses_and_retirements_the_archive_holds_now(self):
         lib, _ = self.load()
-        self.assertEqual(({}, set()), (lib.used, lib.retired))
+        self.assertEqual(({}, set()), (lib.state.used, set(lib.state.retired)))
         self.vocabulary(Coffee=self.at(3000), Rust={"retired_at": "2026-10-08T00:00:00Z"})
         lib = engine.sync(lib, Archive.load(self.root), [], fake_embed)
-        self.assertEqual(({"coffee": 3000.0}, {"rust"}), (lib.used, lib.retired))
+        self.assertEqual(({"coffee": 3000.0}, {"rust"}), (lib.state.used, set(lib.state.retired)))
 
 
 class PortTests(unittest.TestCase):

@@ -94,6 +94,21 @@ def write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value, indent=1) + "\n")
 
 
+def write_state(root: Path, state: dict) -> None:
+    """`library.json` replaced as knowmoretabs replaces it: staged beside it, then renamed over it."""
+    part = root / "library.json.part"
+    part.write_text(json.dumps(state, indent=1) + "\n")
+    part.replace(root / "library.json")
+
+
+def edit_state(root: Path, change) -> dict:
+    """`library.json` read, changed in place by `change(state)` and replaced whole; the new state."""
+    state = json.loads((root / "library.json").read_text())
+    change(state)
+    write_state(root, state)
+    return state
+
+
 def jsonl(path: Path, rows: list[dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("".join(json.dumps(r) + "\n" for r in rows))
@@ -215,8 +230,8 @@ def build(root: Path, data: Path | None = None) -> list[dict]:
             "tabs": tabs,
         },
     )
-    write_json(
-        root / "library.json",
+    write_state(
+        root,
         {
             "schema_version": 1,
             "forgotten": forgotten,
