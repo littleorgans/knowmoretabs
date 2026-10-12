@@ -7,8 +7,8 @@ check:
     cargo fmt --all -- --check
     python3 scripts/clippy.py
     cargo run --locked --package xtask -- slices --check
-    uv run --locked --project lab/tagger ruff check lab/tagger scripts/clippy.py
-    uv run --locked --project lab/tagger ruff format --check lab/tagger scripts/clippy.py
+    uv run --locked --project lab/tagger ruff check lab/tagger scripts
+    uv run --locked --project lab/tagger ruff format --check lab/tagger scripts
     @echo 'Python type checker: none configured'
 
 test:
@@ -19,11 +19,16 @@ test:
 install:
     #!/usr/bin/env sh
     set -eu
-    cargo install --path . --locked
+    before="$(python3 -I scripts/installation.py begin)"
+    # Make the destination explicit so the receipt can verify PATH reaches this install.
+    install_root="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}"
+    cargo install --path . --locked --root "$install_root"
     constraints="$(mktemp)"
     trap 'rm -f -- "$constraints"' EXIT
     uv export --locked --project lab/tagger --no-dev --no-emit-project --no-hashes --output-file "$constraints" > /dev/null
     uv tool install --force --constraints "$constraints" ./lab/tagger
+    # The receipt `just up` checks; only a complete install writes one.
+    python3 -I scripts/installation.py record --before "$before" --installed-kmt "$install_root/bin/knowmoretabs" --kmt "$(command -v knowmoretabs)" --tagger "$(command -v tagger)"
 
 tagger *args:
     uv run --locked --project lab/tagger tagger app "$@"
@@ -40,6 +45,12 @@ _apps action mode library_port tagging_port:
     set -euo pipefail
     action="$1"; mode="$2"; ports=("$3" "$4")
     [[ "$mode" == "" || "$mode" == dev ]] || { echo 'usage: just up [dev]' >&2; exit 1; }
+    kmt=knowmoretabs; tagger=tagger
+    if [[ "$action" == up && "$mode" == "" ]]; then
+        # Launch exactly the pair the install receipt vouches for, before anything else happens.
+        kmt="$(command -v knowmoretabs || true)"; tagger="$(command -v tagger || true)"
+        python3 -I scripts/installation.py check --kmt "$kmt" --tagger "$tagger" || exit 1
+    fi
     # One archive for both apps, so the Library's search ranks over its own pages.
     root="${KMT_ROOT:-$HOME/.knowmoretabs}"
     logs="$root/logs"
@@ -54,11 +65,11 @@ _apps action mode library_port tagging_port:
         port="${ports[$i]}"
         if [[ "$i" == 0 ]]; then
             app=library; ours='* serve --port *'
-            command=(knowmoretabs --root "$root" serve --port "$port" --model-port "${ports[1]}")
+            command=("$kmt" --root "$root" serve --port "$port" --model-port "${ports[1]}")
             [[ "$mode" != dev ]] || command=(cargo run --locked -- --root "$root" serve --port "$port" --model-port "${ports[1]}")
         else
             app=tagger; ours='*tagger app --port *'
-            command=(tagger app --port "$port" --root "$root")
+            command=("$tagger" app --port "$port" --root "$root")
             [[ "$mode" != dev ]] || command=(uv run --locked --project lab/tagger tagger app --port "$port" --root "$root")
         fi
         file="$logs/$app.pid"; log="$logs/$app.log"

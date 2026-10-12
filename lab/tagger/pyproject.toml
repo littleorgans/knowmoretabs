@@ -35,4 +35,5 @@ select = ["F", "E9", "B"]
 [dependency-groups]
 dev = [
     "pytest==9.1.1",
+    "rust-just==1.58.0",
 ]
