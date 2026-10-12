@@ -620,6 +620,56 @@ async function tagPageUndo() {
   assert.deepEqual(plain(K.pages.get(1).tags), ['A']);
 }
 
+/* A background flush's partial failure still settles its page after another page starts writing. */
+async function tagPageOverlap() {
+  const { K, requests } = await screenFixture();
+  const first = K.tagPage(1, ['B', 'C']);
+  const later = K.tagPage(2, ['D']);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 1, app_tags: ['A', 'B'] });
+  await turn(); await turn();
+  requests.shift().reject(new Error('synthetic C failure'));
+  await first;
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the failed tag clears on the older page');
+  assert.match(K.toasted, /Added “B” .*Not added: C/);
+  const undo = K.undo;
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 2, tags: ['D'] }], batch: 2, app_tags: ['A', 'B', 'D'] });
+  await later;
+  const removed = K.untagSelection('B', [1]);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A'] }], batch: 3, app_tags: ['A', 'B', 'D'] });
+  await removed;
+  const replaced = K.tagSelection('B', [1]);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 4, app_tags: ['A', 'B', 'D'] });
+  await replaced;
+  const undone = undo();
+  assert.equal(K.has(1, 'B'), true, 'Undo preserves the later replacement while waiting for its reply');
+  await turn();
+  assert.deepEqual(requests[0].body, { batch: 1 }, 'Undo names only the older successful batch');
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], app_tags: ['A', 'B', 'D'] });
+  await undone;
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the server keeps the later batch on the same tag');
+  assert.deepEqual(plain(K.pages.get(2).tags), ['D'], 'the later page keeps its write');
+}
+
+async function tagPageSiblingFailure() {
+  const { K, requests } = await screenFixture();
+  const first = K.tagPage(1, ['B', 'C']);
+  const later = K.tagSelection('D', [1]);
+  await turn();
+  requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 1, app_tags: ['A', 'B'] });
+  await turn(); await turn();
+  requests.shift().reject(new Error('synthetic C failure'));
+  await first;
+  assert.equal(K.has(1, 'D'), true, 'the first reply keeps the later optimistic pick');
+  await turn();
+  requests.shift().reject(new Error('synthetic D failure'));
+  await later;
+  assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'both failed tags clear, including the older change');
+}
+
 /* Forget: out of the grid, the selection, the pins and every count at once; Undo puts it back as it was */
 async function forgetAndUndo() {
   const { K, node, requests, click, key, settle, press, shown } = await screenFixture('app.js');
@@ -1166,4 +1216,4 @@ async function startupListsKeepChanges() {
   }
 }
 
-run({ tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });
+run({ tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });

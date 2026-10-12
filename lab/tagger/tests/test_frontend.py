@@ -39,6 +39,8 @@ CASES = {
         "chipActsOnSelection",
         "bulkUndo",
         "tagPageUndo",
+        "tagPageOverlap",
+        "tagPageSiblingFailure",
         "forgetAndUndo",
         "forgetUndoOrder",
         "forgetThenNext",
