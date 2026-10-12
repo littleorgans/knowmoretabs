@@ -51,11 +51,12 @@ function setup(...files) {
     history, scrollY: 0, setTimeout, clearTimeout, console, performance, URL,
   });
   context.scrollTo = (x, y) => { context.scrollY = y; };
+  let coreFail;
   for (const file of ['core.js', ...files]) {   // the real open helpers, everything else mocked
     vm.runInContext(fs.readFileSync(path.join(__dirname, '../tagger/app/static', file), 'utf8'), context);
-    if (file === 'core.js') Object.assign(K, mocks);
+    if (file === 'core.js') { coreFail = K.fail; Object.assign(K, mocks); }
   }
-  return { K, node, history, context, keys };
+  return { K, node, history, context, keys, coreFail };
 }
 const turn = () => new Promise((resolve) => setImmediate(resolve));
 const plain = (value) => JSON.parse(JSON.stringify(value)); // objects made inside the scripts' realm

@@ -601,6 +601,7 @@ async function tagPageUndo() {
   assert.deepEqual(seen, [['/api/undo', { batch: 1 }], ['/api/undo', { batch: 2 }]], 'and the server retracts every batch');
   assert.deepEqual(plain(K.pages.get(1).tags), ['A'], 'and its replies agree');
   seen.length = 0; toasts = 0;
+  const failure = K.failure;
   K.tagPage(1, ['B', 'C']);
   await turn();
   requests.shift().resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], changed: 1, batch: 3, app_tags: ['A', 'B'] });
@@ -608,7 +609,7 @@ async function tagPageUndo() {
   requests.shift().reject(new Error('name pages, one of your tags, and true or false'));
   await turn(); await turn();
   assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'the failed tag goes back, the written one stays');
-  assert.match(K.failure.message, /one of your tags/);
+  assert.equal(K.failure, failure, 'the result toast reports the failed tag');
   assert.equal(toasts, 1, 'one toast for what was written');
   assert.equal(K.toasted, 'Added “B” to “Page 1”. Not added: C');
   seen.length = 0;
@@ -668,6 +669,28 @@ async function tagPageSiblingFailure() {
   requests.shift().reject(new Error('synthetic D failure'));
   await later;
   assert.deepEqual(plain(K.pages.get(1).tags), ['A', 'B'], 'both failed tags clear, including the older change');
+}
+
+/* Use core's real error reporter: a partial flush presents its result in one toast. */
+async function tagPagePartialToast() {
+  const { K, coreFail } = setup('pages.js');
+  K.fail = coreFail;
+  K.title = (p) => p.title;
+  K.know([page(1, ['A'])]);
+  const toasts = [];
+  K.toast = (msg, undo) => toasts.push({ msg, undo });
+  K.api = (route, body) => body.tag === 'B'
+    ? Promise.resolve({ pages: [{ row: 1, tags: ['A', 'B'] }], batch: 1, app_tags: ['A', 'B'] })
+    : Promise.reject(new Error('synthetic C failure'));
+  await K.tagPage(1, ['B', 'C']);
+  assert.equal(toasts.length, 1, 'one result toast, including the partial failure');
+  assert.equal(toasts[0].msg, 'Added “B” to “Page 1”. Not added: C');
+  assert.equal(typeof toasts[0].undo, 'function');
+  toasts.length = 0;
+  await K.tagPage(1, ['C']);
+  assert.equal(toasts.length, 1, 'a fully failed change still reports the error');
+  assert.match(toasts[0].msg, /synthetic C failure/);
+  assert.equal(toasts[0].undo, undefined, 'no Undo for a failed write');
 }
 
 /* Forget: out of the grid, the selection, the pins and every count at once; Undo puts it back as it was */
@@ -1216,4 +1239,4 @@ async function startupListsKeepChanges() {
   }
 }
 
-run({ tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });
+run({ tagPagePartialToast, tagPageOverlap, tagPageSiblingFailure, tagPageUndo, startupEdits, startupForgetAndUndo, startupTagsKeepChanges, startupListsKeepChanges, forgetUndoAfterNavigation, startupDuringPage, chipActsOnSelection, bulkUndo, forgetAndUndo, forgetUndoOrder, forgetThenNext, pinView, backDuringPage, likeWaitsForTag, pages, restorePage, likeBackToPage, escapeFromTextInputs, likeNaming, keysBesideCheckbox, select, untagAndOpenDoNotSelect, likeToggle, newTagApplies, newTagKeyboardFocus, newTag, newTagExisting, newTagCancelAndRefusal, openControl, openSearch, openReview, openNoDrag, search, restore, exactQuery, searchAfterCut, pickAfterCut, exclude, cut, pickIncluded, flips, switchedSet, acceptAfterFlip, confirmAllPending, sendWait, sendPreview, sendNothing, sendRestore, sendUncertain, sendResult });

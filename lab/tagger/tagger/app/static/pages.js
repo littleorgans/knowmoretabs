@@ -112,7 +112,7 @@
       K.lib.app_tags = out.app_tags;
       K.changed();
       return out;
-    }, (err) => { onError(rows.filter(current)); K.fail(err); K.changed(); });
+    }, (err) => { onError(rows.filter(current), err); K.changed(); });
   }
   /* each of `tags` on (or off) `rows` at once, then written in order; a failed write puts back its tag only.
      `say(done)` reads the toast for the tags written */
@@ -120,12 +120,17 @@
     const mine = ++tagging;
     for (const tag of tags) set(rows, tag, value, mine);
     K.changed();
-    const sent = tags.map((tag) => settle("/api/apply", { rows, tag, value }, rows, tag, mine, (current) => set(current, tag, !value)));
+    let failure;
+    const sent = tags.map((tag) => settle("/api/apply", { rows, tag, value }, rows, tag, mine, (current, err) => {
+      set(current, tag, !value);
+      failure ||= err;
+    }));
     return Promise.all(sent).then((outs) => {
       const done = tags.filter((_, i) => outs[i]), lost = tags.filter((_, i) => !outs[i]).map(K.short);
       const batches = tags.map((tag, i) => [tag, outs[i] && outs[i].batch]).filter(([, batch]) => batch);
       if (done.length) K.toast(say(done) + (lost.length ? `. Not ${value ? "added" : "removed"}: ${lost.join(", ")}` : ""),
         batches.length ? () => undo(batches, rows, value, mine) : null);
+      else K.fail(failure);
     });
   }
   /* `batches`: [tag, batch] for each write to retract */
@@ -136,8 +141,9 @@
       set([r], tag, changing.get(r).get(tag) === was ? !value : K.has(r, tag), mine);
     }
     K.changed();
-    return Promise.all(batches.map(([tag, batch]) => settle("/api/undo", { batch }, rows, tag, mine, (current) => {
+    return Promise.all(batches.map(([tag, batch]) => settle("/api/undo", { batch }, rows, tag, mine, (current, err) => {
       for (const r of current) set([r], tag, before.get(r).has(tag));
+      K.fail(err);
     })));
   }
   const nothing = (msg) => { K.toast(msg); return Promise.resolve(); };

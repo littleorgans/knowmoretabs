@@ -41,6 +41,7 @@ CASES = {
         "tagPageUndo",
         "tagPageOverlap",
         "tagPageSiblingFailure",
+        "tagPagePartialToast",
         "forgetAndUndo",
         "forgetUndoOrder",
         "forgetThenNext",
