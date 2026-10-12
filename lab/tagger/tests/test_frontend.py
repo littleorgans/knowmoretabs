@@ -76,7 +76,7 @@ CASES = {
         "addPicksAddress",
         "addPicksBeforeReply",
         "addPicksStalePoll",
-        "addPicksMoveOn",
+        "addPicksDetour",
     ],
 }
 

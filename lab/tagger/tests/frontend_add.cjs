@@ -446,21 +446,22 @@ async function addPicksStalePoll() {
   assert.deepEqual(f.applies(), []);
 }
 
-/* Moving to another draft leaves no Retry action for a finished unindexed page. */
-async function addPicksMoveOn() {
+/* A finished unindexed page keeps its picks while the box holds another link: emptying it brings back Retry, which writes them */
+async function addPicksDetour() {
   const f = addFixture(), { K, node } = f, url = 'https://added.example/unindexed';
   f.type(url); node('a-fold').click(); f.click('Trains'); f.submit();
   await f.reply('/api/add', f.job(1, url, STAGES.added));
   await f.reply('/api/add/1', f.job(1, url, done('not_indexed'), { finished: true }));
   await f.reply('/api/library', { ...K.lib });
-  assert.equal(f.look('Trains'), 'pend');
-  f.type('https://added.example/next');
-  assert.match(K.toasted, /not added: the page is not indexed/, 'moving on reports the dropped picks immediately');
+  f.type('https://a');
+  assert.equal(K.toasted, undefined, 'a link being typed drops nothing');
+  f.type('');
   node('a-fold').click();
-  assert.equal(f.look('Trains'), 'off', 'the new draft starts with no picks');
-  f.type(url); node('a-fold').click();
-  assert.equal(f.look('Trains'), 'off', 'returning to the old address does not revive dropped picks');
-  assert.deepEqual(f.applies(), [], 'dropping a pending pick sends no write');
+  assert.equal(f.look('Trains'), 'pend', 'back on the page, its picks wait');
+  assert.equal(node('a-act').textContent, 'Retry');
+  node('a-act').click();
+  await f.reply('/api/add', f.job(2, url, done('indexed'), { action: 'index', finished: true, page: addPage(7, url) }));
+  assert.deepEqual((await f.applied(7, ['Trains'])).map((b) => b.tag), ['Trains'], 'its Retry writes them');
 }
 
-run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksMoveOn });
+run({ addStates, addRequests, addSignedInStages, panelLetters, addPicksHeld, addPicksBackground, addPicksOutcomes, addFilterEnter, addPicksAddress, addPicksBeforeReply, addPicksStalePoll, addPicksDetour });

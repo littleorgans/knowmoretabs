@@ -203,7 +203,6 @@
   }
   function draw() {
     const t = target(), s = t && !t.draft ? say(job) : null, lib = job && job.stages.library;
-    if (job && job.finished && t.url !== job.url) track(job, false);   // its Retry left the panel with its target
     K.$("a-stages").hidden = !t;
     K.$("a-stages").classList.toggle("draft", !s);   // a link not yet added keeps the bar's room, empty
     (s ? s.segs : SEGS.map(() => ["", ""])).forEach(([value, look], i) => {
