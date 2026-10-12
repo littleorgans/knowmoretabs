@@ -52,7 +52,12 @@ echo "cargo $*" >> "$CALLS"
 case "$1" in
 install)
     [ -z "${RACE:-}" ] || echo '// edited mid install' >> src/main.rs
-    mkdir -p "$CARGO_HOME/bin" && cp "$FAKE_APP" "$CARGO_HOME/bin/knowmoretabs" ;;
+    root="${CARGO_INSTALL_ROOT:-$CARGO_HOME}"
+    while [ "$#" -gt 0 ]; do
+        if [ "$1" = --root ]; then shift; root="$1"; fi
+        shift
+    done
+    mkdir -p "$root/bin" && cp "$FAKE_APP" "$root/bin/knowmoretabs" ;;
 run) while [ "$1" != -- ]; do shift; done; shift; exec "$FAKE_APP" "$@" ;;
 esac
 """
@@ -219,6 +224,25 @@ def test_other_binary_first_on_path_refuses(site):
     shadow.mkdir()
     shutil.copy(site.cargo_bin / "knowmoretabs", shadow)
     site.refused(site.just("up", PATH=f"{shadow}{os.pathsep}{site.env['PATH']}"))
+
+
+@pytest.mark.parametrize("custom_root", [False, True])
+def test_install_with_shadowed_cargo_binary_writes_no_receipt(site, custom_root):
+    assert site.install().returncode == 0
+    if custom_root:
+        root = site.checkout.parent / "cargo-install"
+        site.env["CARGO_INSTALL_ROOT"] = str(root)
+        site.cargo_bin = root / "bin"
+        site.env["PATH"] = f"{site.cargo_bin}{os.pathsep}{site.env['PATH']}"
+    shadow = site.checkout.parent / "shadow"
+    old = executable(shadow / "knowmoretabs", APP + "# old installed payload\n")
+    site.env["PATH"] = f"{shadow}{os.pathsep}{site.env['PATH']}"
+    install = site.install()
+    assert install.returncode != 0
+    assert "PATH selects a different knowmoretabs" in install.stderr
+    assert (site.cargo_bin / "knowmoretabs").read_bytes() != old.read_bytes()
+    assert not site.receipt.exists()
+    site.refused(site.just("up"))
 
 
 def test_missing_app_refuses(site):

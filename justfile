@@ -20,13 +20,15 @@ install:
     #!/usr/bin/env sh
     set -eu
     before="$(python3 -I scripts/installation.py begin)"
-    cargo install --path . --locked
+    # Make the destination explicit so the receipt can verify PATH reaches this install.
+    install_root="${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}"
+    cargo install --path . --locked --root "$install_root"
     constraints="$(mktemp)"
     trap 'rm -f -- "$constraints"' EXIT
     uv export --locked --project lab/tagger --no-dev --no-emit-project --no-hashes --output-file "$constraints" > /dev/null
     uv tool install --force --constraints "$constraints" ./lab/tagger
     # The receipt `just up` checks; only a complete install writes one.
-    python3 -I scripts/installation.py record --before "$before" --kmt "$(command -v knowmoretabs)" --tagger "$(command -v tagger)"
+    python3 -I scripts/installation.py record --before "$before" --installed-kmt "$install_root/bin/knowmoretabs" --kmt "$(command -v knowmoretabs)" --tagger "$(command -v tagger)"
 
 tagger *args:
     uv run --locked --project lab/tagger tagger app "$@"

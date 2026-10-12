@@ -105,8 +105,13 @@ def begin() -> dict[str, str]:
     return inputs()
 
 
-def record(kmt: str, tagger: str, before: dict) -> None:
+def record(kmt: str, tagger: str, before: dict, installed_kmt: str) -> None:
     current = receipt(kmt, tagger)
+    if not Path(kmt).samefile(installed_kmt):
+        raise Refused(
+            "PATH selects a different knowmoretabs than cargo just installed; "
+            "put the cargo install bin directory first on PATH, then run `just install`"
+        )
     if current["inputs"] != before:
         raise Refused("sources changed during the install; run it again")
     path = location()
@@ -147,6 +152,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     record_, check_ = commands.add_parser("record"), commands.add_parser("check")
     record_.add_argument("--before", required=True, help="what begin printed")
+    record_.add_argument(
+        "--installed-kmt", required=True, help="the binary cargo just installed"
+    )
     for command in (record_, check_):
         command.add_argument(
             "--kmt", required=True, help="knowmoretabs as found on PATH"
@@ -157,7 +165,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "begin":
             print(json.dumps(begin()))
         elif args.command == "record":
-            record(args.kmt, args.tagger, json.loads(args.before))
+            record(args.kmt, args.tagger, json.loads(args.before), args.installed_kmt)
         else:
             check(args.kmt, args.tagger)
     except Refused as refused:
