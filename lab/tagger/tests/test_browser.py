@@ -138,10 +138,13 @@ class AddBrowserTests(Browser, Synthetic):
             self.app.tag({"name": name})
         self.app.tag({"name": "An invented tag name cut in its cell"})
         self.app.tag({"name": "3D printing"})
+        for name in ("Night trains", "Sleeper cabins", "Timetables"):  # the fake page's night train: the model's picks
+            self.app.tag({"name": name})
         measured = json.loads(self.run_case("addStable", "#add"))
         print("addStable", json.dumps(measured))
+        self.assertEqual(["Sleeper cabins", "Timetables"], measured["suggested"], "best first, less the pick")
         tags = self.app.store.app_tags()["https://added.example/notes/stable"]
-        self.assertIn(measured["tag"], tags, "the pick reached the server")
+        self.assertEqual([measured["tag"], "Timetables"], tags, "the pick and the suggestion reached the server")
 
     def test_a_deep_link_fills_the_box_and_waits_for_enter(self):
         runs = self.logged()

@@ -418,33 +418,48 @@ const cases = {
     if ($('#a-fold')) $('#a-fold').click();
     const cells = [...document.querySelectorAll('#add-screen [data-tag]')];
     check(cells.length >= 10, `the tag cells are there before Add (${cells.length})`);
+    const parts = [...document.querySelectorAll('#a-panel > *')], held = [...cells, ...parts];   // the rows, labels, filter and fold too
     const box = (el) => { const r = el.getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; };
-    const first = cells.map(box);
-    const drift = () => Math.max(...cells.map((el, i) => (el.isConnected ? Math.max(...box(el).map((v, j) => Math.abs(v - first[i][j]))) : Infinity)));
-    const seen = {}, out = { cells: cells.length, frames: 0, max: 0, columns: new Set(first.map(([x]) => Math.round(x))).size };
+    const first = held.map(box);
+    const drift = () => Math.max(...held.map((el, i) => (el.isConnected ? Math.max(...box(el).map((v, j) => Math.abs(v - first[i][j]))) : Infinity)));
+    const seen = {}, out = { cells: cells.length, frames: 0, max: 0, early: 0, columns: new Set(first.slice(0, cells.length).map(([x]) => Math.round(x))).size };
+    const suggested = () => [...document.querySelectorAll('#a-sugg [data-tag]')];
     let sampling = true;
     const frame = () => {
       out.frames++;
       out.max = Math.max(out.max, drift());
       const at = ['library', 'content', 'image', 'search'].map(seg).join(' | ');
       seen[at] = (seen[at] || 0) + 1;
+      if (seg('search') !== 'Indexed' && suggested().length) out.early++;
       if (sampling) requestAnimationFrame(frame);
     };
     requestAnimationFrame(frame);
     $('#a-form').requestSubmit();
     await until(() => $('#a-content').dataset.k === 'run', 'Content running');
-    const tag = cells[1].dataset.tag;
-    (cells[1].matches('button') ? cells[1] : cells[1].querySelector('button')).click();
+    const tag = 'Night trains', cellOf = (t) => cells.find((el) => el.dataset.tag === t);
+    cellOf(tag).click();   // the model would suggest it too: picked, it is left out of Suggested
     await until(() => seg('search') === 'Indexed', 'Indexed');
+    await until(() => suggested().length, 'the suggestions');
+    out.suggested = suggested().map((el) => el.dataset.tag);
     await until(() => $(`#a-tile [data-untag="${tag}"]`), 'the pick on the tile');
+    const chip = suggested().find((el) => el.dataset.tag === 'Timetables');
+    check(chip, `Timetables suggested: ${out.suggested.join(', ')}`);
+    chip.click();
+    await until(() => $('#a-tile [data-untag="Timetables"]'), 'the suggestion on the tile');
     await K.writes;
+    const looks = [chip, cellOf('Timetables')].map((el) => el.dataset.k);
+    check(chip.isConnected && looks.join() === 'on,on', `the chip and its cell read alike: ${looks}`);
     for (let i = 0; i < 10; i++) await new Promise((r) => requestAnimationFrame(r));
     sampling = false;
     K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: K.lib.app_tags.slice(0, 6), recent: K.lib.app_tags.slice(6, 12) });
     out.filled = drift();
+    const line = $('#a-sugg'), edge = line.getBoundingClientRect();
+    out.fits = [suggested().length, getComputedStyle(line).gridTemplateColumns.split(' ').length];
+    check(out.fits[0] === out.fits[1] && suggested().every((el) => el.getBoundingClientRect().right <= edge.right + 0.5),
+      `Suggested holds as many as its line shows: ${out.fits}`);
     out.phases = Object.keys(seen);
     K.changed();
-    check(out.max <= 0.5 && out.filled <= 0.5, `cells moved: ${JSON.stringify(out)}`);
+    check(out.max <= 0.5 && out.filled <= 0.5 && !out.early, `cells moved, or Suggested filled before Indexed: ${JSON.stringify(out)}`);
     check(['Adding', 'Added', 'Web', 'Ok · Web', 'Fetching', 'Indexed'].every((v) => out.phases.some((p) => p.includes(v))), `every stage sampled: ${out.phases.join(' / ')}`);
     return { ...out, tag };
   },
