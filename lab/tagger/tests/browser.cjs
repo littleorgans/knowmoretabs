@@ -93,13 +93,13 @@ const cases = {
     await K.ready;
     await search('night train');
     const before = K.lib.pages;
-    await K.api('/api/forget', { rows: [Number(tiles()[0].dataset.row)], value: true }); // as another tab would
+    await K.api('api/forget', { rows: [Number(tiles()[0].dataset.row)], value: true }); // as another tab would
     $('#send-btn').click();
     await until(() => $('#send').open && !$('#send-go').hidden, 'send preview ready');
     $('#send-go').click();
     await until(() => $('#send-close').textContent === 'Done', 'partial send finished');
     check($('#send-body').textContent.startsWith('Stopped.'), 'uncertain forget reports failure');
-    const library = await K.api('/api/library');
+    const library = await K.api('api/library');
     check(library.pages < before, 'the forget is not yet shown here');
     check(K.lib.pages === library.pages, 'failed send refreshes the browser library count');
     check(K.views.view().total === library.pages, 'failed send refreshes the search count');
@@ -117,7 +117,7 @@ const cases = {
     await until(() => $('#send-close').textContent === 'Done', 'send finished');
     check($('#send-body').textContent.startsWith('Sent.'), 'send succeeded');
     check($('#send-go').hidden, 'completed send cannot be submitted twice');
-    const library = await K.api('/api/library');
+    const library = await K.api('api/library');
     check(K.lib.pages === library.pages, 'send keeps the browser library count');
     check(K.views.view().total === library.pages, 'send keeps the search count');
     $('#send-close').click();
@@ -178,7 +178,7 @@ const cases = {
     await page('#next', 50);
     $('#toast-undo').click();
     await until(() => Number(pos().match(/of (\d+)/)?.[1]) === all, 'Undo updates page two count');
-    const expected = await window.KMT.api('/api/search', { query: 'night train', offset: 49, n: 50 });
+    const expected = await window.KMT.api('api/search', { query: 'night train', offset: 49, n: 50 });
     check(tiles().map((t) => Number(t.dataset.row)).join() === expected.hits.map((p) => p.row).join(), 'Undo refreshes page two to the real ranking');
   },
   newSearch: async ({ $, pos, check, search, page }) => {
@@ -531,7 +531,7 @@ const cases = {
     $('#a-act').click();
     await until(() => seg('library') === 'Already in library' && seg('search') === 'Indexed', 'restored');
     check(!$('#a-result').hidden && $('#a-act').textContent === 'Remove', 'the tile is back');
-    const actual = await window.KMT.api('/api/library');
+    const actual = await window.KMT.api('api/library');
     await until(() => window.KMT.lib.pages === actual.pages, 'the library count after Restore');
     await add('https://added.example/timeout');
     await until(() => seg('search') === 'Indexed', 'timed out');
@@ -653,12 +653,12 @@ async function main() {
       const fetchNormally = window.fetch;
       window.fetch = async (...args) => {
         const response = await fetchNormally(...args);
-        if (!args[1]?.method && ['/api/selection', '/api/pins'].includes(args[0])) {
+        if (!args[1]?.method && ['api/selection', 'api/pins'].includes(args[0])) {
           const read = response.json.bind(response);
           response.json = async () => {
             const out = await read();
-            if (args[0] === '/api/selection') window.startupSaved = out.pages.map((p) => p.row);
-            await new Promise((resolve) => { window[args[0] === '/api/selection' ? 'releaseSelection' : 'releasePins'] = resolve; });
+            if (args[0] === 'api/selection') window.startupSaved = out.pages.map((p) => p.row);
+            await new Promise((resolve) => { window[args[0] === 'api/selection' ? 'releaseSelection' : 'releasePins'] = resolve; });
             return out;
           };
         }
@@ -668,7 +668,7 @@ async function main() {
     if (name === 'addFlow') await send('Page.addScriptToEvaluateOnNewDocument', { source: `
       const fetchNormally = window.fetch;
       window.fetch = async (...args) => {
-        if (window.holdLibrary && args[0] === '/api/library' && !args[1]?.method) {
+        if (window.holdLibrary && args[0] === 'api/library' && !args[1]?.method) {
           window.holdLibrary = false;
           await new Promise((resolve) => { window.releaseLibrary = resolve; });
         }
@@ -679,14 +679,14 @@ async function main() {
       const fetchNormally = window.fetch;
       window.searchRequests = 0;
       window.fetch = async (...args) => {
-        if (args[0] === '/api/search') {
+        if (args[0] === 'api/search') {
           window.searchRequests++;
           if (JSON.parse(args[1].body).offset === 50) {
             window.nextWaiting = true;
             await new Promise((resolve) => { window.releaseNext = resolve; });
           }
         }
-        if (args[0] === '/api/pins') {
+        if (args[0] === 'api/pins') {
           window.pinsWaiting = true;
           await new Promise((resolve) => { window.releasePins = resolve; });
           const response = await fetchNormally(...args);

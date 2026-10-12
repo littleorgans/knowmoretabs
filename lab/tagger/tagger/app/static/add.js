@@ -112,7 +112,7 @@
     latest.set(url, mine);
     latest.set(link, mine);   // a follow up supersedes the link's job too: that job's late poll drops none of its picks
     try {
-      let j = await K.api("/api/add", { url, ...ask });
+      let j = await K.api("api/add", { url, ...ask });
       for (;;) {
         if (latest.get(url) !== mine) return;   // a reply already in flight may belong to a superseded job
         if (link !== url && held.has(link)) {   // the first reply moves picks, including ones made while it waited
@@ -127,7 +127,7 @@
         if (j.finished) return settle(j);
         await pause(POLL);
         if (mine !== asked && !(latest.get(url) === mine && held.has(url))) return;
-        j = await K.api(`/api/add/${j.id}`);
+        j = await K.api(`api/add/${j.id}`);
       }
     } catch (err) { if (mine === asked) K.fail(err); }
   }

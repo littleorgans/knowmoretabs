@@ -27,7 +27,7 @@
   function put(p, body, s = set()) {
     const next = K.review.pending.then(async () => {
       const i = s.pages.findIndex((x) => x.index === p.index);
-      const saved = await K.api(`/api/sessions/${s.id}/pages/${p.index}`, typeof body === "function" ? body(s.pages[i]) : body);
+      const saved = await K.api(`api/sessions/${s.id}/pages/${p.index}`, typeof body === "function" ? body(s.pages[i]) : body);
       s.pages[i] = saved;
       return saved;
     });
@@ -79,7 +79,7 @@
   function swipeCard(p) {
     const near = p.sugg.filter((s) => Math.abs(s.p - 0.5) < 0.15).length;
     const kick = p.status === "skipped" ? "Skipped before · back for a decision" : near ? `<b>${near} of ${p.sugg.length}</b> near a coin toss` : "The model leans one way";
-    const shot = p.image ? `<div class="shot"><img src="/img/${p.image}" alt=""></div>`
+    const shot = p.image ? `<div class="shot"><img src="img/${p.image}" alt=""></div>`
                          : `<div class="shot none" aria-label="No image captured"><b aria-hidden="true">${K.esc((p.host[0] || "?").toUpperCase())}</b><span>No image captured</span></div>`;
     return `<div class="page">${K.open(p)}${shot}<div class="cbody"><p class="kick">${kick}</p>` +
       `<h2 class="ptitle">${p.title ? K.esc(p.title) : "<i>Untitled page</i>"}</h2><p class="host">${K.esc(p.host)}</p>` +
@@ -189,7 +189,7 @@
     left: () => (set() ? decidable().filter(open).length : 0),
     async load(id) {
       if (set() && set().id === id) return;
-      K.set = await K.api(`/api/sessions/${id}`);
+      K.set = await K.api(`api/sessions/${id}`);
       front = null;
     },
     mode(m) { K.state.mode = m; K.save(); K.changed(); },

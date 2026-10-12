@@ -44,7 +44,7 @@
     if (!tag) {
       fresh.busy = true;
       try {
-        const out = await K.api("/api/tags", { name });
+        const out = await K.api("api/tags", { name });
         K.lib.tags = out.tags;
         tag = out.tag;
       } catch (err) {
@@ -66,7 +66,7 @@
     try {
       await K.search.pending;
       if (!K.results || !K.search.included().length) { K.pick.render(); return; }
-      const set = await K.api("/api/sessions", { query: S.query, images: S.images, rows: K.search.included().map((h) => h.row), picked: S.picked });
+      const set = await K.api("api/sessions", { query: S.query, images: S.images, rows: K.search.included().map((h) => h.row), picked: S.picked });
       K.set = set;
       K.state.session = set.id;
       K.save();

@@ -32,18 +32,36 @@
   K.results = null;
   K.set = null;
 
+  /* every path is relative: the Library serves this page and its API below its own /model/ */
   K.api = async (path, body) => {
-    const r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    let r;
+    try {
+      r = await fetch(path, body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    } catch (err) { if (err.name === "TypeError") K.outage(); throw err; }   // fetch's network failure
+    if (OUTAGE.includes(r.status)) K.outage();
     const out = await r.json();
     if (!r.ok) throw new Error(out.error || `HTTP ${r.status}`);
     return out;
   };
-  K.fail = (err) => K.toast(`Something went wrong: ${err.message}`);
+  K.fail = (err) => { if (!K.down) K.toast(`Something went wrong: ${err.message}`); };   // the outage line says it once
+
+  /* ---- the service stopped answering (the Library answers 502, 503 or 504 for it, or is gone itself): one line
+     says so for good, both screens and Send stop taking actions, and only Reload goes on. Nothing is retried or
+     queued; what was in flight may have been done ---- */
+  const OUTAGE = [502, 503, 504];
+  K.down = false;
+  K.outage = () => {
+    if (K.down) return;
+    K.down = true;
+    K.$("outage").hidden = false;
+    K.$("tag-screen").inert = K.$("add-screen").inert = true;
+    K.$("send-btn").disabled = true;
+  };
 
   /* ---- a page's picture: the captured image, or the host's initial; `inner` goes on top ---- */
   K.thumb = (p, cls, inner = "") => {
     const initial = K.esc((p.host.replace(/^www\./, "")[0] || "?").toUpperCase());
-    return p.image ? `<div class="${cls}"><img src="/img/${p.image}" alt="" loading="lazy" decoding="async">${inner}</div>`
+    return p.image ? `<div class="${cls}"><img src="img/${p.image}" alt="" loading="lazy" decoding="async">${inner}</div>`
                    : `<div class="${cls} none" aria-label="No image captured"><b aria-hidden="true">${initial}</b>${inner}</div>`;
   };
   K.own = (p) => (p.own.length ? p.own.map((t) => `<li class="tag">${K.esc(t)}</li>`).join("") : `<li class="none">None yet</li>`);

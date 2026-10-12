@@ -82,8 +82,8 @@
     try {
       await K.writes;  // rankings and tags must include decisions queued before this page was requested
       if (mine !== asked[v.kind]) return false;
-      const out = await (v.kind === "like" ? K.api("/api/like", { tag: v.tag, ...at })
-                                           : K.api("/api/search", { query: S.query, untagged: S.untagged, ...at }));
+      const out = await (v.kind === "like" ? K.api("api/like", { tag: v.tag, ...at })
+                                           : K.api("api/search", { query: S.query, untagged: S.untagged, ...at }));
       if (mine !== asked[v.kind]) return false;
       Object.assign(v, { rows: K.know(out.hits), offset: out.offset, total: out.total, tags: new Set() });
       if (v.kind === "search") { S.offset = v.offset; K.save(); }
