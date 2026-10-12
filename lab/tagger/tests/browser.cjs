@@ -9,7 +9,7 @@ const [chrome, profile, url, name] = process.argv.slice(2);
 
 function launch() {
   const proc = spawn(chrome, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`, '--no-first-run',
-    '--no-default-browser-check', '--window-size=1280,900', 'about:blank'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
+    '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic', '--window-size=1280,900', 'about:blank'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'] });
   const waiting = new Map(), errors = [];
   let id = 0, buffer = '', loaded = null;
   proc.stdio[4].on('data', (chunk) => {
@@ -232,11 +232,11 @@ const cases = {
     await until(() => pos().startsWith('1 to '), 'Back to page one');
     check(scrollY === 1000, 'Back restores where the reading stopped');
   },
-  reloadScroll: async ({ search, page, check }) => {
+  reloadScroll: async ({ search, page, until, check }) => {
     await search('night train');
     await page('#next', 51);
     scrollTo(0, 900);
-    await new Promise((r) => setTimeout(r, 300));
+    await until(() => history.state?.search.scroll === 900, 'the saved scroll before reload');
     check(scrollY === 900, 'scroll before reload');
   },
   /* a selection or tag update reuses the tile's node, its picture and its focus */
@@ -609,9 +609,9 @@ const cases = {
 
 /* the checks a case makes once the page has reloaded */
 const afterReload = {
-  reloadScroll: async ({ pos, until, check }) => {
+  reloadScroll: async ({ pos, until }) => {
     await until(() => pos().startsWith('51 to '), 'the saved page after reload');
-    check(scrollY === 900, 'reload restores the saved scroll');
+    await until(() => scrollY === 900, 'reload restores the saved scroll');
   },
   forgetPin: async ({ $, tileOf, pos, until, check }) => {
     const { row, pinned, all } = JSON.parse(sessionStorage.getItem('p9'));

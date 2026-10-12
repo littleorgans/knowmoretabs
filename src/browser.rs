@@ -424,6 +424,7 @@ fn flags(profile: &Path, relay: u16) -> Vec<OsString> {
         "--no-first-run".into(),
         "--no-default-browser-check".into(),
         "--use-mock-keychain".into(),
+        "--password-store=basic".into(),
         "--disable-background-networking".into(),
         format!("--proxy-server=socks5://127.0.0.1:{relay}").into(),
         "--proxy-bypass-list=<-loopback>".into(),
