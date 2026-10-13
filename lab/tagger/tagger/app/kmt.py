@@ -11,6 +11,7 @@ BINARY = "knowmoretabs"
 # Keys `add --file` mints for local documents (`src/source_key.rs`)
 SOURCES = ("kmt-git:", "kmt-blob:")
 READ_TIMEOUT = 60  # seconds each document's text may take: a git read and a PDF parse
+READ_BATCH_SIZE = 256  # Keep a large document library below the process argument limit.
 
 
 def snapshot(app) -> bool:
@@ -34,11 +35,16 @@ def read_argv(binary: str, root, key: str) -> list[str] | None:
 
 def read(argvs: list[list[str]]) -> list[str]:
     """The text `read` prints for each `read_argv`, or "" where it gives none: a refused key, no binary, a timeout.
-    One `--json read` per binary and archive answers all their keys. Never shown; only embedded."""
+    One `--json read` per binary and archive answers each bounded batch of keys. Never shown; only embedded."""
     batches: dict[tuple[str, ...], list[str]] = {}
     for argv in argvs:
         batches.setdefault(tuple(argv[:-2]), []).append(argv[-1])
-    texts = {(head, key): text for head, keys in batches.items() for key, text in _read(list(head), keys).items()}
+    texts = {
+        (head, key): text
+        for head, keys in batches.items()
+        for start in range(0, len(keys), READ_BATCH_SIZE)
+        for key, text in _read(list(head), keys[start : start + READ_BATCH_SIZE]).items()
+    }
     return [texts.get((tuple(argv[:-2]), argv[-1]), "") for argv in argvs]
 
 

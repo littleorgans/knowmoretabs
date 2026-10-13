@@ -9,6 +9,7 @@ from test_add import fake_binary
 
 import fake_knowmoretabs
 from tagger import dataset
+from tagger.app import kmt
 from tagger.archive import Archive, sha256_hex
 from tagger.embed import CHAR_CAP, MAX_TOKENS, MODELS, input_rows, page_texts
 from tagger.paths import Paths
@@ -71,3 +72,38 @@ def test_without_the_binary_a_document_embeds_its_title_and_path(tmp_path):
     _, records = dataset.app_records(Paths(tmp_path / "data"), archive(root), binary=str(tmp_path / "absent"))
     texts = dict(zip((r["key"] for r in records), page_texts(records, True, 100), strict=True))
     assert texts[NOTE] == ("Quokka note", "example.test/o/r//notes/quokka.md")
+
+
+def test_thousands_of_documents_keep_their_text_and_hashes_in_bounded_reads(tmp_path, monkeypatch):
+    root = tmp_path / "archive"
+    archive(root)
+    binary = fake_binary(tmp_path)
+    runs = tmp_path / "runs.jsonl"
+    monkeypatch.setenv("FAKE_KMT_LOG", str(runs))
+    keys = [f"kmt-git:example.test/research/notes//documents/{'x' * 45}{n}.md" for n in range(3000)]
+    refused = {keys[255], keys[-1]}
+    for key in keys:
+        fake_knowmoretabs.append(
+            root / "pages/added.jsonl",
+            {"schema_version": 1, "url": key, "added_at": fake_knowmoretabs.AT, "title": "Research note"},
+        )
+        if key not in refused:
+            fake_knowmoretabs.append(
+                root / "pages/sources.jsonl",
+                {"schema_version": 1, "url": key, "kind": "md", "added_at": fake_knowmoretabs.AT},
+            )
+    _, records = dataset.app_records(Paths(tmp_path / "data"), Archive.load(root), keys=keys, binary=binary)
+    expected = [
+        (r["title"], r["a_text"] + ("\n\n" + fake_knowmoretabs.SOURCE_BODY + "\n" if r["key"] not in refused else ""))
+        for r in records
+    ]
+    assert page_texts(records, True, MAX_TOKENS * CHAR_CAP) == expected
+    reads = [json.loads(line)["argv"] for line in runs.read_text().splitlines()]
+    assert len(reads) > 1
+    assert max(len(args[args.index("--") + 1 :]) for args in reads) <= kmt.READ_BATCH_SIZE
+    assert [key for args in reads for key in args[args.index("--") + 1 :]] == keys
+
+    model = MODELS["eg2"]
+    assert [row["hash"] for row in input_rows(records, model, "B")] == [
+        sha256_hex(model.format(*page)) for page in expected
+    ]
