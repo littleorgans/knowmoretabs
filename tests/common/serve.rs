@@ -8,6 +8,7 @@ use std::net::{Shutdown, TcpStream};
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
+use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use serde_json::{Value, json};
 
 use super::{Fixture, write_snapshot};
@@ -58,6 +59,21 @@ pub fn append_line(fx: &Fixture, log: &str, line: &Value) {
         .open(pages.join(log))
         .unwrap();
     writeln!(file, "{line}").unwrap();
+}
+
+/// A content line for `url` and, given a body, its file as `content` writes
+/// it: front matter, then the markdown.
+pub fn kept_text(fx: &Fixture, url: &str, line: &Value, body: Option<&str>) {
+    append_line(fx, "content.jsonl", line);
+    if let Some(body) = body {
+        let dir = fx.root.join("pages").join("content");
+        fs::create_dir_all(&dir).unwrap();
+        let front = format!(
+            "---\nschema_version: 1\nurl: {}\nfetched_at: \"2026-10-07T09:00:00Z\"\n---\n",
+            json!(url)
+        );
+        fs::write(dir.join(format!("{}.md", kept_name(url))), front + body).unwrap();
+    }
 }
 
 /// Appends an image line for `url` and, given bytes, writes its file.
@@ -153,6 +169,22 @@ impl Server {
 
     pub fn get(&self, path: &str) -> Reply {
         self.raw("GET", path, &[format!("Host: {}", self.host())], b"")
+    }
+
+    /// `GET /api/content` for `url`, percent encoded.
+    pub fn content(&self, url: &str) -> Reply {
+        self.get(&format!(
+            "/api/content?url={}",
+            utf8_percent_encode(url, NON_ALPHANUMERIC)
+        ))
+    }
+
+    /// The content route's reply for `url`, which must be a JSON 200.
+    pub fn served(&self, url: &str) -> Value {
+        let reply = self.content(url);
+        assert_eq!(reply.status, 200, "{}", reply.text());
+        assert_eq!(reply.header("content-type"), Some("application/json"));
+        reply.json()
     }
 
     pub fn post(&self, path: &str, body: &Value) -> Reply {
