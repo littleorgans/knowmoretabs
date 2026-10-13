@@ -74,36 +74,18 @@ def test_without_the_binary_a_document_embeds_its_title_and_path(tmp_path):
     assert texts[NOTE] == ("Quokka note", "example.test/o/r//notes/quokka.md")
 
 
-def test_thousands_of_documents_keep_their_text_and_hashes_in_bounded_reads(tmp_path, monkeypatch):
+def test_a_large_library_is_read_in_bounded_batches(tmp_path, monkeypatch):
+    """Keys go to `read` in batches, so a large library stays under the process argument limit."""
     root = tmp_path / "archive"
-    archive(root)
     binary = fake_binary(tmp_path)
     runs = tmp_path / "runs.jsonl"
     monkeypatch.setenv("FAKE_KMT_LOG", str(runs))
-    keys = [f"kmt-git:example.test/research/notes//documents/{'x' * 45}{n}.md" for n in range(3000)]
-    refused = {keys[255], keys[-1]}
-    for key in keys:
-        fake_knowmoretabs.append(
-            root / "pages/added.jsonl",
-            {"schema_version": 1, "url": key, "added_at": fake_knowmoretabs.AT, "title": "Research note"},
-        )
-        if key not in refused:
-            fake_knowmoretabs.append(
-                root / "pages/sources.jsonl",
-                {"schema_version": 1, "url": key, "kind": "md", "added_at": fake_knowmoretabs.AT},
-            )
-    _, records = dataset.app_records(Paths(tmp_path / "data"), Archive.load(root), keys=keys, binary=binary)
-    expected = [
-        (r["title"], r["a_text"] + ("\n\n" + fake_knowmoretabs.SOURCE_BODY + "\n" if r["key"] not in refused else ""))
-        for r in records
-    ]
-    assert page_texts(records, True, MAX_TOKENS * CHAR_CAP) == expected
+    monkeypatch.setattr(kmt, "READ_BATCH_SIZE", 2)
+    _, records = dataset.app_records(Paths(tmp_path / "data"), archive(root), binary=binary)
+    texts = dict(zip((r["key"] for r in records), page_texts(records, True, MAX_TOKENS * CHAR_CAP), strict=True))
     reads = [json.loads(line)["argv"] for line in runs.read_text().splitlines()]
-    assert len(reads) > 1
-    assert max(len(args[args.index("--") + 1 :]) for args in reads) <= kmt.READ_BATCH_SIZE
-    assert [key for args in reads for key in args[args.index("--") + 1 :]] == keys
-
-    model = MODELS["eg2"]
-    assert [row["hash"] for row in input_rows(records, model, "B")] == [
-        sha256_hex(model.format(*page)) for page in expected
-    ]
+    keys = [r["key"] for r in records if r["read"]]
+    assert reads == [["--root", str(root), "read", "--json", "--", *keys[i : i + 2]] for i in (0, 2)]
+    assert texts[NOTE][1].endswith("\n\n" + fake_knowmoretabs.SOURCE_BODY + "\n")
+    assert texts[LOOSE][1].endswith("\n\n" + fake_knowmoretabs.SOURCE_BODY + "\n")
+    assert texts[UNPINNED] == ("Unpinned", "example.test/o/r//notes/unpinned.md"), "a refused batch reads nothing"

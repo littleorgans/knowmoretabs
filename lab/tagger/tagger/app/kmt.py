@@ -11,7 +11,7 @@ BINARY = "knowmoretabs"
 # Keys `add --file` mints for local documents (`src/source_key.rs`)
 SOURCES = ("kmt-git:", "kmt-blob:")
 READ_TIMEOUT = 60  # seconds each document's text may take: a git read and a PDF parse
-READ_BATCH_SIZE = 256  # Keep a large document library below the process argument limit.
+READ_BATCH_SIZE = 256  # keys each `read` run takes, so a large library stays under the process argument limit
 
 
 def snapshot(app) -> bool:
