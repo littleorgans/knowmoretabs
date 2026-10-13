@@ -2,7 +2,7 @@
 //! through `Local State`, whether its remote debugging is on, and picking
 //! the newest `Session_*` log.
 //!
-//! slice: browsers, platforms, content
+//! slice: browsers, platforms, content, sources
 //! why: The reference implementation hardcoded one macOS path and trusted a
 //!      profile name straight onto the filesystem. This module is the one
 //!      place that knowledge lives, shaped as a table whose rows are browsers
@@ -298,6 +298,12 @@ impl Roots {
             chrome_user_data,
             local_app_data,
         }
+    }
+
+    /// knowmoretabs' own file `name` in the config home:
+    /// `<config>/knowmoretabs/<name>`.
+    pub fn config_file(&self, name: &str) -> PathBuf {
+        self.config.join("knowmoretabs").join(name)
     }
 
     fn config_home(&self, id: &str) -> &Path {

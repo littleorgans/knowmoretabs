@@ -1,7 +1,7 @@
 //! The model service on this machine through the shell: one path prefix,
 //! one loopback port, one exchange per request.
 //!
-//! slice: library, triage
+//! slice: library, triage, sources
 //! why: The Library ranks, and Tag and Add link run, through a service the
 //!      shell does not own, and every byte crossing that boundary is bounded
 //!      and checked here. A request the route table admits (`model_routes`)
@@ -168,6 +168,27 @@ impl ModelService {
             "the model service is off: {why}; search is by keyword"
         ));
         None
+    }
+
+    /// Every page key the service holds, best first for `query`, through
+    /// the route the Library ranks by, which writes nothing on the service's
+    /// side; or why there is no order.
+    pub fn rank(&self, root: &Path, query: &str) -> Result<Vec<String>, &'static str> {
+        #[derive(serde::Deserialize)]
+        struct Ranked {
+            keys: Vec<String>,
+        }
+        let route = model_routes::classify("POST", "api/rank").ok_or("no rank route")?;
+        let body = serde_json::json!({ "query": query }).to_string();
+        let response = self
+            .exchange(&route, body.as_bytes(), root)
+            .map_err(|failure| failure.said().1)?;
+        if response.status != Status::Ok {
+            return Err("the model service refused the query");
+        }
+        serde_json::from_slice::<Ranked>(response.body())
+            .map(|ranked| ranked.keys)
+            .map_err(|_| Failure::Malformed.said().1)
     }
 
     /// One request on its own connection, closed after the reply.

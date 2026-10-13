@@ -1,7 +1,7 @@
 //! Entry point: parses the command line, runs the chosen command, and turns
 //! the outcome into stdout lines or JSON and an exit status.
 //!
-//! slice: capture, library, triage, tags, history, enrich, content, add
+//! slice: capture, library, triage, tags, history, enrich, content, add, sources
 //! why: Presentation lives here and nowhere else. The capture code returns
 //!      typed outcomes and typed errors; this file decides what a person
 //!      sees on a terminal, what a script sees under `--json`, and which
@@ -67,11 +67,16 @@ mod page_key;
 mod platform;
 mod process_tree;
 mod prompt;
+mod search;
 mod server;
 mod service_auth;
 mod session;
 mod snss;
 mod socks;
+mod source_add;
+mod source_git;
+mod source_key;
+mod sources;
 mod staleness;
 mod suggestions;
 mod tags;
@@ -128,10 +133,12 @@ fn main() -> ExitCode {
             library_commands::export(&root, dir.as_deref(), *with_history, cli.json, log)
         }
         Some(Command::Serve(args)) => serve(root, args, cli.json, log),
-        Some(Command::Add(args)) => match add(&root, args, &cli, log) {
+        Some(Command::Add(args)) => match add(&root, args, &cli, roots.as_ref(), log) {
             Ok(code) => return code,
             Err(err) => Err(err),
         },
+        Some(Command::Search(args)) => search(&root, args, &cli, roots.as_ref(), log),
+        Some(Command::Read { key }) => read(&root, key, &cli, roots.as_ref(), log),
         Some(Command::Forget { urls }) => {
             triage::command(&root, urls, triage::Action::Forget, cli.json, log)
         }
@@ -191,13 +198,58 @@ fn main() -> ExitCode {
     }
 }
 
+/// The checkouts file: `--checkouts`, else the config home's.
+fn checkouts(
+    cli: &Cli,
+    roots: Option<&platform::Roots>,
+) -> Result<std::path::PathBuf, error::Error> {
+    cli.checkouts
+        .clone()
+        .or_else(|| roots.map(|roots| roots.config_file(sources::CHECKOUTS_FILE)))
+        .ok_or(error::Error::NoHome)
+}
+
+fn search(
+    root: &std::path::Path,
+    args: &cli::SearchArgs,
+    cli: &Cli,
+    roots: Option<&platform::Roots>,
+    log: Log,
+) -> Result<(), error::Error> {
+    let checkouts = checkouts(cli, roots)?;
+    let model = args.model.model_port.and_then(|port| {
+        model_service::ModelService::new(port, args.model.model_secret_file.as_deref(), log)
+    });
+    let query = args.query.join(" ");
+    search::command(root, &query, &checkouts, model.as_ref(), cli.json, log)
+}
+
+fn read(
+    root: &std::path::Path,
+    key: &str,
+    cli: &Cli,
+    roots: Option<&platform::Roots>,
+    log: Log,
+) -> Result<(), error::Error> {
+    sources::read_command(root, key, &checkouts(cli, roots)?, cli.json, log)
+}
+
 /// `add`, whose exit status is its own.
 fn add(
     root: &std::path::Path,
     args: &cli::AddArgs,
     cli: &Cli,
+    roots: Option<&platform::Roots>,
     log: Log,
 ) -> Result<ExitCode, error::Error> {
+    if let Some(file) = &args.file {
+        let args = source_add::Args {
+            file,
+            title: args.title.as_deref(),
+            checkouts: &checkouts(cli, roots)?,
+        };
+        return source_add::command(root, args, cli.json, log);
+    }
     let retry: Vec<content::Stage> = args
         .retry
         .iter()
@@ -212,7 +264,7 @@ fn add(
         retry: &retry,
     };
     let args = add::Args {
-        url: &args.url,
+        url: args.url.as_deref().unwrap_or_default(),
         title: args.title.as_deref(),
         content: (!args.no_content).then_some(ask),
     };
@@ -229,8 +281,8 @@ fn serve(
     server::run(&server::Options {
         root,
         port: args.port,
-        model_port: args.model_port,
-        model_secret_file: args.model_secret_file.clone(),
+        model_port: args.model.model_port,
+        model_secret_file: args.model.model_secret_file.clone(),
         open: args.open,
         json,
         log,
