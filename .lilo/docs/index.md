@@ -1,7 +1,7 @@
 # knowmoretabs system map
 <!-- lilo-page kind=index schema=1 -->
-<!-- lilo-covers Cargo.toml Cargo.lock .cargo/config.toml xtask/Cargo.toml xtask/src/main.rs slices.toml src/*.rs web/index.html web/app.css web/app.js justfile scripts/clippy.py lab/tagger/tagger/paths.py lab/tagger/tagger/app/kmt.py -->
-<!-- lilo-verified digest=c80afa26bf810733 commit=6dba24657080 date=2026-10-12 -->
+<!-- lilo-covers Cargo.toml Cargo.lock .cargo/config.toml xtask/Cargo.toml xtask/src/main.rs slices.toml src/*.rs web/index.html web/app.css web/app.js justfile scripts/clippy.py lab/tagger/tagger/paths.py lab/tagger/tagger/app/kmt.py scripts/installation.py extension/manifest.json extension/*.js -->
+<!-- lilo-verified digest=ea8ba4009d4cb488 commit=3dee0ba58e72 date=2026-10-13 -->
 
 > One Rust binary that snapshots the open tabs of Chromium browsers from their on-disk session files and serves the snapshots as a local, searchable library.
 
@@ -11,7 +11,7 @@ knowmoretabs saves a dated, immutable snapshot of every open window and tab by r
 
 Browsers: Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and Vivaldi on macOS, Linux and Windows (`code:src/platform.rs`). Arc is refused (`code:src/error.rs#ArcUnsupported`).
 
-Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (`content` is opt in, and keyword search over what it stores comes later), tag hierarchy, touching or closing live tabs, modifying browser files (claimed by S1, unverified).
+Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (`content` is opt in), copies of local documents (`add --file` keeps a reference), tag hierarchy, touching or closing live tabs, modifying browser files (claimed by S1, unverified).
 
 ## Responsibilities
 
@@ -19,15 +19,18 @@ Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (`c
 - Capture: browser and profile discovery, SNSS parsing, the encrypted-sessions preflight, History signals: `code:src/capture.rs`, `code:src/platform.rs`, `code:src/snss.rs`, `code:src/session.rs`, `code:src/staleness.rs`, `code:src/history.rs`, `code:src/model.rs`.
 - Archive: root creation, advisory lock, staged writes: `code:src/archive.rs`.
 - Library: pages derived across snapshots, user state, export, the library's History record: `code:src/library.rs`, `code:src/library_commands.rs`, `code:src/export.rs`, `code:src/library_history.rs`.
-- Serve and triage: the HTTP server and JSON API, forget and restore: `code:src/server.rs`, `code:src/triage.rs`; the frontend `code:web/app.js`, loaded by `code:src/assets.rs#load`.
-- Add, one page by its address: the command and its stage lines `code:src/add.rs`, its content stage `code:src/add_content.rs`, the intake log and its fold into the library `code:src/intake.rs`.
+- Serve and triage: the HTTP wire `code:src/http.rs`, the routes and JSON API `code:src/server.rs`, forget and restore `code:src/triage.rs`, the drawer's Content tab `code:src/content_view.rs`; the frontend `code:web/app.js`, with the nav and the page shown when the model service cannot answer, loaded by `code:src/assets.rs#load`.
+- Model service: the shell's forward to the tagger lab's `tagger app` on a loopback port, through which the Library ranks search and Tag and Add link are served under `/model/`: the forward `code:src/model_service.rs`, its route table `code:src/model_routes.rs`, the proof on each exchange `code:src/service_auth.rs`.
+- Add, one page by its address: the command and its stage lines `code:src/add.rs`, the key a new page is kept under `code:src/page_key.rs`, its content stage `code:src/add_content.rs`, the intake log and its fold into the library `code:src/intake.rs`.
+- Local documents, kept by reference: `add --file` `code:src/source_add.rs`, document keys `code:src/source_key.rs`, the git questions `code:src/source_git.rs`, the pins log, checkouts file, resolver and `read` `code:src/sources.rs`, and `search` over added pages and documents by keyword or the model service `code:src/search.rs`.
 - Tags and suggestions: `code:src/tags.rs`, `code:src/prompt.rs`, `code:src/suggestions.rs`.
 - Enrich, the opt-in head fetch: `code:src/enrich.rs`, `code:src/metadata_fetch.rs`, `code:src/head.rs`, `code:src/metadata.rs`, `code:src/metadata_writer.rs`; GitHub address parsing and the embedded repository data `code:src/github.rs`, shared with content.
 - Shared by the network commands: the URL refusal rules `code:src/guard.rs`, the guarded GET and pacer `code:src/fetch.rs`, the planner and per-host workers `code:src/targets.rs`, the append-only logs and the log-plus-files store `code:src/jsonl.rs`, the JSON-LD walker `code:src/jsonld.rs`.
 - Content, the opt-in page text capture: `code:src/content.rs`, `code:src/content_plan.rs`, `code:src/content_fetch.rs`, `code:src/content_store.rs`, `code:src/extract.rs`, PDF text `code:src/content_pdf.rs`; the router `code:src/content_route.rs`, the X post route `code:src/xpost.rs`, the GitHub route through `gh api` `code:src/github_api.rs` with its markdown `code:src/github_page.rs`, and the YouTube route through yt-dlp `code:src/ytdlp.rs` with its video addresses `code:src/youtube.rs` and its caption choice, transcript and markdown `code:src/youtube_page.rs`; the headless tier: which pages are rendered, what a render writes and what waits `code:src/content_headless.rs`, the installed browser run headless, or the owner's running browser attached to `code:src/browser.rs`, the one tab a render opens and the only way to its page `code:src/browser_tab.rs`, its `DevTools` protocol `code:src/cdp.rs`, and the loopback relay every rendered page's connections go through `code:src/socks.rs`; the signed in tier: which pages `--signed-in` opens, the personal apps it never opens, and how the owner's browser is found `code:src/content_signed_in.rs`, `code:src/guard.rs#PERSONAL_APPS`; external tool discovery and bounded runs `code:src/tools.rs`, each program in a process group of its own with the registry and signal handler that end it `code:src/process_tree.rs`; the readiness report `code:src/doctor.rs`; classifier parity tool `code:examples/content_parity.rs`. Each page's preview image: which pages get one and the retries `code:src/content_image.rs`, candidates and the ladder `code:src/image_pick.rs`, candidates from HTML and README markup `code:src/image_page.rs`, the guarded fetch, checks, decode and JPEG `code:src/image_fetch.rs`, the image log and files, and the kept images `serve` names in the library and answers on `GET /api/image/<hex>` `code:src/image_store.rs`.
 - Slice lint and matrix generator: `code:xtask/src/main.rs`.
-- Developer recipes: `code:justfile` (`check`, `test`, `install`, `up`, `down`); `code:scripts/clippy.py` runs clippy on the toolchain CI pins.
-- Tagger lab, a Python prototype outside the binary, tested by the CI lab job: `lab/tagger`. It resolves the archive as `--root`, then `KMT_ROOT`, then `~/.knowmoretabs`, and its data as `--data`, then `KMT_TAGGER_DATA`, then `<root>/tagger` (`code:lab/tagger/tagger/paths.py`); Add link runs `knowmoretabs --root <root>` found on `PATH` (`code:lab/tagger/tagger/app/kmt.py`); Tag and Add link write tags, names, forget and restore through the shell's own API, never the service.
+- Developer recipes: `code:justfile` (`check`, `test`, `install`, `tagger`, `up`, `down`); `install` writes a receipt and `up` refuses an install that does not match it (`code:scripts/installation.py`); `code:scripts/clippy.py` runs clippy on the toolchain CI pins.
+- Toolbar extension: a Chrome button that points a Library tab at Add link for the current tab (`code:extension/background.js`, `code:extension/link.js`).
+- Tagger lab, a Python prototype outside the binary, tested by the CI lab job: `lab/tagger`. It resolves the archive as `--root`, then `KMT_ROOT`, then `~/.knowmoretabs`, and its data as `--data`, then `KMT_TAGGER_DATA`, then `<root>/tagger` (`code:lab/tagger/tagger/paths.py`); Add link runs `knowmoretabs --root <root>`, the binary `tagger app --kmt-bin` names or else the one on `PATH`, and embeds a local document's text from its `read` (`code:lab/tagger/tagger/app/kmt.py`); Tag and Add link write tags, names, forget and restore through the shell's own API, never the service.
 
 ## Reading path
 
@@ -37,41 +40,21 @@ Start here, then [verification gates](verification-gates.md). Before changing a 
 
 - Archive: the root directory: `--root`, then `KMT_ROOT` (empty means unset), then `~/.knowmoretabs`, and `%LOCALAPPDATA%\knowmoretabs` on Windows (`code:src/platform.rs#resolve_root`, `code:src/platform.rs#default_root`).
 - Snapshot: one dated directory under `snapshots/` holding `snapshot.json`, the source of truth, and `session.snss`, a verbatim copy of the browser's file (`code:src/archive.rs#SNAPSHOT_JSON`, `code:src/model.rs#SESSION_FILE_NAME`).
-- Added page: a page in `pages/added.jsonl`, written by `add` when new, with a later line if captured text supplies a missing title; the library reads the log as one in-memory snapshot, id `added` (`code:src/intake.rs#retitle`, `code:src/intake.rs#SNAPSHOT_ID`).
+- Added page: a page in `pages/added.jsonl`, by address or, for a local document, by its key, written by `add` when new, with a later line if captured text supplies a missing title; the library reads the log as one in-memory snapshot, id `added` (`code:src/intake.rs#retitle`, `code:src/intake.rs#SNAPSHOT_ID`).
 - Page: one URL as the library lists it, derived across snapshots; a sighting is one appearance of a page in a snapshot (`code:src/library.rs#Library`).
 - Library state: `library.json`, per URL user state: forgotten pages, tags and the tag vocabulary (`code:src/library.rs#State`).
 - Forget, restore: hide a page from the library, and bring it back; snapshots are untouched (`code:src/triage.rs`).
 - Signals: what the browser's History database knows about a URL: visits, typed visits, first and last visit, foreground time, search, referrer (`code:src/history.rs`). First visit means the earliest visit History still retains, about 90 days (claimed by S5, unverified).
 - Vocabulary, retire: the owner's tag names; retiring hides a tag everywhere and keeps it (`code:src/tags.rs`).
+- Local document: a markdown, text or PDF file added with `add --file`, keyed `kmt-git:<repo>//<path>` for a committed file or `kmt-blob:sha256-<hex>` for a loose one (`code:src/source_key.rs#GIT`, `code:src/source_key.rs#BLOB`); its pin, in `pages/sources.jsonl`, names the bytes it was (`code:src/sources.rs#Pin`).
+- Checkouts file: `checkouts.json`, per machine and outside the archive, naming each repository's checkout and the shelf loose documents are copied to (`code:src/sources.rs#CHECKOUTS_FILE`).
+- Model service: the tagger lab's `tagger app`, which `serve --model-port` and `search --model-port` reach on 127.0.0.1 (`code:src/cli.rs#ModelArgs`).
 - Suggestion: a tag an agent proposed, imported into `tags/suggested.jsonl` (`code:src/suggestions.rs#FILE`).
 - Slice, capability: a vertical cut that ships user value end to end, and the user want it serves; `code:slices.toml` declares both, plus a future band of what is deliberately not built.
 
 ## Rules
 
-- Archive writers hold the archive's advisory lock (`code:src/archive.rs#LOCK_FILE`).
-- A snapshot is staged as a directory and renamed into place once, never over anything, and never written again (`code:src/archive.rs#publish`).
-- State files such as `library.json` are replaced whole: staged beside the target, then renamed (`code:src/archive.rs#replace_file`).
-- `pages/added.jsonl`, `pages/metadata.jsonl`, `pages/content.jsonl` and `pages/images.jsonl` are append only: one whole line per write, under the lock, synced before the next (`code:src/jsonl.rs#Appender`).
-- A content file or a page image is replaced whole, then its log line appended, under one hold of the lock, never across a request or a decode; an unchanged body or image leaves the file untouched (`code:src/jsonl.rs#Store`, `code:src/content_store.rs#Store`, `code:src/image_store.rs#Store`).
-- Opening a log repairs its file's Unix permissions, and opening a file store repairs its own directory and files, under the archive lock, including existing images, without rewriting their bytes (`code:src/archive.rs#make_private`, `code:src/jsonl.rs#Appender`, `code:src/jsonl.rs#Store`).
-- On Unix the archive root and its private directories are created mode 0700; on Windows they inherit the parent's ACL (`code:src/archive.rs#create_private_dir`).
-- An unknown session command is skipped and counted, never fatal; a torn tail is reported as truncated bytes (`code:src/session.rs`, `code:src/snss.rs`).
-- The encrypted-sessions preflight refuses a stale save with exit 3; `--force` cannot bypass it (`code:src/staleness.rs#check`, `code:src/error.rs#exit_code`).
-- Tabs on this machine (`localhost`, its subdomains, loopback) are left out of `snapshot.json` and of change detection; `session.snss` stays verbatim and keeps them (`code:src/capture.rs#leave_out_this_machine`, `code:src/local.rs#is_this_machine_url`).
-- Only `enrich`, `content` and `add`, whose content stage is `content` narrowed to one page unless `--no-content`, send page addresses off the machine, and `content` sends a video's id, never its library address, to YouTube through yt-dlp, without cookies or yt-dlp's configuration files (`code:src/ytdlp.rs`); `content` also downloads one preview image per page from the address the page names, which may be on another host, and keeps it in the private archive (`code:src/image_fetch.rs`); `doctor` is offline by default; `--live` lets gh check its own sign in, asks the X post API for one fixed public post and starts the browser once with no page, sending nothing of the owner's. `ureq` appears only in `code:src/fetch.rs`.
-- A page `content` renders is loaded in the installed browser, headless, on a scratch profile, and every connection it makes goes through the loopback relay `code:src/socks.rs`, opened by `code:src/fetch.rs#connect_public` under the fetcher's public only rule; WebRTC is kept off UDP. Rendered text replaces kept text only when it is longer, and the headless tier never writes `error` (`code:src/content_headless.rs#settle`).
-- `content --signed-in` reads only the remote debugging switch in `Local State` and `DevToolsActivePort` to find the owner's running Chrome, connects once per run, and only after the owner allows it; it creates hidden tabs of its own with a session each, never lists, attaches to or closes another tab and never sends `Browser.close` (`code:src/browser_tab.rs`, `code:src/cdp.rs#Command`). It opens only lines a public tier wrote as behind a login, paywalled or blocked, or rendered thin or empty after a 403 (`code:src/content_signed_in.rs#eligible`), never a personal app, and every line it writes says `signed_in` for tier and access. Names are checked before navigation and where a page ends (`code:src/fetch.rs#Fetcher`); Chrome's own redirects, name resolution and subresources are not guarded. `doctor` reads the same two files and never connects.
-- Content's external tools run only through `code:src/tools.rs`, the browser only through `code:src/browser.rs`: `run` uses an argument vector, no shell, no input, a timeout, capped output and stderr cut to one line, its first `ERROR:` line when there is one; `System::exit_code` runs `gh auth status` with only its exit code read (`code:src/github_api.rs#Readiness`).
-- Every program `content` and `doctor` run, and every tool scratch directory, goes through `code:src/process_tree.rs`: one registry lock covers start and register, retirement and the signal handler, which never takes the archive lock; a timeout or a signal ends the whole group (Unix `killpg`, Windows `taskkill /T /F`), and a signal exits 130. A signal inherited as ignored stays ignored and turns signal cleanup off, warned once.
-- `serve` binds 127.0.0.1 only (`code:src/server.rs`).
-- JSON is the archive's storage; SQLite, bundled, only reads a copy of the browser's `History` taken with its `-journal` and `-wal` (`code:src/history.rs#COMPANIONS`).
-- Foreground time sums positive durations only; the search walk stops at `MAX_HOPS` hops (`code:src/history.rs#MAX_HOPS`).
-- Export omits the search and referrer signals unless `--with-history`, and lists no forgotten page (`code:src/library.rs#Shape`).
-- Imported suggestions never change the owner's tags; tag names match without regard to case (`code:src/suggestions.rs`, `code:src/library.rs#fold`).
-- The frontend is hand-written HTML, CSS and JS with no build step, embedded with `include_str!`; a debug build reads `web/` from the source checkout on every asset request and export, falling back to the embedded copy, so a frontend edit needs a browser refresh, not a rebuild (`code:src/assets.rs#load`); committed files are LF, and Windows CI fails on a checkout that rewrites them (`code:.github/workflows/ci.yml`).
-- Unsafe code is forbidden; clippy `all` and `pedantic` deny; `print_stdout` and `print_stderr` are denied, so user output goes through `code:src/out.rs` (`code:Cargo.toml`).
-- Committed fixtures are synthetic or redacted, never a real URL or title from a browser; `reference/` is vendored prior art and read-only (claimed by S1, unverified).
-- Every `.rs` file under `src/` and `xtask/src/` carries a `slice:` naming a slice in `slices.toml` and a `why:`; the slice matrix doc is generated from `slices.toml` and never hand-edited (`code:xtask/src/main.rs#lint`).
+- The invariants for the archive, capture, local documents, the network commands, `serve` and the model service, and the build: [rules](domain/rules.md).
 
 ## Components
 

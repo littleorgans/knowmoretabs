@@ -2,7 +2,7 @@
 - Scoped: `cargo test --locked --test <file>`
 - Structural: `cargo clippy --workspace --all-targets --locked -- -D warnings`
 - Full: `cargo test --workspace --all-targets --locked`
-- CI parity: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --all-targets --locked && cargo run --locked --package xtask -- slices --check && node --test tests/serve_frontend.cjs`
+- CI parity: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --all-targets --locked && cargo run --locked --package xtask -- slices --check && node --test tests/serve_frontend.cjs tests/extension.cjs`
 - CI pins 1.89.0; run clippy on it too: `python3 scripts/clippy.py`.
 - Every `.rs` under `src/` and `xtask/src/` needs a `//!` header with `slice:` and `why:`; run the slices check after changing one.
 - The slice matrix doc is generated from `slices.toml` by `cargo xtask slices`; never hand-edit it.
@@ -12,7 +12,9 @@
 - Fixtures are synthetic: never commit a real URL or title from a browser. `reference/` is read-only.
 Docs: `.lilo/docs/`, start at `index.md`.
 - `index.md`: purpose, responsibilities, vocabulary, rules, sources.
+- `domain/rules.md`: archive, network, serve and model service invariants.
 - `verification-gates.md`: gates, CI jobs, expected failures.
 <!-- lilo-onboarding status=complete-quick date=2026-10-06 schema=1 -->
-<!-- lilo-digest sha256:17086ecb8d6b31a8 .lilo/docs/index.md -->
-<!-- lilo-digest sha256:916db94fcb32d2e2 .lilo/docs/verification-gates.md -->
+<!-- lilo-digest sha256:c9e63cc3cd811bd4 .lilo/docs/index.md -->
+<!-- lilo-digest sha256:8ba874bd20ad4cb3 .lilo/docs/verification-gates.md -->
+<!-- lilo-digest sha256:3120e839acc8652a .lilo/docs/domain/rules.md -->
