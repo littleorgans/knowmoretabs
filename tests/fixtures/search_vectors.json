@@ -1,0 +1,74 @@
+{
+ "about": "Fixed vectors for the keyword rule and the rank merge: src/search.rs and web/app.js (tests/serve_frontend.cjs) check the same cases. Title and URL only: the Library holds no page text. Synthetic pages.",
+ "match": [
+  { "title": "Night trains", "url": "https://a.test/zeppelin", "query": "NIGHT zeppelin", "fields": ["title", "url"] },
+  { "title": "Night trains", "url": "https://a.test/zeppelin", "query": "  night\tTRAINS\n", "fields": ["title"] },
+  { "title": "Night trains", "url": "https://a.test/zeppelin", "query": "night ferry", "fields": null },
+  { "title": "Night trains", "url": "https://a.test/zeppelin", "query": "", "fields": [] },
+  { "title": "", "url": "https://a.test/", "query": "x", "fields": null },
+  { "title": "", "url": "https://a.test/", "query": "A.TEST", "fields": ["url"] },
+  { "title": "Night", "url": "https://a.test/", "query": "night https", "fields": ["title", "url"] },
+  { "title": "Ödön Straße", "url": "https://a.test/", "query": "ÖDÖN straße", "fields": ["title"] },
+  { "title": "ΟΔΟΣ ΤΡΕΝΟΥ", "url": "https://a.test/", "query": "οδος", "fields": ["title"] }
+ ],
+ "pages": [
+  { "url": "https://a.test/1", "title": "Zeppelin one" },
+  { "url": "https://a.test/2", "title": "Other" },
+  { "url": "https://a.test/3", "title": "zeppelin three" },
+  { "url": "https://a.test/zeppelin-4", "title": "Four" },
+  { "url": "https://b.test/5", "title": "Night trains" }
+ ],
+ "pick": [
+  {
+   "about": "without a ranking, every match in library order",
+   "query": "zeppelin",
+   "ranked": null,
+   "shows": [["https://a.test/1", false], ["https://a.test/3", false], ["https://a.test/zeppelin-4", false]]
+  },
+  {
+   "about": "without a ranking or words, every page",
+   "query": "",
+   "ranked": null,
+   "shows": [["https://a.test/1", false], ["https://a.test/2", false], ["https://a.test/3", false], ["https://a.test/zeppelin-4", false], ["https://b.test/5", false]]
+  },
+  {
+   "about": "ranked pages first in the service's order, matched or not, then the unindexed matches; a key no page has is ignored",
+   "query": "zeppelin",
+   "ranked": ["https://a.test/2", "https://a.test/1", "https://gone.test/"],
+   "shows": [["https://a.test/2", true], ["https://a.test/1", true], ["https://a.test/3", false], ["https://a.test/zeppelin-4", false]]
+  },
+  {
+   "about": "no unindexed page matches",
+   "query": "ferry",
+   "ranked": ["https://b.test/5", "https://a.test/1"],
+   "shows": [["https://b.test/5", true], ["https://a.test/1", true]]
+  },
+  {
+   "about": "an empty ranking leaves the keyword matches",
+   "query": "night",
+   "ranked": [],
+   "shows": [["https://b.test/5", false]]
+  }
+ ],
+ "known_differences": [
+  {
+   "about": "Documented only, outside the equality vectors: duplicate ranked keys keep their first position in Rust and their last in web/app.js. The bundled service cannot produce duplicates: Archive.load uses a set, dataset.app_records iterates those unique keys, engine.sync deduplicates and replaces existing rows, and engine.order returns each row once (lab/tagger/tests/test_rank.py checks this). The shell does not enforce uniqueness for a replacement service.",
+   "query": "ferry",
+   "ranked": ["https://a.test/1", "https://a.test/2", "https://a.test/1"],
+   "rust_shows": [["https://a.test/1", true], ["https://a.test/2", true]],
+   "web_shows": [["https://a.test/2", true], ["https://a.test/1", true]]
+  },
+  {
+   "about": "Documented only, outside the equality vectors: Rust split_whitespace treats U+0085 as whitespace; JavaScript /\\s+/ does not.",
+   "query": "a\u0085b",
+   "rust_words": ["a", "b"],
+   "web_words": ["a\u0085b"]
+  },
+  {
+   "about": "Documented only, outside the equality vectors: JavaScript /\\s+/ treats U+FEFF as whitespace; Rust split_whitespace does not.",
+   "query": "a\ufeffb",
+   "rust_words": ["a\ufeffb"],
+   "web_words": ["a", "b"]
+  }
+ ]
+}
