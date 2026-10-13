@@ -2,13 +2,10 @@
 //! the outcome into stdout lines or JSON and an exit status.
 //!
 //! slice: capture, library, triage, tags, history, enrich, content, add, sources
-//! why: Presentation lives here and nowhere else. The capture code returns
-//!      typed outcomes and typed errors; this file decides what a person
-//!      sees on a terminal, what a script sees under `--json`, and which
-//!      exit code each outcome maps to. Keeping that in one short file means
-//!      the library-shaped modules stay silent and testable. Every slice that
-//!      added a command added its presentation here, so this file claims
-//!      each of them.
+//! why: Commands are dispatched here, with presentation delegated to their
+//!      modules and save_report.rs. Typed errors become terminal lines or
+//!      JSON and exit codes here. Every slice that added a command added
+//!      its dispatch here, so this file claims each of them.
 
 mod add;
 mod add_content;
