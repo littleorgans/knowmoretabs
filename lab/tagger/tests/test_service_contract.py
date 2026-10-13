@@ -3,6 +3,7 @@ shared contract that `src/model_service.rs` holds the shell's to."""
 
 import json
 import mimetypes
+import re
 import unittest
 from pathlib import Path
 
@@ -15,11 +16,19 @@ class ContractTests(unittest.TestCase):
     def test_the_service_restates_the_shell_as_the_shared_contract(self):
         files = {f.name: mimetypes.guess_type(f.name)[0] for f in server.STATIC.iterdir() if f.name != "index.html"}
         self.assertEqual(CONTRACT["files"], files)
+        # Expand the fixture's decimal segment, preserving the service's regex text and flags.
         api = {
-            (method, pattern.pattern.removeprefix("/api/").replace(r"(\d+)", "#"))
-            for method, pattern, _ in server.ROUTES + server.RANK_ROUTES + server.JOB_ROUTES
+            (
+                method,
+                re.compile(
+                    "/api/" + "/".join(r"(\d+)" if part == "#" else re.escape(part) for part in path.split("/"))
+                ),
+            )
+            for method, path in CONTRACT["api"]
         }
-        self.assertEqual({tuple(route) for route in CONTRACT["api"]}, api)
+        self.assertEqual(
+            api, {(method, pattern) for method, pattern, _ in server.ROUTES + server.RANK_ROUTES + server.JOB_ROUTES}
+        )
         self.assertEqual(CONTRACT["archive_header"], server.ARCHIVE_HEADER)
         self.assertEqual(CONTRACT["body_limit"], server.BODY_LIMIT)
         self.assertEqual(set(CONTRACT["page_policy"]), set(server.CSP.split("; ")))
