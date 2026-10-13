@@ -1,0 +1,42 @@
+{
+ "about": "What the shell and the model service each restate about the other: src/model_service.rs and lab/tagger/tests/test_service_contract.py check their own constants against these. Neither reads this file at run time.",
+ "files": {
+  "add.js": "text/javascript",
+  "app.css": "text/css",
+  "app.js": "text/javascript",
+  "core.js": "text/javascript",
+  "lit-html.js": "text/javascript",
+  "lit.js": "text/javascript",
+  "pages.js": "text/javascript",
+  "panel.js": "text/javascript",
+  "strip.js": "text/javascript",
+  "views.js": "text/javascript"
+ },
+ "api": [
+  ["GET", "library"],
+  ["GET", "selection"],
+  ["GET", "pins"],
+  ["GET", "add/#"],
+  ["POST", "rank"],
+  ["POST", "search"],
+  ["POST", "exclusions"],
+  ["POST", "selection"],
+  ["POST", "pins"],
+  ["POST", "like"],
+  ["POST", "add"]
+ ],
+ "archive_header": "X-KMT-Archive",
+ "body_limit": 4194304,
+ "page_policy": [
+  "default-src 'none'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "connect-src 'self'",
+  "img-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'"
+ ],
+ "rank_top": 50,
+ "source_prefixes": ["kmt-git:", "kmt-blob:"]
+}

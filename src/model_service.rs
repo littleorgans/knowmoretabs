@@ -328,3 +328,47 @@ fn archive_identity(root: &Path) -> Option<String> {
 fn archive_identity(_root: &Path) -> Option<String> {
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use serde_json::Value;
+
+    use super::*;
+    use crate::{http::BODY_LIMIT, search::RANK_TOP, source_key};
+
+    #[test]
+    fn the_shell_restates_the_service_as_the_shared_contract() {
+        let contract: Value =
+            serde_json::from_str(include_str!("../tests/fixtures/service_contract.json")).unwrap();
+        let files: BTreeMap<String, String> =
+            serde_json::from_value(contract["files"].clone()).unwrap();
+        let ours = model_routes::FILES.map(|(name, kind)| {
+            let essence = kind.content_type().split(';').next().unwrap();
+            (name.to_owned(), essence.to_owned())
+        });
+        assert_eq!(BTreeMap::from(ours), files);
+        let api: Vec<(String, String)> = serde_json::from_value(contract["api"].clone()).unwrap();
+        let ours =
+            model_routes::API.map(|(method, pattern)| (method.to_owned(), pattern.to_owned()));
+        assert_eq!(BTreeSet::from(ours), api.into_iter().collect());
+        assert_eq!(contract["archive_header"], ARCHIVE_HEADER);
+        assert_eq!(contract["body_limit"], BODY_LIMIT);
+        let policy: BTreeSet<String> =
+            serde_json::from_value(contract["page_policy"].clone()).unwrap();
+        assert_eq!(
+            Policy::Service
+                .header()
+                .split("; ")
+                .map(str::to_owned)
+                .collect::<BTreeSet<_>>(),
+            policy
+        );
+        assert_eq!(contract["rank_top"], RANK_TOP);
+        assert_eq!(
+            contract["source_prefixes"],
+            serde_json::json!([source_key::GIT, source_key::BLOB])
+        );
+    }
+}
