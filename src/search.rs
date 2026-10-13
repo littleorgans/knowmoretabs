@@ -32,7 +32,7 @@ use crate::{out, sources};
 
 pub const SCHEMA_VERSION: u32 = 1;
 /// Ranked pages kept, as the Library shows them (`RANK_TOP` in `web/app.js`).
-const RANK_TOP: usize = 50;
+pub const RANK_TOP: usize = 50;
 /// The most of a page's text a result quotes, in characters.
 const SNIPPET_CHARS: usize = 200;
 /// How much of the quote comes before the first word found.

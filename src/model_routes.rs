@@ -75,7 +75,7 @@ const ORDINARY: Duration = Duration::from_secs(10);
 
 /// The service's files besides its page (`lab/tagger/tagger/app/static`),
 /// each a single name at its root.
-const FILES: [(&str, Kind); 10] = [
+pub const FILES: [(&str, Kind); 10] = [
     ("add.js", Kind::Script),
     ("app.css", Kind::Css),
     ("app.js", Kind::Script),
@@ -92,7 +92,7 @@ const FILES: [(&str, Kind); 10] = [
 /// `JOB_ROUTES` in `lab/tagger/tagger/app/server.py`); `#` is one decimal
 /// segment. The screens' tag, vocabulary, forget and restore writes are
 /// this shell's own (`server.rs`), never the service's.
-const API: [(&str, &str); 11] = [
+pub const API: [(&str, &str); 11] = [
     ("GET", "library"),
     ("GET", "selection"),
     ("GET", "pins"),
