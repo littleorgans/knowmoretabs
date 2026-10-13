@@ -42,6 +42,26 @@ pub fn archive(fx: &Fixture) {
     .unwrap();
 }
 
+/// The state file, `library.json`, as written.
+pub fn state(fx: &Fixture) -> Value {
+    serde_json::from_slice(&fs::read(fx.root.join("library.json")).unwrap()).unwrap()
+}
+
+/// The served library's entry for `url`.
+pub fn page<'a>(library: &'a Value, url: &str) -> &'a Value {
+    library["pages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["url"] == url)
+        .unwrap_or_else(|| panic!("{url} not in pages"))
+}
+
+pub fn without_generated_at(mut library: Value) -> Value {
+    library.as_object_mut().unwrap().remove("generated_at");
+    library
+}
+
 /// The name a page's text and image are kept under, and its image served
 /// by: the hex SHA-256 of its URL.
 pub fn kept_name(url: &str) -> String {
