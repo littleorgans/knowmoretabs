@@ -156,7 +156,26 @@ fn responses_close_the_connection_and_carry_no_cors_headers() {
 #[test]
 fn a_status_is_found_by_its_code_and_only_by_its_code() {
     for status in Status::ALL {
-        assert_eq!(Status::from_code(status.code()), Some(status));
+        // Keep this exhaustive so a new variant forces a review of ALL.
+        match status {
+            Status::Ok
+            | Status::PermanentRedirect
+            | Status::BadRequest
+            | Status::Forbidden
+            | Status::NotFound
+            | Status::MethodNotAllowed
+            | Status::Conflict
+            | Status::LengthRequired
+            | Status::ContentTooLarge
+            | Status::UnsupportedMediaType
+            | Status::RequestHeaderFieldsTooLarge
+            | Status::InternalServerError
+            | Status::BadGateway
+            | Status::ServiceUnavailable
+            | Status::GatewayTimeout => {
+                assert_eq!(Status::from_code(status.code()), Some(status));
+            }
+        }
     }
     for code in [0, 100, 201, 301, 401, 418, 501, 599] {
         assert_eq!(Status::from_code(code), None, "{code}");
