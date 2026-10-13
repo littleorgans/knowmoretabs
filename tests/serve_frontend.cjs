@@ -252,6 +252,30 @@ test('an export never asks the model', () => {
   assert.deepEqual(lib.shown(), ['Night train']);
 });
 
+// The keyword rule and the rank merge, held to the vectors src/search.rs checks.
+const vectors = JSON.parse(readFileSync(join(__dirname, 'fixtures/search_vectors.json'), 'utf8'));
+
+test('the ranked cap is the shared vectors\' rank_top', () => {
+  assert.equal(searchable([page(0)]).run('RANK_TOP'), vectors.rank_top);
+});
+
+test('the keyword rule matches the shared vectors', () => {
+  const lib = searchable(vectors.match.map(({ url, title }) => ({ url, title })));
+  for (const [i, { query, fields }] of vectors.match.entries()) {
+    lib.run(`S.q = ${JSON.stringify(query)}`);
+    assert.equal(lib.run(`matcher('')(S.pages[${i}])`), fields !== null, JSON.stringify(vectors.match[i]));
+  }
+});
+
+test('the rank merge matches the shared vectors', async () => {
+  for (const { query, ranked, shows } of vectors.pick) {
+    const lib = searchable(vectors.pages);
+    lib.type(query);
+    if (ranked) { lib.settle(); await lib.answer(0, { keys: ranked }); }
+    assert.deepEqual(JSON.parse(lib.run("JSON.stringify(pick('').map((p) => [p.url, !!ranked()?.at.has(p.url)]))")), shows, query);
+  }
+});
+
 // ---- The drawer's Content tab -----------------------------------------------
 // The renderer over one synthetic page, served or exported, with `document`
 // just deep enough for the top of the script.

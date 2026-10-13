@@ -159,7 +159,8 @@ pub fn command(
 /// The ranked pages search may show, in the service's order, at most
 /// [`RANK_TOP`], then the pages it has not indexed that the words match;
 /// without a ranking, every match in library order. Each with whether the
-/// service ranked it. `web/app.js` `pick`.
+/// service ranked it. `web/app.js` `pick`; both are held to
+/// `tests/fixtures/search_vectors.json`.
 fn pick<'a>(
     entries: &'a [Entry],
     words: &[String],
@@ -248,6 +249,8 @@ fn snippet(text: &str, words: &[String]) -> Option<String> {
 mod tests {
     use super::*;
 
+    use serde::Deserialize;
+
     use crate::page_text::{Kind, Text};
 
     fn entry(url: &str, title: &str, text: Option<&str>) -> Entry {
@@ -275,61 +278,62 @@ mod tests {
             .collect()
     }
 
+    fn vectors() -> Value {
+        serde_json::from_str(include_str!("../tests/fixtures/search_vectors.json")).unwrap()
+    }
+
+    fn text_of(value: &Value) -> &str {
+        value.as_str().unwrap()
+    }
+
     #[test]
-    fn every_word_must_be_somewhere_and_each_field_is_named() {
+    fn the_keyword_rule_matches_the_shared_vectors() {
+        for case in vectors()["match"].as_array().unwrap() {
+            let page = entry(text_of(&case["url"]), text_of(&case["title"]), None);
+            let fields: Option<Vec<&str>> = Deserialize::deserialize(&case["fields"]).unwrap();
+            assert_eq!(
+                page.matched(&words(text_of(&case["query"]))),
+                fields,
+                "{case}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_rank_merge_matches_the_shared_vectors() {
+        let vectors = vectors();
+        let pages: Vec<Entry> = vectors["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| entry(text_of(&p["url"]), text_of(&p["title"]), None))
+            .collect();
+        for case in vectors["pick"].as_array().unwrap() {
+            let ranked: Option<Vec<String>> = Deserialize::deserialize(&case["ranked"]).unwrap();
+            let shows: Vec<(String, bool)> = Deserialize::deserialize(&case["shows"]).unwrap();
+            let picked: Vec<(String, bool)> =
+                pick(&pages, &words(text_of(&case["query"])), ranked.as_deref())
+                    .into_iter()
+                    .map(|(e, ranked)| (e.url.clone(), ranked))
+                    .collect();
+            assert_eq!(picked, shows, "{case}");
+        }
+    }
+
+    /// The Library holds no page text, so this part of the rule is search's own.
+    #[test]
+    fn the_text_is_a_field_too() {
         let page = entry(
             "https://a.test/zeppelin",
             "Night trains",
             Some("Airship timetables"),
         );
-        assert_eq!(
-            page.matched(&words("NIGHT zeppelin")),
-            Some(vec!["title", "url"])
-        );
         assert_eq!(page.matched(&words("airship")), Some(vec!["text"]));
-        assert_eq!(page.matched(&words("night ferry")), None);
-        assert_eq!(page.matched(&[]), Some(vec![]));
         assert_eq!(
-            entry("https://a.test/", "", None).matched(&words("x")),
-            None
+            page.matched(&words("night airship")),
+            Some(vec!["title", "text"])
         );
-    }
-
-    #[test]
-    fn ranked_pages_come_first_in_the_services_order_then_unindexed_matches() {
-        let pages = [
-            entry("https://a.test/1", "zeppelin one", None),
-            entry("https://a.test/2", "other", None),
-            entry("https://a.test/3", "zeppelin three", None),
-            entry("https://a.test/4", "zeppelin four", None),
-        ];
-        let words = words("zeppelin");
-        let ranked = [
-            "https://a.test/2".to_owned(),
-            "https://a.test/1".to_owned(),
-            "https://gone.test/".to_owned(),
-        ];
-        let order: Vec<_> = pick(&pages, &words, Some(&ranked))
-            .into_iter()
-            .map(|(e, ranked)| (e.url.as_str(), ranked))
-            .collect();
-        assert_eq!(
-            order,
-            [
-                ("https://a.test/2", true),
-                ("https://a.test/1", true),
-                ("https://a.test/3", false),
-                ("https://a.test/4", false),
-            ]
-        );
-        let keyword: Vec<_> = pick(&pages, &words, None)
-            .into_iter()
-            .map(|(e, _)| e.url.as_str())
-            .collect();
-        assert_eq!(
-            keyword,
-            ["https://a.test/1", "https://a.test/3", "https://a.test/4"]
-        );
+        assert_eq!(page.matched(&words("airship ferry")), None);
     }
 
     #[test]
