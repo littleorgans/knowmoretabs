@@ -26,6 +26,7 @@ use crate::http::{
     self, BODY_LIMIT, Framing, HEAD_LIMIT, Head, IO_TIMEOUT, Response, Status, json_request,
 };
 use crate::library::{self, Shape};
+use crate::model_routes::Kind;
 use crate::model_service::{self, ModelService};
 use crate::triage::{self, Action};
 use crate::{
@@ -153,6 +154,34 @@ fn open_browser(url: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// A route's answer to the request and its body.
+type Handler = fn(&Server, &Head, &[u8]) -> Response;
+
+/// Every exact path the server answers, query cut, with its one method and
+/// its handler; any other method on one of these paths is a 405 naming that
+/// method. The image and model service prefixes are matched after these.
+const ROUTES: [(&str, &str, Handler); 11] = [
+    ("/", "GET", |s, _, _| s.page()),
+    ("/index.html", "GET", |s, _, _| s.page()),
+    ("/app.css", "GET", |_, _, _| asset("app.css", Kind::Css)),
+    ("/app.js", "GET", |_, _, _| asset("app.js", Kind::Script)),
+    ("/unavailable.js", "GET", |_, _, _| {
+        asset("unavailable.js", Kind::Script)
+    }),
+    ("/api/library", "GET", |s, _, _| s.library()),
+    ("/api/content", "GET", |s, head, _| s.content(&head.target)),
+    ("/api/forget", "POST", |s, head, body| {
+        s.triage(head, body, Action::Forget)
+    }),
+    ("/api/restore", "POST", |s, head, body| {
+        s.triage(head, body, Action::Restore)
+    }),
+    ("/api/tags", "POST", |s, head, body| s.tags(head, body)),
+    ("/api/vocabulary", "POST", |s, head, body| {
+        s.vocabulary(head, body)
+    }),
+];
+
 struct Server {
     root: PathBuf,
     port: u16,
@@ -199,15 +228,14 @@ impl Server {
 
     fn route(&self, head: &Head, body: &[u8]) -> Response {
         let path = head.target.split('?').next().unwrap_or("");
+        if let Some(&(_, method, handler)) = ROUTES.iter().find(|&&(route, ..)| route == path) {
+            return if head.method == method {
+                handler(self, head, body)
+            } else {
+                Response::method_not_allowed(method)
+            };
+        }
         match (head.method.as_str(), path) {
-            ("GET", "/" | "/index.html") => self.asset("index.html"),
-            ("GET", "/app.css" | "/app.js" | "/unavailable.js") => self.asset(&path[1..]),
-            ("GET", "/api/library") => self.library(),
-            ("GET", "/api/content") => self.content(&head.target),
-            ("POST", "/api/forget") => self.triage(head, body, Action::Forget),
-            ("POST", "/api/restore") => self.triage(head, body, Action::Restore),
-            ("POST", "/api/tags") => self.tags(head, body),
-            ("POST", "/api/vocabulary") => self.vocabulary(head, body),
             ("GET", _) if path.starts_with(image_store::ROUTE) => {
                 match image_store::served(&self.root, &path[image_store::ROUTE.len()..]) {
                     Ok(Some(jpeg)) => Response::ok("image/jpeg", jpeg),
@@ -220,36 +248,16 @@ impl Server {
             _ if path.starts_with(model_service::PREFIX) => {
                 model_service::forward(self.model.as_ref(), &self.root, head, path, body, self.log)
             }
-            (
-                _,
-                "/" | "/index.html" | "/app.css" | "/app.js" | "/unavailable.js" | "/api/library"
-                | "/api/content",
-            ) => Response::method_not_allowed("GET"),
-            (_, "/api/forget" | "/api/restore" | "/api/tags" | "/api/vocabulary") => {
-                Response::method_not_allowed("POST")
-            }
             _ => Response::error(Status::NotFound, "no such page"),
         }
     }
 
-    /// The same files `export` writes, and the unavailable page's script;
-    /// the data element is served empty so the page knows to fetch.
-    fn asset(&self, name: &str) -> Response {
-        if name == "index.html" {
-            return match export::page(Surface::Serve, "") {
-                Ok(html) => Response::html(Status::Ok, html.into_bytes(), Policy::Library),
-                Err(err) => self.failure(&err),
-            };
-        }
-        let Some(content) = assets::load(name) else {
-            return Response::error(Status::NotFound, "no such page");
-        };
-        match name {
-            "app.css" => Response::ok("text/css; charset=utf-8", content.as_bytes().to_vec()),
-            _ => Response::ok(
-                "text/javascript; charset=utf-8",
-                content.as_bytes().to_vec(),
-            ),
+    /// The page `export` writes, its data element served empty so the page
+    /// knows to fetch.
+    fn page(&self) -> Response {
+        match export::page(Surface::Serve, "") {
+            Ok(html) => Response::html(Status::Ok, html.into_bytes(), Policy::Library),
+            Err(err) => self.failure(&err),
         }
     }
 
@@ -424,6 +432,15 @@ impl Server {
     fn failure(&self, err: &Error) -> Response {
         self.log.warn(&err.to_string());
         Response::error(Status::InternalServerError, &err.to_string())
+    }
+}
+
+/// The files `export` writes beside its page, and the unavailable page's
+/// script.
+fn asset(name: &str, kind: Kind) -> Response {
+    match assets::load(name) {
+        Some(content) => Response::ok(kind.content_type(), content.as_bytes().to_vec()),
+        None => Response::error(Status::NotFound, "no such page"),
     }
 }
 

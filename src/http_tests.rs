@@ -153,6 +153,16 @@ fn responses_close_the_connection_and_carry_no_cors_headers() {
     assert!(text.ends_with("\r\n\r\n{\"error\":\"method not allowed\"}"));
 }
 
+#[test]
+fn a_status_is_found_by_its_code_and_only_by_its_code() {
+    for status in Status::ALL {
+        assert_eq!(Status::from_code(status.code()), Some(status));
+    }
+    for code in [0, 100, 201, 301, 401, 418, 501, 599] {
+        assert_eq!(Status::from_code(code), None, "{code}");
+    }
+}
+
 /// The caller's limit, not `HEAD_LIMIT`, bounds the head, and each way a
 /// message can fail to frame has its own name, so a server and a client
 /// can each give it their own answer.
