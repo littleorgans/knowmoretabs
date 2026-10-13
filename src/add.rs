@@ -230,19 +230,12 @@ pub struct Args<'a> {
 pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<ExitCode, Error> {
     // Surrounding whitespace is what a paste brings, never part of an address.
     let url = args.url.trim();
-    if json {
-        out::json(&library_line("running"));
-    }
+    let stages = Stages::start(json, log);
     let retry = args.content.is_some_and(|ask| !ask.retry.is_empty());
-    let outcome = apply(root, url, args.title, retry, waiting(json, log))?;
-    if json {
-        out::json(&library_done(&outcome));
-    }
+    let outcome = apply(root, url, args.title, retry, stages.waiting())?;
     // What follows is about the page the library holds, by its key.
     let url = outcome.key().unwrap_or(url);
-    if !json {
-        report(url, &outcome, args.content.is_some(), log);
-    }
+    stages.library(url, &outcome, args.content.is_some());
     let ended = match args.content {
         Some(ask) if outcome.in_library() => add_content::capture(root, url, ask, json, log),
         _ => Ended::default(),
@@ -256,34 +249,74 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
     {
         out::problem(&format!("knowmoretabs: {err}"));
     }
-    if json {
-        out::json(&done_line(url, &outcome, &ended));
-    }
-    Ok(if outcome.in_library() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
+    Ok(stages.done(url, &outcome, &ended, json!({})))
 }
 
-pub fn library_line(state: &str) -> Value {
-    json!({"stage": "library", "state": state})
+/// The stage lines an add says, in order, and the exit code it ends on.
+/// Under `--json`: the library stage as it runs, and the last line. Else
+/// the library stage is the report, and the last line is not said.
+#[derive(Debug, Clone, Copy)]
+pub struct Stages {
+    json: bool,
+    log: Log,
 }
 
-/// What the library stage says when another run holds the archive lock.
-pub fn waiting(json: bool, log: Log) -> impl FnOnce() {
-    move || {
+impl Stages {
+    /// Says the library stage is running.
+    pub fn start(json: bool, log: Log) -> Self {
         if json {
-            out::json(&library_line("waiting"));
+            out::json(&library_line("running"));
+        }
+        Self { json, log }
+    }
+
+    /// What the library stage says when another run holds the archive lock.
+    pub fn waiting(self) -> impl FnOnce() {
+        move || {
+            if self.json {
+                out::json(&library_line("waiting"));
+            } else {
+                self.log.warn(archive::WAITING);
+            }
+        }
+    }
+
+    /// How the library stage ended for `url`, the page's key; `more` as
+    /// [`report`] takes it.
+    pub fn library(self, url: &str, outcome: &Outcome, more: bool) {
+        if self.json {
+            out::json(&library_done(outcome));
         } else {
-            log.warn(archive::WAITING);
+            report(url, outcome, more, self.log);
+        }
+    }
+
+    /// The last line, with the fields of `also`, an object, beside its
+    /// own; and the run's exit code: success when the page is in the
+    /// library at the end, failure when it was refused or is forgotten.
+    pub fn done(self, url: &str, outcome: &Outcome, ended: &Ended, also: Value) -> ExitCode {
+        if self.json {
+            let mut line = done_line(url, outcome, ended);
+            if let (Some(line), Value::Object(also)) = (line.as_object_mut(), also) {
+                line.extend(also);
+            }
+            out::json(&line);
+        }
+        if outcome.in_library() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
         }
     }
 }
 
+fn library_line(state: &str) -> Value {
+    json!({"stage": "library", "state": state})
+}
+
 /// How the library stage ended, and the key the library holds the page
 /// under, so a caller has it before any later stage.
-pub fn library_done(outcome: &Outcome) -> Value {
+fn library_done(outcome: &Outcome) -> Value {
     let mut line = library_line("done");
     line["value"] = outcome.value().into();
     if let Some(key) = outcome.key() {
@@ -298,7 +331,7 @@ pub fn library_done(outcome: &Outcome) -> Value {
 /// The last line: the page's key (the asked address on a refusal), how the
 /// library stage ended, and the text's and the image's status names, null
 /// when there is none.
-pub fn done_line(url: &str, outcome: &Outcome, ended: &Ended) -> Value {
+fn done_line(url: &str, outcome: &Outcome, ended: &Ended) -> Value {
     json!({"stage": "done", "state": "done", "url": url, "value": outcome.value(),
         "content": ended.content, "image": ended.image})
 }
@@ -307,7 +340,7 @@ pub fn done_line(url: &str, outcome: &Outcome, ended: &Ended) -> Value {
 /// exits on, on stderr whatever `-q` says, as every command's is. A known
 /// page is left as it was only when nothing `more` is done to it: no
 /// capture, no new pin.
-pub fn report(url: &str, outcome: &Outcome, more: bool, log: Log) {
+fn report(url: &str, outcome: &Outcome, more: bool, log: Log) {
     match outcome {
         Outcome::Added(_) if !log.quiet => out::line(&format!("added {url} to your library")),
         Outcome::Known(_) if !log.quiet && more => {

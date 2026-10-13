@@ -24,6 +24,8 @@ use std::io::Read as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+use serde_json::json;
+
 use crate::add;
 use crate::add_content::Ended;
 use crate::archive;
@@ -32,7 +34,6 @@ use crate::content_fetch::BODY_CAP;
 use crate::content_store::sha256_hex;
 use crate::error::Error;
 use crate::jsonl::Appender;
-use crate::out;
 use crate::source_git::Git;
 use crate::source_key;
 use crate::sources::{self, Checkouts, Format, Pin};
@@ -112,11 +113,9 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
         .title
         .or(doc.title.as_deref())
         .or(doc.path.is_some().then_some(doc.name.as_str()));
-    if json {
-        out::json(&add::library_line("running"));
-    }
+    let stages = add::Stages::start(json, log);
     let pinned = Cell::new(false);
-    let outcome = add::admit(root, &key, title, false, add::waiting(json, log), |lock| {
+    let outcome = add::admit(root, &key, title, false, stages.waiting(), |lock| {
         let pins = sources::pins(root)?;
         if pins
             .pages
@@ -132,20 +131,13 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
     if let (Home::Repo { repo, top, .. }, true) = (&home, outcome.in_library()) {
         remember(args.checkouts, repo, top)?;
     }
-    if json {
-        out::json(&add::library_done(&outcome));
-        let mut done = add::done_line(&key, &outcome, &Ended::default());
-        done["pinned"] = pinned.get().into();
-        done["source"] = pin.source();
-        out::json(&done);
-    } else {
-        add::report(&key, &outcome, pinned.get(), log);
-    }
-    Ok(if outcome.in_library() {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    })
+    stages.library(&key, &outcome, pinned.get());
+    Ok(stages.done(
+        &key,
+        &outcome,
+        &Ended::default(),
+        json!({"pinned": pinned.get(), "source": pin.source()}),
+    ))
 }
 
 impl Document {
