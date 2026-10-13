@@ -91,19 +91,27 @@ def load(model: Model, *, local_files_only: bool = False):
     return st, stats
 
 
-def page_body(record: dict) -> str | None:
-    """A page's kept text when it is ok, a local document's as `read` prints it; None for none."""
-    if record["text_ok"]:
-        return content_body(Path(record["content_path"]))
-    return (kmt.read(record["read"]) or None) if record.get("read") else None
+def page_bodies(records: list[dict]) -> list[str | None]:
+    """Each page's kept text when it is ok, a local document's as `read` prints it, every document read by one call;
+    None for none."""
+    printed = iter(kmt.read([r["read"] for r in records if not r["text_ok"] and r.get("read")]))
+    bodies = []
+    for r in records:
+        if r["text_ok"]:
+            bodies.append(content_body(Path(r["content_path"])))
+        elif r.get("read"):
+            bodies.append(next(printed) or None)
+        else:
+            bodies.append(None)
+    return bodies
 
 
 def page_texts(records: list[dict], with_text: bool, chars: int) -> list[tuple[str, str]]:
     """(title, text) per page; text is A, plus the page body when asked for and there is one."""
     out = []
-    for r in records:
+    for r, body in zip(records, page_bodies(records) if with_text else [None] * len(records), strict=True):
         text = r["a_text"]
-        if with_text and (body := page_body(r)) is not None:
+        if body is not None:
             text = text + "\n\n" + body[:chars]
         out.append((r["title"], text))
     return out
@@ -206,13 +214,10 @@ def model_identity(model: Model, *, image: bool = False, dim: int | None = None)
 
 
 def text_docs(records: list[dict], model: Model, name: str) -> list[str]:
-    """The exact formatted, character capped strings passed to encode."""
-    return [
-        r["_embedding_doc"]
-        if "_embedding_doc" in r
-        else model.format(*page_texts([r], name == "B", MAX_TOKENS * CHAR_CAP)[0])
-        for r in records
-    ]
+    """The exact formatted, character capped strings passed to encode; pages not yet formatted are read together."""
+    missing = [r for r in records if "_embedding_doc" not in r]
+    formatted = iter([model.format(*page) for page in page_texts(missing, name == "B", MAX_TOKENS * CHAR_CAP)])
+    return [r["_embedding_doc"] if "_embedding_doc" in r else next(formatted) for r in records]
 
 
 def input_rows(records: list[dict], model: Model, name: str) -> list[dict]:

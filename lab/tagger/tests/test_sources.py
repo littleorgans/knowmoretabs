@@ -31,9 +31,11 @@ def archive(root: Path) -> Archive:
     return Archive.load(root)
 
 
-def test_a_documents_text_is_embedded_from_read_and_never_kept(tmp_path):
+def test_a_documents_text_is_embedded_from_read_and_never_kept(tmp_path, monkeypatch):
     root = tmp_path / "archive"
     binary = fake_binary(tmp_path)
+    runs = tmp_path / "runs.jsonl"
+    monkeypatch.setenv("FAKE_KMT_LOG", str(runs))
     _, records = dataset.app_records(Paths(tmp_path / "data"), archive(root), binary=binary)
     by_key = {r["key"]: r for r in records}
     assert by_key[NOTE]["read"] == [binary, "--root", str(root), "read", "--", NOTE]
@@ -46,11 +48,15 @@ def test_a_documents_text_is_embedded_from_read_and_never_kept(tmp_path):
     assert texts[LOOSE][1].endswith("\n\n" + body)
     assert texts[UNPINNED] == ("Unpinned", "example.test/o/r//notes/unpinned.md"), "read refused: title and path only"
     assert texts[WEB] == ("Plain", "web.example/plain")
+    # Every document is read by one run, refusals included.
+    reads = [json.loads(line)["argv"] for line in runs.read_text().splitlines()]
+    assert reads == [["--root", str(root), "read", "--json", "--", *(r["key"] for r in records if r["read"])]]
     assert page_texts(records, False, MAX_TOKENS * CHAR_CAP)[0][1] == by_key[records[0]["key"]]["a_text"]
 
     # The vector's input hash is over the document's text, so it moves when the pinned bytes do.
     model = MODELS["eg2"]
     hashes = {row["id"]: row["hash"] for row in input_rows(records, model, "B")}
+    assert len(runs.read_text().splitlines()) == 2, "input B's documents are read together"
     assert hashes[NOTE] == sha256_hex(model.format("Quokka note", texts[NOTE][1]))
     assert hashes[NOTE] != {row["id"]: row["hash"] for row in input_rows(records, model, "A")}[NOTE]
 

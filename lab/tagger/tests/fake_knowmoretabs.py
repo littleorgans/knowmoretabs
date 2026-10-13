@@ -16,8 +16,8 @@ known URL is `known`; a forgotten one is refused as `forgotten`, anything but a 
 under `--retry` an unknown one as `refused`, `not_in_library`, all exiting 1. `--title` or `--no-content` with `--retry` is a usage error: exit 2,
 nothing on stdout. `forget -- <url>…` and `restore -- <url>…` edit `library.json`'s forgotten list, replacing the
 file as knowmoretabs does, and refuse the whole call, writing nothing, when one URL is not in the library (for
-`restore`, neither known nor forgotten). `read -- <key>` prints `SOURCE_BODY` for a key with a line in
-`pages/sources.jsonl`, and refuses any other with exit 1. `FAKE_KMT_DELAY` (seconds) paces the lines; `FAKE_KMT_LOG` names a file that
+`restore`, neither known nor forgotten). `read --json -- <key>…` prints one line per key, in order: `SOURCE_BODY` as
+the text of a key with a line in `pages/sources.jsonl`, a refusal for any other, exiting 1 when any was refused. `FAKE_KMT_DELAY` (seconds) paces the lines; `FAKE_KMT_LOG` names a file that
 gets each argument list, and with it the add right after a `restore` of a `relapse` page fails with the error
 document. Every page, title and text here is invented.
 """
@@ -296,12 +296,17 @@ def main(argv: list[str]) -> int:
     assert argv[0] == "--root", argv
     root, command, rest = Path(argv[1]), argv[2], argv[3:]
     if command == "read":
-        key = rest[rest.index("--") + 1]
-        if key not in latest_log(root / "pages" / "sources.jsonl"):
-            print(f"knowmoretabs: cannot read {key}: no source in your library has this key", file=sys.stderr)
-            return 1
-        print(SOURCE_BODY)
-        return 0
+        assert rest[: rest.index("--")] == ["--json"], rest
+        keys = rest[rest.index("--") + 1 :]
+        pins = latest_log(root / "pages" / "sources.jsonl")
+        for key in keys:
+            if key in pins:
+                kind = "git" if key.startswith("kmt-git:") else "blob"
+                emit({"schema_version": 1, "url": key, "kind": kind, "text": SOURCE_BODY + "\n"})
+            else:
+                error = {"kind": "source_read", "message": f"cannot read {key}: not a page you added", "detail": None}
+                emit({"schema_version": 1, "url": key, "error": error})
+        return 0 if all(key in pins for key in keys) else 1
     if command == "add":
         args = parse(rest[: rest.index("--")])
         if args is None:
