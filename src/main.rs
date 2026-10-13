@@ -3,7 +3,7 @@
 //!
 //! slice: capture, library, triage, tags, history, enrich, content, add, sources
 //! why: Commands are dispatched here, with presentation delegated to their
-//!      modules and save_report.rs. Typed errors become terminal lines or
+//!      modules and `save_report.rs`. Typed errors become terminal lines or
 //!      JSON and exit codes here. Every slice that added a command added
 //!      its dispatch here, so this file claims each of them.
 
