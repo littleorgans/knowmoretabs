@@ -26,11 +26,9 @@ use serde_json::{Value, json};
 
 use crate::capture::Log;
 use crate::error::Error;
-use crate::library::{self, State};
 use crate::model_service::ModelService;
-use crate::source_key::{self, Key};
-use crate::sources::{self, Checkouts, Resolver};
-use crate::{content_store, intake, out};
+use crate::page_text::{self, PageText, Reader};
+use crate::{out, sources};
 
 pub const SCHEMA_VERSION: u32 = 1;
 /// Ranked pages kept, as the Library shows them (`RANK_TOP` in `web/app.js`).
@@ -40,23 +38,23 @@ const SNIPPET_CHARS: usize = 200;
 /// How much of the quote comes before the first word found.
 const SNIPPET_LEAD: usize = 60;
 
-/// What a result is.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "lowercase")]
-enum Kind {
-    Web,
-    Git,
-    Blob,
-}
-
 /// A page search can find, with what it says.
 struct Entry {
     url: String,
     title: String,
-    kind: Kind,
-    /// The pin's resolution; `None` for a web page.
-    resolved: Option<(sources::State, Option<&'static str>, Value)>,
-    text: Option<String>,
+    page: PageText,
+}
+
+/// One result, as `--json` writes it.
+#[derive(Serialize)]
+struct Hit<'a> {
+    url: &'a str,
+    title: &'a str,
+    #[serde(flatten)]
+    page: &'a PageText,
+    matched: Vec<&'static str>,
+    snippet: Option<String>,
+    ranked: bool,
 }
 
 impl Entry {
@@ -65,7 +63,7 @@ impl Entry {
     fn matched(&self, words: &[String]) -> Option<Vec<&'static str>> {
         let title = self.title.to_lowercase();
         let url = self.url.to_lowercase();
-        let text = self.text.as_deref().map(str::to_lowercase);
+        let text = self.text().map(str::to_lowercase);
         let fields = [
             ("title", Some(&title)),
             ("url", Some(&url)),
@@ -91,21 +89,18 @@ impl Entry {
         )
     }
 
+    fn text(&self) -> Option<&str> {
+        self.page.text.as_ref().map(|text| text.body.as_str())
+    }
+
     fn result(&self, words: &[String], ranked: bool) -> Value {
-        let (state, why, source) = match &self.resolved {
-            Some((state, why, source)) => (Some(*state), *why, source.clone()),
-            None => (None, None, Value::Null),
-        };
-        json!({
-            "url": self.url,
-            "kind": self.kind,
-            "title": self.title,
-            "matched": self.matched(words).unwrap_or_default(),
-            "snippet": self.text.as_deref().and_then(|text| snippet(text, words)),
-            "source": source,
-            "state": state,
-            "why": why,
-            "ranked": ranked,
+        json!(Hit {
+            url: &self.url,
+            title: &self.title,
+            page: &self.page,
+            matched: self.matched(words).unwrap_or_default(),
+            snippet: self.text().and_then(|text| snippet(text, words)),
+            ranked,
         })
     }
 }
@@ -151,13 +146,9 @@ pub fn command(
         }));
     } else if !log.quiet {
         for (entry, _) in &hits {
-            let state = match &entry.resolved {
-                Some((sources::State::Fresh, ..)) | None => String::new(),
-                Some((state, why, _)) => format!(
-                    "  [{}: {}]",
-                    json!(state).as_str().unwrap_or(""),
-                    why.unwrap_or("")
-                ),
+            let state = match entry.page.state {
+                Some(sources::State::Fresh) | None => String::new(),
+                Some(state) => format!("  [{}: {}]", state.word(), entry.page.why.unwrap_or("")),
             };
             out::line(&format!("{}  {}{state}", entry.url, entry.title));
         }
@@ -208,46 +199,18 @@ fn pick<'a>(
 /// Every added page the library lists and has not forgotten, with its
 /// text: a document's from its pin, a web page's as kept.
 fn entries(root: &Path, checkouts: &Path) -> Result<Vec<Entry>, Error> {
-    let Some(added) = intake::snapshot(root)? else {
-        return Ok(Vec::new());
-    };
-    let forgotten = State::read(root)?.forgotten;
-    let pins = sources::pins(root)?;
-    let mut pinned: Option<Resolver> = None;
-    let mut entries = Vec::new();
-    for tab in added.tabs {
-        if !library::is_listed(&tab.url) || forgotten.contains(&tab.url) {
-            continue;
-        }
-        let kind = match source_key::parse(&tab.url) {
-            Some(Key::Git { .. }) => Kind::Git,
-            Some(Key::Blob { .. }) => Kind::Blob,
-            None => Kind::Web,
-        };
-        let (resolved, text) = if kind == Kind::Web {
-            (None, content_store::kept_text(root, &tab.url)?)
-        } else {
-            let resolver = match &mut pinned {
-                Some(resolver) => resolver,
-                none => none.insert(Resolver::new(Checkouts::read(checkouts)?)),
-            };
-            let pin = pins.pages.get(&tab.url);
-            let resolution = resolver.resolve(pin);
-            let source = pin.map_or(Value::Null, sources::Pin::source);
-            (
-                Some((resolution.state, resolution.why, source)),
-                resolution.text.map(|text| text.body),
-            )
-        };
-        entries.push(Entry {
-            url: tab.url,
-            title: tab.title,
-            kind,
-            resolved,
-            text,
-        });
-    }
-    Ok(entries)
+    let (added, _) = page_text::added(root)?;
+    let mut reader = Reader::new(root, Some(checkouts));
+    added
+        .into_iter()
+        .map(|tab| {
+            Ok(Entry {
+                page: reader.text(&tab.url)?,
+                url: tab.url,
+                title: tab.title,
+            })
+        })
+        .collect()
 }
 
 /// About [`SNIPPET_CHARS`] of `text` around the first query word it holds,
@@ -285,13 +248,22 @@ fn snippet(text: &str, words: &[String]) -> Option<String> {
 mod tests {
     use super::*;
 
+    use crate::page_text::{Kind, Text};
+
     fn entry(url: &str, title: &str, text: Option<&str>) -> Entry {
         Entry {
             url: url.to_owned(),
             title: title.to_owned(),
-            kind: Kind::Web,
-            resolved: None,
-            text: text.map(ToOwned::to_owned),
+            page: PageText {
+                kind: Kind::Web,
+                state: None,
+                why: None,
+                source: Value::Null,
+                text: text.map(|body| Text {
+                    title: None,
+                    body: body.to_owned(),
+                }),
+            },
         }
     }
 

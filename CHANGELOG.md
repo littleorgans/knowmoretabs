@@ -258,7 +258,11 @@ as what you can do that you could not before.
   `checkouts.json`. `knowmoretabs search --json` finds added pages and
   documents by what they say, ranked by the model service when given, and
   says whether each document's text is fresh, stale or unresolved.
-  `knowmoretabs read KEY` prints a document's text.
+  `knowmoretabs read KEY` prints the text of any page search lists, a web
+  page's as kept and a document's as pinned; `--json read KEY...` gives one
+  line per key, its text or why it was refused. The Library drawer's Content
+  tab shows a document's text as `read` prints it, through the checkouts file
+  `serve --checkouts` names.
 
 ### Changed
 

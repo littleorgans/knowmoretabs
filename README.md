@@ -220,7 +220,7 @@ knowmoretabs tag --prompt DIR    # a work folder for an agent: prompt.md and the
 knowmoretabs tag --import FILE   # check an agent's tags.jsonl and store it as suggestions; --dry-run
 knowmoretabs add --file FILE     # a local markdown, text or PDF document, by reference; --file - reads stdin
 knowmoretabs search QUERY        # added pages and documents by what they say; --model-port N ranks them
-knowmoretabs read KEY            # the text of a document add --file kept, by its key
+knowmoretabs read KEY            # the text of a page search lists, by its key; several with --json
 ```
 
 `tag --prompt` covers pages that show none of your tags and have no imported
@@ -321,8 +321,12 @@ and says of each whether its text is `fresh`, `stale` (the checkout has moved
 on; the pinned text is still what is searched) or `unresolved`, and why. It
 never reads your snapshots or History, and never lists a forgotten page. With
 `--model-port N --model-secret-file FILE` the model service ranks the query
-first, as in the Library. `read KEY` prints one document's text. None of the
-three sends anything off the machine.
+first, as in the Library. `read KEY` prints the text of a page search lists, a
+web page's as kept and a document's as pinned; it refuses a forgotten page and
+one you did not add. `--json read KEY...` prints one line per key, its text or
+why it was refused, and exits 1 when any was. None of the three sends anything
+off the machine. The Library's Content tab shows a document's text too, read
+through the same checkouts file (`serve --checkouts FILE` for another).
 
 ## Page text, if you ask for it
 

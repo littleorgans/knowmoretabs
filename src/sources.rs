@@ -1,6 +1,6 @@
 //! Local documents kept by reference: the pins log `pages/sources.jsonl`,
-//! the machine's `checkouts.json`, the resolver from a key to the pinned
-//! bytes and their text, and `knowmoretabs read`.
+//! the machine's `checkouts.json`, and the resolver from a key to the
+//! pinned bytes and their text.
 //!
 //! slice: sources
 //! why: A note in a repository or a paper on disk is the owner's own
@@ -14,8 +14,6 @@
 //!      `HEAD` (`stale`) or out of reach (`unresolved`), so no answer is
 //!      silently missing or silently outdated. Text is read from the bytes
 //!      in memory, a PDF through content's own reader, and never written.
-//!      `read` prints one document's text, so an agent or the tagger lab
-//!      gets it through this one resolver rather than a second copy of it.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -24,14 +22,14 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::capture::Log;
 use crate::content_fetch::BODY_CAP;
 use crate::digest::sha256_hex;
 use crate::error::Error;
 use crate::jsonl::{self, Keyed};
+use crate::page_text::Text;
 use crate::source_git::Git;
 use crate::source_key::{self, Key};
-use crate::{archive, content_pdf, library, metadata, out};
+use crate::{archive, content_pdf, metadata};
 
 pub const FILE: &str = "sources.jsonl";
 pub const SCHEMA_VERSION: u32 = 1;
@@ -50,13 +48,6 @@ pub enum Format {
     Md,
     Txt,
     Pdf,
-}
-
-/// A document's text, and the title it gives itself.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Text {
-    pub title: Option<String>,
-    pub body: String,
 }
 
 impl Format {
@@ -226,6 +217,17 @@ pub enum State {
     Unresolved,
 }
 
+impl State {
+    /// The state's name, as results write it.
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Fresh => "fresh",
+            Self::Stale => "stale",
+            Self::Unresolved => "unresolved",
+        }
+    }
+}
+
 /// A pin resolved: its state, why when it is not fresh, and its text when
 /// the bytes could be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -340,53 +342,6 @@ impl Resolver {
     }
 }
 
-/// `knowmoretabs read`: the text of the source `key`, as pinned, on
-/// stdout. A stale pin's text is still the pinned bytes, said on stderr.
-pub fn read_command(
-    root: &Path,
-    key: &str,
-    checkouts: &Path,
-    json: bool,
-    log: Log,
-) -> Result<(), Error> {
-    let failed = |reason: &str| Error::SourceRead {
-        key: key.to_owned(),
-        reason: reason.to_owned(),
-    };
-    if source_key::parse(key).is_none() {
-        return Err(failed("not a source key (kmt-git: or kmt-blob:)"));
-    }
-    if library::State::read(root)?.forgotten.contains(key) {
-        return Err(failed("this source is forgotten; restore it first"));
-    }
-    let pins = pins(root)?;
-    let pin = pins
-        .pages
-        .get(key)
-        .ok_or_else(|| failed("no source in your library has this key"))?;
-    let resolved = Resolver::new(Checkouts::read(checkouts)?).resolve(Some(pin));
-    let Some(text) = resolved.text else {
-        return Err(failed(resolved.why.unwrap_or("unreadable")));
-    };
-    if json {
-        out::json(&json!({
-            "schema_version": SCHEMA_VERSION,
-            "url": key,
-            "state": resolved.state,
-            "why": resolved.why,
-            "source": pin.source(),
-            "title": text.title,
-            "text": text.body,
-        }));
-        return Ok(());
-    }
-    if let Some(why) = resolved.why {
-        log.warn(&format!("{key} is stale: {why}; this is the text as added"));
-    }
-    out::block(&text.body);
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -436,6 +391,13 @@ mod tests {
         assert_eq!(written["repos"]["example.test/o/r"], "/c");
         std::fs::write(&file, r#"{"schema_version":2}"#).unwrap();
         assert!(matches!(Checkouts::read(&file), Err(Error::Checkouts(_))));
+    }
+
+    #[test]
+    fn a_state_says_its_word_as_json_does() {
+        for state in [State::Fresh, State::Stale, State::Unresolved] {
+            assert_eq!(json!(state), state.word());
+        }
     }
 
     #[test]

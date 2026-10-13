@@ -9,6 +9,7 @@ from test_add import fake_binary
 
 import fake_knowmoretabs
 from tagger import dataset
+from tagger.app import kmt
 from tagger.archive import Archive, sha256_hex
 from tagger.embed import CHAR_CAP, MAX_TOKENS, MODELS, input_rows, page_texts
 from tagger.paths import Paths
@@ -31,9 +32,11 @@ def archive(root: Path) -> Archive:
     return Archive.load(root)
 
 
-def test_a_documents_text_is_embedded_from_read_and_never_kept(tmp_path):
+def test_a_documents_text_is_embedded_from_read_and_never_kept(tmp_path, monkeypatch):
     root = tmp_path / "archive"
     binary = fake_binary(tmp_path)
+    runs = tmp_path / "runs.jsonl"
+    monkeypatch.setenv("FAKE_KMT_LOG", str(runs))
     _, records = dataset.app_records(Paths(tmp_path / "data"), archive(root), binary=binary)
     by_key = {r["key"]: r for r in records}
     assert by_key[NOTE]["read"] == [binary, "--root", str(root), "read", "--", NOTE]
@@ -46,11 +49,15 @@ def test_a_documents_text_is_embedded_from_read_and_never_kept(tmp_path):
     assert texts[LOOSE][1].endswith("\n\n" + body)
     assert texts[UNPINNED] == ("Unpinned", "example.test/o/r//notes/unpinned.md"), "read refused: title and path only"
     assert texts[WEB] == ("Plain", "web.example/plain")
+    # Every document is read by one run, refusals included.
+    reads = [json.loads(line)["argv"] for line in runs.read_text().splitlines()]
+    assert reads == [["--root", str(root), "read", "--json", "--", *(r["key"] for r in records if r["read"])]]
     assert page_texts(records, False, MAX_TOKENS * CHAR_CAP)[0][1] == by_key[records[0]["key"]]["a_text"]
 
     # The vector's input hash is over the document's text, so it moves when the pinned bytes do.
     model = MODELS["eg2"]
     hashes = {row["id"]: row["hash"] for row in input_rows(records, model, "B")}
+    assert len(runs.read_text().splitlines()) == 2, "input B's documents are read together"
     assert hashes[NOTE] == sha256_hex(model.format("Quokka note", texts[NOTE][1]))
     assert hashes[NOTE] != {row["id"]: row["hash"] for row in input_rows(records, model, "A")}[NOTE]
 
@@ -65,3 +72,20 @@ def test_without_the_binary_a_document_embeds_its_title_and_path(tmp_path):
     _, records = dataset.app_records(Paths(tmp_path / "data"), archive(root), binary=str(tmp_path / "absent"))
     texts = dict(zip((r["key"] for r in records), page_texts(records, True, 100), strict=True))
     assert texts[NOTE] == ("Quokka note", "example.test/o/r//notes/quokka.md")
+
+
+def test_a_large_library_is_read_in_bounded_batches(tmp_path, monkeypatch):
+    """Keys go to `read` in batches, so a large library stays under the process argument limit."""
+    root = tmp_path / "archive"
+    binary = fake_binary(tmp_path)
+    runs = tmp_path / "runs.jsonl"
+    monkeypatch.setenv("FAKE_KMT_LOG", str(runs))
+    monkeypatch.setattr(kmt, "READ_BATCH_SIZE", 2)
+    _, records = dataset.app_records(Paths(tmp_path / "data"), archive(root), binary=binary)
+    texts = dict(zip((r["key"] for r in records), page_texts(records, True, MAX_TOKENS * CHAR_CAP), strict=True))
+    reads = [json.loads(line)["argv"] for line in runs.read_text().splitlines()]
+    keys = [r["key"] for r in records if r["read"]]
+    assert reads == [["--root", str(root), "read", "--json", "--", *keys[i : i + 2]] for i in (0, 2)]
+    assert texts[NOTE][1].endswith("\n\n" + fake_knowmoretabs.SOURCE_BODY + "\n")
+    assert texts[LOOSE][1].endswith("\n\n" + fake_knowmoretabs.SOURCE_BODY + "\n")
+    assert texts[UNPINNED] == ("Unpinned", "example.test/o/r//notes/unpinned.md"), "a refused batch reads nothing"
