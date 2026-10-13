@@ -1,7 +1,7 @@
 //! `knowmoretabs serve`: the library over HTTP/1.1 on 127.0.0.1.
 //!
 //! slice: triage, platforms, tags
-//! why: Routing over the archive: ten routes, one client, each answered
+//! why: Routing over the archive: one client, each request answered
 //!      from the archive on disk and every write through the same locked
 //!      paths the commands use, plus one prefix forwarded to the model
 //!      service (`model_service`). It binds loopback only; the wire, its
