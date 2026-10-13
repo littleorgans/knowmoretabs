@@ -88,8 +88,7 @@ the pinned pages as a view (again, Esc or Back returns to the results). Keys: `/
 open, `f` forget, `p` pin, `u` or Ctrl+Z undo while the message shows, Esc leaves ≈ or Pinned (else clears the
 selection), `?` help.
 The selection and the pins live in `<data>/app/selection.json` and `pinned.json`, results marked not relevant in
-`not-relevant.json`. An earlier app kept its own decisions in `state.json`, its forgotten pages in `forgotten.json`
-and Send to library records in `exports/`: those files stay where they are, unread; Send to library is gone.
+`not-relevant.json`.
 `knowmoretabs serve` reads the archive on every request: reload the Library to see a change made here.
 Add link (`#add`; `#add=<encoded link>&title=<encoded title>` fills the box and focuses Add, which waits for Enter):
 Add, Enter, or a paste of a web address into the empty box starts a job that runs
