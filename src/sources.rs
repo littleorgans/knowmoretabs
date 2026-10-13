@@ -31,7 +31,7 @@ use crate::error::Error;
 use crate::jsonl::{self, Keyed};
 use crate::source_git::Git;
 use crate::source_key::{self, Key};
-use crate::{archive, content_pdf, metadata, out};
+use crate::{archive, content_pdf, library, metadata, out};
 
 pub const FILE: &str = "sources.jsonl";
 pub const SCHEMA_VERSION: u32 = 1;
@@ -355,6 +355,9 @@ pub fn read_command(
     };
     if source_key::parse(key).is_none() {
         return Err(failed("not a source key (kmt-git: or kmt-blob:)"));
+    }
+    if library::State::read(root)?.forgotten.contains(key) {
+        return Err(failed("this source is forgotten; restore it first"));
     }
     let pins = pins(root)?;
     let pin = pins

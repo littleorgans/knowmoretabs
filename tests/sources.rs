@@ -487,6 +487,50 @@ fn search_never_returns_history_sessions_or_forgotten_pages() {
 }
 
 #[test]
+fn read_refuses_forgotten_sources_until_restored_without_changing_the_archive() {
+    let desk = Desk::new();
+    assert_success(&desk.add(&desk.repo.join("notes").join("evals.md")));
+    let bytes = b"# Loose note\nA quokka on the shelf.\n";
+    let loose = blob_key(bytes);
+    assert_success(&desk.add(&desk.loose("loose.md", bytes)));
+
+    for key in [NOTE, loose.as_str()] {
+        assert_success(&desk.run(&["forget", key]));
+        let before = common::fingerprint(&desk.fx.root);
+        for args in [vec!["read", key], vec!["--json", "read", key]] {
+            let output = desk.run(&args);
+            assert_eq!(output.status.code(), Some(1));
+            if args[0] == "--json" {
+                let error: Value = serde_json::from_str(&stdout(&output)).unwrap();
+                assert_eq!(error["error"]["kind"], "source_read");
+                assert!(
+                    error["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("forgotten")
+                );
+                assert!(error.get("text").is_none());
+            } else {
+                assert_eq!(stdout(&output), "");
+                assert!(stderr(&output).contains("forgotten"));
+            }
+        }
+        assert_eq!(common::fingerprint(&desk.fx.root), before);
+        assert_success(&desk.run(&["restore", key]));
+        let read = desk.run(&["read", key]);
+        assert_success(&read);
+        assert_eq!(
+            stdout(&read),
+            if key == NOTE {
+                NOTE_TEXT
+            } else {
+                std::str::from_utf8(bytes).unwrap()
+            }
+        );
+    }
+}
+
+#[test]
 fn search_on_a_missing_archive_finds_nothing_and_creates_nothing() {
     let desk = Desk::new();
     assert_eq!(urls(&desk.search("quokka")), NONE);
