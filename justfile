@@ -14,7 +14,9 @@ check:
 test:
     cargo test --workspace --all-targets --locked
     node --test tests/serve_frontend.cjs tests/extension.cjs
-    uv run --locked --project lab/tagger pytest -q lab/tagger/tests
+    # As CI's lab job: the shell and browser tests run behind this checkout's debug build.
+    cargo build --locked
+    KMT_BIN="${CARGO_TARGET_DIR:-$PWD/target}/debug/knowmoretabs" uv run --locked --project lab/tagger pytest -q lab/tagger/tests
 
 install:
     #!/usr/bin/env sh

@@ -25,7 +25,7 @@ Toolchains: on the owner's machine Homebrew's rust comes before rustup on `PATH`
 
 - Formatting: `cargo fmt --all -- --check`.
 - Slice metadata, after touching a `//!` header, `slices.toml` or adding a source file: `cargo run --locked --package xtask -- slices --check`. Without `--check`, `cargo xtask slices` regenerates the matrix doc (`code:xtask/src/main.rs#run`, `code:.cargo/config.toml`).
-- Local recipes: `just check` runs rustfmt, `scripts/clippy.py`, the slice check, and ruff check and format on `lab/tagger` and `scripts`; `just test` runs the Full and Frontend gates and the tagger tests, without setting `KMT_BIN`, so the lab step uses any inherited value (`code:justfile`).
+- Local recipes: `just check` runs rustfmt, `scripts/clippy.py`, the slice check, and ruff check and format on `lab/tagger` and `scripts`; `just test` runs the Full and Frontend gates, then `cargo build --locked` and the tagger tests with `KMT_BIN` on that debug build, as CI does (`code:justfile`).
 - Tagger lab, after touching `lab/tagger`: `uv run --locked --project lab/tagger pytest -q lab/tagger/tests`. CI runs it as the lab job. With `KMT_BIN` set to a build (`cargo build --locked`, then `KMT_BIN="$PWD/target/debug/knowmoretabs"`), the shell tests and `test_auto_sync.py`, an end to end run of Tag and Add link writing through the real shell, run against that binary on scratch roots; without it they skip. The browser cases in `code:lab/tagger/tests/test_browser.py` run behind that binary where Node and Chrome are found, and fail without `KMT_BIN` there.
 - Release machinery: `.github/workflows/release.yml` runs on a `v*` tag or by hand; on a tag it fails unless the tag matches the `Cargo.toml` version and the changelog has a dated heading for it (`code:.github/workflows/release.yml`).
 
@@ -48,4 +48,4 @@ Actions are pinned to commit SHAs.
 
 ## Expected failures
 
-`just test` does not set `KMT_BIN`. Where Node and Chrome are available, the lab browser cases fail unless `KMT_BIN` is inherited and names a build; the other shell cases and `test_auto_sync.py` skip without it (`code:justfile`, `code:lab/tagger/tests/test_browser.py`, `code:lab/tagger/tests/test_auto_sync.py`).
+The lab pytest run directly, without `KMT_BIN`: where Node and Chrome are available, the lab browser cases fail; the other shell cases and `test_auto_sync.py` skip (`code:lab/tagger/tests/test_browser.py`, `code:lab/tagger/tests/test_auto_sync.py`). `just test` sets it (`code:justfile`).
