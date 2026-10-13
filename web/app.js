@@ -115,7 +115,7 @@ const TICKS = '<i class="src" aria-hidden="true"></i>';
 const isForm = (el) => el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.type !== 'checkbox';   // a box is not typed into
 const plural = (n, one, many = one + 's') => `${num.format(n)} ${n === 1 ? one : many}`;
 const SORTS = {
-  last: (a, b) => b.last - a.last || a.lw - b.lw || a.lp - b.lp,
+  last: (a, b) => b.ls.date - a.ls.date || b.last - a.last || a.lw - b.lw || a.lp - b.lp,
   first: (a, b) => b.first - a.first || a.lw - b.lw || a.lp - b.lp,
   count: (a, b) => b.n - a.n || b.last - a.last || a.lw - b.lw,
   title: (a, b) => collator.compare(a.name, b.name) || b.last - a.last,
@@ -174,6 +174,9 @@ function derive(lib) {
     if (!p.seen.length) { p.n = 0; continue; }      // allowed by the contract, never shown
     const ks = [...new Set(p.seen.map((x) => x[0]))];
     p.n = ks.length; p.first = ks[0]; p.last = ks.at(-1); p.open = ks.includes(latest);
+    // Last seen: the newest sighting, where adding a page counts as seeing it then, not when intake's snapshot is dated.
+    const added = new Date(p.added_at);
+    p.ls = ks.map((k) => (S.snaps[k].id === 'added' && !isNaN(added) ? { captured_at: p.added_at, date: added } : S.snaps[k])).reduce((a, b) => (b.date >= a.date ? b : a));
     const l = p.seen.at(-1); p.lw = l[1]; p.lp = l[3];
     p.grp = (p.seen.find((x) => x[0] === p.last && x[4]) || l)[4];   // the group it sat in when last seen
     p.gs = [...new Set(p.seen.map((x) => x[4] && x[4].title.toLowerCase()).filter(Boolean))];
@@ -276,7 +279,7 @@ const groupOptions = () => facet('group', (p) => p.gs)
 function tagCounts(pages, own) { const n = new Map(); for (const p of pages) for (const k of own ? p.tk : p.all) n.set(k, (n.get(k) || 0) + 1); return n; }
 const libraryCounts = () => tagCounts(S.pages.filter((p) => p.n && !p.forgotten));
 function bandOf(p) {
-  if (S.sort === 'last') return p.open ? 'Open now' : F.month.format(S.snaps[p.last].date);
+  if (S.sort === 'last') return p.open ? 'Open now' : F.month.format(p.ls.date);
   if (S.sort === 'first') return F.month.format(S.snaps[p.first].date);
   return '';
 }
@@ -319,7 +322,7 @@ function tagsHTML(p) {
 // screen reader and takes no focus.
 function thumbHTML(p) { return p.image ? `<img class="thumb" src="api/image/${p.image}" alt="" loading="lazy" decoding="async">` : ''; }
 function rowHTML(p) {
-  const s = S.snaps[p.last];
+  const s = p.ls;
   return `<li class="row${p.open ? ' open' : ''}${S.sel.has(p.i) ? ' sel' : ''}${p.i === S.cur ? ' cur' : ''}${S.exp.has(p.i) ? ' exp' : ''}" data-i="${p.i}" tabindex="${p.i === S.cur ? 0 : -1}">` +
     `<span class="pick"><input type="checkbox" tabindex="-1" aria-label="Select"${S.sel.has(p.i) ? ' checked' : ''}></span>` +
     `<span class="strip" title="Seen in ${p.n} of ${S.snaps.length} snapshots"></span>` +

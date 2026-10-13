@@ -53,6 +53,28 @@ test('a later intake sighting preserves open membership only for captured pages'
   ]), ['Current']);
 });
 
+test('last seen counts each add as a sighting at its own time, newest first', () => {
+  const context = vm.createContext({
+    document: { getElementById: () => null, documentElement: { style: { setProperty() {} } } },
+    IntersectionObserver: class {},
+    library: {
+      pages: [
+        { url: 'https://synthetic.test/captured', domain: 'synthetic.test', title: 'Captured' },
+        { url: 'https://synthetic.test/first', domain: 'synthetic.test', title: 'First', added_at: '2026-03-01T09:00:00Z' },
+        { url: 'https://synthetic.test/second', domain: 'synthetic.test', title: 'Second', added_at: '2026-03-03T09:00:00Z' },
+      ],
+      // Intake's snapshot is dated by the first add, so it sorts before the capture.
+      snapshots: [snapshot('added', '2026-03-01T09:00:00Z', [1, 2]), snapshot('2026-03-02-090000Z', '2026-03-02T09:00:00Z', [0])],
+    },
+  });
+  vm.runInContext(renderer, context);
+  const rows = vm.runInContext(`derive(library); S.pages.slice().sort(SORTS.last)
+    .map((p) => [p.title, /datetime="([^"]+)"/.exec(rowHTML(p))[1]])`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(rows)), [
+    ['Second', '2026-03-03T09:00:00Z'], ['Captured', '2026-03-02T09:00:00Z'], ['First', '2026-03-01T09:00:00Z'],
+  ]);
+});
+
 // ---- Library search through the model ------------------------------------
 // The renderer over a stub fetch whose replies the test gives, timers the
 // test runs, and `render` replaced by a recorder of what `compute` shows.

@@ -357,6 +357,10 @@ struct Page {
     /// snapshot that recorded signals for it; absent when neither does.
     #[serde(skip_serializing_if = "Option::is_none")]
     history: Option<PageHistory>,
+    /// When the page was added by its address; absent for a page never
+    /// added. The frontend counts adding a page as seeing it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    added_at: Option<Timestamp>,
     /// The hex name `serve` answers the page's kept image by; only `serve`
     /// sets it, so an export never carries images.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -538,10 +542,14 @@ pub fn build(
                     tags: state.page_tags(&tab.url, &spellings),
                     suggested: suggested.get(&tab.url).cloned().unwrap_or_default(),
                     history: None,
+                    added_at: None,
                     image: None,
                 });
                 index
             });
+            if tab.added_at.is_some() {
+                library.pages[index].added_at = tab.added_at;
+            }
             // Ascending snapshots make the newest signals win.
             if let Some(history) = &tab.history {
                 library.pages[index].history =

@@ -427,6 +427,7 @@ emits today.
         "search": { "term": "eza ls", "hops": 1 },                            // optional; serve, or export --with-history
         "referrer": { "url": "https://…", "title": "…" }                      // optional, as search; title only when the URL is a page here
       },
+      "added_at": "2026-09-24T10:05:00Z",      // optional; when `knowmoretabs add` put the page in the library
       "image": "3f2a…"                         // optional, serve only: 64 lowercase hex, the name of its kept preview
     }
   ]
@@ -436,11 +437,13 @@ emits today.
 Rules the backend must keep:
 
 - `snapshots` is ascending by time. The client uses the array index as the
-  strip column and as the sort key for first/last seen.
+  strip column and as the sort key for first seen.
 - The snapshot with id `added` holds the pages `knowmoretabs add` put in the
-  library, dated by the first add. It is not a browser capture: "Open now"
-  means a sighting in the newest snapshot that is not `added`, and a library
-  of added pages alone has nothing open now.
+  library, dated by the first add. A sighting there counts as the page's own
+  `added_at` for last seen, so a page added today is last seen today. It is
+  not a browser capture: "Open now" means a sighting in the newest snapshot
+  that is not `added`, and a library of added pages alone has nothing open
+  now.
 - Every `page_index` in a tab tuple is a valid index into `pages`. A page
   with no tab rows is allowed; the client never shows it.
 - `tab_id` is unique within one snapshot (it is the deep-link target).

@@ -9,10 +9,10 @@
 //!      they were added. Every reader already derives pages from snapshot
 //!      tabs, so "not in your library" and "not shown" keep agreeing by
 //!      construction, and nothing on disk changes schema. The snapshot is
-//!      dated by the first add. The frontend excludes this snapshot when
-//!      deciding what is open now. A title captured later joins as one more
-//!      line, only for a page whose latest line has none, dated as the page
-//!      was added.
+//!      dated by the first add; each tab carries its own page's add time.
+//!      The frontend excludes this snapshot when deciding what is open now.
+//!      A title captured later joins as one more line, only for a page whose
+//!      latest line has none, dated as the page was added.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -126,6 +126,7 @@ fn fold(lines: Vec<Line>, path: PathBuf) -> Option<Snapshot> {
             last_active: None,
             window_id: 1,
             history: None,
+            added_at: Some(line.added_at),
         })
         .collect();
     let count = u32::try_from(tabs.len()).unwrap_or(u32::MAX);

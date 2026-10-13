@@ -207,6 +207,10 @@ pub struct Tab {
     /// the snapshot predates it; `Snapshot::history` says which.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub history: Option<TabHistory>,
+    /// When the page was added by its address: set only on the tabs of
+    /// [`crate::intake`]'s snapshot, and never read or written on disk.
+    #[serde(skip)]
+    pub added_at: Option<Timestamp>,
 }
 
 /// One URL's signals from the browser's `History` database. Chrome keeps
