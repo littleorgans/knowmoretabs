@@ -24,7 +24,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::content_fetch::Attempted;
-use crate::content_store::sha256_hex;
+use crate::digest::sha256_hex;
 use crate::error::Error;
 use crate::image_pick::{Candidate, Source};
 use crate::jsonl::{self, Keyed};

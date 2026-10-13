@@ -31,7 +31,7 @@ use crate::add_content::Ended;
 use crate::archive;
 use crate::capture::Log;
 use crate::content_fetch::BODY_CAP;
-use crate::content_store::sha256_hex;
+use crate::digest::sha256_hex;
 use crate::error::Error;
 use crate::jsonl::Appender;
 use crate::source_git::Git;
