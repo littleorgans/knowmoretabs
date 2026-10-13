@@ -50,5 +50,26 @@
    "ranked": [],
    "shows": [["https://b.test/5", false]]
   }
+ ],
+ "known_differences": [
+  {
+   "about": "Documented only, outside the equality vectors: duplicate ranked keys keep their first position in Rust and their last in web/app.js. The bundled service cannot produce duplicates: Archive.load uses a set, dataset.app_records iterates those unique keys, engine.sync deduplicates and replaces existing rows, and engine.order returns each row once (lab/tagger/tests/test_rank.py checks this). The shell does not enforce uniqueness for a replacement service.",
+   "query": "ferry",
+   "ranked": ["https://a.test/1", "https://a.test/2", "https://a.test/1"],
+   "rust_shows": [["https://a.test/1", true], ["https://a.test/2", true]],
+   "web_shows": [["https://a.test/2", true], ["https://a.test/1", true]]
+  },
+  {
+   "about": "Documented only, outside the equality vectors: Rust split_whitespace treats U+0085 as whitespace; JavaScript /\\s+/ does not.",
+   "query": "a\u0085b",
+   "rust_words": ["a", "b"],
+   "web_words": ["a\u0085b"]
+  },
+  {
+   "about": "Documented only, outside the equality vectors: JavaScript /\\s+/ treats U+FEFF as whitespace; Rust split_whitespace does not.",
+   "query": "a\ufeffb",
+   "rust_words": ["a\ufeffb"],
+   "web_words": ["a", "b"]
+  }
  ]
 }
