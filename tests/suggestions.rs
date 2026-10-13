@@ -8,7 +8,7 @@ mod common;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use common::{Fixture, assert_success, fingerprint, stderr, stdout, write_snapshot};
+use common::{Fixture, assert_success, fingerprint, state, stderr, stdout, write_snapshot};
 use serde_json::{Value, json};
 
 const A: &str = "https://a.test/one";
@@ -57,10 +57,6 @@ fn json_run(fx: &Fixture, args: &[&str]) -> Value {
     let output = fx.run(&all);
     assert_success(&output);
     serde_json::from_str(&stdout(&output)).unwrap()
-}
-
-fn state(fx: &Fixture) -> Value {
-    serde_json::from_slice(&fs::read(fx.root.join("library.json")).unwrap()).unwrap()
 }
 
 fn write_state(fx: &Fixture, state: &Value) {

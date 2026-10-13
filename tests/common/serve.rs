@@ -42,11 +42,6 @@ pub fn archive(fx: &Fixture) {
     .unwrap();
 }
 
-/// The state file, `library.json`, as written.
-pub fn state(fx: &Fixture) -> Value {
-    serde_json::from_slice(&fs::read(fx.root.join("library.json")).unwrap()).unwrap()
-}
-
 /// The served library's entry for `url`.
 pub fn page<'a>(library: &'a Value, url: &str) -> &'a Value {
     library["pages"]

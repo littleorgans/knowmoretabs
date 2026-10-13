@@ -8,8 +8,8 @@ use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::serve::{A, HIDDEN, Server, archive, page, state};
-use common::{Fixture, stderr};
+use common::serve::{A, HIDDEN, Server, archive, page};
+use common::{Fixture, state, stderr};
 use serde_json::json;
 
 // --- Rule 1: bound to 127.0.0.1 and nothing else --------------------------

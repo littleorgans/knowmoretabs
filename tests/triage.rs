@@ -6,7 +6,7 @@ mod common;
 
 use std::fs;
 
-use common::{Fixture, assert_success, fingerprint, stderr, stdout, write_snapshot};
+use common::{Fixture, assert_success, fingerprint, state, stderr, stdout, write_snapshot};
 use serde_json::{Value, json};
 
 const A: &str = "https://a.test/one";
@@ -20,10 +20,6 @@ fn archive(fx: &Fixture) {
         "2026-01-01T00:00:00Z",
         &[(1, A, "A"), (2, B, "B"), (3, LOCAL, "Dev")],
     );
-}
-
-fn state(fx: &Fixture) -> Value {
-    serde_json::from_slice(&fs::read(fx.root.join("library.json")).unwrap()).unwrap()
 }
 
 #[test]

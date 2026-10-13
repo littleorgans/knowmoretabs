@@ -262,6 +262,11 @@ pub fn read_snapshot(dir: &Path) -> serde_json::Value {
     serde_json::from_slice(&bytes).expect("valid json")
 }
 
+/// The state file, `library.json`, as written.
+pub fn state(fx: &Fixture) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(fx.root.join("library.json")).unwrap()).unwrap()
+}
+
 pub fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }

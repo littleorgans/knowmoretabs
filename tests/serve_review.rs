@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::process::Stdio;
 use std::time::Duration;
 
-use common::Fixture;
-use common::serve::{A, B, HIDDEN, Reply, Server, archive, state};
+use common::serve::{A, B, HIDDEN, Reply, Server, archive};
+use common::{Fixture, state};
 use serde_json::{Value, json};
 
 /// The timeouts are the same ten seconds `Server::raw` uses, and they are

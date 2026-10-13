@@ -6,8 +6,8 @@ mod common;
 
 use std::fs;
 
-use common::serve::{A, B, HIDDEN, Server, archive, page, state, without_generated_at};
-use common::{Fixture, fingerprint, stderr};
+use common::serve::{A, B, HIDDEN, Server, archive, page, without_generated_at};
+use common::{Fixture, fingerprint, state, stderr};
 use serde_json::json;
 
 #[test]
