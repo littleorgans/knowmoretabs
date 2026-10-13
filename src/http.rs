@@ -399,6 +399,29 @@ pub(crate) enum Status {
 }
 
 impl Status {
+    const ALL: [Self; 15] = [
+        Self::Ok,
+        Self::PermanentRedirect,
+        Self::BadRequest,
+        Self::Forbidden,
+        Self::NotFound,
+        Self::MethodNotAllowed,
+        Self::Conflict,
+        Self::LengthRequired,
+        Self::ContentTooLarge,
+        Self::UnsupportedMediaType,
+        Self::RequestHeaderFieldsTooLarge,
+        Self::InternalServerError,
+        Self::BadGateway,
+        Self::ServiceUnavailable,
+        Self::GatewayTimeout,
+    ];
+
+    /// The status a code names, by `code` itself; `None` for any other.
+    pub(crate) fn from_code(code: u16) -> Option<Self> {
+        Self::ALL.into_iter().find(|status| status.code() == code)
+    }
+
     pub(crate) fn code(self) -> u16 {
         match self {
             Self::Ok => 200,

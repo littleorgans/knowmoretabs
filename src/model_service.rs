@@ -245,15 +245,17 @@ impl ModelService {
         if archive.is_none() || reply.fields.get(ARCHIVE_HEADER) != archive.as_deref() {
             return Err(Failure::OtherArchive);
         }
-        let status = match reply.code {
-            200 => Status::Ok,
-            400 => Status::BadRequest,
-            403 => Status::Forbidden,
-            404 => Status::NotFound,
-            409 => Status::Conflict,
-            415 => Status::UnsupportedMediaType,
-            503 => Status::ServiceUnavailable,
-            code => return Err(Failure::Upstream(code)),
+        let Some(
+            status @ (Status::Ok
+            | Status::BadRequest
+            | Status::Forbidden
+            | Status::NotFound
+            | Status::Conflict
+            | Status::UnsupportedMediaType
+            | Status::ServiceUnavailable),
+        ) = Status::from_code(reply.code)
+        else {
+            return Err(Failure::Upstream(reply.code));
         };
         // Only a success has its route's type; every refusal is JSON.
         let kind = if status == Status::Ok {
