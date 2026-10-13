@@ -334,11 +334,9 @@ fn an_attached_run_speaks_only_to_the_tabs_it_opens_and_closes_each_one() {
 
 #[test]
 fn an_owner_who_is_not_running_or_does_not_allow_is_told_which() {
-    let closed = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let port = closed.local_addr().unwrap().port();
-    drop(closed);
     let attached = |port| Browser::attach(port, PEER_ROUTE, "Google Chrome".to_owned()).err();
-    assert_eq!(attached(port), Some(Unavailable::NotRunning));
+    // Not running: nothing can listen on port 0, so no parallel test can take it.
+    assert_eq!(attached(0), Some(Unavailable::NotRunning));
     // Denied: the browser closes the connection instead of answering.
     let refusing = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).unwrap();
     let port = refusing.local_addr().unwrap().port();

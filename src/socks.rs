@@ -382,9 +382,8 @@ mod tests {
             "a closed connection frees its slot"
         );
 
-        let closed = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-        let nowhere = closed.local_addr().unwrap();
-        drop(closed);
+        // Nothing can listen on port 0, so no parallel test can take it.
+        let nowhere = SocketAddr::from((Ipv4Addr::LOCALHOST, 0));
         let relay = Relay::with(Some(nowhere)).unwrap();
         assert_eq!(ask(&relay, &name("public.test", 80)).1, REFUSED);
         assert_eq!(relay.refused(), 0, "a failed connect is not a refusal");
