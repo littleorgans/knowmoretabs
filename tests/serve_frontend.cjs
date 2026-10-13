@@ -53,10 +53,13 @@ test('a later intake sighting preserves open membership only for captured pages'
   ]), ['Current']);
 });
 
-test('last seen counts each add as a sighting at its own time, newest first', () => {
+test('last seen counts each add at its own time and each displayed band separately', () => {
+  const list = { contains: () => false, querySelector: () => ({}), querySelectorAll: () => [] };
   const context = vm.createContext({
-    document: { getElementById: () => null, documentElement: { style: { setProperty() {} } } },
+    document: { getElementById: (id) => id === 'library-data' ? null : list,
+      documentElement: { style: { setProperty() {} }, dataset: {} } },
     IntersectionObserver: class {},
+    performance: { now: () => 0 },
     library: {
       pages: [
         { url: 'https://synthetic.test/captured', domain: 'synthetic.test', title: 'Captured' },
@@ -73,6 +76,12 @@ test('last seen counts each add as a sighting at its own time, newest first', ()
   assert.deepEqual(JSON.parse(JSON.stringify(rows)), [
     ['Second', '2026-03-03T09:00:00Z'], ['Captured', '2026-03-02T09:00:00Z'], ['First', '2026-03-01T09:00:00Z'],
   ]);
+  vm.runInContext('tagbar = tray = fitRows = syncSort = () => {}; render();', context);
+  const bands = [...list.innerHTML.matchAll(/<h3>([^<]+)<small>(\d+)<\/small><\/h3>/g)];
+  assert.equal(bands.length, 3);
+  assert.equal(bands[0][1], bands[2][1], 'the same month appears around Open now');
+  assert.equal(bands[1][1], 'Open now');
+  assert.deepEqual(bands.map((band) => Number(band[2])), [1, 1, 1]);
 });
 
 // ---- Library search through the model ------------------------------------

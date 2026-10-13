@@ -435,9 +435,12 @@ function render() {
   const flush = () => { if (pending) { html += `<li class="ph" data-a="${S.rendered.length - pending}" data-b="${S.rendered.length}"></li>`; pending = 0; } };
   const nOpen = plain ? S.shown.filter((x) => x.open).length : 0;
   S.rendered = [];
-  for (const p of S.shown) {
+  for (const [i, p] of S.shown.entries()) {
     const b = bandOf(p);
-    if (b !== band) { flush(); html += (band === null ? '' : tail + '</ol></section>') + `<section class="band">${b ? `<h3>${esc(b)}<small>${num.format(S.shown.filter((x) => bandOf(x) === b).length)}</small></h3>` : ''}<ol>`; band = b; inBand = 0; tail = ''; }
+    if (b !== band) {
+      let end = i + 1; while (end < S.shown.length && bandOf(S.shown[end]) === b) end++;
+      flush(); html += (band === null ? '' : tail + '</ol></section>') + `<section class="band">${b ? `<h3>${esc(b)}<small>${num.format(end - i)}</small></h3>` : ''}<ol>`; band = b; inBand = 0; tail = '';
+    }
     if (plain && p.open && ++inBand > FOLD) { tail = fold(nOpen, !S.openAll); if (!S.openAll) continue; }
     S.rendered.push(p);
     if (S.rendered.length > EAGER) { if (++pending === CHUNK) flush(); } else html += rowHTML(p);
