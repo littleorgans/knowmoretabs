@@ -11,14 +11,15 @@
 //!      `lab/tagger/tagger/app/service_auth.py` is the service's side;
 //!      `tests/fixtures/service_auth.json` holds both to the same bytes.
 
-use std::fmt::Write as _;
 use std::fs::File;
 use std::io::Read as _;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hmac::{Hmac, Mac as _};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
+
+use crate::digest::{hex, sha256_hex};
 
 /// Header names, as the service reads and writes them.
 pub const NONCE: &str = "X-KMT-Nonce";
@@ -105,7 +106,7 @@ impl Request<'_> {
             self.path,
             self.content_type,
             &self.body.len().to_string(),
-            &digest(self.body),
+            &sha256_hex(self.body),
         ])
     }
 }
@@ -132,7 +133,7 @@ impl Reply<'_> {
             self.content_type,
             self.archive,
             &self.body.len().to_string(),
-            &digest(self.body),
+            &sha256_hex(self.body),
         ])
     }
 }
@@ -161,17 +162,6 @@ fn framed(fields: &[&str]) -> Vec<u8> {
         out.extend_from_slice(field.as_bytes());
     }
     out
-}
-
-fn digest(body: &[u8]) -> String {
-    hex(&Sha256::digest(body))
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().fold(String::new(), |mut out, b| {
-        let _ = write!(out, "{b:02x}");
-        out
-    })
 }
 
 /// Lowercase hex only, as both sides write it.

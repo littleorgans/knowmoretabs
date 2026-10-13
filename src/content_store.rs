@@ -21,10 +21,10 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::archive;
 use crate::content_fetch;
+use crate::digest::sha256_hex;
 use crate::error::Error;
 use crate::jsonl::{self, Keyed};
 use crate::metadata;
@@ -47,15 +47,6 @@ pub fn dir(root: &Path) -> PathBuf {
 /// A page's file name: the lowercase hex SHA-256 of its exact URL.
 pub fn file_name(url: &str) -> String {
     format!("{}.md", sha256_hex(url.as_bytes()))
-}
-
-pub fn sha256_hex(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, b| {
-            let _ = write!(hex, "{b:02x}");
-            hex
-        })
 }
 
 /// What became of a page. Only `error`, and `not_html` for a type a later

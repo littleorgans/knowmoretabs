@@ -29,6 +29,7 @@ mod content_store;
 #[cfg(test)]
 mod content_test;
 mod content_view;
+mod digest;
 mod doctor;
 mod enrich;
 mod error;

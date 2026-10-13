@@ -16,9 +16,9 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
-use sha2::{Digest, Sha256};
 
 use crate::archive::{self, Archive, SNAPSHOT_JSON};
+use crate::digest::sha256_hex;
 use crate::error::Error;
 use crate::history;
 use crate::library_history;
@@ -155,7 +155,7 @@ pub fn save(opts: &Options, log: Log) -> Result<Outcome, Error> {
             profile_display: profile.and_then(|p| p.display.clone()),
             path: read.path.clone(),
             file: SESSION_FILE_NAME.to_owned(),
-            sha256: format!("{:x}", Sha256::digest(&read.bytes)),
+            sha256: sha256_hex(&read.bytes),
             bytes: read.bytes.len() as u64,
             saved_at: read.modified.and_then(|t| Timestamp::try_from(t).ok()),
             session_started_at: read

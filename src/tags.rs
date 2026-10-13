@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::archive::{self, Archive};
 use crate::capture::Log;
+use crate::digest;
 use crate::error::Error;
 use crate::library::{self, PageTags, State, Term, VocabularyEntry, fold, tag_order};
 use crate::out;
@@ -491,14 +492,12 @@ fn definition(name: &str, raw: &str) -> Result<Option<String>, Error> {
 /// (a tag or a definition) gives a new one. Retired tags, creation times and
 /// use times are not part of it.
 pub fn vocabulary_version(state: &State) -> String {
-    use sha2::{Digest, Sha256};
     let canonical: Vec<serde_json::Value> = state
         .active_vocabulary()
         .into_iter()
         .map(|entry| serde_json::json!([entry.name, entry.definition.unwrap_or_default()]))
         .collect();
-    let digest = Sha256::digest(serde_json::Value::Array(canonical).to_string().as_bytes());
-    format!("{digest:x}")[..12].to_owned()
+    digest::sha256_hex(serde_json::Value::Array(canonical).to_string().as_bytes())[..12].to_owned()
 }
 
 /// Creates, retires and defines vocabulary entries. Creating a retired name

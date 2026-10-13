@@ -224,7 +224,7 @@ fn unavailable_quotes_keep_no_text_in_the_store() {
         );
         assert_eq!(
             line.content_sha256.as_deref(),
-            Some(content_store::sha256_hex(body.as_bytes()).as_str())
+            Some(crate::digest::sha256_hex(body.as_bytes()).as_str())
         );
     }
 }
@@ -300,7 +300,7 @@ fn an_article_keeps_atomic_code_embeds_and_images_in_order() {
     assert_eq!(front["completeness"], "full");
     assert_eq!(
         line.content_sha256.as_deref(),
-        Some(content_store::sha256_hex(body.as_bytes()).as_str())
+        Some(crate::digest::sha256_hex(body.as_bytes()).as_str())
     );
 }
 
