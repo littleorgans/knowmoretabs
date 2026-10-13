@@ -1,6 +1,5 @@
 {
  "about": "Fixed vectors for the keyword rule and the rank merge: src/search.rs and web/app.js (tests/serve_frontend.cjs) check the same cases. Title and URL only: the Library holds no page text. Synthetic pages.",
- "rank_top": 50,
  "match": [
   { "title": "Night trains", "url": "https://a.test/zeppelin", "query": "NIGHT zeppelin", "fields": ["title", "url"] },
   { "title": "Night trains", "url": "https://a.test/zeppelin", "query": "  night\tTRAINS\n", "fields": ["title"] },

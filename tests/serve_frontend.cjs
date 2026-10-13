@@ -255,8 +255,9 @@ test('an export never asks the model', () => {
 // The keyword rule and the rank merge, held to the vectors src/search.rs checks.
 const vectors = JSON.parse(readFileSync(join(__dirname, 'fixtures/search_vectors.json'), 'utf8'));
 
-test('the ranked cap is the shared vectors\' rank_top', () => {
-  assert.equal(searchable([page(0)]).run('RANK_TOP'), vectors.rank_top);
+test('the ranked cap matches the shared service contract', () => {
+  const contract = JSON.parse(readFileSync(join(__dirname, 'fixtures/service_contract.json'), 'utf8'));
+  assert.equal(searchable([page(0)]).run('RANK_TOP'), contract.rank_top);
 });
 
 test('the keyword rule matches the shared vectors', () => {
