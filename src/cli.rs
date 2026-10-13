@@ -43,7 +43,7 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "DIR", conflicts_with = "session")]
     pub user_data_dir: Option<PathBuf>,
 
-    /// The file naming each repository's checkout and the shelf for loose files, for add --file, search and read (default: knowmoretabs/checkouts.json in your config folder)
+    /// The file naming each repository's checkout and the shelf for loose files, for add --file, search, read and serve (default: knowmoretabs/checkouts.json in your config folder)
     #[arg(long, global = true, value_name = "FILE")]
     pub checkouts: Option<PathBuf>,
 
@@ -121,16 +121,19 @@ says whether its text is fresh, stale (its checkout's HEAD has other bytes at th
 are still searched) or unresolved, and why. Writes nothing."
     )]
     Search(SearchArgs),
-    /// Print the text of a local document in the library, by its key
+    /// Print the text of pages you added, web pages and local documents, by key
     #[command(
-        long_about = "Prints the text of the local document kept under KEY (kmt-git: or kmt-blob:), read \
-from its pinned bytes through the checkouts file: markdown and text as they are, a PDF's text as content \
-reads it. A stale pin prints the pinned text, saying so on stderr; an unresolved one fails. Writes nothing."
+        long_about = "Prints the text of a page added one at a time, the pages search lists: a web page's \
+text as content kept it, a local document's (kmt-git: or kmt-blob:) read from its pinned bytes through the \
+checkouts file, markdown and text as they are, a PDF's text as content reads it. A stale pin prints the \
+pinned text, saying so on stderr. A forgotten page, one not added (a page known only from your browser \
+included), and one with no text are refused. Several keys need --json: one line per key, in the order \
+given, its text or why it was refused, exiting 1 when any was. Writes nothing."
     )]
     Read {
-        /// The document's key, as add --file and search name it
-        #[arg(value_name = "KEY")]
-        key: String,
+        /// The pages' keys, as add and search name them
+        #[arg(required = true, value_name = "KEY")]
+        keys: Vec<String>,
     },
     /// Hide pages from the library; the snapshots keep them
     Forget {
@@ -974,7 +977,23 @@ mod tests {
         assert!(Cli::try_parse_from(["knowmoretabs", "search"]).is_err());
         let cli =
             Cli::try_parse_from(["knowmoretabs", "read", "kmt-blob:sha256-00", "--json"]).unwrap();
-        assert!(matches!(&cli.command, Some(Command::Read { key }) if key == "kmt-blob:sha256-00"));
+        assert!(
+            matches!(&cli.command, Some(Command::Read { keys }) if keys == &["kmt-blob:sha256-00"])
+        );
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "--json",
+            "read",
+            "--",
+            "https://a.test/",
+            "kmt-blob:sha256-00",
+        ])
+        .unwrap();
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Read { keys }) if keys == &["https://a.test/", "kmt-blob:sha256-00"]
+        ));
+        assert!(Cli::try_parse_from(["knowmoretabs", "read"]).is_err());
     }
 
     #[test]

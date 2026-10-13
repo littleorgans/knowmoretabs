@@ -28,6 +28,7 @@ use crate::digest::sha256_hex;
 use crate::error::Error;
 use crate::jsonl::{self, Keyed};
 use crate::metadata;
+use crate::page_text;
 use crate::targets::{Outcome, Recorded};
 
 pub const LOG_FILE: &str = "content.jsonl";
@@ -332,13 +333,26 @@ pub fn parse(text: &str) -> Option<(BTreeMap<String, Value>, &str)> {
     Some((front, &rest[end + "---\n".len()..]))
 }
 
-/// The kept text of `url`, front matter dropped; `None` when no file is
-/// kept for it. No lock: a file is replaced whole by a rename.
-pub fn kept_text(root: &Path, url: &str) -> Result<Option<String>, Error> {
+/// The kept text of `url`, front matter dropped, titled by its front
+/// matter; `None` when no file is kept for it. No lock: a file is replaced
+/// whole by a rename. `page_text` is its reader.
+pub fn kept_text(root: &Path, url: &str) -> Result<Option<page_text::Text>, Error> {
     let file = dir(root).join(file_name(url));
     Ok(jsonl::kept_file(&file)?.map(|bytes| {
         let text = String::from_utf8_lossy(&bytes);
-        parse(&text).map_or_else(|| text.to_string(), |(_, body)| body.to_owned())
+        match parse(&text) {
+            Some((front, body)) => page_text::Text {
+                title: front
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned),
+                body: body.to_owned(),
+            },
+            None => page_text::Text {
+                title: None,
+                body: text.into_owned(),
+            },
+        }
     }))
 }
 

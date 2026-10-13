@@ -13,6 +13,7 @@ use std::process::{Command, Output, Stdio};
 use common::add::{intake, lines};
 use common::model_service::{Service, json_fields, key_file, proven};
 use common::pdf_builder::pdf;
+use common::serve::{Server, kept_text};
 use common::{Fixture, assert_success, stderr, stdout, write_snapshot};
 use serde_json::{Value, json};
 
@@ -477,13 +478,17 @@ fn search_never_returns_history_sessions_or_forgotten_pages() {
 
     assert_success(&desk.run(&["forget", NOTE]));
     assert_eq!(urls(&desk.search("quokka")), NONE);
-    let read = desk.run(&["read", "kmt-blob:sha256-00"]);
-    assert_eq!(read.status.code(), Some(1));
-    assert!(
-        stderr(&read).contains("not a source key"),
-        "{}",
-        stderr(&read)
-    );
+    // Read answers what search does: a page known only from a snapshot is
+    // refused as not added, and so is a key nothing names.
+    for key in ["https://snap.test/xyzzymarker", "kmt-blob:sha256-00"] {
+        let read = desk.run(&["read", key]);
+        assert_eq!(read.status.code(), Some(1));
+        assert_eq!(stdout(&read), "");
+        assert_eq!(
+            stderr(&read).trim(),
+            format!("knowmoretabs: cannot read {key}: not a page you added; search lists them")
+        );
+    }
 }
 
 #[test]
@@ -528,6 +533,121 @@ fn read_refuses_forgotten_sources_until_restored_without_changing_the_archive() 
             }
         );
     }
+}
+
+#[test]
+fn the_drawer_shows_a_documents_text_as_read_prints_it() {
+    let desk = Desk::new();
+    assert_success(&desk.add(&desk.repo.join("notes").join("evals.md")));
+    let loose = b"# Loose note\nA quokka on the shelf.\n";
+    assert_success(&desk.add(&desk.loose("loose.md", loose)));
+    let paper = pdf(&[&["Quokka migration paper."]], Some("A paper"));
+    assert_success(&desk.add(&desk.loose("paper.pdf", &paper)));
+    let server = Server::start_with(&desk.fx, &["--checkouts", desk.checkouts.to_str().unwrap()]);
+    let before = common::fingerprint(&desk.fx.root);
+    for key in [NOTE, &blob_key(loose), &blob_key(&paper)] {
+        let read = desk.run(&["read", key]);
+        assert_success(&read);
+        let drawer = server.served(key);
+        assert_eq!(drawer["text"], stdout(&read), "{key}");
+        assert_eq!(
+            (&drawer["content"], &drawer["image"]),
+            (&Value::Null, &Value::Null)
+        );
+    }
+
+    // Stale, the drawer shows the pinned text, as read does.
+    desk.commit(
+        "notes/evals.md",
+        b"# Airship evals\n\nRewritten about ferries.\n",
+    );
+    assert_eq!(server.served(NOTE)["text"], NOTE_TEXT);
+    // Its checkout gone, the page is still answered, with no text.
+    std::fs::rename(&desk.repo, desk.fx.home.path().join("moved")).unwrap();
+    assert_eq!(server.served(NOTE)["text"], Value::Null);
+    assert_eq!(common::fingerprint(&desk.fx.root), before);
+}
+
+#[test]
+fn read_answers_added_web_pages_and_several_keys_as_json_lines() {
+    const WEB: &str = "https://web.test/kept";
+    const WEB_TEXT: &str = "# Kept\n\nA quokka timetable, as content kept it.\n";
+    let desk = Desk::new();
+    assert_success(&desk.run(&["add", WEB, "--title", "Kept", "--no-content"]));
+    let line = json!({"schema_version": 1, "url": WEB, "attempted_at": "2026-10-07T09:00:00Z",
+        "status": "ok", "tier": "web", "chars": WEB_TEXT.len()});
+    kept_text(&desk.fx, WEB, &line, Some(WEB_TEXT));
+    assert_success(&desk.add(&desk.repo.join("notes").join("evals.md")));
+    let paper = pdf(&[&["Quokka migration paper."]], Some("A paper"));
+    let pdf_key = blob_key(&paper);
+    assert_success(&desk.add(&desk.loose("paper.pdf", &paper)));
+    let gone = b"# Gone\nA forgotten quokka.\n";
+    let forgotten = blob_key(gone);
+    assert_success(&desk.add(&desk.loose("gone.md", gone)));
+    assert_success(&desk.run(&["forget", &forgotten]));
+    let server = Server::start_with(&desk.fx, &["--checkouts", desk.checkouts.to_str().unwrap()]);
+    let before = common::fingerprint(&desk.fx.root);
+
+    let read = desk.run(&["read", WEB]);
+    assert_success(&read);
+    assert_eq!(stdout(&read), WEB_TEXT, "the body, without front matter");
+
+    let unknown = "https://unknown.test/";
+    let keys = [WEB, NOTE, &pdf_key, unknown, &forgotten];
+    let mut args = vec!["--json", "read", "--"];
+    args.extend(keys);
+    let output = desk.run(&args);
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let read = lines(&output);
+    assert_eq!(
+        read.iter().map(|line| &line["url"]).collect::<Vec<_>>(),
+        keys
+    );
+    for (line, kind) in read.iter().zip(["web", "git", "blob"]) {
+        assert_eq!(line["schema_version"], 1);
+        assert_eq!(line["kind"], kind);
+        assert_eq!(
+            line["text"],
+            server.served(line["url"].as_str().unwrap())["text"]
+        );
+    }
+    assert_eq!(read[0]["text"], WEB_TEXT);
+    assert_eq!(
+        (&read[0]["state"], &read[0]["why"], &read[0]["source"]),
+        (&Value::Null, &Value::Null, &Value::Null)
+    );
+    assert_eq!(
+        (&read[1]["state"], &read[1]["title"]),
+        (&json!("fresh"), &json!("Airship evals"))
+    );
+    assert_eq!(read[1]["source"]["path"], "notes/evals.md");
+    assert_eq!(read[2]["title"], "A paper");
+    for (line, reason) in read[3..].iter().zip([
+        "not a page you added; search lists them",
+        "it is forgotten; restore it first",
+    ]) {
+        assert_eq!(line["schema_version"], 1);
+        assert_eq!(line["error"]["kind"], "source_read");
+        let url = line["url"].as_str().unwrap();
+        assert_eq!(
+            line["error"]["message"],
+            format!("cannot read {url}: {reason}")
+        );
+        assert!(line.get("text").is_none());
+    }
+
+    let output = desk.run(&["--json", "read", WEB, &pdf_key]);
+    assert_success(&output);
+    assert_eq!(lines(&output).len(), 2);
+
+    let output = desk.run(&["read", WEB, NOTE]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(stdout(&output), "");
+    assert_eq!(
+        stderr(&output).trim(),
+        "knowmoretabs: several keys need --json, one line each; nothing read"
+    );
+    assert_eq!(common::fingerprint(&desk.fx.root), before);
 }
 
 #[test]

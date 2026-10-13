@@ -62,6 +62,7 @@ mod model_routes;
 mod model_service;
 mod out;
 mod page_key;
+mod page_text;
 mod platform;
 mod process_tree;
 mod prompt;
@@ -129,13 +130,16 @@ fn main() -> ExitCode {
         Some(Command::Export { dir, with_history }) => {
             library_commands::export(&root, dir.as_deref(), *with_history, cli.json, log)
         }
-        Some(Command::Serve(args)) => serve(root, args, cli.json, log),
+        Some(Command::Serve(args)) => serve(root, args, &cli, roots.as_ref(), log),
         Some(Command::Add(args)) => match add(&root, args, &cli, roots.as_ref(), log) {
             Ok(code) => return code,
             Err(err) => Err(err),
         },
         Some(Command::Search(args)) => search(&root, args, &cli, roots.as_ref(), log),
-        Some(Command::Read { key }) => read(&root, key, &cli, roots.as_ref(), log),
+        Some(Command::Read { keys }) => match read(&root, keys, &cli, roots.as_ref(), log) {
+            Ok(code) => return code,
+            Err(err) => Err(err),
+        },
         Some(Command::Forget { urls }) => {
             triage::command(&root, urls, triage::Action::Forget, cli.json, log)
         }
@@ -195,15 +199,12 @@ fn main() -> ExitCode {
     }
 }
 
-/// The checkouts file: `--checkouts`, else the config home's.
-fn checkouts(
-    cli: &Cli,
-    roots: Option<&platform::Roots>,
-) -> Result<std::path::PathBuf, error::Error> {
+/// The checkouts file: `--checkouts`, else the config home's; `None`
+/// without either.
+fn checkouts(cli: &Cli, roots: Option<&platform::Roots>) -> Option<std::path::PathBuf> {
     cli.checkouts
         .clone()
         .or_else(|| roots.map(|roots| roots.config_file(sources::CHECKOUTS_FILE)))
-        .ok_or(error::Error::NoHome)
 }
 
 fn search(
@@ -213,7 +214,7 @@ fn search(
     roots: Option<&platform::Roots>,
     log: Log,
 ) -> Result<(), error::Error> {
-    let checkouts = checkouts(cli, roots)?;
+    let checkouts = checkouts(cli, roots).ok_or(error::Error::NoHome)?;
     let model = args.model.model_port.and_then(|port| {
         model_service::ModelService::new(port, args.model.model_secret_file.as_deref(), log)
     });
@@ -221,14 +222,16 @@ fn search(
     search::command(root, &query, &checkouts, model.as_ref(), cli.json, log)
 }
 
+/// `read`, whose exit status is its own.
 fn read(
     root: &std::path::Path,
-    key: &str,
+    keys: &[String],
     cli: &Cli,
     roots: Option<&platform::Roots>,
     log: Log,
-) -> Result<(), error::Error> {
-    sources::read_command(root, key, &checkouts(cli, roots)?, cli.json, log)
+) -> Result<ExitCode, error::Error> {
+    let checkouts = checkouts(cli, roots).ok_or(error::Error::NoHome)?;
+    page_text::read_command(root, keys, &checkouts, cli.json, log)
 }
 
 /// `add`, whose exit status is its own.
@@ -243,7 +246,7 @@ fn add(
         let args = source_add::Args {
             file,
             title: args.title.as_deref(),
-            checkouts: &checkouts(cli, roots)?,
+            checkouts: &checkouts(cli, roots).ok_or(error::Error::NoHome)?,
         };
         return source_add::command(root, args, cli.json, log);
     }
@@ -271,7 +274,8 @@ fn add(
 fn serve(
     root: std::path::PathBuf,
     args: &cli::ServeArgs,
-    json: bool,
+    cli: &Cli,
+    roots: Option<&platform::Roots>,
     log: Log,
 ) -> Result<(), error::Error> {
     server::run(&server::Options {
@@ -279,8 +283,9 @@ fn serve(
         port: args.port,
         model_port: args.model.model_port,
         model_secret_file: args.model.model_secret_file.clone(),
+        checkouts: checkouts(cli, roots),
         open: args.open,
-        json,
+        json: cli.json,
         log,
     })
 }

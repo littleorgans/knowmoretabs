@@ -42,6 +42,9 @@ pub struct Options {
     /// The key that proves each forward and each reply; forwarding is off
     /// without a usable one.
     pub model_secret_file: Option<PathBuf>,
+    /// The checkouts file a local document's text is read through; without
+    /// one, documents show no text.
+    pub checkouts: Option<PathBuf>,
     pub open: bool,
     pub json: bool,
     pub log: Log,
@@ -93,6 +96,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
     }
     let server = Arc::new(Server {
         root: options.root.clone(),
+        checkouts: options.checkouts.clone(),
         port,
         model,
         log: options.log,
@@ -184,6 +188,7 @@ const ROUTES: [(&str, &str, Handler); 11] = [
 
 struct Server {
     root: PathBuf,
+    checkouts: Option<PathBuf>,
     port: u16,
     model: Option<ModelService>,
     log: Log,
@@ -276,7 +281,7 @@ impl Server {
                 "name a page: /api/content?url=<address>",
             );
         };
-        match content_view::served(&self.root, &url) {
+        match content_view::served(&self.root, self.checkouts.as_deref(), &url) {
             Ok(Some(served)) => match serde_json::to_vec(&served) {
                 Ok(json) => Response::ok("application/json", json),
                 Err(source) => self.failure(&Error::Json {

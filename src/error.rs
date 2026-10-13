@@ -140,6 +140,8 @@ pub enum Error {
     SourceFile { file: String, reason: String },
     #[error("cannot read {key}: {reason}")]
     SourceRead { key: String, reason: String },
+    #[error("several keys need --json, one line each; nothing read")]
+    ReadSeveral,
 }
 
 impl Error {
@@ -178,7 +180,7 @@ impl Error {
             Self::HistoryUnreadable(_) => "history_unreadable",
             Self::Checkouts(_) => "checkouts",
             Self::SourceFile { .. } => "source_file",
-            Self::SourceRead { .. } => "source_read",
+            Self::SourceRead { .. } | Self::ReadSeveral => "source_read",
         }
     }
 

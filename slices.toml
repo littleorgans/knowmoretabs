@@ -386,8 +386,10 @@ archive, `checkouts.json`. `knowmoretabs search --json` finds added pages and
 documents by every word of a query in their title, key or text, the text read
 live from the pinned bytes, ranked first by the model service when it is
 given, and says of each document whether its text is fresh, stale or
-unresolved, and why. `knowmoretabs read KEY` prints one document's text, which
-the tagger lab embeds.
+unresolved, and why. `knowmoretabs read KEY...` prints the text of the pages
+search lists, web pages and documents, one JSON line per key with `--json`;
+the tagger lab embeds documents' text through it, and the Library drawer shows
+the same text.
 """
 intent = """
 Research agents work from a separate archive and need their own notes and
