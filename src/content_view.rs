@@ -15,7 +15,7 @@ use serde::Serialize;
 
 use crate::archive::Archive;
 use crate::error::Error;
-use crate::{content_store, image_store, jsonl, library};
+use crate::{content_store, image_store, library};
 
 /// The route's reply, the lines in their recorded shape.
 #[derive(Debug, Serialize)]
@@ -36,15 +36,10 @@ pub fn served(root: &Path, url: &str) -> Result<Option<Served>, Error> {
     if !library::known_urls(&library::load(&archive)?.snapshots).contains(url) {
         return Ok(None);
     }
-    let file = content_store::dir(root).join(content_store::file_name(url));
-    let text = jsonl::kept_file(&file)?.map(|bytes| {
-        let text = String::from_utf8_lossy(&bytes);
-        content_store::parse(&text).map_or_else(|| text.to_string(), |(_, body)| body.to_owned())
-    });
     Ok(Some(Served {
         url: url.to_owned(),
         content: content_store::read(root)?.pages.remove(url),
-        text,
+        text: content_store::kept_text(root, url)?,
         image: image_store::read(root)?.pages.remove(url),
     }))
 }

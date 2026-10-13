@@ -24,6 +24,7 @@
 | `what-a-page-is` | Know what a page is about without opening it | 7 `enrich` |
 | `keep-page-text` | Keep what a page says, not just what it is called | 8 `content` |
 | `add-a-page` | Add the page I am reading without saving every tab | 9 `add` |
+| `my-documents` | Find my own notes and papers beside the pages I read, without copying them | 10 `sources` |
 
 ## Build order
 
@@ -251,6 +252,33 @@ needs no schema change. It is the product side of quick add: the tagger lab
 runs `add --json` and shows its lines as a progress bar. Its requests are
 content's own, made by content's run narrowed to the page, so the page is
 read by the rules every other page is.
+
+### 10. Local documents by reference, and search (`sources`) — done
+
+- Delivers: my-documents
+- Depends on: add, library
+
+**Ships.** `knowmoretabs add --file` puts a local markdown, text or PDF document in the
+library by reference: a file committed in a git repository with a remote as
+`kmt-git:<repository>//<path>`, the repository named by its remote less
+scheme, user, port and `.git`, pinned to its blob and commit in
+`pages/sources.jsonl`; any other file, or text on stdin, copied once to a
+shelf the owner names and kept as `kmt-blob:sha256-<hex>`. A file with changes
+or not committed is refused, and so is a loose file with no shelf. Where each
+repository is checked out, and the shelf, are one file per machine outside the
+archive, `checkouts.json`. `knowmoretabs search --json` finds added pages and
+documents by every word of a query in their title, key or text, the text read
+live from the pinned bytes, ranked first by the model service when it is
+given, and says of each document whether its text is fresh, stale or
+unresolved, and why. `knowmoretabs read KEY` prints one document's text, which
+the tagger lab embeds.
+
+**Intent.** Research agents work from a separate archive and need their own notes and
+papers back by what they say, without the archive becoming a second copy of
+the owner's documents or a record of where they live. The archive keeps the
+key and the pin; git and the shelf keep the bytes. Search reads only what was
+added and the library state, never a snapshot or the History record, so an
+agent is never handed the owner's browsing.
 
 ## Prepared for, deliberately not built
 

@@ -1,6 +1,6 @@
 //! The command line: clap types for `knowmoretabs` and its subcommands.
 //!
-//! slice: capture, library, triage, browsers, tags, history, enrich, content, add
+//! slice: capture, library, triage, browsers, tags, history, enrich, content, add, sources
 //! why: The whole CLI surface is visible in one file, so "what flags exist
 //!      and where are they allowed" is a question answered by reading forty
 //!      lines rather than grepping. Global options are global so that
@@ -43,6 +43,10 @@ pub struct Cli {
     #[arg(long, global = true, value_name = "DIR", conflicts_with = "session")]
     pub user_data_dir: Option<PathBuf>,
 
+    /// The file naming each repository's checkout and the shelf for loose files, for add --file, search and read (default: knowmoretabs/checkouts.json in your config folder)
+    #[arg(long, global = true, value_name = "FILE")]
+    pub checkouts: Option<PathBuf>,
+
     /// Machine-readable output on stdout
     #[arg(long, global = true)]
     pub json: bool,
@@ -79,7 +83,7 @@ pub enum Command {
     },
     /// Serve the library on 127.0.0.1 with live forget, restore and tagging
     Serve(ServeArgs),
-    /// Add one page to the library by its address
+    /// Add one page to the library by its address, or a local document with --file
     #[command(
         long_about = "Adds one page to the library by its address, with no session file and no new \
 snapshot: one line in <root>/pages/added.jsonl, which the library lists as one snapshot of added pages. \
@@ -95,9 +99,39 @@ last attempt was an error, and retries an image that failed. With --retry, for a
 library, it writes no line and runs only the stages named, each only where it failed: the text after an \
 error or with no attempt (with --signed-in, a page eligible for it), the image after an error, from the \
 candidates it kept; a text or image that was kept is never fetched again. With --json, one line per stage as it happens, the last saying how it ended. Exits 0 when \
-the page is in the library at the end, however its text and image ended."
+the page is in the library at the end, however its text and image ended.\n\n\
+With --file, adds a local markdown, text or PDF document by reference; the archive keeps no copy of it and \
+no local path. A file committed in a git repository with a remote is kept as \
+kmt-git:<repository>//<path>, the repository named by its remote less scheme, user, port and .git, and \
+pinned to its blob and commit in <root>/pages/sources.jsonl; a file with changes or not committed is \
+refused. Its checkout is written to the checkouts file when the file names none. Any other file, or text \
+on stdin with --file -, is copied once to the shelf the checkouts file names, as <sha256>.<ext>, and kept \
+as kmt-blob:sha256-<hex>; with no shelf it is refused. Added again, it writes a new pin only when the \
+bytes changed. Nothing is sent anywhere."
     )]
     Add(AddArgs),
+    /// Find added pages and local documents by what they say, read only
+    #[command(
+        long_about = "Searches the pages added one at a time, local documents among them, for every word \
+of the query in a page's title, key or text: a local document's text read live from its pinned git blob \
+or shelf copy, a web page's from the text content kept. Never reads snapshots or the History record, and \
+never lists a forgotten page. With --model-port and --model-secret-file, the model service ranks the \
+query first, as the Library does, then the keyword matches it has not indexed follow. Each local result \
+says whether its text is fresh, stale (its checkout's HEAD has other bytes at the path; the pinned bytes \
+are still searched) or unresolved, and why. Writes nothing."
+    )]
+    Search(SearchArgs),
+    /// Print the text of a local document in the library, by its key
+    #[command(
+        long_about = "Prints the text of the local document kept under KEY (kmt-git: or kmt-blob:), read \
+from its pinned bytes through the checkouts file: markdown and text as they are, a PDF's text as content \
+reads it. A stale pin prints the pinned text, saying so on stderr; an unresolved one fails. Writes nothing."
+    )]
+    Read {
+        /// The document's key, as add --file and search name it
+        #[arg(value_name = "KEY")]
+        key: String,
+    },
     /// Hide pages from the library; the snapshots keep them
     Forget {
         /// Page URLs to hide, each exactly as the library shows it
@@ -250,8 +284,16 @@ pub struct ServeArgs {
     /// Open the page in your browser once the server is listening
     #[arg(long)]
     pub open: bool,
-    /// Rank Library search through the model service on this port of
-    /// 127.0.0.1 (the tagger lab's `tagger app`); keyword search without it
+    #[command(flatten)]
+    pub model: ModelArgs,
+}
+
+/// Where search is ranked: `serve`'s Library and `search` ask the same
+/// service the same way.
+#[derive(Debug, Clone, Default, Args)]
+pub struct ModelArgs {
+    /// Rank search through the model service on this port of 127.0.0.1
+    /// (the tagger lab's `tagger app`); keyword search without it
     #[arg(long, value_name = "N", value_parser = clap::value_parser!(u16).range(1..))]
     pub model_port: Option<u16>,
     /// The key file `just up` writes, which proves each request to the
@@ -261,12 +303,29 @@ pub struct ServeArgs {
     pub model_secret_file: Option<PathBuf>,
 }
 
-/// One page to add, and how far to capture it.
+/// What to search for, and where it is ranked.
+#[derive(Debug, Args)]
+pub struct SearchArgs {
+    /// The words to find; every one must be in the page
+    #[arg(required = true, value_name = "QUERY")]
+    pub query: Vec<String>,
+    #[command(flatten)]
+    pub model: ModelArgs,
+}
+
+/// One page to add, and how far to capture it; or one local document.
 #[derive(Debug, Args)]
 pub struct AddArgs {
     /// The page's address, as it should be kept: http or https
-    #[arg(value_name = "URL")]
-    pub url: String,
+    #[arg(value_name = "URL", required_unless_present = "file")]
+    pub url: Option<String>,
+    /// Add a local markdown, text or PDF document by reference; - reads markdown on stdin
+    #[arg(
+        long,
+        value_name = "FILE",
+        conflicts_with_all = ["url", "signed_in", "no_content", "retry"]
+    )]
+    pub file: Option<PathBuf>,
     /// The page's title, when you have it
     #[arg(long, value_name = "TITLE")]
     pub title: Option<String>,
@@ -452,8 +511,10 @@ mod tests {
             Some(Command::Serve(ServeArgs {
                 port: DEFAULT_PORT,
                 open: false,
-                model_port: None,
-                model_secret_file: None,
+                model: ModelArgs {
+                    model_port: None,
+                    model_secret_file: None,
+                },
             }))
         ));
         let cli = Cli::try_parse_from(["knowmoretabs", "serve", "--port", "0", "--open"]).unwrap();
@@ -462,15 +523,20 @@ mod tests {
             Some(Command::Serve(ServeArgs {
                 port: 0,
                 open: true,
-                model_port: None,
-                model_secret_file: None,
+                model: ModelArgs {
+                    model_port: None,
+                    model_secret_file: None,
+                },
             }))
         ));
         let cli = Cli::try_parse_from(["knowmoretabs", "serve", "--model-port", "41879"]).unwrap();
         assert!(matches!(
             cli.command,
             Some(Command::Serve(ServeArgs {
-                model_port: Some(41879),
+                model: ModelArgs {
+                    model_port: Some(41879),
+                    ..
+                },
                 ..
             }))
         ));
@@ -481,7 +547,10 @@ mod tests {
         assert!(matches!(
             cli.command,
             Some(Command::Serve(ServeArgs {
-                model_secret_file: Some(ref path),
+                model: ModelArgs {
+                    model_secret_file: Some(ref path),
+                    ..
+                },
                 ..
             })) if path == std::path::Path::new("k")
         ));
@@ -805,7 +874,7 @@ mod tests {
         assert!(cli.json);
         assert!(matches!(
             &cli.command,
-            Some(Command::Add(AddArgs { url, title: Some(title), signed_in: false, no_content: true, retry }))
+            Some(Command::Add(AddArgs { url: Some(url), file: None, title: Some(title), signed_in: false, no_content: true, retry }))
                 if url == "https://a.test/" && title == "A" && retry.is_empty()
         ));
         let cli =
@@ -855,11 +924,57 @@ mod tests {
                 "A",
             ],
             &["add", "https://a.test/", "--retry", "nonsense"],
+            &["add", "https://a.test/", "--file", "a.md"],
+            &["add", "--file", "a.md", "--signed-in"],
+            &["add", "--file", "a.md", "--no-content"],
+            &["add", "--file", "a.md", "--retry", "content"],
         ] {
             let mut args = vec!["knowmoretabs"];
             args.extend_from_slice(bad);
             assert!(Cli::try_parse_from(args).is_err(), "{bad:?}");
         }
+    }
+
+    #[test]
+    fn a_file_a_search_and_a_read_name_their_checkouts_file() {
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "add",
+            "--file",
+            "notes/a.md",
+            "--title",
+            "A",
+            "--checkouts",
+            "c.json",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.checkouts.as_deref(),
+            Some(std::path::Path::new("c.json"))
+        );
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Add(AddArgs { url: None, file: Some(file), title: Some(_), .. }))
+                if file == std::path::Path::new("notes/a.md")
+        ));
+        let cli = Cli::try_parse_from([
+            "knowmoretabs",
+            "search",
+            "night",
+            "train",
+            "--model-port",
+            "41879",
+        ])
+        .unwrap();
+        assert!(matches!(
+            &cli.command,
+            Some(Command::Search(SearchArgs { query, model: ModelArgs { model_port: Some(41879), .. } }))
+                if query == &["night", "train"]
+        ));
+        assert!(Cli::try_parse_from(["knowmoretabs", "search"]).is_err());
+        let cli =
+            Cli::try_parse_from(["knowmoretabs", "read", "kmt-blob:sha256-00", "--json"]).unwrap();
+        assert!(matches!(&cli.command, Some(Command::Read { key }) if key == "kmt-blob:sha256-00"));
     }
 
     #[test]

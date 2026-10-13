@@ -5,6 +5,8 @@
 
 pub mod add;
 pub mod history_builder;
+pub mod model_service;
+pub mod pdf_builder;
 pub mod serve;
 pub mod session_builder;
 pub mod site;

@@ -21,6 +21,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from .. import dataset
+from . import kmt
 from ..archive import Archive, LibraryState
 from ..embed import CHAR_CAP, MAX_TOKENS, MODELS, page_texts, persist_text, persist_images
 from ..vector_store import VectorStore
@@ -66,6 +67,7 @@ class Library:
     embed_image: Callable | None  # lazy image encoder, shared by startup and sync
     dim: int
     added_q: np.ndarray  # queries of the tags `add_tags` appended, in tag order after the rules' own
+    binary: str = kmt.BINARY  # the knowmoretabs that prints a local document's text (`kmt.read_argv`)
     rows: dict = field(init=False)  # page key -> row
 
     def __post_init__(self):
@@ -108,12 +110,14 @@ def _keyword_index(records: list[dict]) -> tuple[TfidfVectorizer, object]:
     return vec, vec.fit_transform(docs)
 
 
-def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=None, dim=None) -> tuple[Library, dict]:
+def load(
+    paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=None, dim=None, binary: str = kmt.BINARY
+) -> tuple[Library, dict]:
     dim = MODELS[MODEL].dim if dim is None else dim
     timings = {}
     start = time.perf_counter()
     archive = Archive.load(root)
-    legacy, records = dataset.app_records(paths, archive)
+    legacy, records = dataset.app_records(paths, archive, binary=binary)
     counts = {n: 0 for n in archive.state.active.values()}
     for r in records:
         for t in r["tags"]:
@@ -172,6 +176,7 @@ def load(paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=
         embed_image=embed_image,
         dim=dim,
         added_q=np.zeros((0, X.shape[1]), X.dtype),
+        binary=binary,
     )
 
     stats = {
@@ -266,7 +271,7 @@ def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Libra
     urls = [url for url in dict.fromkeys(urls) if url in known]
     if not urls:
         return lib
-    _, fresh = dataset.app_records(lib.paths, archive, keys=urls)
+    _, fresh = dataset.app_records(lib.paths, archive, keys=urls, binary=lib.binary)
     vectors, image_rows, mask, counts = _vectors(
         lib.paths,
         fresh,

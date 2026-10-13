@@ -1,7 +1,7 @@
 //! The page text store: `pages/content.jsonl`, one line per capture
 //! attempt, and `pages/content/<sha256>.md`, one markdown file per page.
 //!
-//! slice: content
+//! slice: content, sources
 //! why: Page text is the most private thing the archive keeps, and later
 //!      readers (a keyword index, agents) must be able to trust it without
 //!      knowing how it was captured. So the log is the record and a file is
@@ -339,6 +339,16 @@ pub fn parse(text: &str) -> Option<(BTreeMap<String, Value>, &str)> {
         }
     }
     Some((front, &rest[end + "---\n".len()..]))
+}
+
+/// The kept text of `url`, front matter dropped; `None` when no file is
+/// kept for it. No lock: a file is replaced whole by a rename.
+pub fn kept_text(root: &Path, url: &str) -> Result<Option<String>, Error> {
+    let file = dir(root).join(file_name(url));
+    Ok(jsonl::kept_file(&file)?.map(|bytes| {
+        let text = String::from_utf8_lossy(&bytes);
+        parse(&text).map_or_else(|| text.to_string(), |(_, body)| body.to_owned())
+    }))
 }
 
 /// Where a run writes: the log, and the directory of content files.

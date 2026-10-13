@@ -1,7 +1,7 @@
 //! `knowmoretabs add`: one page into the library by its address, and the
 //! stage lines a caller follows it by.
 //!
-//! slice: add
+//! slice: add, sources
 //! why: Saving a whole session to keep the one page you are reading is the
 //!      wrong cost, and a page with no session has no snapshot to join. So
 //!      `add` writes one line to the intake log, which the library folds in,
@@ -31,7 +31,7 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::add_content::{self, Ask, Ended};
-use crate::archive::{self, Archive};
+use crate::archive::{self, Archive, Lock};
 use crate::capture::Log;
 use crate::error::Error;
 use crate::jsonl::Appender;
@@ -96,7 +96,7 @@ impl Outcome {
     }
 
     /// The key the library holds the page under; none for a refusal.
-    fn key(&self) -> Option<&str> {
+    pub fn key(&self) -> Option<&str> {
         match self {
             Self::Added(key) | Self::Known(key) | Self::Forgotten(key) => Some(key),
             Self::Refused(_) => None,
@@ -104,7 +104,7 @@ impl Outcome {
     }
 
     /// The page is in the library at the end: the run succeeded.
-    fn in_library(&self) -> bool {
+    pub fn in_library(&self) -> bool {
         matches!(self, Self::Added(_) | Self::Known(_))
     }
 }
@@ -144,18 +144,39 @@ pub fn apply(
     if known_only && !root.exists() {
         return Ok(Outcome::Refused(Reason::NotInLibrary));
     }
+    admit(root, url, title, known_only, waiting, |_| Ok(()))
+}
+
+/// [`apply`] past the URL's own refusal, for any key the library lists:
+/// `also` writes what goes with the page under the same hold of the lock,
+/// before its intake line, whenever the page is in the library at the end,
+/// so the page is never listed without it.
+pub fn admit(
+    root: &Path,
+    url: &str,
+    title: Option<&str>,
+    known_only: bool,
+    waiting: impl FnOnce(),
+    also: impl FnOnce(&Lock) -> Result<(), Error>,
+) -> Result<Outcome, Error> {
     let archive = Archive::open(root)?;
     let lock = archive.lock(waiting)?;
     let key = page_key::clean(url);
     let forgotten = State::read(root)?.forgotten;
     let loaded = library::load(&archive)?;
     let known = library::known_urls(&loaded.snapshots);
-    if let Some(held) = held(url, &key, &known, &forgotten) {
-        return Ok(held);
+    match held(url, &key, &known, &forgotten) {
+        Some(outcome @ Outcome::Known(_)) => {
+            also(&lock)?;
+            return Ok(outcome);
+        }
+        Some(outcome) => return Ok(outcome),
+        None => {}
     }
     if known_only {
         return Ok(Outcome::Refused(Reason::NotInLibrary));
     }
+    also(&lock)?;
     let mut log = Appender::open_locked(root, intake::path(root), &lock)?;
     log.append_locked(&intake::Line::new(&key, archive::now(), title), &lock)?;
     Ok(Outcome::Added(key.into_owned()))
@@ -213,13 +234,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
         out::json(&library_line("running"));
     }
     let retry = args.content.is_some_and(|ask| !ask.retry.is_empty());
-    let outcome = apply(root, url, args.title, retry, || {
-        if json {
-            out::json(&library_line("waiting"));
-        } else {
-            log.warn(archive::WAITING);
-        }
-    })?;
+    let outcome = apply(root, url, args.title, retry, waiting(json, log))?;
     if json {
         out::json(&library_done(&outcome));
     }
@@ -251,13 +266,24 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
     })
 }
 
-fn library_line(state: &str) -> Value {
+pub fn library_line(state: &str) -> Value {
     json!({"stage": "library", "state": state})
+}
+
+/// What the library stage says when another run holds the archive lock.
+pub fn waiting(json: bool, log: Log) -> impl FnOnce() {
+    move || {
+        if json {
+            out::json(&library_line("waiting"));
+        } else {
+            log.warn(archive::WAITING);
+        }
+    }
 }
 
 /// How the library stage ended, and the key the library holds the page
 /// under, so a caller has it before any later stage.
-fn library_done(outcome: &Outcome) -> Value {
+pub fn library_done(outcome: &Outcome) -> Value {
     let mut line = library_line("done");
     line["value"] = outcome.value().into();
     if let Some(key) = outcome.key() {
@@ -272,18 +298,19 @@ fn library_done(outcome: &Outcome) -> Value {
 /// The last line: the page's key (the asked address on a refusal), how the
 /// library stage ended, and the text's and the image's status names, null
 /// when there is none.
-fn done_line(url: &str, outcome: &Outcome, ended: &Ended) -> Value {
+pub fn done_line(url: &str, outcome: &Outcome, ended: &Ended) -> Value {
     json!({"stage": "done", "state": "done", "url": url, "value": outcome.value(),
         "content": ended.content, "image": ended.image})
 }
 
 /// A page in the library is news on stdout; a refusal is the error the run
 /// exits on, on stderr whatever `-q` says, as every command's is. A known
-/// page is left as it was only when nothing more is captured.
-fn report(url: &str, outcome: &Outcome, capturing: bool, log: Log) {
+/// page is left as it was only when nothing `more` is done to it: no
+/// capture, no new pin.
+pub fn report(url: &str, outcome: &Outcome, more: bool, log: Log) {
     match outcome {
         Outcome::Added(_) if !log.quiet => out::line(&format!("added {url} to your library")),
-        Outcome::Known(_) if !log.quiet && capturing => {
+        Outcome::Known(_) if !log.quiet && more => {
             out::line(&format!("already in your library: {url}"));
         }
         Outcome::Known(_) if !log.quiet => {

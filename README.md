@@ -218,6 +218,9 @@ knowmoretabs tags                # your tags, with how many pages carry each; --
 knowmoretabs tags --define NAME TEXT   # what a tag means, for you and for a tagging agent
 knowmoretabs tag --prompt DIR    # a work folder for an agent: prompt.md and the pages not yet tagged
 knowmoretabs tag --import FILE   # check an agent's tags.jsonl and store it as suggestions; --dry-run
+knowmoretabs add --file FILE     # a local markdown, text or PDF document, by reference; --file - reads stdin
+knowmoretabs search QUERY        # added pages and documents by what they say; --model-port N ranks them
+knowmoretabs read KEY            # the text of a document add --file kept, by its key
 ```
 
 `tag --prompt` covers pages that show none of your tags and have no imported
@@ -290,6 +293,36 @@ without being fetched, and so is a page that redirects to one or that is only
 a sign-in form. None of this hides a page from your library; forgetting it is
 your call. `--dry-run` lists every page and the reason, and `--json` reports
 the counts.
+
+## Your own documents, by reference
+
+`add --file` puts a note, a text file or a PDF beside the pages you read,
+without the archive keeping a copy or a path on this machine. A file committed
+in a git repository with a remote is kept as
+`kmt-git:<repository>//<path>`, the repository named by its remote
+(`git@github.com:o/r.git` is `github.com/o/r`), and pinned to the blob and
+commit git has for it. A file with changes, or not committed, is refused:
+commit it first. Any other file, or text on stdin (`--file -`), is copied once
+to a shelf folder you name, as `<sha256>.<ext>`, and kept as
+`kmt-blob:sha256-<hex>`; with no shelf it is refused.
+
+Where each repository is checked out, and the shelf, live in one file per
+machine, `~/.config/knowmoretabs/checkouts.json` (`--checkouts FILE` for
+another):
+
+```json
+{"schema_version": 1, "repos": {"github.com/o/r": "/path/to/checkout"}, "shelf": "/path/to/shelf"}
+```
+
+`add --file` names a repository's checkout there the first time it sees one.
+`search QUERY --json` finds added pages and documents by every word of the
+query in their title, key or text, reading each document's pinned bytes live,
+and says of each whether its text is `fresh`, `stale` (the checkout has moved
+on; the pinned text is still what is searched) or `unresolved`, and why. It
+never reads your snapshots or History, and never lists a forgotten page. With
+`--model-port N --model-secret-file FILE` the model service ranks the query
+first, as in the Library. `read KEY` prints one document's text. None of the
+three sends anything off the machine.
 
 ## Page text, if you ask for it
 
@@ -527,6 +560,7 @@ tier is ready; a missing tool is a warning.
 │   ├── content/               # one markdown file per captured page, named by the SHA-256 of its address
 │   ├── images.jsonl           # what `content` did about each page's image, one line per attempt; append-only
 │   ├── images/                # one preview JPEG per captured page, named as its text file is
+│   ├── sources.jsonl          # which bytes each local document was when added: blob and commit; append-only
 │   └── history.json           # what History last said about each page; refreshed, never drops a page
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
 ├── tags/
@@ -542,9 +576,9 @@ with a `schema_version`; it is the source of truth and readable in any
 editor. Everything under `export/` is derived and can be deleted.
 
 Nothing leaves the machine unless you run `enrich` or `content`. `save`,
-`export` and the tag commands make no network requests. `serve` makes none
-unless `--model-port` is set; then it sends each search query to the model
-service over loopback on this machine.
+`export`, the tag commands and `add --file` make no network requests. `serve`
+and `search` make none unless `--model-port` is set; then they send each
+search query to the model service over loopback on this machine.
 `enrich` and `content` are the only code that sends your pages' addresses,
 or a video's id to YouTube through yt-dlp, and what each sends is described
 above; `content` also downloads one preview image per page from the address

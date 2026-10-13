@@ -447,8 +447,8 @@ def smoke(paths: Paths, app: App) -> dict:
 def run(
     paths: Paths, root: Path, port: int, smoke_only: bool, secret_file: str | None = None, kmt_bin: str | None = None
 ) -> None:
-    """Serving needs the launch's key before any model loads; `--smoke` serves nothing and needs none. Add link runs
-    `kmt_bin`, the launch's own knowmoretabs, else the one on PATH."""
+    """Serving needs the launch's key before any model loads; `--smoke` serves nothing and needs none. Add link, and
+    the text of a local document, run `kmt_bin`, the launch's own knowmoretabs, else the one on PATH."""
     key = None
     if not smoke_only:
         if secret_file is None:
@@ -479,9 +479,10 @@ def run(
         finally:
             release(image_st)
 
-    lib, stats = engine.load(paths, root.resolve(), encode, embed, embed_image=embed_image)
+    binary = kmt_bin or kmt.BINARY
+    lib, stats = engine.load(paths, root.resolve(), encode, embed, embed_image=embed_image, binary=binary)
     app = App(lib, paths.data / "app", encode, embed)
-    app.binary = kmt_bin or app.binary
+    app.binary = binary
     stats |= {"model_load_s": model["load_s"], "startup_s": round(time.perf_counter() - start, 2)}
     print(json.dumps(stats))
     if smoke_only:

@@ -507,6 +507,10 @@ impl Response {
         )
     }
 
+    pub(crate) fn body(&self) -> &[u8] {
+        &self.body
+    }
+
     pub(crate) fn method_not_allowed(allow: &'static str) -> Self {
         Self {
             field: Some(("Allow", allow)),

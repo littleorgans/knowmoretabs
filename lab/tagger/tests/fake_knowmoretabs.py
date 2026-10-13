@@ -1,4 +1,4 @@
-"""A stand in for `knowmoretabs --root <root> add|forget|restore` on a synthetic archive, for the app tests.
+"""A stand in for `knowmoretabs --root <root> add|forget|restore|read` on a synthetic archive, for the app tests.
 
 `add --json [--title <T>] [--signed-in] [--retry <content|image> …] -- <url>` prints the contract's stage events (one
 JSON object per line, flushed) and writes what the real command would: an intake line, a content file and its log
@@ -16,7 +16,8 @@ known URL is `known`; a forgotten one is refused as `forgotten`, anything but a 
 under `--retry` an unknown one as `refused`, `not_in_library`, all exiting 1. `--title` or `--no-content` with `--retry` is a usage error: exit 2,
 nothing on stdout. `forget -- <url>…` and `restore -- <url>…` edit `library.json`'s forgotten list, replacing the
 file as knowmoretabs does, and refuse the whole call, writing nothing, when one URL is not in the library (for
-`restore`, neither known nor forgotten). `FAKE_KMT_DELAY` (seconds) paces the lines; `FAKE_KMT_LOG` names a file that
+`restore`, neither known nor forgotten). `read -- <key>` prints `SOURCE_BODY` for a key with a line in
+`pages/sources.jsonl`, and refuses any other with exit 1. `FAKE_KMT_DELAY` (seconds) paces the lines; `FAKE_KMT_LOG` names a file that
 gets each argument list, and with it the add right after a `restore` of a `relapse` page fails with the error
 document. Every page, title and text here is invented.
 """
@@ -33,6 +34,7 @@ from tagger.archive import latest_log, sha256_hex
 AT = "2026-10-08T12:00:00Z"
 TITLE = "An invented page on zeppelin timetables"
 BODY = "Zeppelin timetables and airship routes, invented for a test, with a night train or two."
+SOURCE_BODY = "A local note, invented for a test, on quokka migrations by night train."  # every pinned document's text
 RUNS = 3  # failed runs before a stage is unavailable
 PUBLIC = ("web", "github", "x", "youtube", "headless")  # tiers a signed in read starts from
 SIGN_IN = ("blocked", "behind_login", "paywalled")
@@ -293,6 +295,13 @@ def main(argv: list[str]) -> int:
         append(Path(log), {"argv": argv})
     assert argv[0] == "--root", argv
     root, command, rest = Path(argv[1]), argv[2], argv[3:]
+    if command == "read":
+        key = rest[rest.index("--") + 1]
+        if key not in latest_log(root / "pages" / "sources.jsonl"):
+            print(f"knowmoretabs: cannot read {key}: no source in your library has this key", file=sys.stderr)
+            return 1
+        print(SOURCE_BODY)
+        return 0
     if command == "add":
         args = parse(rest[: rest.index("--")])
         if args is None:

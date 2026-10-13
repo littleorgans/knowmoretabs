@@ -1,6 +1,6 @@
 //! Typed errors for the whole binary and their one-line rendering.
 //!
-//! slice: capture, library, triage, browsers, platforms, tags, history, content
+//! slice: capture, library, triage, browsers, platforms, tags, history, content, sources
 //! why: A failed `save` has to tell the user what to do next in one line,
 //!      keep the categories apart so tests and scripts can tell "no Chrome
 //!      here" from "archive unwritable", and never show a backtrace. Each
@@ -134,6 +134,12 @@ pub enum Error {
     HistoryRecord { path: PathBuf, reason: String },
     #[error("History not read, so nothing was refreshed: {0}")]
     HistoryUnreadable(String),
+    #[error("cannot use checkouts.json: {0}; repair it first")]
+    Checkouts(String),
+    #[error("not added: {file}: {reason}; nothing changed")]
+    SourceFile { file: String, reason: String },
+    #[error("cannot read {key}: {reason}")]
+    SourceRead { key: String, reason: String },
 }
 
 impl Error {
@@ -170,6 +176,9 @@ impl Error {
             Self::ExportDestination(_) => "export_destination",
             Self::HistoryRecord { .. } => "history_record",
             Self::HistoryUnreadable(_) => "history_unreadable",
+            Self::Checkouts(_) => "checkouts",
+            Self::SourceFile { .. } => "source_file",
+            Self::SourceRead { .. } => "source_read",
         }
     }
 

@@ -249,6 +249,16 @@ as what you can do that you could not before.
   whether `content --signed-in` can reach your running Chrome, from Chrome's
   files and never by connecting. `--json` for scripts. Exits 0 when the web
   tier is ready.
+- **Your own documents beside your pages, by reference.**
+  `knowmoretabs add --file` adds a markdown, text or PDF document: a file
+  committed in a git repository by its repository and path, pinned to its
+  blob and commit, and any other file, or text on stdin, by its hash after
+  one copy to a shelf you name. The archive keeps no copy and no local path;
+  where checkouts and the shelf are is one file per machine,
+  `checkouts.json`. `knowmoretabs search --json` finds added pages and
+  documents by what they say, ranked by the model service when given, and
+  says whether each document's text is fresh, stale or unresolved.
+  `knowmoretabs read KEY` prints a document's text.
 
 ### Changed
 
