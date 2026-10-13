@@ -53,6 +53,37 @@ test('a later intake sighting preserves open membership only for captured pages'
   ]), ['Current']);
 });
 
+test('last seen counts each add at its own time and each displayed band separately', () => {
+  const list = { contains: () => false, querySelector: () => ({}), querySelectorAll: () => [] };
+  const context = vm.createContext({
+    document: { getElementById: (id) => id === 'library-data' ? null : list,
+      documentElement: { style: { setProperty() {} }, dataset: {} } },
+    IntersectionObserver: class {},
+    performance: { now: () => 0 },
+    library: {
+      pages: [
+        { url: 'https://synthetic.test/captured', domain: 'synthetic.test', title: 'Captured' },
+        { url: 'https://synthetic.test/first', domain: 'synthetic.test', title: 'First', added_at: '2026-03-01T09:00:00Z' },
+        { url: 'https://synthetic.test/second', domain: 'synthetic.test', title: 'Second', added_at: '2026-03-03T09:00:00Z' },
+      ],
+      // Intake's snapshot is dated by the first add, so it sorts before the capture.
+      snapshots: [snapshot('added', '2026-03-01T09:00:00Z', [1, 2]), snapshot('2026-03-02-090000Z', '2026-03-02T09:00:00Z', [0])],
+    },
+  });
+  vm.runInContext(renderer, context);
+  const rows = vm.runInContext(`derive(library); S.pages.slice().sort(SORTS.last)
+    .map((p) => [p.title, /datetime="([^"]+)"/.exec(rowHTML(p))[1]])`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(rows)), [
+    ['Second', '2026-03-03T09:00:00Z'], ['Captured', '2026-03-02T09:00:00Z'], ['First', '2026-03-01T09:00:00Z'],
+  ]);
+  vm.runInContext('tagbar = tray = fitRows = syncSort = () => {}; render();', context);
+  const bands = [...list.innerHTML.matchAll(/<h3>([^<]+)<small>(\d+)<\/small><\/h3>/g)];
+  assert.equal(bands.length, 3);
+  assert.equal(bands[0][1], bands[2][1], 'the same month appears around Open now');
+  assert.equal(bands[1][1], 'Open now');
+  assert.deepEqual(bands.map((band) => Number(band[2])), [1, 1, 1]);
+});
+
 // ---- Library search through the model ------------------------------------
 // The renderer over a stub fetch whose replies the test gives, timers the
 // test runs, and `render` replaced by a recorder of what `compute` shows.

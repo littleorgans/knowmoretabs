@@ -369,6 +369,7 @@ impl Fold {
                 last_active: state.last_active.and_then(chrome_time),
                 window_id,
                 history: None,
+                added_at: None,
             });
         }
         (tabs, group_windows, dropped)
