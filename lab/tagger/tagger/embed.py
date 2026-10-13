@@ -1,6 +1,7 @@
 """Step 2: durable page keyed document vectors, with legacy experiment caches preserved.
 
-A: title + URL host and path + head metadata. B: A + page text (A when no text is ok).
+A: title + URL host and path + head metadata. B: A + page text (A when no text is ok); a local document's text is
+what `knowmoretabs read` prints for it, as pinned, so its vector follows the bytes its pin names.
 C is assembled in `features` from B and the EG2 image embedding. Page text is read here only
 and never printed; the log carries counts, timings and memory.
 """
@@ -18,6 +19,7 @@ import psutil
 import torch
 
 from . import dataset
+from .app import kmt
 from .archive import Archive, content_body, sha256_hex
 from .paths import Paths, write_json
 from .vector_store import VectorStore
@@ -89,13 +91,20 @@ def load(model: Model, *, local_files_only: bool = False):
     return st, stats
 
 
+def page_body(record: dict) -> str | None:
+    """A page's kept text when it is ok, a local document's as `read` prints it; None for none."""
+    if record["text_ok"]:
+        return content_body(Path(record["content_path"]))
+    return (kmt.read(record["read"]) or None) if record.get("read") else None
+
+
 def page_texts(records: list[dict], with_text: bool, chars: int) -> list[tuple[str, str]]:
-    """(title, text) per page; text is A, plus the page body when asked for and ok."""
+    """(title, text) per page; text is A, plus the page body when asked for and there is one."""
     out = []
     for r in records:
         text = r["a_text"]
-        if with_text and r["text_ok"]:
-            text = text + "\n\n" + content_body(Path(r["content_path"]))[:chars]
+        if with_text and (body := page_body(r)) is not None:
+            text = text + "\n\n" + body[:chars]
         out.append((r["title"], text))
     return out
 

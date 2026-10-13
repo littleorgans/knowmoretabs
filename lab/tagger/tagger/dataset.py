@@ -11,6 +11,7 @@ import json
 import re
 import urllib.parse
 
+from .app import kmt
 from .archive import Archive
 from .paths import Paths, write_json
 
@@ -63,8 +64,9 @@ def metadata_lines(title: str, record: dict | None) -> list[str]:
     return lines
 
 
-def record(archive: Archive, url: str) -> dict:
-    """One known page's record; content and image paths point under the archive's root."""
+def record(archive: Archive, url: str, binary: str = kmt.BINARY) -> dict:
+    """One known page's record; content and image paths point under the archive's root. A local document's text is
+    not kept anywhere: `read` is the command that prints it (`kmt.read_argv`), run with `binary`."""
     title = collapse(archive.titles.get(url))
     tags = archive.state.tags(url)
     return {
@@ -79,13 +81,14 @@ def record(archive: Archive, url: str) -> dict:
         "added": archive.added.get(url),
         "text_ok": url in archive.text_ok,
         "content_path": str(archive.text_ok[url]) if url in archive.text_ok else None,
+        "read": kmt.read_argv(binary, archive.root, url),
         "image_ok": url in archive.image_ok,
         "image_path": str(archive.image_ok[url]) if url in archive.image_ok else None,
     }
 
 
 def app_records(
-    paths: Paths, archive: Archive, *, keys: list[str] | None = None
+    paths: Paths, archive: Archive, *, keys: list[str] | None = None, binary: str = kmt.BINARY
 ) -> tuple[Callable[[], list[dict]] | None, list[dict]]:
     """Current archive inputs for startup, CLI embedding and individual syncs.
 
@@ -93,7 +96,7 @@ def app_records(
     A sync requests its keys directly and never migrates positional data.
     """
     legacy = partial(load_records, paths, missing_ok=True) if keys is None else None
-    return legacy, [record(archive, key) for key in (archive.known if keys is None else keys)]
+    return legacy, [record(archive, key, binary) for key in (archive.known if keys is None else keys)]
 
 
 def run(paths: Paths) -> None:
