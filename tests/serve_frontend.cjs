@@ -53,7 +53,9 @@ test('a later intake sighting preserves open membership only for captured pages'
   ]), ['Current']);
 });
 
-test('last seen counts each add at its own time and each displayed band separately', () => {
+// The renderer over a captured page and two pages added at different times, with
+// one stub standing in for every element.
+function addedLibrary(snapshots) {
   const list = { contains: () => false, querySelector: () => ({}), querySelectorAll: () => [] };
   const context = vm.createContext({
     document: { getElementById: (id) => id === 'library-data' ? null : list,
@@ -66,11 +68,18 @@ test('last seen counts each add at its own time and each displayed band separate
         { url: 'https://synthetic.test/first', domain: 'synthetic.test', title: 'First', added_at: '2026-03-01T09:00:00Z' },
         { url: 'https://synthetic.test/second', domain: 'synthetic.test', title: 'Second', added_at: '2026-03-03T09:00:00Z' },
       ],
-      // Intake's snapshot is dated by the first add, so it sorts before the capture.
-      snapshots: [snapshot('added', '2026-03-01T09:00:00Z', [1, 2]), snapshot('2026-03-02-090000Z', '2026-03-02T09:00:00Z', [0])],
+      snapshots,
     },
   });
   vm.runInContext(renderer, context);
+  return { context, list };
+}
+
+test('last seen counts each add at its own time and each displayed band separately', () => {
+  // Intake's snapshot is dated by the first add, so it sorts before the capture.
+  const { context, list } = addedLibrary([
+    snapshot('added', '2026-03-01T09:00:00Z', [1, 2]), snapshot('2026-03-02-090000Z', '2026-03-02T09:00:00Z', [0]),
+  ]);
   const rows = vm.runInContext(`derive(library); S.pages.slice().sort(SORTS.last)
     .map((p) => [p.title, /datetime="([^"]+)"/.exec(rowHTML(p))[1]])`, context);
   assert.deepEqual(JSON.parse(JSON.stringify(rows)), [
@@ -85,23 +94,10 @@ test('last seen counts each add at its own time and each displayed band separate
 });
 
 test('first seen and the drawer date each add at its own time', () => {
-  const list = { contains: () => false, querySelector: () => ({}), querySelectorAll: () => [] };
-  const context = vm.createContext({
-    document: { getElementById: (id) => id === 'library-data' ? null : list,
-      documentElement: { style: { setProperty() {} }, dataset: {} } },
-    IntersectionObserver: class {},
-    performance: { now: () => 0 },
-    library: {
-      pages: [
-        { url: 'https://synthetic.test/captured', domain: 'synthetic.test', title: 'Captured' },
-        { url: 'https://synthetic.test/first', domain: 'synthetic.test', title: 'First', added_at: '2026-03-01T09:00:00Z' },
-        { url: 'https://synthetic.test/second', domain: 'synthetic.test', title: 'Second', added_at: '2026-03-03T09:00:00Z' },
-      ],
-      // Intake's snapshot is dated by the first add; First is captured after its add.
-      snapshots: [snapshot('added', '2026-03-01T09:00:00Z', [1, 2]), snapshot('2026-03-02-090000Z', '2026-03-02T09:00:00Z', [0, 1])],
-    },
-  });
-  vm.runInContext(renderer, context);
+  // Intake's snapshot is dated by the first add; First is captured after its add.
+  const { context } = addedLibrary([
+    snapshot('added', '2026-03-01T09:00:00Z', [1, 2]), snapshot('2026-03-02-090000Z', '2026-03-02T09:00:00Z', [0, 1]),
+  ]);
   // Each row: its title, the drawer's date range, then its sightings newest first.
   const rows = vm.runInContext(`derive(library); S.pages.slice().sort(SORTS.first).map((p) => { const h = histHTML(p);
     return [p.title, /class="sum">Seen in [^·]+· ([^·<]+)/.exec(h)[1].trim(), [...h.matchAll(/<a href="#snapshot[^>]+>([^<]+)/g)].map((m) => m[1])]; })`, context);
@@ -111,6 +107,26 @@ test('first seen and the drawer date each add at its own time', () => {
     ['Second', day('2026-03-03T09:00:00Z'), [full('2026-03-03T09:00:00Z')]],
     ['Captured', day('2026-03-02T09:00:00Z'), [full('2026-03-02T09:00:00Z')]],
     ['First', `${day('2026-03-01T09:00:00Z')} to ${day('2026-03-02T09:00:00Z')}`, [full('2026-03-02T09:00:00Z'), full('2026-03-01T09:00:00Z')]],
+  ]);
+});
+
+test('each snapshot counts the pages first seen there, an add at its own time', () => {
+  // Second is captured before its add, so a browser capture sees it first.
+  const { context } = addedLibrary([
+    snapshot('added', '2026-03-01T09:00:00Z', [1, 2]), snapshot('2026-03-02-090000Z', '2026-03-02T09:00:00Z', [0, 2]),
+  ]);
+  const els = {};
+  context.document.getElementById = (id) => id === 'library-data' ? null : (els[id] ||= { querySelectorAll: () => [] });
+  const shown = vm.runInContext('derive(library); S.snaps.map((s) => s.id)', context).map((id) => {
+    vm.runInContext(`renderSnapshot('${id}')`, context);
+    return [els['snap-title'].textContent, Number(/(\d+) pages first seen here/.exec(els['snap-meta'].textContent)[1])];
+  });
+  const at = (t) => vm.runInContext(`F.long.format(new Date('${t}')) + ', ' + F.time.format(new Date('${t}')) + ' UTC'`, context);
+  const full = (t) => vm.runInContext(`F.full.format(new Date('${t}'))`, context);
+  // Intake's snapshot runs from the first add to the latest.
+  assert.deepEqual(shown, [
+    [`${at('2026-03-01T09:00:00Z')} to ${full('2026-03-03T09:00:00Z')} UTC`, 1],
+    [at('2026-03-02T09:00:00Z'), 2],
   ]);
 });
 

@@ -442,7 +442,10 @@ Rules the backend must keep:
   library, dated by the first add. A sighting there counts as the page's own
   `added_at`, when it has one, for first and last seen and in the page's
   drawer. First and last seen are the earliest and latest sightings across
-  adds and browser captures. The `added` snapshot is not a browser capture:
+  adds and browser captures. A page counts as first seen in the snapshot that
+  holds its first seen sighting, so the `added` snapshot counts only pages
+  added before any capture saw them, and the snapshot view dates it from the
+  first add to the latest. The `added` snapshot is not a browser capture:
   "Open now" means a sighting in the newest snapshot that is not `added`, and
   a library of added pages alone has nothing open now.
 - Every `page_index` in a tab tuple is a valid index into `pages`. A page
