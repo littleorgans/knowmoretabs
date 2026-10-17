@@ -84,6 +84,36 @@ test('last seen counts each add at its own time and each displayed band separate
   assert.deepEqual(bands.map((band) => Number(band[2])), [1, 1, 1]);
 });
 
+test('first seen and the drawer date each add at its own time', () => {
+  const list = { contains: () => false, querySelector: () => ({}), querySelectorAll: () => [] };
+  const context = vm.createContext({
+    document: { getElementById: (id) => id === 'library-data' ? null : list,
+      documentElement: { style: { setProperty() {} }, dataset: {} } },
+    IntersectionObserver: class {},
+    performance: { now: () => 0 },
+    library: {
+      pages: [
+        { url: 'https://synthetic.test/captured', domain: 'synthetic.test', title: 'Captured' },
+        { url: 'https://synthetic.test/first', domain: 'synthetic.test', title: 'First', added_at: '2026-03-01T09:00:00Z' },
+        { url: 'https://synthetic.test/second', domain: 'synthetic.test', title: 'Second', added_at: '2026-03-03T09:00:00Z' },
+      ],
+      // Intake's snapshot is dated by the first add; First is captured after its add.
+      snapshots: [snapshot('added', '2026-03-01T09:00:00Z', [1, 2]), snapshot('2026-03-02-090000Z', '2026-03-02T09:00:00Z', [0, 1])],
+    },
+  });
+  vm.runInContext(renderer, context);
+  // Each row: its title, the drawer's date range, then its sightings newest first.
+  const rows = vm.runInContext(`derive(library); S.pages.slice().sort(SORTS.first).map((p) => { const h = histHTML(p);
+    return [p.title, /class="sum">Seen in [^·]+· ([^·<]+)/.exec(h)[1].trim(), [...h.matchAll(/<a href="#snapshot[^>]+>([^<]+)/g)].map((m) => m[1])]; })`, context);
+  const day = (t) => vm.runInContext(`F.dayYear.format(new Date('${t}'))`, context);
+  const full = (t) => vm.runInContext(`F.full.format(new Date('${t}'))`, context);
+  assert.deepEqual(JSON.parse(JSON.stringify(rows)), [
+    ['Second', day('2026-03-03T09:00:00Z'), [full('2026-03-03T09:00:00Z')]],
+    ['Captured', day('2026-03-02T09:00:00Z'), [full('2026-03-02T09:00:00Z')]],
+    ['First', `${day('2026-03-01T09:00:00Z')} to ${day('2026-03-02T09:00:00Z')}`, [full('2026-03-02T09:00:00Z'), full('2026-03-01T09:00:00Z')]],
+  ]);
+});
+
 // ---- Library search through the model ------------------------------------
 // The renderer over a stub fetch whose replies the test gives, timers the
 // test runs, and `render` replaced by a recorder of what `compute` shows.

@@ -116,7 +116,7 @@ const isForm = (el) => el && /^(INPUT|SELECT|TEXTAREA)$/.test(el.tagName) && el.
 const plural = (n, one, many = one + 's') => `${num.format(n)} ${n === 1 ? one : many}`;
 const SORTS = {
   last: (a, b) => b.ls.date - a.ls.date || b.last - a.last || a.lw - b.lw || a.lp - b.lp,
-  first: (a, b) => b.first - a.first || a.lw - b.lw || a.lp - b.lp,
+  first: (a, b) => b.fs.date - a.fs.date || b.first - a.first || a.lw - b.lw || a.lp - b.lp,
   count: (a, b) => b.n - a.n || b.last - a.last || a.lw - b.lw,
   title: (a, b) => collator.compare(a.name, b.name) || b.last - a.last,
   url: (a, b) => collator.compare(a.addr, b.addr),
@@ -133,6 +133,8 @@ const RELEVANCE = { value: 'relevance', label: 'Relevance' };
 // readable page is dropped and counted on its snapshot (§7 shows it as
 // "unreadable tab rows"); a snapshot without a parseable time is skipped and
 // counted in the footer.
+// When a sighting happened: adding a page counts as seeing it then, not when intake's snapshot is dated.
+function seenAt(p, k) { const s = S.snaps[k], added = new Date(p.added_at); return s.id === 'added' && !isNaN(added) ? { captured_at: p.added_at, date: added } : s; }
 function derive(lib) {
   S.stats = lib.stats || {};
   const P = lib.pages || [];
@@ -174,9 +176,8 @@ function derive(lib) {
     if (!p.seen.length) { p.n = 0; continue; }      // allowed by the contract, never shown
     const ks = [...new Set(p.seen.map((x) => x[0]))];
     p.n = ks.length; p.first = ks[0]; p.last = ks.at(-1); p.open = ks.includes(latest);
-    // Last seen: the newest sighting, where adding a page counts as seeing it then, not when intake's snapshot is dated.
-    const added = new Date(p.added_at);
-    p.ls = ks.map((k) => (S.snaps[k].id === 'added' && !isNaN(added) ? { captured_at: p.added_at, date: added } : S.snaps[k])).reduce((a, b) => (b.date >= a.date ? b : a));
+    const at = ks.map((k) => seenAt(p, k));
+    p.fs = at.reduce((a, b) => (b.date < a.date ? b : a)); p.ls = at.reduce((a, b) => (b.date >= a.date ? b : a));   // first and last seen
     const l = p.seen.at(-1); p.lw = l[1]; p.lp = l[3];
     p.grp = (p.seen.find((x) => x[0] === p.last && x[4]) || l)[4];   // the group it sat in when last seen
     p.gs = [...new Set(p.seen.map((x) => x[4] && x[4].title.toLowerCase()).filter(Boolean))];
@@ -280,7 +281,7 @@ function tagCounts(pages, own) { const n = new Map(); for (const p of pages) for
 const libraryCounts = () => tagCounts(S.pages.filter((p) => p.n && !p.forgotten));
 function bandOf(p) {
   if (S.sort === 'last') return p.open ? 'Open now' : F.month.format(p.ls.date);
-  if (S.sort === 'first') return F.month.format(S.snaps[p.first].date);
+  if (S.sort === 'first') return F.month.format(p.fs.date);
   return '';
 }
 // A group mark: a dot in the group's colour and its name. Nothing else on the
@@ -373,14 +374,14 @@ function browserHTML(p) {
   return out ? `<div class="hx"><h4>Browser history</h4><dl>${out}</dl></div>` : '';
 }
 function histHTML(p, cls = 'hist in') {
-  const sightings = p.seen.map(([k, w, tid, pos, g]) => { const s = S.snaps[k];
-    return `<li><a href="#snapshot/${esc(s.id)}/${tid}">${F.full.format(s.date)}</a><span>window ${w} · tab ${pos + 1}</span>${grpHTML(g)}</li>`; }).reverse();
+  const sightings = p.seen.map((x) => [x, seenAt(p, x[0]).date]).reverse().sort((a, b) => b[1] - a[1]).map(([[k, w, tid, pos, g], date]) =>
+    `<li><a href="#snapshot/${esc(S.snaps[k].id)}/${tid}">${F.full.format(date)}</a><span>window ${w} · tab ${pos + 1}</span>${grpHTML(g)}</li>`);
   const tagged = (p.tags.length ? ` · tagged ${p.tags.map(esc).join(', ')}` : '') + (p.sug.length ? ` · suggested ${p.sug.map((s) => esc(s.name)).join(', ')}` : '');
   const groups = p.gs.length ? ` · in ${p.gs.length === 1 ? 'group' : 'groups'} ${p.gs.map((t) => esc(S.groups.get(t).title)).join(', ')}` : '';
   const act = p.forgotten ? '<button type="button" data-act="restore" title="Puts it back in the library.">Restore</button>'
     : '<button type="button" data-act="forget" title="Hides it from the library. The snapshots themselves are never touched.">Forget</button>';
   const ro = `<span class="ro">Read-only export · to hide this page: <code>knowmoretabs forget ${esc(shellQuote(p.url))}</code></span>`;
-  const first = F.dayYear.format(S.snaps[p.first].date), last = F.dayYear.format(S.snaps[p.last].date);
+  const first = F.dayYear.format(p.fs.date), last = F.dayYear.format(p.ls.date);
   const only = S.domain.toLowerCase() === p.domain ? 'Clear site filter' : `Filter to ${esc(p.domain)}`;
   const full = p.link ? `<a class="full" href="${esc(p.url)}" target="_blank" rel="noopener noreferrer" title="${esc(p.url)}">${esc(p.url)}</a>` : `<p class="full" title="${esc(p.url)}">${esc(p.url)}</p>`;
   const history = full +
