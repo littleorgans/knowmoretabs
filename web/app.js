@@ -934,12 +934,12 @@ async function retire(k) {
 
 // ---- 7. Snapshots view -----------------------------------------------------
 // Intake's snapshot is dated by its first add and runs to its latest.
-const untilText = (s) => (s.until ? ` to ${F.full.format(s.until)} UTC` : '');
+const spanText = (s) => [`${F.time.format(s.date)} UTC`, ...(s.until ? [`to ${F.full.format(s.until)} UTC`] : [])];
 function renderSnapshots() {
   const max = Math.max(1, ...S.snaps.map((s) => s.tabs_total));
   $('snaps-empty').hidden = S.snaps.length > 0;
   $('snaps-body').innerHTML = S.snaps.slice().reverse().map((s) => { const d = degraded(s);
-    return `<tr><td><a href="#snapshot/${esc(s.id)}">${F.long.format(s.date)}</a> <span class="u">${F.time.format(s.date)} UTC${untilText(s)}</span></td>` +
+    return `<tr><td><a href="#snapshot/${esc(s.id)}">${F.long.format(s.date)}</a> <span class="u">${spanText(s).map((t) => `<span>${t}</span>`).join(' ')}</span></td>` +
     `<td class="num">${s.windows}</td><td class="bar-cell"><span class="num">${s.tabs_total}</span><span class="tabs-bar" data-w="${Math.round(100 * s.tabs_total / max)}"></span>${d ? `<span class="warn">incomplete: ${d}</span>` : ''}</td>` +
     `<td class="num">${s.fresh}</td><td class="num">${s.gone}</td></tr>`; }).join('');
   for (const b of $('snaps-body').querySelectorAll('.tabs-bar')) b.style.width = `${b.dataset.w * 0.6}%`;
@@ -949,7 +949,7 @@ function renderSnapshot(id, tab) {
   const wins = new Map();
   for (const t of s.tabs) { if (!wins.has(t[1])) wins.set(t[1], []); wins.get(t[1]).push(t); }
   const d = degraded(s);
-  $('snap-title').textContent = F.long.format(s.date) + ', ' + F.time.format(s.date) + ' UTC' + untilText(s);
+  $('snap-title').textContent = F.long.format(s.date) + ', ' + spanText(s).join(' ');
   $('snap-meta').textContent = `${plural(s.tabs_total, 'tab')} in ${plural(s.windows || wins.size, 'window')}${s.groups.length ? ', ' + plural(s.groups.length, 'group') : ''} · ${s.browser || 'unknown browser'} / ${s.profile || 'unknown profile'} · ${s.fresh} pages first seen here${d ? ' · incomplete: ' + d : ''}`;
   $('snap-body').innerHTML = [...wins].sort((a, b) => a[0] - b[0]).map(([w, tabs]) => `<section class="win"><h3>Window ${w}<small>${plural(tabs.length, 'tab')}</small></h3><ol>` +
     tabs.sort((a, b) => a[2] - b[2]).map(([pi, , pos, tid, pin, g]) => { const p = S.pages[pi];
