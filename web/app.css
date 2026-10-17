@@ -397,9 +397,8 @@ button.tag:hover, .tag.on { color: inherit; border-color: currentColor; }
 .snaps td { padding: 0.9rem 1.5rem; border-bottom: 1px solid var(--line); white-space: nowrap; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
 .snaps td a { font: 1rem/1.3 var(--serif); }
 .snaps td .u { font-size: 0.75rem; margin-left: 0.5rem; white-space: normal; }
-.snaps td .u > :first-child { white-space: nowrap; }
+.snaps td .u > span { white-space: nowrap; }
 .snaps td.num { text-align: right; }
-.snaps .bar-cell { width: 40%; }
 .snaps .tabs-bar { display: inline-block; height: 0.5rem; background: currentColor; vertical-align: middle; margin-left: 0.75rem; opacity: 0.45; }
 .snaps .warn { margin-left: 0.6rem; font-size: 0.75rem; font-style: italic; color: var(--ink-2); }
 .snaps tr:hover td { background: var(--ink); color: var(--bg); }
