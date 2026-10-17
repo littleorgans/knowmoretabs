@@ -440,12 +440,11 @@ Rules the backend must keep:
   strip column.
 - The snapshot with id `added` holds the pages `knowmoretabs add` put in the
   library, dated by the first add. A sighting there counts as the page's own
-  `added_at` for first and last seen and in the page's drawer. First seen
-  takes the earliest sighting; last seen takes the latest, including browser
-  captures. The `added` snapshot is not a browser capture: "Open now" means
-  a sighting in the newest snapshot
-  that is not `added`, and a library of added pages alone has nothing open
-  now.
+  `added_at`, when it has one, for first and last seen and in the page's
+  drawer. First and last seen are the earliest and latest sightings across
+  adds and browser captures. The `added` snapshot is not a browser capture:
+  "Open now" means a sighting in the newest snapshot that is not `added`, and
+  a library of added pages alone has nothing open now.
 - Every `page_index` in a tab tuple is a valid index into `pages`. A page
   with no tab rows is allowed; the client never shows it.
 - `tab_id` is unique within one snapshot (it is the deep-link target).
