@@ -437,10 +437,11 @@ emits today.
 Rules the backend must keep:
 
 - `snapshots` is ascending by time. The client uses the array index as the
-  strip column and as the sort key for first seen.
+  strip column.
 - The snapshot with id `added` holds the pages `knowmoretabs add` put in the
   library, dated by the first add. A sighting there counts as the page's own
-  `added_at` for last seen, so a page added today is last seen today. It is
+  `added_at` for first and last seen and in the page's drawer, so a page
+  added today is first and last seen today. It is
   not a browser capture: "Open now" means a sighting in the newest snapshot
   that is not `added`, and a library of added pages alone has nothing open
   now.
