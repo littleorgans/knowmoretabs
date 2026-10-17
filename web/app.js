@@ -134,7 +134,7 @@ const RELEVANCE = { value: 'relevance', label: 'Relevance' };
 // "unreadable tab rows"); a snapshot without a parseable time is skipped and
 // counted in the footer.
 // When a sighting happened: adding a page counts as seeing it then, not when intake's snapshot is dated.
-function seenAt(p, k) { const s = S.snaps[k], added = new Date(p.added_at); return s.id === 'added' && !isNaN(added) ? { captured_at: p.added_at, date: added } : s; }
+function seenAt(p, k) { const s = S.snaps[k], added = new Date(p.added_at); return s.id === 'added' && !isNaN(added) ? { k, captured_at: p.added_at, date: added } : s; }
 function derive(lib) {
   S.stats = lib.stats || {};
   const P = lib.pages || [];
@@ -178,11 +178,13 @@ function derive(lib) {
     p.n = ks.length; p.first = ks[0]; p.last = ks.at(-1); p.open = ks.includes(latest);
     const at = ks.map((k) => seenAt(p, k));
     p.fs = at.reduce((a, b) => (b.date < a.date ? b : a)); p.ls = at.reduce((a, b) => (b.date >= a.date ? b : a));   // first and last seen
+    const add = at.find((x) => x !== S.snaps[x.k]), into = add && S.snaps[add.k];   // intake's snapshot runs to its latest add
+    if (add && add.date > (into.until || into.date)) into.until = add.date;
     const l = p.seen.at(-1); p.lw = l[1]; p.lp = l[3];
     p.grp = (p.seen.find((x) => x[0] === p.last && x[4]) || l)[4];   // the group it sat in when last seen
     p.gs = [...new Set(p.seen.map((x) => x[4] && x[4].title.toLowerCase()).filter(Boolean))];
     for (const t of p.gs) { const e = S.groups.get(t) || { title: p.seen.find((x) => x[4] && x[4].title.toLowerCase() === t)[4].title, n: 0 }; e.n++; S.groups.set(t, e); }
-    S.snaps[p.first].fresh++; if (!p.open) S.snaps[p.last].gone++;
+    S.snaps[p.fs.k].fresh++; if (!p.open) S.snaps[p.last].gone++;
     const hit = new Array(cells).fill(0);
     for (const k of ks) hit[cellOf(k)]++;
     const layers = [];                                 // one gradient per line; runs of equal fill → stops
@@ -931,11 +933,13 @@ async function retire(k) {
 }
 
 // ---- 7. Snapshots view -----------------------------------------------------
+// Intake's snapshot is dated by its first add and runs to its latest.
+const spanText = (s) => [`${F.time.format(s.date)} UTC`, ...(s.until ? [`to ${F.full.format(s.until)} UTC`] : [])];
 function renderSnapshots() {
   const max = Math.max(1, ...S.snaps.map((s) => s.tabs_total));
   $('snaps-empty').hidden = S.snaps.length > 0;
   $('snaps-body').innerHTML = S.snaps.slice().reverse().map((s) => { const d = degraded(s);
-    return `<tr><td><a href="#snapshot/${esc(s.id)}">${F.long.format(s.date)}</a> <span class="u">${F.time.format(s.date)} UTC</span></td>` +
+    return `<tr><td><a href="#snapshot/${esc(s.id)}">${F.long.format(s.date)}</a> <span class="u">${spanText(s).map((t) => `<span>${t}</span>`).join(' ')}</span></td>` +
     `<td class="num">${s.windows}</td><td class="bar-cell"><span class="num">${s.tabs_total}</span><span class="tabs-bar" data-w="${Math.round(100 * s.tabs_total / max)}"></span>${d ? `<span class="warn">incomplete: ${d}</span>` : ''}</td>` +
     `<td class="num">${s.fresh}</td><td class="num">${s.gone}</td></tr>`; }).join('');
   for (const b of $('snaps-body').querySelectorAll('.tabs-bar')) b.style.width = `${b.dataset.w * 0.6}%`;
@@ -945,7 +949,7 @@ function renderSnapshot(id, tab) {
   const wins = new Map();
   for (const t of s.tabs) { if (!wins.has(t[1])) wins.set(t[1], []); wins.get(t[1]).push(t); }
   const d = degraded(s);
-  $('snap-title').textContent = F.long.format(s.date) + ', ' + F.time.format(s.date) + ' UTC';
+  $('snap-title').textContent = F.long.format(s.date) + ', ' + spanText(s).join(' ');
   $('snap-meta').textContent = `${plural(s.tabs_total, 'tab')} in ${plural(s.windows || wins.size, 'window')}${s.groups.length ? ', ' + plural(s.groups.length, 'group') : ''} · ${s.browser || 'unknown browser'} / ${s.profile || 'unknown profile'} · ${s.fresh} pages first seen here${d ? ' · incomplete: ' + d : ''}`;
   $('snap-body').innerHTML = [...wins].sort((a, b) => a[0] - b[0]).map(([w, tabs]) => `<section class="win"><h3>Window ${w}<small>${plural(tabs.length, 'tab')}</small></h3><ol>` +
     tabs.sort((a, b) => a[2] - b[2]).map(([pi, , pos, tid, pin, g]) => { const p = S.pages[pi];
