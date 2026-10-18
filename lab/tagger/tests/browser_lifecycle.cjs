@@ -90,4 +90,14 @@ async function unresponsiveLoad() {
   await deadline(setup({ stopAt: 'Page.navigate', reply: true, event: null }));
 }
 
-run({ disconnectedCommand, disconnectedLoad, launchFailure, pipeFailure, pipeEnded, unresponsiveCommand, unresponsiveLoad });
+async function failedTeardown() {
+  const browser = setup({ stopAt: null, stubborn: true });
+  await assert.rejects(browser.main(), (err) => {
+    assert.match(err.message, /case failed/);
+    assert.match(err.message, /Chrome and its helpers/);
+    return true;
+  });
+  assert.ok(browser.signals.includes('SIGKILL'), 'teardown tries the bounded group kill before failing');
+}
+
+run({ disconnectedCommand, disconnectedLoad, launchFailure, pipeFailure, pipeEnded, unresponsiveCommand, unresponsiveLoad, failedTeardown });
