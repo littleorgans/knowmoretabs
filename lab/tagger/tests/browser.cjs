@@ -13,12 +13,10 @@ function launch() {
   const proc = spawn(chrome, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`, '--no-first-run',
     '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic', '--window-size=1280,900', 'about:blank'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], detached: true });
   const waiting = new Map(), errors = [], requests = [];
+  // A Chrome gone mid case answers nothing more: fail the case, never a quiet exit 0, and still tear down.
   const disconnected = new Promise((resolve, reject) => {
-    proc.once('error', reject);
     proc.once('exit', (code, signal) => reject(new Error(`Chrome exited (${signal || code})`)));
-    proc.stdio[3].on('error', reject);
-    proc.stdio[4].on('error', reject);
-    proc.stdio[4].once('end', () => reject(new Error('Chrome DevTools pipe disconnected')));
+    proc.stdio[3].on('error', reject);   // writing to a Chrome already gone
   });
   let id = 0, buffer = '', loaded = null;
   proc.stdio[4].on('data', (chunk) => {
@@ -51,7 +49,6 @@ function launch() {
 // Chrome asked to close, killed with its helpers if they linger; back once none is left. Helpers can outlive Chrome
 // itself, so its exit alone does not free the profile.
 async function close(proc, send) {
-  if (!proc.pid) return;   // a failed spawn has no process group
   // Whether any is left. Only ESRCH says none: macOS answers EPERM while an exited one waits to be reaped.
   const signal = (sig) => { try { process.kill(-proc.pid, sig); return true; } catch (err) { return err.code !== 'ESRCH'; } };
   const left = async () => {

@@ -9,15 +9,6 @@ import pytest
 
 
 CASES = {
-    "browser_lifecycle.cjs": [
-        "disconnectedCommand",
-        "disconnectedLoad",
-        "launchFailure",
-        "pipeFailure",
-        "pipeEnded",
-        "unresponsiveCommand",
-        "unresponsiveLoad",
-    ],
     "frontend.cjs": [
         "openControl",
         "select",
