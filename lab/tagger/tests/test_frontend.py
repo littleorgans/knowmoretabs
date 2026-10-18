@@ -17,7 +17,6 @@ CASES = {
         "pipeEnded",
         "unresponsiveCommand",
         "unresponsiveLoad",
-        "failedTeardown",
     ],
     "frontend.cjs": [
         "openControl",

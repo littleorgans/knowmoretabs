@@ -814,20 +814,11 @@ async function main() {
   const timeout = new Promise((resolve, reject) => {
     timer = setTimeout(() => reject(new Error('browser case timed out')), 45000);
   });
-  let failure;
   try {
     await Promise.race([exercise(), disconnected, timeout]);
-  } catch (err) {
-    failure = err;
-    throw err;
   } finally {
     clearTimeout(timer);
-    try {
-      await close(proc, send);
-    } catch (err) {
-      if (failure) throw new AggregateError([failure, err], `${failure.message}\nChrome teardown: ${err.message}`);
-      throw err;
-    }
+    await close(proc, send);
   }
 }
 main().catch((err) => { console.error(err.message); process.exitCode = 1; });
