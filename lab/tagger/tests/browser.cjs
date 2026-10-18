@@ -13,6 +13,13 @@ function launch() {
   const proc = spawn(chrome, ['--headless=new', '--remote-debugging-pipe', `--user-data-dir=${profile}`, '--no-first-run',
     '--no-default-browser-check', '--use-mock-keychain', '--password-store=basic', '--window-size=1280,900', 'about:blank'], { stdio: ['ignore', 'ignore', 'ignore', 'pipe', 'pipe'], detached: true });
   const waiting = new Map(), errors = [], requests = [];
+  const disconnected = new Promise((resolve, reject) => {
+    proc.once('error', reject);
+    proc.once('exit', (code, signal) => reject(new Error(`Chrome exited (${signal || code})`)));
+    proc.stdio[3].on('error', reject);
+    proc.stdio[4].on('error', reject);
+    proc.stdio[4].once('end', () => reject(new Error('Chrome DevTools pipe disconnected')));
+  });
   let id = 0, buffer = '', loaded = null;
   proc.stdio[4].on('data', (chunk) => {
     buffer += chunk;
@@ -38,19 +45,19 @@ function launch() {
     waiting.set(++id, { resolve, reject });
     proc.stdio[3].write(JSON.stringify({ id, method, params, sessionId }) + '\0');
   });
-  return { proc, send, errors, requests, load: () => new Promise((resolve) => { loaded = resolve; }) };
+  return { proc, send, errors, requests, disconnected, load: () => new Promise((resolve) => { loaded = resolve; }) };
 }
 
 // Chrome asked to close, killed with its helpers if they linger; back once none is left. Helpers can outlive Chrome
 // itself, so its exit alone does not free the profile.
 async function close(proc, send) {
+  if (!proc.pid) return;   // a failed spawn has no process group
   // Whether any is left. Only ESRCH says none: macOS answers EPERM while an exited one waits to be reaped.
   const signal = (sig) => { try { process.kill(-proc.pid, sig); return true; } catch (err) { return err.code !== 'ESRCH'; } };
   const left = async () => {
     for (let i = 0; i < 200; i++) { if (!signal(0)) return true; await new Promise((r) => setTimeout(r, 25)); }
     return false;
   };
-  proc.stdio[3].on('error', () => {});   // a Chrome already gone cannot read it; the wait below decides
   send('Browser.close').catch(() => {});
   if (await left()) return;
   signal('SIGKILL');
@@ -715,8 +722,8 @@ const afterReload = {
 async function main() {
   const run = cases[name];
   assert.ok(run, `no case ${name}`);
-  const { proc, send, errors, requests, load } = launch();
-  try {
+  const { proc, send, errors, requests, load, disconnected } = launch();
+  const exercise = async () => {
     const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
     for (const domain of ['Page', 'Runtime', 'Log', 'Network']) await send(`${domain}.enable`, {}, sessionId);
@@ -801,6 +808,9 @@ async function main() {
     });
     assert.ok(requests.length > 0, 'requests are seen');
     assert.deepEqual(strays, [], `every request goes to the shell's /model/ or its own API: ${strays.join(' | ')}`);
+  };
+  try {
+    await Promise.race([exercise(), disconnected]);
   } finally {
     await close(proc, send);
   }
