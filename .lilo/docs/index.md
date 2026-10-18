@@ -1,7 +1,7 @@
 # knowmoretabs system map
 <!-- lilo-page kind=index schema=1 -->
 <!-- lilo-covers Cargo.toml Cargo.lock .cargo/config.toml xtask/Cargo.toml xtask/src/main.rs slices.toml src/*.rs web/index.html web/app.css web/app.js justfile scripts/clippy.py lab/tagger/tagger/paths.py lab/tagger/tagger/app/kmt.py lab/tagger/tagger/app/add.py lab/tagger/tagger/app/static/pages.js scripts/installation.py extension/manifest.json extension/*.js -->
-<!-- lilo-verified digest=a7129be686e7a504 commit=3a0159524068 date=2026-10-13 -->
+<!-- lilo-verified digest=ff2e32f65bbffe29 commit=049ae66e3fdc date=2026-10-18 -->
 
 > One Rust binary that snapshots the open tabs of Chromium browsers from their on-disk session files and serves the snapshots as a local, searchable library.
 

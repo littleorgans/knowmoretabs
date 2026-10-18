@@ -1,7 +1,7 @@
 # Rules
 <!-- lilo-page kind=focus schema=1 -->
 <!-- lilo-covers Cargo.toml .github/workflows/ci.yml xtask/src/main.rs src/*.rs lab/tagger/tagger/app/service_auth.py tests/fixtures/service_auth.json -->
-<!-- lilo-verified digest=d98ab6855276f395 commit=3a0159524068 date=2026-10-13 -->
+<!-- lilo-verified digest=6872a37067af7dbb commit=049ae66e3fdc date=2026-10-18 -->
 
 Up: [knowmoretabs system map](../index.md)
 

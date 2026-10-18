@@ -1,7 +1,7 @@
 # Verification gates
 <!-- lilo-page kind=gates schema=1 -->
 <!-- lilo-covers .github/workflows/ci.yml .github/workflows/release.yml .cargo/config.toml Cargo.toml xtask/src/main.rs tests/serve_frontend.cjs tests/extension.cjs lab/tagger/tests/test_browser.py lab/tagger/tests/test_auto_sync.py justfile scripts/clippy.py lab/tagger/pyproject.toml -->
-<!-- lilo-verified digest=3d588a2e7a2abcbe commit=3a0159524068 date=2026-10-13 -->
+<!-- lilo-verified digest=98c689c02ebcf11c commit=049ae66e3fdc date=2026-10-18 -->
 
 Up: [knowmoretabs system map](index.md)
 

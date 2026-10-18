@@ -15,6 +15,6 @@ Docs: `.lilo/docs/`, start at `index.md`.
 - `domain/rules.md`: archive, network, serve and model service invariants.
 - `verification-gates.md`: gates, CI jobs, expected failures.
 <!-- lilo-onboarding status=complete-quick date=2026-10-06 schema=1 -->
-<!-- lilo-digest sha256:ae40babf256c7245 .lilo/docs/index.md -->
-<!-- lilo-digest sha256:83080c4c3f585064 .lilo/docs/verification-gates.md -->
-<!-- lilo-digest sha256:92acdc0b262614c1 .lilo/docs/domain/rules.md -->
+<!-- lilo-digest sha256:389645426b75d453 .lilo/docs/index.md -->
+<!-- lilo-digest sha256:32563cd9d1504626 .lilo/docs/verification-gates.md -->
+<!-- lilo-digest sha256:b6b5acb36bb4acb3 .lilo/docs/domain/rules.md -->
