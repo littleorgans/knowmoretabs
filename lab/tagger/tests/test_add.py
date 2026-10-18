@@ -2,6 +2,7 @@
 lacks embedded at load from `--root`, a library with no owner tags, Recently used from the library's use times, page
 keyed image addresses, the fixed port, and the Add link jobs driven through HTTP against a fake knowmoretabs."""
 
+import io
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import redirect_stdout
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -22,7 +24,7 @@ import signed
 import synthetic_archive
 from test_app import DIM, build, fake_embed, fake_encode, fake_image
 
-from tagger import cli
+from tagger import cli, embed
 from tagger.app import add, engine, server
 from tagger.archive import STATE_FILE, Archive, sha256_hex, signature
 from tagger.paths import Paths
@@ -37,17 +39,45 @@ def fake_binary(folder: Path) -> str:
     return str(path)
 
 
-def capture(root: Path, url: str, title: str | None = None, image: bool = True) -> None:
+def capture(root: Path, url: str, title: str | None = None, image: bool = True, body: str = fake_knowmoretabs.BODY):
     """What `knowmoretabs add` leaves for a page: an intake line, its text and, with `image`, its picture."""
     name = sha256_hex(url)
     line = {"schema_version": 1, "url": url, "added_at": fake_knowmoretabs.AT, **({"title": title} if title else {})}
     fake_knowmoretabs.append(root / "pages/added.jsonl", line)
-    (root / "pages/content" / f"{name}.md").write_text(f"---\nurl: {url}\n---\n{fake_knowmoretabs.BODY}\n")
+    (root / "pages/content" / f"{name}.md").write_text(f"---\nurl: {url}\n---\n{body}\n")
     log = {"schema_version": 1, "url": url, "status": "ok", "attempted_at": fake_knowmoretabs.AT}
     fake_knowmoretabs.append(root / "pages/content.jsonl", log)
     if image:
         shutil.copy(next((root / "pages/images").glob("*.jpg")), root / "pages/images" / f"{name}.jpg")
         fake_knowmoretabs.append(root / "pages/images.jsonl", log)
+
+
+class TextModel:
+    """The app's text model as CI can hold it, with no model files: EG2's own processor check on each document, its
+    media tokens as the model names them, then the fake topic vectors."""
+
+    max_seq_length = embed.MAX_TOKENS
+
+    def __init__(self):
+        from transformers.models.embedding_gemma2.processing_embedding_gemma2 import EmbeddingGemma2Processor
+
+        self.processor = object.__new__(EmbeddingGemma2Processor)
+        vars(self.processor).update(
+            image_token="<|image|>",
+            audio_token="<|audio|>",
+            video_token="<|video|>",
+            boa_token="<|audio>",
+            eoa_token="<audio|>",
+        )
+        self.docs = []
+
+    def encode(self, docs: list[str], **kwargs) -> np.ndarray:
+        self.processor.validate_inputs(text=docs)
+        self.docs += docs
+        return fake_encode(docs)
+
+    def tokenizer(self, docs: list[str], add_special_tokens: bool) -> dict:
+        return {"input_ids": [doc.split() for doc in docs]}
 
 
 class Synthetic(unittest.TestCase):
@@ -627,8 +657,13 @@ class AddJobTests(Served):
         np.testing.assert_array_equal(self.app.lib.X[row], fake_embed([self.app.lib.records[row]], "B")[0])
 
     def test_an_index_failure_is_not_indexed(self):
-        with patch.object(self.app, "embed", side_effect=RuntimeError("no model")):
+        out = io.StringIO()
+        with patch.object(self.app, "embed", side_effect=RuntimeError("no model")), redirect_stdout(out):
             job = self.add(NEW)
+        self.assertIn(
+            {"search_failed": "RuntimeError", "error": "no model"},
+            [json.loads(line) for line in out.getvalue().splitlines()],
+        )
         self.assertEqual(
             ("added", "not_indexed", None), (self.values(job)["library"], self.values(job)["search"], job["page"])
         )
@@ -645,6 +680,27 @@ class AddJobTests(Served):
         self.assertEqual("indexed", self.values(job)["search"])
         self.assertEqual(NEW, job["page"]["url"])
         self.assertEqual(commands, self.log.read_bytes())
+
+    def test_literal_modality_markers_index_and_retry(self):
+        """EG2's media markers quoted in a title or text are ordinary text: a page with them is indexed with its
+        image, and one an earlier add left captured without vectors is indexed by one index Retry."""
+        model = TextModel()
+        self.app.embed = lambda records, name: embed.embed_input(model, embed.MODELS[engine.MODEL], records, name)[0]
+        self.assertEqual("B", self.app.lib.input_name, "the page text is embedded")
+        job = self.add("https://added.example/notes/markers", title="Invented <|video|> notes")
+        self.assertEqual({"library": "added", "content": "ok", "image": "ok", "search": "indexed"}, self.values(job))
+        self.assertTrue(self.app.lib.has_image[job["page"]["row"]])
+        failed = "https://added.example/notes/failed"
+        capture(self.root, failed, "Invented <|image|> notes", body=fake_knowmoretabs.BODIES["markers"])
+        commands = self.log.read_bytes()
+        job = self.add(failed, "index")
+        self.assertEqual("indexed", self.values(job)["search"])
+        self.assertEqual(failed, job["page"]["url"])
+        self.assertEqual(commands, self.log.read_bytes())
+        titles = [doc.split(" | ")[0] for doc in model.docs]
+        self.assertEqual(["title: Invented < |video|> notes", "title: Invented < |image|> notes"], titles)
+        for doc in model.docs:
+            self.assertIn("quotes < |image|>, < |audio|> and < |video|> as text", doc)
 
     def test_a_missing_binary_fails_the_job(self):
         self.app.binary = str(self.work / "absent")

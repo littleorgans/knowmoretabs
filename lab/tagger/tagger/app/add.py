@@ -201,7 +201,8 @@ class Jobs:
             job.stages["search"] = {"stage": "search", "state": "running"}
         try:
             page = self._sync(job)
-        except Exception:  # an embed or index failure: the page joins at the next start; the screen offers Retry
+        except Exception as err:  # an embed or index failure: the page joins at the next start; the screen offers Retry
+            print(json.dumps({"search_failed": type(err).__name__, "error": str(err)}), flush=True)
             page = None
         with self.lock:
             job.page = page

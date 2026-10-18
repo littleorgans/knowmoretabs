@@ -34,6 +34,8 @@ from tagger.archive import latest_log, sha256_hex
 AT = "2026-10-08T12:00:00Z"
 TITLE = "An invented page on zeppelin timetables"
 BODY = "Zeppelin timetables and airship routes, invented for a test, with a night train or two."
+# segment: the text kept, `BODY` for any other; `markers` quotes EG2's media markers as a README might
+BODIES = {"markers": "An invented README on night trains that quotes <|image|>, <|audio|> and <|video|> as text."}
 SOURCE_BODY = "A local note, invented for a test, on quokka migrations by night train."  # every pinned document's text
 RUNS = 3  # failed runs before a stage is unavailable
 PUBLIC = ("web", "github", "x", "youtube", "headless")  # tiers a signed in read starts from
@@ -167,7 +169,7 @@ def capture_text(root: Path, url: str, seg: str, args: dict, fresh: bool) -> tup
     content = root / "pages" / "content" / f"{sha256_hex(url)}.md"
     if out["status"] in ("ok", "thin"):
         content.parent.mkdir(parents=True, exist_ok=True)
-        content.write_text(f"---\nurl: {url}\n---\n# {TITLE}\n\n{BODY}\n")
+        content.write_text(f"---\nurl: {url}\n---\n# {TITLE}\n\n{BODIES.get(seg, BODY)}\n")
     record(root, "content.jsonl", url, out)
     intake = latest(root, "added.jsonl", url)
     if content.exists() and intake and not intake.get("title"):  # the kept text's title joins the page's line
