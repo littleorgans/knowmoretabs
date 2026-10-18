@@ -52,7 +52,7 @@ class Browser:
             result = subprocess.run(
                 ["node", script, chrome(), profile, url, case], capture_output=True, text=True, timeout=60
             )
-        self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual(0, result.returncode, result.stderr)  # before the profile's removal can hide it
         return result.stdout
 
 
