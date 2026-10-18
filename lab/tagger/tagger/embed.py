@@ -33,6 +33,13 @@ CHAR_CAP = 16
 MEDIA_MARKERS = ("<|image|>", "<|audio|>", "<|video|>")
 
 
+def escape_media_markers(text: str) -> str:
+    """Keep literal media markers in documents and queries as ordinary text."""
+    for marker in MEDIA_MARKERS:
+        text = text.replace(marker, "< " + marker[1:])
+    return text
+
+
 @dataclass(frozen=True)
 class Model:
     key: str
@@ -42,10 +49,7 @@ class Model:
     dim: int = 768
 
     def format(self, title: str, text: str) -> str:
-        doc = self.prompt.format(title=title or "none", text=text)
-        for marker in MEDIA_MARKERS:
-            doc = doc.replace(marker, "< " + marker[1:])
-        return doc
+        return escape_media_markers(self.prompt.format(title=title or "none", text=text))
 
 
 # EG2 card: documents are `title: {title} | text: {content}`, `none` without a title.

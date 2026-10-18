@@ -24,7 +24,7 @@ import signed
 import synthetic_archive
 from test_app import DIM, build, fake_embed, fake_encode, fake_image
 
-from tagger import cli, embed
+from tagger import cli, embed, zeroshot
 from tagger.app import add, engine, server
 from tagger.archive import STATE_FILE, Archive, sha256_hex, signature
 from tagger.paths import Paths
@@ -680,6 +680,16 @@ class AddJobTests(Served):
         self.assertEqual("indexed", self.values(job)["search"])
         self.assertEqual(NEW, job["page"]["url"])
         self.assertEqual(commands, self.log.read_bytes())
+
+    def test_search_accepts_literal_modality_markers(self):
+        model = TextModel()
+        self.app.encode = lambda texts: zeroshot.encode_queries(model, texts)
+        for route, results in (("/api/search", "hits"), ("/api/rank", "keys")):
+            for marker in ("<|image|>", "<|audio|>", "<|video|>"):
+                with self.subTest(route=route, marker=marker):
+                    status, result = self.call(self.port, "POST", route, {"query": f"night trains {marker}", "n": 5})
+                    self.assertEqual(200, status)
+                    self.assertTrue(result[results])
 
     def test_literal_modality_markers_index_and_retry(self):
         """EG2's media markers quoted in a title or text are ordinary text: a page with them is indexed with its

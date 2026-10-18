@@ -18,7 +18,7 @@ import time
 import numpy as np
 from sklearn.metrics import average_precision_score
 
-from .embed import IMAGE_MODEL, MODELS, load, release, sync
+from .embed import IMAGE_MODEL, MODELS, escape_media_markers, load, release, sync
 from .evaluate import labels, outer_folds, split
 from .heads import SEED, unit
 from .metrics import best_threshold, evaluate
@@ -33,7 +33,12 @@ NEG_WEIGHT = 0.25  # Rocchio weight of the negatives' mean
 
 
 def encode_queries(st, queries: list[str]) -> np.ndarray:
-    emb = st.encode(queries, prompt_name=QUERY_PROMPT, normalize_embeddings=True, convert_to_numpy=True)
+    emb = st.encode(
+        [escape_media_markers(q) for q in queries],
+        prompt_name=QUERY_PROMPT,
+        normalize_embeddings=True,
+        convert_to_numpy=True,
+    )
     return np.asarray(emb, np.float32)
 
 
