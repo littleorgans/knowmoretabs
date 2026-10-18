@@ -31,6 +31,20 @@ def chrome() -> str | None:
     return found or (str(MAC_CHROME) if MAC_CHROME.exists() else None)
 
 
+def node_case(browser: str, profile: str, url: str, case: str) -> subprocess.CompletedProcess:
+    script = str(Path(__file__).with_name("browser.cjs"))
+    return subprocess.run(["node", script, browser, profile, url, case], capture_output=True, text=True, timeout=60)
+
+
+def test_a_chrome_gone_mid_case_fails_it():
+    """The case waits on Chrome's answers: a Chrome that exits fails it, never a quiet exit 0."""
+    if shutil.which("node") is None:
+        pytest.skip("Node is needed to run the browser harness")
+    with tempfile.TemporaryDirectory() as profile:
+        result = node_case(shutil.which("false"), profile, "about:blank", "identity")
+    assert result.returncode == 1, result.stderr
+
+
 class Browser:
     def start(self, lib) -> server.App:
         if shutil.which("node") is None or chrome() is None:
@@ -48,11 +62,8 @@ class Browser:
         """Run the case on the shell's /model/ page; what it returns, as JSON (empty when it returns nothing)."""
         url = f"{self.shell.url}model/{fragment}"
         with tempfile.TemporaryDirectory() as profile:
-            script = str(Path(__file__).with_name("browser.cjs"))
-            result = subprocess.run(
-                ["node", script, chrome(), profile, url, case], capture_output=True, text=True, timeout=60
-            )
-        self.assertEqual(0, result.returncode, result.stderr)
+            result = node_case(chrome(), profile, url, case)
+            self.assertEqual(0, result.returncode, result.stderr)  # before the profile's removal can hide it
         return result.stdout
 
 

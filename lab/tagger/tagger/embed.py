@@ -28,6 +28,16 @@ MAX_TOKENS = 2048
 CHUNKED_TOKENS = 8192
 # Characters kept before tokenizing; generous enough that only text past the token limit is cut.
 CHAR_CAP = 16
+# EG2's processor takes these in text for media inputs and refuses text that has them without one; a page that quotes
+# one keeps it as ordinary text, `<` spaced off.
+MEDIA_MARKERS = ("<|image|>", "<|audio|>", "<|video|>")
+
+
+def escape_media_markers(text: str) -> str:
+    """Keep literal media markers in documents and queries as ordinary text."""
+    for marker in MEDIA_MARKERS:
+        text = text.replace(marker, "< " + marker[1:])
+    return text
 
 
 @dataclass(frozen=True)
@@ -39,7 +49,7 @@ class Model:
     dim: int = 768
 
     def format(self, title: str, text: str) -> str:
-        return self.prompt.format(title=title or "none", text=text)
+        return escape_media_markers(self.prompt.format(title=title or "none", text=text))
 
 
 # EG2 card: documents are `title: {title} | text: {content}`, `none` without a title.
