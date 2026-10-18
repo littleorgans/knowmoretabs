@@ -809,9 +809,15 @@ async function main() {
     assert.ok(requests.length > 0, 'requests are seen');
     assert.deepEqual(strays, [], `every request goes to the shell's /model/ or its own API: ${strays.join(' | ')}`);
   };
+  // Leave both five second shutdown waits before run_case's 60 second deadline can kill Node.
+  let timer;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => reject(new Error('browser case timed out')), 45000);
+  });
   try {
-    await Promise.race([exercise(), disconnected]);
+    await Promise.race([exercise(), disconnected, timeout]);
   } finally {
+    clearTimeout(timer);
     await close(proc, send);
   }
 }

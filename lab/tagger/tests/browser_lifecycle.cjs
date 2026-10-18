@@ -75,4 +75,19 @@ async function pipeEnded() {
   assert.ok(browser.sent.includes('Browser.close'), 'an ended CDP stream still reaches teardown');
 }
 
-run({ disconnectedCommand, disconnectedLoad, launchFailure, pipeFailure, pipeEnded });
+async function deadline(browser) {
+  await assert.rejects(browser.main(), /browser case timed out/i);
+  assert.ok(browser.sent.includes('Browser.close'), 'a hung case reaches teardown before Python kills Node');
+  const timeout = browser.delays.find((ms) => ms >= 10000);
+  assert.ok(timeout + 10000 < 60000, 'the case leaves time for both shutdown waits before the parent timeout');
+}
+
+async function unresponsiveCommand() {
+  await deadline(setup({ event: null }));
+}
+
+async function unresponsiveLoad() {
+  await deadline(setup({ stopAt: 'Page.navigate', reply: true, event: null }));
+}
+
+run({ disconnectedCommand, disconnectedLoad, launchFailure, pipeFailure, pipeEnded, unresponsiveCommand, unresponsiveLoad });
