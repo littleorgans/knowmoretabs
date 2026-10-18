@@ -202,7 +202,7 @@ class Jobs:
         try:
             page = self._sync(job)
         except Exception as err:  # an embed or index failure: the page joins at the next start; the screen offers Retry
-            print(json.dumps({"search_failed": type(err).__name__, "error": str(err)}), flush=True)
+            print(json.dumps({"search_failed": type(err).__name__}), flush=True)
             page = None
         with self.lock:
             job.page = page

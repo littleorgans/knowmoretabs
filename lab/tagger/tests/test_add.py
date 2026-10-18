@@ -661,7 +661,7 @@ class AddJobTests(Served):
         with patch.object(self.app, "embed", side_effect=RuntimeError("no model")), redirect_stdout(out):
             job = self.add(NEW)
         self.assertIn(
-            {"search_failed": "RuntimeError", "error": "no model"},
+            {"search_failed": "RuntimeError"},
             [json.loads(line) for line in out.getvalue().splitlines()],
         )
         self.assertEqual(
@@ -690,6 +690,17 @@ class AddJobTests(Served):
                     status, result = self.call(self.port, "POST", route, {"query": f"night trains {marker}", "n": 5})
                     self.assertEqual(200, status)
                     self.assertTrue(result[results])
+
+    def test_index_failure_log_omits_page_details(self):
+        private_path = self.root / "pages/content/invented-private-document.md"
+        out = io.StringIO()
+        error = PermissionError(13, "permission denied", str(private_path))
+        with patch.object(self.app, "embed", side_effect=error), redirect_stdout(out):
+            job = self.add(NEW)
+        self.assertEqual("not_indexed", self.values(job)["search"])
+        events = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertIn({"search_failed": "PermissionError"}, events)
+        self.assertNotIn(str(private_path), out.getvalue())
 
     def test_literal_modality_markers_index_and_retry(self):
         """EG2's media markers quoted in a title or text are ordinary text: a page with them is indexed with its
