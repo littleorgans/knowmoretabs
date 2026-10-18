@@ -657,13 +657,13 @@ class AddJobTests(Served):
         np.testing.assert_array_equal(self.app.lib.X[row], fake_embed([self.app.lib.records[row]], "B")[0])
 
     def test_an_index_failure_is_not_indexed(self):
+        private_path = str(self.root / "pages/content/invented-private-document.md")
         out = io.StringIO()
-        with patch.object(self.app, "embed", side_effect=RuntimeError("no model")), redirect_stdout(out):
+        error = PermissionError(13, "permission denied", private_path)
+        with patch.object(self.app, "embed", side_effect=error), redirect_stdout(out):
             job = self.add(NEW)
-        self.assertIn(
-            {"search_failed": "RuntimeError"},
-            [json.loads(line) for line in out.getvalue().splitlines()],
-        )
+        self.assertIn({"search_failed": "PermissionError"}, [json.loads(line) for line in out.getvalue().splitlines()])
+        self.assertNotIn(private_path, out.getvalue(), "nothing about a page is printed")
         self.assertEqual(
             ("added", "not_indexed", None), (self.values(job)["library"], self.values(job)["search"], job["page"])
         )
@@ -690,17 +690,6 @@ class AddJobTests(Served):
                     status, result = self.call(self.port, "POST", route, {"query": f"night trains {marker}", "n": 5})
                     self.assertEqual(200, status)
                     self.assertTrue(result[results])
-
-    def test_index_failure_log_omits_page_details(self):
-        private_path = self.root / "pages/content/invented-private-document.md"
-        out = io.StringIO()
-        error = PermissionError(13, "permission denied", str(private_path))
-        with patch.object(self.app, "embed", side_effect=error), redirect_stdout(out):
-            job = self.add(NEW)
-        self.assertEqual("not_indexed", self.values(job)["search"])
-        events = [json.loads(line) for line in out.getvalue().splitlines()]
-        self.assertIn({"search_failed": "PermissionError"}, events)
-        self.assertNotIn(str(private_path), out.getvalue())
 
     def test_literal_modality_markers_index_and_retry(self):
         """EG2's media markers quoted in a title or text are ordinary text: a page with them is indexed with its
