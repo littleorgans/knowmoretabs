@@ -198,7 +198,7 @@ async function panelLetters() {
   assert.deepEqual([node('a-tag').value, ...folded()], ['', 'false', true], 'a new target: no filter, the fold closed');
 }
 
-/* Recently used: the library's order, as many as the line has columns, each cell as its twin in the letter rows */
+/* Recently used: the library's order, as many as three rows of its columns, nine at most, each cell as its twin in the letter rows */
 async function panelRecent() {
   const { K, node } = setup({ lit, lib: { app_tags: ['Alpha', 'apple', 'eagle', 'iOS', 'zeta'], recent: ['zeta', 'Alpha', 'eagle', 'apple', 'iOS'] } },
     'strip.js', 'panel.js');
@@ -208,7 +208,7 @@ async function panelRecent() {
   const button = (id, t) => node(id).innerHTML.match(new RegExp(`<button[^>]*data-tag="${t}"[^>]*>`))[0];
   node('a-recent').columns = '136px 136px 136px';
   K.panel.render({ has: (t) => t === 'Alpha', pend: (t) => t === 'eagle', pick: (t) => picked.push(t), sugg: K.lib.app_tags });
-  assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle'], 'latest first, three columns, three cells');
+  assert.deepEqual(recent(), ['zeta', 'Alpha', 'eagle', 'apple', 'iOS'], 'latest first, three columns, all five on two rows');
   assert.deepEqual(suggested(), ['Alpha', 'apple', 'eagle'], 'Suggested shares the one line cap');
   node('a-fold').click();
   for (const t of ['zeta', 'Alpha', 'eagle']) assert.equal(button('a-recent', t), button('a-rows', t), `${t} reads as its letter row cell`);
@@ -233,6 +233,17 @@ async function panelRecent() {
   K.lib.recent = ['iOS'];
   K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [] });
   assert.deepEqual(recent(), ['iOS'], 'the order as the library last said');
+  const many = Array.from({ length: 12 }, (_, i) => `T${i}`);
+  K.lib = { ...K.lib, app_tags: many, recent: [...many].reverse() };
+  K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [] });
+  assert.deepEqual(recent(), ['T11', 'T10', 'T9', 'T8', 'T7', 'T6', 'T5', 'T4', 'T3'], 'three rows of three: the nine latest, latest first');
+  node('a-recent').columns = 2;
+  node('a-recent').resized();
+  assert.deepEqual(recent(), many.slice(6).reverse(), 'two columns: three rows of two');
+  node('a-recent').columns = 6;
+  node('a-recent').resized();
+  assert.equal(recent().length, 9, 'a wide line still holds nine at most');
+  node('a-recent').columns = '136px 136px 136px';
   K.lib.recent = [];
   K.panel.render({ has: () => false, pend: () => false, pick() {}, sugg: [] });
   assert.equal(node('a-recent').innerHTML, '', 'nothing used yet: the line stays, empty');
