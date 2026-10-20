@@ -1,7 +1,8 @@
 /* knowmoretabs · tagger app · the tag panel (Add link)
-   Suggested and Recently used, one line each whatever they hold (Recently
-   used: the tags last put on a page, latest first, as many as its line
-   has columns, so none sits clipped out of sight); a box
+   Suggested, one line whatever it holds, and Recently used, three lines
+   held open (the tags last put on a page, latest first, as many as three
+   rows of its columns fit, nine at most, so none sits clipped out of
+   sight); a box
    that filters the tags or names a new one; then every tag,
    folded under one button, in letter rows ("#" first, then A to Z,
    letters without tags left out) of same width cells. A cell is one tag
@@ -31,11 +32,12 @@
     }
     return [...rows].sort(([a], [b]) => (a < b ? -1 : 1));   // "#" sorts before A
   }
-  /* active names only, in their order, as many as the line has columns: none clipped yet reachable by Tab */
-  const fit = (names, line) => {
+  /* active names only, in their order, as many as `rows` rows of the line's columns: none clipped yet reachable by Tab */
+  const fit = (names, line, rows = 1) => {
     const active = new Set(K.lib ? K.lib.app_tags : []);
-    return names.filter((t) => active.has(t)).slice(0, getComputedStyle(line).gridTemplateColumns.split(" ").filter((w) => w.endsWith("px")).length);
+    return names.filter((t) => active.has(t)).slice(0, rows * getComputedStyle(line).gridTemplateColumns.split(" ").filter((w) => w.endsWith("px")).length);
   };
+  const RECENT_ROWS = 3, RECENT_MAX = 9;   // Recently used: the rows .rlines holds open (app.css), and its cap
   const matching = (q) => (K.lib ? K.lib.app_tags : []).filter((t) => t.toLowerCase().includes(q));
 
   const cell = (t) => {
@@ -53,7 +55,7 @@
     K.$("a-fold").setAttribute("aria-expanded", String(expanded));
     K.$("a-rows").hidden = !expanded;
     render(html`${cells(fit(view.sugg, K.$("a-sugg")))}`, K.$("a-sugg"));
-    render(html`${cells(fit((K.lib && K.lib.recent) || [], K.$("a-recent")))}`, K.$("a-recent"));
+    render(html`${cells(fit((K.lib && K.lib.recent) || [], K.$("a-recent"), RECENT_ROWS).slice(0, RECENT_MAX))}`, K.$("a-recent"));
     render(!expanded ? nothing : shown.length ? html`${repeat(letters(shown), ([k]) => k, row)}`
       : html`<p class="nil">No tag has “${typed}”. Enter makes it.</p>`, K.$("a-rows"));
   }

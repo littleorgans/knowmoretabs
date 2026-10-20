@@ -108,13 +108,13 @@ the `extension` folder. A click opens the Library tab already open on port 41878
 tab's address and title filled in; a page that is not on the web (`chrome://`, `file://`) opens Add link empty. It asks
 for `activeTab`, to read the clicked tab, and for `http://127.0.0.1:41878/*`, to find the Library tab, nothing else.
 From the moment the box holds a web address the page's tile (a placeholder until the library lists the page) and its
-tag panel show (`static/panel.js`): Suggested and Recently used rows of one line each, a box that
+tag panel show (`static/panel.js`): Suggested, one line, and Recently used, three lines held open, a box that
 filters the tags or, on Enter with no match, has the library make one, and every active name folded under "All N tags" in letter rows
 (`#` first, letters without tags hidden, case and accents folded) of same width cells. A cell is that page's tag, on or
 off; no stage, pick or write moves a cell. At Indexed, Suggested fills with the active names the model would put on
 the page (`App.suggested`: `engine.prechecks`, those clearing their threshold, by confidence), less those it holds,
 has turned down or was picked for, as many as its line holds, and stays put while the page is on screen. Recently used
-holds the active names by last use, latest first, as many as its line fits: a use is an add the library records as
+holds the active names by last use, latest first, as many as three rows of its columns fit, nine at most: a use is an add the library records as
 the term's `used_at`, which removing the tag or undoing the add leaves as it was; a write moves its tag to the front.
 Tags picked before the page has a row show striped, go with the link when it is added and are written once Indexed
 gives it a row, as one library write for the key Indexed names with one Undo; a newer link does not stop an older

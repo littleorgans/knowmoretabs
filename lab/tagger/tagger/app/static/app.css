@@ -206,7 +206,7 @@ main { flex: 1; }
 .add .tile.sel::before { inset: -1px; }
 .add .th.wait { --st: var(--line); --sp: 1s; }
 .add .ht.link { font: 0.8125rem/1.4 var(--sans); color: var(--ink-3); overflow-wrap: anywhere; }
-/* the tag panel: Suggested and Recently used, one line each; the filter; the fold over letter rows of same width
+/* the tag panel: Suggested, one line, and Recently used, three lines held open; the filter; the fold over letter rows of same width
    cells, ruled as the Library's .tg-grid (web/app.css; S6 makes one). No state changes a cell's size */
 .tpanel { display: flex; flex-direction: column; gap: 0.5rem; min-width: 0; }
 .tpanel .lbl ~ .lbl { margin-top: 0.75rem; }
@@ -215,7 +215,8 @@ main { flex: 1; }
 .tfilter input:focus { box-shadow: inset 0 -2px 0 var(--ink); }
 .cells { display: grid; grid-template-columns: repeat(auto-fill, minmax(8.5rem, 1fr)); grid-auto-rows: 2.5rem; margin: 0; padding: 0; list-style: none; }
 .cells.line { height: 2.5rem; overflow: hidden; }   /* one line, however many it holds: filling it moves nothing below */
-.cells.line:has(li) { box-shadow: inset 1px 1px 0 var(--line); }
+.rlines { height: 7.5rem; }   /* three lines held open, ruled only as far as it holds: filling it moves nothing below */
+.cells.line:has(li), .rlines .cells:has(li) { box-shadow: inset 1px 1px 0 var(--line); }
 .cells > li { display: flex; min-width: 0; }
 .tagcell { flex: 1; display: flex; align-items: center; min-width: 0; padding: 0 0.875rem; background: none; border: 0; box-shadow: inset -1px -1px 0 var(--line); font-size: 0.8125rem; color: var(--ink); text-align: left; white-space: nowrap; transition: background-color 0.12s var(--ease), color 0.12s var(--ease); }
 .tagcell span { overflow: hidden; text-overflow: ellipsis; }

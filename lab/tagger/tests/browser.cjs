@@ -393,7 +393,7 @@ const cases = {
   },
   /* every tag cell holds its place from the link typed to the pick written: sampled each frame through Add, Library,
      Content (a pick while it runs), Image, Search, Indexed, the write and its reply, then the reserved rows filled.
-     Recently used, filled from the start, holds only what its line fits; the tag written moves to its front */
+     Recently used, filled from the start, holds only what its three lines fit, nine at most; the tag written moves to its front */
   addStable: async ({ $, until, check }) => {
     const K = window.KMT, seg = (k) => $(`#a-${k} .val`).textContent;
     await K.ready;
@@ -411,14 +411,14 @@ const cases = {
     const seen = {}, out = { cells: cells.length, frames: 0, max: 0, early: 0, columns: new Set(first.slice(0, cells.length).map(([x]) => Math.round(x))).size };
     const suggested = () => [...document.querySelectorAll('#a-sugg [data-tag]')];
     const recentLine = $('#a-recent'), recent = () => [...recentLine.querySelectorAll('button')];
-    const fits = () => {   // as many as its columns, each wholly inside the line: none clipped, none out of sight
-      const [x, y, w, h] = box(recentLine), n = getComputedStyle(recentLine).gridTemplateColumns.split(' ').length;
-      check(recent().length === n && n > 1, `Recently used holds ${recent().length} for ${n} columns`);
+    const fits = () => {   // three rows of its columns, nine at most, each wholly inside the lines: none clipped, none out of sight
+      const [x, y, w, h] = box(recentLine), n = Math.min(9, 3 * getComputedStyle(recentLine).gridTemplateColumns.split(' ').length);
+      check(recent().length === n && n > 3, `Recently used holds ${recent().length}, not ${n}`);
       check(recent().every((b) => { const [bx, by, bw, bh] = box(b); return bx >= x && by >= y && bx + bw <= x + w + 0.5 && by + bh <= y + h + 0.5; }), 'a recent cell sits clipped');
       return n;
     };
     const columns = fits();
-    check(K.lib.recent.length > columns, `more used tags (${K.lib.recent.length}) than the line fits`);
+    check(K.lib.recent.length > columns, `more used tags (${K.lib.recent.length}) than the lines fit`);
     let sampling = true;
     const frame = () => {   // a frame already asked for when sampling stops samples nothing
       if (!sampling) return;

@@ -154,13 +154,13 @@ class AddBrowserTests(Browser, Synthetic):
         names = ["Airships", "Archive", "Atlas", "Canals", "Coffee", "Docs", "Éclair", "Ferries", "iOS", "Maps"]
         names += ["An invented tag name cut in its cell", "3D printing"]
         names += ["Night trains", "Sleeper cabins", "Timetables"]  # the fake page's night train: the model's picks
-        used = ["Archive", "Atlas", "Canals", "Coffee", "Docs", "Ferries", "iOS", "Maps"]  # more than its line fits
+        used = names[:10]  # more than nine
 
         def seed(state):
             for name in names:
                 state["vocabulary"].setdefault(name, {"created_at": synthetic_archive.AT})
             for i, name in enumerate(used):
-                state["vocabulary"][name]["used_at"] = f"2026-10-0{i + 1}T00:00:00Z"
+                state["vocabulary"][name]["used_at"] = f"2026-10-{i + 1:02}T00:00:00Z"
             for name in synthetic_archive.DEFINITIONS:  # only the model's names are suggested; the rest are retired
                 if name not in names:
                     state["vocabulary"][name]["retired_at"] = "2026-10-09T00:00:00Z"
