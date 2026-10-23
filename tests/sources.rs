@@ -657,12 +657,70 @@ fn search_on_a_missing_archive_finds_nothing_and_creates_nothing() {
     assert!(!desk.fx.root.exists());
 }
 
-#[cfg(unix)]
 #[test]
-fn the_model_service_ranks_first_then_keyword_matches_it_has_not_indexed() {
+fn search_skips_a_reader_failure_and_warns_without_losing_readable_pages() {
+    const WEB: &str = "https://readable.test/airship";
     let desk = Desk::new();
     assert_success(&desk.add(&desk.repo.join("notes").join("evals.md")));
-    let paper = b"# Quokka paper\nOn zeppelins.\n";
+    assert_success(&desk.run(&["add", WEB, "--title", "Airship", "--no-content"]));
+    std::fs::write(&desk.checkouts, "not json").unwrap();
+    let before = common::fingerprint(&desk.fx.root);
+
+    let output = desk.run(&["search", "--json", "airship"]);
+    assert_success(&output);
+    let found: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(found["schema_version"], 1);
+    assert_eq!(urls(&found), [WEB]);
+    let warnings = found["warnings"].as_array().unwrap();
+    assert_eq!(warnings.len(), 1);
+    assert_eq!(warnings[0]["url"], NOTE);
+    assert_eq!(warnings[0]["error"]["kind"], "checkouts");
+    let message = warnings[0]["error"]["message"].as_str().unwrap();
+    assert!(message.contains("cannot use checkouts.json"));
+    assert!(stderr(&output).contains(NOTE));
+    assert!(stderr(&output).contains(message));
+
+    let quiet = desk.run(&["search", "--json", "--quiet", "airship"]);
+    assert_success(&quiet);
+    assert_eq!(stderr(&quiet), "");
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout(&quiet)).unwrap(),
+        found
+    );
+
+    let human = desk.run(&["search", "airship"]);
+    assert_success(&human);
+    assert!(stdout(&human).contains(WEB));
+    assert!(stderr(&human).contains(message));
+    assert_eq!(common::fingerprint(&desk.fx.root), before);
+}
+
+#[test]
+fn search_fails_when_forgotten_state_cannot_be_read() {
+    let desk = Desk::new();
+    assert_success(&desk.add(&desk.repo.join("notes").join("evals.md")));
+    std::fs::create_dir(desk.fx.root.join("library.json")).unwrap();
+    let before = common::fingerprint(&desk.fx.root);
+
+    let output = desk.run(&["search", "--json", "airship"]);
+    assert_eq!(output.status.code(), Some(1));
+    let failed: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert!(
+        failed["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("read library state")
+    );
+    assert!(failed.get("results").is_none());
+    assert_eq!(common::fingerprint(&desk.fx.root), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn search_modes_control_model_ranking_and_default_is_combined() {
+    let desk = Desk::new();
+    assert_success(&desk.add(&desk.repo.join("notes").join("evals.md")));
+    let paper = b"# Airship paper\nOn zeppelins.\n";
     let loose = blob_key(paper);
     assert_success(&desk.add(&desk.loose("paper.md", paper)));
     let unindexed = b"# Late quokka\n";
@@ -671,15 +729,24 @@ fn the_model_service_ranks_first_then_keyword_matches_it_has_not_indexed() {
     let fields = json_fields(&desk.fx, &keys);
     let service = Service::start(move |request| Some(proven(request, "200 OK", &fields, &keys)));
     let key = key_file(&desk.fx);
-    let output = desk.run(&[
+    let port = service.port.to_string();
+    let args = [
         "search",
         "--json",
         "quokka",
         "--model-port",
-        &service.port.to_string(),
+        &port,
         "--model-secret-file",
         key.to_str().unwrap(),
-    ]);
+    ];
+    let keyword = desk.run(&[args.as_slice(), &["--mode", "keyword"]].concat());
+    assert_success(&keyword);
+    let keyword: Value = serde_json::from_str(&stdout(&keyword)).unwrap();
+    assert_eq!(keyword["ranking"], "keyword");
+    assert_eq!(urls(&keyword), [NOTE, blob_key(unindexed).as_str()]);
+    assert!(service.seen().is_empty());
+
+    let output = desk.run(&args);
     assert_success(&output);
     let found: Value = serde_json::from_str(&stdout(&output)).unwrap();
     assert_eq!(found["ranking"], "model");
@@ -694,8 +761,14 @@ fn the_model_service_ranks_first_then_keyword_matches_it_has_not_indexed() {
         .map(|hit| hit["ranked"].clone())
         .collect();
     assert_eq!(ranked, [true, true, false]);
+    let combined = desk.run(&[args.as_slice(), &["--mode", "combined"]].concat());
+    assert_success(&combined);
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout(&combined)).unwrap(),
+        found
+    );
     let seen = service.seen();
-    assert_eq!(seen.len(), 1);
+    assert_eq!(seen.len(), 2);
     assert!(String::from_utf8_lossy(&seen[0]).starts_with("POST /api/rank HTTP/1.1\r\n"));
     assert!(String::from_utf8_lossy(&seen[0]).ends_with(r#"{"query":"quokka"}"#));
 

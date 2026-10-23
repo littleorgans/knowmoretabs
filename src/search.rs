@@ -25,7 +25,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::capture::Log;
-use crate::error::Error;
+use crate::error::{self, Error};
 use crate::model_service::ModelService;
 use crate::page_text::{self, PageText, Reader};
 use crate::{out, sources};
@@ -115,7 +115,7 @@ pub fn command(
     json: bool,
     log: Log,
 ) -> Result<(), Error> {
-    let entries = entries(root, checkouts)?;
+    let (entries, warnings) = entries(root, checkouts, log)?;
     let words: Vec<String> = query
         .to_lowercase()
         .split_whitespace()
@@ -139,6 +139,7 @@ pub fn command(
             "schema_version": SCHEMA_VERSION,
             "query": query,
             "ranking": if ranked.is_some() { "model" } else { "keyword" },
+            "warnings": warnings,
             "results": hits
                 .iter()
                 .map(|(entry, ranked)| entry.result(&words, *ranked))
@@ -199,19 +200,27 @@ fn pick<'a>(
 
 /// Every added page the library lists and has not forgotten, with its
 /// text: a document's from its pin, a web page's as kept.
-fn entries(root: &Path, checkouts: &Path) -> Result<Vec<Entry>, Error> {
+fn entries(root: &Path, checkouts: &Path, log: Log) -> Result<(Vec<Entry>, Vec<Value>), Error> {
     let (added, _) = page_text::added(root)?;
     let mut reader = Reader::new(root, Some(checkouts));
-    added
-        .into_iter()
-        .map(|tab| {
-            Ok(Entry {
-                page: reader.text(&tab.url)?,
+    let mut entries = Vec::new();
+    let mut warnings = Vec::new();
+    for tab in added {
+        match reader.text(&tab.url) {
+            Ok(page) => entries.push(Entry {
+                page,
                 url: tab.url,
                 title: tab.title,
-            })
-        })
-        .collect()
+            }),
+            Err(err) => {
+                log.warn(&format!("skipping {}: {err}", tab.url));
+                let mut warning = error::render_json(&err);
+                warning["url"] = json!(tab.url);
+                warnings.push(warning);
+            }
+        }
+    }
+    Ok((entries, warnings))
 }
 
 /// About [`SNIPPET_CHARS`] of `text` around the first query word it holds,
