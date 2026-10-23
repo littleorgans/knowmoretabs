@@ -219,7 +219,7 @@ knowmoretabs tags --define NAME TEXT   # what a tag means, for you and for a tag
 knowmoretabs tag --prompt DIR    # a work folder for an agent: prompt.md and the pages not yet tagged
 knowmoretabs tag --import FILE   # check an agent's tags.jsonl and store it as suggestions; --dry-run
 knowmoretabs add --file FILE     # a local markdown, text or PDF document, by reference; --file - reads stdin
-knowmoretabs search QUERY        # added pages and documents by what they say; --model-port N ranks them
+knowmoretabs search QUERY        # added pages and documents; --mode keyword|combined (default combined)
 knowmoretabs read KEY            # the text of a page search lists, by its key; several with --json
 ```
 
@@ -315,14 +315,19 @@ another):
 ```
 
 `add --file` names a repository's checkout there the first time it sees one.
-`search QUERY --json` finds added pages and documents by every word of the
-query in their title, key or text, reading each document's pinned bytes live,
-and says of each whether its text is `fresh`, `stale` (the checkout has moved
+`search QUERY --json --mode keyword` finds added pages and documents by every
+word of the query in their title, key or text, reading each document's pinned
+bytes live, and says of each whether its text is `fresh`, `stale` (the checkout has moved
 on; the pinned text is still what is searched) or `unresolved`, and why. It
-never reads your snapshots or History, and never lists a forgotten page. With
-`--model-port N --model-secret-file FILE` the model service ranks the query
-first, as in the Library. `read KEY` prints the text of a page search lists, a
-web page's as kept and a document's as pinned; it refuses a forgotten page and
+never reads your snapshots or History, and never lists a forgotten page.
+The default, `--mode combined`, uses `--model-port N --model-secret-file FILE`
+to rank by meaning, including pages without the query words, then adds keyword
+matches the service has not indexed. Without a usable model service it falls
+back to keyword matching. Keyword mode never contacts the model service.
+A read error skips the affected entry with a warning, also in JSON's
+`warnings` array; `--quiet` suppresses stderr warnings. Unreadable forgotten
+state still fails the search. `read KEY` prints the text of a page search
+lists, a web page's as kept and a document's as pinned; it refuses a forgotten page and
 one you did not add. `--json read KEY...` prints one line per key, its text or
 why it was refused, and exits 1 when any was. None of the three sends anything
 off the machine. The Library's Content tab shows a document's text too, read
@@ -581,8 +586,9 @@ editor. Everything under `export/` is derived and can be deleted.
 
 Nothing leaves the machine unless you run `enrich` or `content`. `save`,
 `export`, the tag commands and `add --file` make no network requests. `serve`
-and `search` make none unless `--model-port` is set; then they send each
-search query to the model service over loopback on this machine.
+and `search --mode combined` make none unless `--model-port` is set; then they
+send each query to the model service over loopback on this machine.
+`search --mode keyword` makes no network requests.
 `enrich` and `content` are the only code that sends your pages' addresses,
 or a video's id to YouTube through yt-dlp, and what each sends is described
 above; `content` also downloads one preview image per page from the address

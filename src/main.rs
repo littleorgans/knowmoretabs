@@ -215,9 +215,12 @@ fn search(
     log: Log,
 ) -> Result<(), error::Error> {
     let checkouts = checkouts(cli, roots).ok_or(error::Error::NoHome)?;
-    let model = args.model.model_port.and_then(|port| {
-        model_service::ModelService::new(port, args.model.model_secret_file.as_deref(), log)
-    });
+    let model = match args.mode {
+        cli::SearchMode::Keyword => None,
+        cli::SearchMode::Combined => args.model.model_port.and_then(|port| {
+            model_service::ModelService::new(port, args.model.model_secret_file.as_deref(), log)
+        }),
+    };
     let query = args.query.join(" ");
     search::command(root, &query, &checkouts, model.as_ref(), cli.json, log)
 }

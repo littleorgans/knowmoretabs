@@ -112,13 +112,11 @@ bytes changed. Nothing is sent anywhere."
     Add(AddArgs),
     /// Find added pages and local documents by what they say, read only
     #[command(
-        long_about = "Searches the pages added one at a time, local documents among them, for every word \
-of the query in a page's title, key or text: a local document's text read live from its pinned git blob \
-or shelf copy, a web page's from the text content kept. Never reads snapshots or the History record, and \
-never lists a forgotten page. With --model-port and --model-secret-file, the model service ranks the \
-query first, as the Library does, then the keyword matches it has not indexed follow. Each local result \
-says whether its text is fresh, stale (its checkout's HEAD has other bytes at the path; the pinned bytes \
-are still searched) or unresolved, and why. Writes nothing."
+        long_about = "Searches added pages and local documents, reading pinned document bytes or kept \
+web text. Keyword mode matches every query word in the title, key or text. Combined mode (default) also \
+admits model matches without those words, followed by unindexed keyword matches; without a usable model \
+service it uses keyword matching. Never reads snapshots or History or lists forgotten pages. Local \
+results report fresh, stale or unresolved text and why. Writes nothing."
     )]
     Search(SearchArgs),
     /// Print the text of pages you added, web pages and local documents, by key
@@ -309,11 +307,23 @@ pub struct ModelArgs {
 /// What to search for, and where it is ranked.
 #[derive(Debug, Args)]
 pub struct SearchArgs {
-    /// The words to find; every one must be in the page
+    /// The words to search for
     #[arg(required = true, value_name = "QUERY")]
     pub query: Vec<String>,
+    /// How pages match
+    #[arg(long, value_enum, default_value = "combined")]
+    pub mode: SearchMode,
     #[command(flatten)]
     pub model: ModelArgs,
+}
+
+/// How search combines keyword matching and model ranking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SearchMode {
+    /// Every query word in title, key or text; never contacts the model service
+    Keyword,
+    /// Model ranking plus unindexed keyword matches, with keyword fallback
+    Combined,
 }
 
 /// One page to add, and how far to capture it; or one local document.
@@ -971,7 +981,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &cli.command,
-            Some(Command::Search(SearchArgs { query, model: ModelArgs { model_port: Some(41879), .. } }))
+            Some(Command::Search(SearchArgs { query, mode: SearchMode::Combined, model: ModelArgs { model_port: Some(41879), .. } }))
                 if query == &["night", "train"]
         ));
         assert!(Cli::try_parse_from(["knowmoretabs", "search"]).is_err());
