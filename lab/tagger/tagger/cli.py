@@ -21,7 +21,7 @@ def main() -> None:
     embed = steps.add_parser("embed", help="embed inputs A and B per model, and images")
     embed.add_argument("--model", action="append", help="model key (default: all)")
     embed.add_argument("--chunked", action="store_true", help="input B with chunked mean pooling to 8,192 tokens")
-    chunks = steps.add_parser("chunks", help="publish full body chunk references in Store C without embedding")
+    chunks = steps.add_parser("chunks", help="incrementally embed full body chunks in Store C with cached EG2")
     chunks.add_argument("--kmt-bin", help="the knowmoretabs reader (default: knowmoretabs on PATH)")
     evaluate = steps.add_parser("eval", help="cross validated grid on the 80%%, or --final on the test split")
     evaluate.add_argument("--final", action="store_true", help="score the CV pick once on the held out 20%%")

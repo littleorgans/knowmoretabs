@@ -101,18 +101,26 @@ def load(model: Model, *, local_files_only: bool = False):
     return st, stats
 
 
-def page_bodies(records: list[dict]) -> list[str | None]:
-    """Kept web text, or document bodies projected from the shared batched reader; None for none."""
-    printed = iter(kmt.read([r["read"] for r in records if not r["text_ok"] and r.get("read")]))
-    bodies = []
+def body_pages(records: list[dict], *, strict: bool = False) -> list[dict]:
+    """Kept web bodies or structured document answers, in record order."""
+    printed = iter(kmt.read_pages([r["read"] for r in records if not r["text_ok"] and r.get("read")], strict=strict))
+    pages = []
     for r in records:
         if r["text_ok"]:
-            bodies.append(content_body(Path(r["content_path"])))
+            pages.append({"text": content_body(Path(r["content_path"])), "title": r["title"]})
         elif r.get("read"):
-            bodies.append(next(printed) or None)
+            pages.append(next(printed) or {})
         else:
-            bodies.append(None)
-    return bodies
+            pages.append({})
+    return pages
+
+
+def page_bodies(records: list[dict]) -> list[str | None]:
+    """Kept web text, or lenient document bodies; preserve empty kept files and None for absence."""
+    return [
+        page["text"] if r["text_ok"] else page.get("text") or None
+        for r, page in zip(records, body_pages(records), strict=True)
+    ]
 
 
 def page_texts(records: list[dict], with_text: bool, chars: int) -> list[tuple[str, str]]:
@@ -143,8 +151,22 @@ def encode(st, docs: list, batch: int) -> tuple[np.ndarray, dict]:
     return emb, stats
 
 
+def token_lengths(st, docs: list[str]) -> np.ndarray:
+    """Exact input lengths, including special tokens, counted in bounded batches without truncation."""
+    return np.array(
+        [
+            len(ids)
+            for start in range(0, len(docs), BATCH["A"])
+            for ids in st.tokenizer(
+                docs[start : start + BATCH["A"]], add_special_tokens=True, truncation=False, padding=False
+            )["input_ids"]
+        ],
+        dtype=np.int64,
+    )
+
+
 def token_stats(st, docs: list[str]) -> dict:
-    lengths = np.array([len(ids) for ids in st.tokenizer(docs, add_special_tokens=True)["input_ids"]])
+    lengths = token_lengths(st, docs)
     return {
         "tokens_mean_capped": round(float(np.minimum(lengths, st.max_seq_length).mean()), 1),
         "truncated": int((lengths > st.max_seq_length).sum()),

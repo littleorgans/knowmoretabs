@@ -76,7 +76,7 @@ class TextModel:
         self.docs += docs
         return fake_encode(docs)
 
-    def tokenizer(self, docs: list[str], add_special_tokens: bool) -> dict:
+    def tokenizer(self, docs: list[str], add_special_tokens: bool, *, truncation=False, padding=False) -> dict:
         return {"input_ids": [doc.split() for doc in docs]}
 
 
