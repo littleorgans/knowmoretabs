@@ -322,8 +322,26 @@ on; the pinned text is still what is searched) or `unresolved`, and why. It
 never reads your snapshots or History, and never lists a forgotten page.
 The default, `--mode combined`, uses `--model-port N --model-secret-file FILE`
 to rank by meaning, including pages without the query words, then adds keyword
-matches the service has not indexed. Without a usable model service it falls
-back to keyword matching. Keyword mode never contacts the model service.
+matches the service has not indexed. Results are unbounded by default.
+`--limit N` and `--cursor TOKEN` page the complete order; JSON reports
+`total`, `returned`, `limit`, `next_cursor` and `truncated`. Cursors bind the
+query, filters, mode and current results; changed results give `stale_cursor`
+and exit 2. An explicit empty or whitespace query lists every eligible page
+in intake order without contacting the model; omitting QUERY is a usage error.
+
+Repeat `--tag` to require every active owner tag, ignoring case. Repeat
+`--domain` for any exact Library-normalized host (no subdomain expansion),
+and `--kind web|git|blob` for any of those kinds. Different filters combine
+with AND. `--after` is inclusive and `--before` exclusive on intake time;
+both require RFC 3339 instants. Filtering happens before ranking and paging.
+
+Schema 1 JSON preserves existing fields and adds stable page IDs, tags,
+intake dates, capture status, readability, body digests and final ranks.
+Model hits include fused scores and source ranks, plus the best chunk
+reference, section and exact bounded passage when available. Scores are
+ranking signals, not confidence. `fallback` carries structured setup, rank
+and chunk reasons. Runtime and `--json` usage errors share a schema 1 error
+envelope. Without a usable model service search falls back to keyword matching. Keyword mode never contacts the model service.
 A read error skips the affected entry with a warning, also in JSON's
 `warnings` array; `--quiet` suppresses stderr warnings. Unreadable forgotten
 state still fails the search. `read KEY` prints the text of a page search
@@ -587,7 +605,8 @@ editor. Everything under `export/` is derived and can be deleted.
 Nothing leaves the machine unless you run `enrich` or `content`. `save`,
 `export`, the tag commands and `add --file` make no network requests. `serve`
 and `search --mode combined` make none unless `--model-port` is set; then they
-send each query to the model service over loopback on this machine.
+send each query to the model service over loopback on this machine. CLI search
+also supplies the filtered page keys and current body digests.
 `search --mode keyword` makes no network requests.
 `enrich` and `content` are the only code that sends your pages' addresses,
 or a video's id to YouTube through yt-dlp, and what each sends is described

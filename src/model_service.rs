@@ -43,9 +43,17 @@ pub struct ModelService {
 /// Why a forward got no usable answer. Logged by name only, never with a
 /// query or a reply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Failure {
+pub enum Failure {
     /// `serve` was started without `--model-port`.
     Off,
+    KeyMissing,
+    KeyUnreadable,
+    KeyUnsafe,
+    KeyMalformed,
+    InvalidRank,
+    UnsupportedRank,
+    RequestTooLarge,
+    Busy,
     /// Nothing accepting the connection: not running, or still loading its
     /// model.
     Refused,
@@ -66,6 +74,52 @@ enum Failure {
 }
 
 impl Failure {
+    pub fn fallback(self) -> crate::model_rank::Fallback {
+        use crate::model_rank::Fallback;
+        let code = match self {
+            Self::Off => "model_unset",
+            Self::KeyMissing => "model_key_missing",
+            Self::KeyUnreadable => "model_key_unreadable",
+            Self::KeyUnsafe => "model_key_unsafe",
+            Self::KeyMalformed => "model_key_malformed",
+            Self::Refused => "rank_refused",
+            Self::Timeout => "rank_timeout",
+            Self::TooLarge => "rank_response_too_large",
+            Self::RequestTooLarge => "rank_request_too_large",
+            Self::Malformed | Self::InvalidRank => "rank_invalid_reply",
+            Self::OtherArchive => "rank_wrong_archive",
+            Self::Unproven => "rank_unproven_reply",
+            Self::Entropy => "rank_entropy",
+            Self::UnsupportedRank => "rank_contract_unsupported",
+            Self::Busy => "rank_busy",
+            Self::Upstream(_) => "rank_failed",
+        };
+        let stage = if matches!(
+            self,
+            Self::Off
+                | Self::KeyMissing
+                | Self::KeyUnreadable
+                | Self::KeyUnsafe
+                | Self::KeyMalformed
+        ) {
+            "setup"
+        } else {
+            "rank"
+        };
+        Fallback {
+            stage: stage.into(),
+            code: code.into(),
+            affected_pages: None,
+        }
+    }
+
+    pub fn warn(self, log: Log) {
+        log.warn(&format!(
+            "the model service did not rank: {}; search is by keyword",
+            self.said().1
+        ));
+    }
+
     /// JSON for every route but the page, which gets the shell's own page
     /// saying so, under the same address, nav and all; never the service's
     /// bytes.
@@ -82,6 +136,26 @@ impl Failure {
     fn said(self) -> (Status, &'static str) {
         match self {
             Self::Off => (Status::ServiceUnavailable, "no model service is set"),
+            Self::KeyMissing => (
+                Status::ServiceUnavailable,
+                "no --model-secret-file was given",
+            ),
+            Self::KeyUnreadable => (Status::ServiceUnavailable, "its key file cannot be read"),
+            Self::KeyUnsafe => (
+                Status::ServiceUnavailable,
+                "its key file is a link, someone else's, or readable by others",
+            ),
+            Self::KeyMalformed => (
+                Status::ServiceUnavailable,
+                "its key file does not hold a key",
+            ),
+            Self::InvalidRank => (Status::BadGateway, "the detailed rank reply is invalid"),
+            Self::UnsupportedRank => (
+                Status::BadGateway,
+                "the detailed rank contract is unsupported",
+            ),
+            Self::RequestTooLarge => (Status::BadGateway, "the rank request is too large"),
+            Self::Busy => (Status::ServiceUnavailable, "the model service is busy"),
             Self::Refused => (
                 Status::ServiceUnavailable,
                 "the model service is not answering",
@@ -151,44 +225,53 @@ pub fn forward(
 }
 
 impl ModelService {
-    /// The service on `port` when `key_file` holds a usable key. Otherwise
-    /// nothing is forwarded, said once here without the file's bytes, and
-    /// the Library searches by keyword.
-    pub fn new(port: u16, key_file: Option<&Path>, log: Log) -> Option<Self> {
-        let why = match key_file.map(Key::read) {
-            Some(Ok(key)) => return Some(Self { port, key }),
-            None => "no --model-secret-file was given",
-            Some(Err(Unusable::Unreadable)) => "its key file cannot be read",
-            Some(Err(Unusable::Unsafe)) => {
-                "its key file is a link, someone else's, or readable by others"
-            }
-            Some(Err(Unusable::Malformed)) => "its key file does not hold a key",
-        };
-        log.warn(&format!(
-            "the model service is off: {why}; search is by keyword"
-        ));
-        None
+    /// Construct the service without losing the setup failure category.
+    pub fn new(port: u16, key_file: Option<&Path>) -> Result<Self, Failure> {
+        let key = key_file.ok_or(Failure::KeyMissing).and_then(|path| {
+            Key::read(path).map_err(|why| match why {
+                Unusable::Unreadable => Failure::KeyUnreadable,
+                Unusable::Unsafe => Failure::KeyUnsafe,
+                Unusable::Malformed => Failure::KeyMalformed,
+            })
+        })?;
+        Ok(Self { port, key })
     }
 
-    /// Every page key the service holds, best first for `query`, through
-    /// the route the Library ranks by, which writes nothing on the service's
-    /// side; or why there is no order.
-    pub fn rank(&self, root: &Path, query: &str) -> Result<Vec<String>, &'static str> {
-        #[derive(serde::Deserialize)]
-        struct Ranked {
-            keys: Vec<String>,
+    /// Detailed ranking among exactly the caller's eligible current bodies.
+    pub fn rank(
+        &self,
+        root: &Path,
+        query: &str,
+        among: &[crate::model_rank::Candidate<'_>],
+    ) -> Result<crate::model_rank::Ranked, Failure> {
+        use crate::model_rank::{Ranked, SNIPPET_CHARS};
+        let route = model_routes::classify("POST", "api/rank").ok_or(Failure::InvalidRank)?;
+        let body = serde_json::to_vec(&crate::model_rank::Request {
+            schema_version: 1,
+            query,
+            among,
+            snippet_chars: SNIPPET_CHARS,
+        })
+        .map_err(|_| Failure::InvalidRank)?;
+        if body.len() > http::BODY_LIMIT {
+            return Err(Failure::RequestTooLarge);
         }
-        let route = model_routes::classify("POST", "api/rank").ok_or("no rank route")?;
-        let body = serde_json::json!({ "query": query }).to_string();
-        let response = self
-            .exchange(&route, body.as_bytes(), root)
-            .map_err(|failure| failure.said().1)?;
+        let response = self.exchange(&route, &body, root)?;
         if response.status != Status::Ok {
-            return Err("the model service refused the query");
+            return Err(if response.status == Status::ServiceUnavailable {
+                Failure::Busy
+            } else {
+                Failure::Upstream(response.status.code())
+            });
         }
-        serde_json::from_slice::<Ranked>(response.body())
-            .map(|ranked| ranked.keys)
-            .map_err(|_| Failure::Malformed.said().1)
+        let value: serde_json::Value =
+            serde_json::from_slice(response.body()).map_err(|_| Failure::InvalidRank)?;
+        if value.get("schema_version") != Some(&serde_json::json!(1)) {
+            return Err(Failure::UnsupportedRank);
+        }
+        let ranked: Ranked = serde_json::from_value(value).map_err(|_| Failure::InvalidRank)?;
+        ranked.validate(among)?;
+        Ok(ranked)
     }
 
     /// One request on its own connection, closed after the reply.
@@ -336,7 +419,7 @@ mod tests {
     use serde_json::Value;
 
     use super::*;
-    use crate::{http::BODY_LIMIT, search::RANK_TOP, source_key};
+    use crate::{http::BODY_LIMIT, source_key};
 
     #[test]
     fn the_shell_restates_the_service_as_the_shared_contract() {
@@ -365,7 +448,6 @@ mod tests {
                 .collect::<BTreeSet<_>>(),
             policy
         );
-        assert_eq!(contract["rank_top"], RANK_TOP);
         assert_eq!(
             contract["source_prefixes"],
             serde_json::json!([source_key::GIT, source_key::BLOB])

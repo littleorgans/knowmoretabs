@@ -18,6 +18,12 @@ use crate::staleness::StaleReason;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("{0}")]
+    Usage(String),
+    #[error("{0}")]
+    ContentLog(String),
+    #[error("search results changed; start again without --cursor")]
+    StaleCursor,
     #[error("cannot determine your home directory; pass --root DIR and --session FILE")]
     NoHome,
     #[error("cannot {what} {}: {source}", path.display())]
@@ -148,6 +154,9 @@ impl Error {
     /// A stable machine-readable name for `--json` output.
     pub fn kind(&self) -> &'static str {
         match self {
+            Self::Usage(_) => "usage",
+            Self::ContentLog(_) => "content_log",
+            Self::StaleCursor => "stale_cursor",
             Self::NoHome => "no_home",
             Self::Io { .. } => "io",
             Self::Profile(_) => "profile",
@@ -189,6 +198,7 @@ impl Error {
     pub fn exit_code(&self) -> u8 {
         match self {
             Self::Stale { .. } => 3,
+            Self::Usage(_) | Self::StaleCursor => 2,
             _ => 1,
         }
     }
@@ -233,6 +243,7 @@ fn summarize(problems: &[String]) -> String {
 /// candidates for the same `write`.
 pub fn render_json(error: &Error) -> serde_json::Value {
     serde_json::json!({
+        "schema_version": 1,
         "error": {
             "kind": error.kind(),
             "message": error.to_string(),

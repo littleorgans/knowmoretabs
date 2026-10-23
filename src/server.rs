@@ -74,7 +74,9 @@ pub fn run(options: &Options) -> Result<(), Error> {
     library_history::for_library(&options.root, options.log);
     // Settled, and said, before the banner announces the library.
     let model = options.model_port.and_then(|port| {
-        ModelService::new(port, options.model_secret_file.as_deref(), options.log)
+        ModelService::new(port, options.model_secret_file.as_deref())
+            .map_err(|why| why.warn(options.log))
+            .ok()
     });
     let url = format!("http://127.0.0.1:{port}/");
     // Through `out`: the banner is written after the port is bound and

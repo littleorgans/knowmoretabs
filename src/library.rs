@@ -697,7 +697,7 @@ fn name_referrers(pages: &mut [Page]) {
     }
 }
 
-fn public_domain(raw: &str) -> Option<String> {
+pub fn public_domain(raw: &str) -> Option<String> {
     let Ok(url) = Url::parse(raw) else {
         return Some(String::new());
     };
