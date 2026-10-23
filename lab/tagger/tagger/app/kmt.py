@@ -28,28 +28,33 @@ def argv(app, args: list[str]) -> list[str]:
     return command(app.binary, app.lib.root, args)
 
 
-def read_argv(binary: str, root, key: str) -> list[str] | None:
-    """The command that prints a local document's text, or None for any other page."""
-    return command(binary, root, ["read", "--", key]) if key.startswith(SOURCES) else None
+def read_argv(binary: str, root, key: str) -> list[str]:
+    """The command that prints a page's text through the shared reader."""
+    return command(binary, root, ["read", "--", key])
 
 
 def read(argvs: list[list[str]]) -> list[str]:
     """The text `read` prints for each `read_argv`, or "" where it gives none: a refused key, no binary, a timeout.
     One `--json read` per binary and archive answers each bounded batch of keys. Never shown; only embedded."""
+    return [(page or {}).get("text") or "" for page in read_pages(argvs, strict=False)]
+
+
+def read_pages(argvs: list[list[str]], *, strict: bool = True) -> list[dict | None]:
+    """Structured answers, including empty bodies and source refusals. Strict callers abort on failed batches."""
     batches: dict[tuple[str, ...], list[str]] = {}
     for argv in argvs:
         batches.setdefault(tuple(argv[:-2]), []).append(argv[-1])
-    texts = {
-        (head, key): text
+    pages = {
+        (head, key): page
         for head, keys in batches.items()
         for start in range(0, len(keys), READ_BATCH_SIZE)
-        for key, text in _read(list(head), keys[start : start + READ_BATCH_SIZE]).items()
+        for key, page in _read(list(head), keys[start : start + READ_BATCH_SIZE], strict=strict).items()
     }
-    return [texts.get((tuple(argv[:-2]), argv[-1]), "") for argv in argvs]
+    return [pages.get((tuple(argv[:-2]), argv[-1])) for argv in argvs]
 
 
-def _read(head: list[str], keys: list[str]) -> dict[str, str]:
-    """Each answered key's text from one `read` run; its lines are parsed on exit 0 (all answered) or 1 (some refused)."""
+def _read(head: list[str], keys: list[str], *, strict: bool) -> dict[str, dict]:
+    """Answers from one run on exit 0 (all answered) or 1 (some refused)."""
     try:
         done = subprocess.run(
             [*head, "--json", "--", *keys],
@@ -58,15 +63,42 @@ def _read(head: list[str], keys: list[str]) -> dict[str, str]:
             timeout=READ_TIMEOUT * len(keys),
         )
     except (OSError, subprocess.TimeoutExpired):
+        if strict:
+            raise RuntimeError("page reader could not complete the batch") from None
         return {}
     if done.returncode not in (0, 1):
+        if strict:
+            raise RuntimeError("page reader failed the batch")
         return {}
-    texts = {}
-    for line in done.stdout.decode("utf-8", errors="replace").splitlines():
+    pages = {}
+    for line in done.stdout.decode("utf-8", errors="strict" if strict else "replace").split("\n"):
+        if not line:
+            continue
         try:
             row = json.loads(line)
         except ValueError:
+            if strict:
+                raise ValueError("page reader returned malformed JSON") from None
             continue
-        if isinstance(row, dict) and isinstance(row.get("text"), str):
-            texts[row["url"]] = row["text"]
-    return texts
+        if not isinstance(row, dict) or not isinstance(row.get("url"), str):
+            if strict:
+                raise ValueError("page reader returned a malformed answer")
+            continue
+        if strict:
+            error = row.get("error")
+            refused = isinstance(error, dict) and error.get("kind") == "source_read"
+            if (
+                row.get("schema_version") != 1
+                or row["url"] not in keys
+                or row["url"] in pages
+                or not isinstance(row.get("title"), str | None)
+                or (not isinstance(row.get("text"), str) and not refused)
+                or (error is not None and not refused)
+            ):
+                raise ValueError("page reader returned an unexpected answer")
+        elif not isinstance(row.get("text"), str):
+            continue
+        pages[row["url"]] = row
+    if strict and set(pages) != set(keys):
+        raise ValueError("page reader did not answer every key")
+    return pages

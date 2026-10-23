@@ -81,7 +81,7 @@ def record(archive: Archive, url: str, binary: str = kmt.BINARY) -> dict:
         "added": archive.added.get(url),
         "text_ok": url in archive.text_ok,
         "content_path": str(archive.text_ok[url]) if url in archive.text_ok else None,
-        "read": kmt.read_argv(binary, archive.root, url),
+        "read": kmt.read_argv(binary, archive.root, url) if url.startswith(kmt.SOURCES) else None,
         "image_ok": url in archive.image_ok,
         "image_path": str(archive.image_ok[url]) if url in archive.image_ok else None,
     }

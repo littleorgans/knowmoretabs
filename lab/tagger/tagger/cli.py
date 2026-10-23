@@ -21,6 +21,8 @@ def main() -> None:
     embed = steps.add_parser("embed", help="embed inputs A and B per model, and images")
     embed.add_argument("--model", action="append", help="model key (default: all)")
     embed.add_argument("--chunked", action="store_true", help="input B with chunked mean pooling to 8,192 tokens")
+    chunks = steps.add_parser("chunks", help="publish full body chunk references in Store C without embedding")
+    chunks.add_argument("--kmt-bin", help="the knowmoretabs reader (default: knowmoretabs on PATH)")
     evaluate = steps.add_parser("eval", help="cross validated grid on the 80%%, or --final on the test split")
     evaluate.add_argument("--final", action="store_true", help="score the CV pick once on the held out 20%%")
     steps.add_parser("zeroshot", help="tags as queries, zero labels; then the label efficiency curve")
@@ -38,7 +40,7 @@ def main() -> None:
     app.add_argument("--kmt-bin", help="the knowmoretabs Add link and Send run (default: knowmoretabs on PATH)")
     compare = steps.add_parser("compare", help="compare metric outputs with another data directory")
     compare.add_argument("other")
-    for step in (embed, app):
+    for step in (embed, chunks, app):
         step.add_argument("--root", default=argparse.SUPPRESS, help="archive directory (overrides KMT_ROOT)")
     args = parser.parse_args()
     root = resolve_root(args.root, os.environ.get("KMT_ROOT"), Path.home())
@@ -51,6 +53,13 @@ def main() -> None:
         from . import embed
 
         embed.run(paths, args.model, args.chunked, root)
+    elif args.step == "chunks":
+        import json
+
+        from . import chunks
+        from .app import kmt
+
+        print(json.dumps(chunks.ingest(paths, root, args.kmt_bin or kmt.BINARY)))
     elif args.step == "eval":
         from . import evaluate
 
