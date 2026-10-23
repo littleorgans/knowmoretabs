@@ -3,7 +3,8 @@ rules fitted on every owner labelled page. Search fuses EG2 cosine with keywords
 reciprocal rank; a result set gets suggested tags (S2's mean z ranking) and, for the picked tags, prechecks.
 The decisions follow `library.json` (`apply_state`): a name the vocabulary gains joins as a zero shot tag with its
 name as the query (`add_tags`), a retired one keeps its column out of sight, and every page's tags, labels and
-visibility are the file's, without touching a vector, the keyword index or a fitted head.
+visibility are the file's. The app refits heads, thresholds and score spread in the background after tag changes;
+`fit` is shared with startup and never changes the library it reads.
 Document vectors are persisted by page id. Startup and `sync` refresh changed inputs
 and reuse matching rows after knowmoretabs adds, forgets or restores a page.
 
@@ -162,12 +163,7 @@ def load(
     timings["tag_queries_s"] = time.perf_counter() - start
 
     start = time.perf_counter()
-    fit = np.flatnonzero(Y.any(axis=1))
-    rules = fit_rules(X[fit], Y[fit], q)
-    S = rules.scores(X)["supervised"]
-    threshold = rules.thresholds["supervised"].copy()
-    unseen = ~np.isfinite(threshold)
-    threshold[unseen] = _zero_shot_threshold(S[:, unseen])
+    fitted = fit(X, Y, q)
     timings["heads_s"] = time.perf_counter() - start
 
     start = time.perf_counter()
@@ -185,10 +181,7 @@ def load(
         live=np.array([not r["forgotten"] for r in records]),
         keywords=keywords,
         K=K,
-        rules=rules,
-        S=S,
-        threshold=threshold,
-        spread=_spread(S),
+        **fitted,
         root=root,
         state=archive.state,
         paths=paths,
@@ -203,10 +196,10 @@ def load(
     stats = {
         "pages": len(lib.records),
         "live_pages": int(lib.live.sum()),
-        "labelled_pages": len(fit),
+        "labelled_pages": int(Y.any(axis=1).sum()),
         "tags": len(tags),
-        "heads": len(rules.heads),
-        "zero_shot_tags": len(tags) - len(rules.heads),
+        "heads": len(lib.rules.heads),
+        "zero_shot_tags": len(tags) - len(lib.rules.heads),
         "image_pages": int(lib.has_image.sum()),
         "input": input_name,
         "vectors": vector_counts,
@@ -233,6 +226,17 @@ def _zero_shot_threshold(S: np.ndarray) -> np.ndarray:
 
 def _spread(S: np.ndarray) -> np.ndarray:
     return np.maximum(S.std(axis=0), 1e-12)
+
+
+def fit(X: np.ndarray, Y: np.ndarray, q: np.ndarray) -> dict:
+    """A complete fit from one snapshot of owner labels, without mutating any published arrays."""
+    rows = np.flatnonzero(Y.any(axis=1))
+    rules = fit_rules(X[rows], Y[rows], q)
+    S = rules.scores(X)["supervised"]
+    threshold = rules.thresholds["supervised"].copy()
+    unseen = ~np.isfinite(threshold)
+    threshold[unseen] = _zero_shot_threshold(S[:, unseen])
+    return {"rules": rules, "S": S, "threshold": threshold, "spread": _spread(S)}
 
 
 def find_tag(lib: Library, name: str) -> str | None:

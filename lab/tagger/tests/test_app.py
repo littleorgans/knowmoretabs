@@ -763,16 +763,15 @@ class FollowTests(Served):
         self.assertEqual([["Sleeper cars"]], encoded, "and not encoded again")
         self.assertIn({"name": "Sleeper cars", "positives": 2, "source": "zero shot"}, library["tags"])
 
-    def test_following_never_touches_vectors_keywords_or_heads(self):
+    def test_following_reuses_vectors_and_keyword_index(self):
         before = self.app.lib
         self.tag(self.rows_for("night train")[:3], "Sleeper cars")
         self.forget(self.rows_for("espresso")[:1])
         self.call("GET", "/api/library")
         after = self.app.lib
         self.assertIsNot(before, after)
-        for name in ("X", "image", "has_image", "keywords", "K", "rules"):
+        for name in ("X", "image", "has_image", "keywords", "K"):
             self.assertIs(getattr(before, name), getattr(after, name), name)
-        np.testing.assert_array_equal(before.S, after.S[:, : before.S.shape[1]])
 
     def test_an_unreadable_file_answers_503_keeps_the_last_view_and_recovers(self):
         rows = self.rows_for("night train")

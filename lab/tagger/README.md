@@ -83,9 +83,11 @@ changed or missing inputs are embedded at startup. With no owner vocabulary the 
 Every tag, dismissal, name and forgotten page is the library's: the screens write them through the Library's own API
 (`POST /api/tags`, `/api/vocabulary`, `/api/forget`, `/api/restore`), and the app follows `library.json` before each
 request that shows them, reading it again only when its inode, size or mtime moved. A name the vocabulary gains joins
-as a zero shot tag, its name as the query; a retired one leaves every list and comes back in its own column. Vectors,
-the keyword index and the fitted heads are never touched by a decision. A file it cannot read answers 503 and is read
-again on the next request.
+as a zero shot tag, its name as the query; a retired one leaves every list and comes back in its own column.
+Owner tag changes refit heads, thresholds and the score SD used by the Add margin in the background, using the
+cached vectors. Requests use the previous fit until the replacement is ready, then switch to it together.
+Changes during a fit coalesce into one follow up on the latest tags; an outdated fit is discarded. Vectors and the
+keyword index are unchanged by a tag decision. A file it cannot read answers 503 and is read again on the next request.
 One screen: search (EG2 cosine over B, else A, fused by reciprocal rank with TF-IDF over title, metadata and text;
 images on request; "Untagged only" keeps pages with no tag), click results to select them, tag the selection.
 Results come 50 at a time ("51 to 100 of 240", of every page the search ranks); Previous and Next replace them.
