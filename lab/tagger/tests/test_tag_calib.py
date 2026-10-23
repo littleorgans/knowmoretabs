@@ -181,9 +181,15 @@ def test_full_study_runner_and_frozen_outputs(corpus, tmp_path):
     assert len((tmp_path / "calib.md").read_text().splitlines()) <= 40
     assert len(result["rows"]) == 5
     assert len(result["fair_c"]) == 4
-    assert len(result["abstention"]) == 3 * len(tag_calib.CURVE_TARGETS)
+    assert result["abstention_strategies"] == ["app", "knn"]
+    assert set(result["training_cuts"]) == {"app", "knn"}
+    assert len(result["abstention"]) == 2 * len(tag_calib.CURVE_TARGETS)
     assert result["fair_c"]["app/app covered"]["metrics"] == result["fair_c"]["cmean/app covered"]["metrics"]
-    assert result["best_row"] != "ceiling"
+    assert {name for name in result["fair_c"] if name.startswith("bc/")} == {"bc/app", "bc/knn"}
+    assert "best_row" not in result and "best_b_scorer" not in result
+    report = (tmp_path / "calib.md").read_text()
+    assert "best row" not in report and "Best deployable" not in report
+    assert "checks.json" not in report and "verification.json" not in report
     assert (tag_calib.input_snapshot(root, paths.data), split.read_bytes()) == before
     with pytest.raises(tag_eval.Invalid, match="already exist"):
         tag_calib.run(paths, root, split, tmp_path, baseline_path)

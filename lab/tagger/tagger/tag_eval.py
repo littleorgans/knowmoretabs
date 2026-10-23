@@ -8,26 +8,23 @@ Only tagged training rows fit rules; every training row sets the ranking referen
 import hashlib
 import importlib.metadata
 import json
-import shlex
-import subprocess
-import traceback
-from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 
 import numpy as np
 
-from . import dataset, embed, zeroshot
+from . import dataset, embed, eval_runner, zeroshot
 from .app import engine, kmt
 from .archive import Archive, LibraryState, sha256_hex
+from .eval_runner import Invalid
 from .evaluate import OUTER_FOLDS, Labels, outer_folds
 from .features import Dense
 from .guided.search_tag import MIN_HEAD_POSITIVES, fit_rules
 from .heads import SEED, fit_knn, fit_prior, unit
 from .metrics import best_threshold
-from .paths import Paths, read_json, write_json
-from .search_eval import Invalid, _safe_paths, fingerprint
+from .paths import Paths, read_json
+from .search_eval import fingerprint
 from .vector_store import COUNT_KEYS, VectorStore
 
 K = 3
@@ -483,62 +480,32 @@ def report(result: dict) -> str:
 
 
 def run(paths: Paths, root: Path, split: Path, out: Path, *, source="app", strategy="app", binary=kmt.BINARY) -> dict:
-    _safe_paths(paths, root, out)
     if split.resolve().is_relative_to((Path.home() / ".knowmoretabs").resolve()):
         raise Invalid("scratch split path required")
-    if any((out / name).exists() for name in ("baseline.json", "baseline.md")):
-        raise Invalid("baseline outputs already exist; choose a separate output directory")
-    logs = out / "baseline-logs"
-    logs.mkdir(parents=True, exist_ok=True)
-    with (logs / "tag-eval.log").open("a") as log, redirect_stdout(log), redirect_stderr(log):
-        try:
-            corpus = PAGE_SOURCES[source](paths, root, binary)
-            saved = page_split(corpus, split)
-            result = {
-                "schema": 1,
-                "source_revision": subprocess.run(
-                    ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
-                ).stdout.strip(),
-                "seed": SEED,
-                "k": K,
-                "page_source": source,
-                "strategy": strategy,
-                "split_digest": fingerprint(saved),
-                "inputs": corpus.metadata,
-                **cross_validate(corpus, saved, strategy),
-            }
-            result["command"] = shlex.join(
-                [
-                    "uv",
-                    "run",
-                    "--locked",
-                    "--project",
-                    "lab/tagger",
-                    "tagger",
-                    "--root",
-                    str(root),
-                    "--data",
-                    str(paths.data),
-                    "tag-eval",
-                    "--split",
-                    str(split),
-                    "--out",
-                    str(out),
-                    "--source",
-                    source,
-                    "--strategy",
-                    strategy,
-                    "--kmt-bin",
-                    binary,
-                ]
-            )
-            # Reject nonfinite metrics or scores before publishing any result.
-            json.dumps(result, allow_nan=False)
-            write_json(out / "baseline.json", result)
-            (out / "baseline.md").write_text(report(result))
-            return result
-        except Exception as err:
-            traceback.print_exc()
-            raise Invalid(
-                str(err) if isinstance(err, Invalid) else "unreadable inputs or unavailable runtime"
-            ) from None
+
+    def evaluate():
+        corpus = PAGE_SOURCES[source](paths, root, binary)
+        saved = page_split(corpus, split)
+        return {
+            "schema": 1,
+            "seed": SEED,
+            "k": K,
+            "page_source": source,
+            "strategy": strategy,
+            "split_digest": fingerprint(saved),
+            "inputs": corpus.metadata,
+            **cross_validate(corpus, saved, strategy),
+        }
+
+    return eval_runner.run(
+        paths,
+        root,
+        out,
+        evaluate,
+        stem="baseline",
+        label="baseline outputs",
+        log=out / "baseline-logs" / "tag-eval.log",
+        report=report,
+        binary=binary,
+        command=["tag-eval", "--split", str(split), "--source", source, "--strategy", strategy],
+    )

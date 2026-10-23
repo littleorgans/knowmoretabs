@@ -7,27 +7,21 @@ refresh scratch A/B once; comparisons reuse frozen queries and refuse any refres
 import importlib.metadata
 import json
 import re
-import subprocess
 import sys
-import traceback
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import numpy as np
 
-from . import dataset, embed, zeroshot
+from . import dataset, embed, eval_runner, zeroshot
 from .app import engine, kmt
 from .archive import Archive, sha256_hex
+from .eval_runner import Invalid
 from .guided.retrieval import precision_at
 from .paths import Paths, read_json, write_json
 
 K = 10
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 ADDRESS = re.compile(r"://|\bwww\.|\b[\w-]+(?:\.[\w-]+)+\b|\bkmt-(?:git|blob):|[/\\]", re.I)
-
-
-class Invalid(ValueError):
-    """A bounded reason safe to show outside private diagnostics."""
 
 
 def fingerprint(value) -> str:
@@ -110,15 +104,6 @@ def score(fixture: dict, rankings: dict[str, list[dict]]) -> dict:
         selected = [r for r in rows if group == "overall" or r["type"] == group]
         macro[group] = {metric: float(np.mean([r[metric] for r in selected])) for metric in ("p_at_10", "r_at_10")}
     return {"pages": len(eligible), "queries": rows, "macro": macro}
-
-
-def _safe_paths(paths: Paths, root: Path, out: Path) -> None:
-    live = (Path.home() / ".knowmoretabs").resolve()
-    for path in (root, paths.data, out):
-        if path.resolve().is_relative_to(live):
-            raise Invalid("scratch paths required outside the live archive")
-        if path.exists() and any(p.is_symlink() for p in path.rglob("*")):
-            raise Invalid("scratch paths must contain ordinary copies")
 
 
 def _files(folder: Path) -> dict:
@@ -261,10 +246,8 @@ def _run(paths: Paths, root: Path, fixture: dict, out: Path, binary: str, prepar
         ]
     _, final_records = dataset.app_records(paths, Archive.load(root), binary=binary)
     _frozen_check(after, _inputs(paths, root, final_records))
-    revision = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
     result = {
         "schema": 1,
-        "source_revision": revision,
         "fixture_digest": fixture_digest,
         "corpus_digest": fixture["corpus_digest"],
         "inputs_digest": fingerprint(after),
@@ -277,20 +260,16 @@ def _run(paths: Paths, root: Path, fixture: dict, out: Path, binary: str, prepar
         "k": K,
         **score(fixture, rankings),
     }
-    write_json(out / "results.json", result)
     return result
 
 
 def run(paths: Paths, root: Path, fixture: Path, out: Path, *, binary: str = kmt.BINARY, prepare: bool = False) -> dict:
     """All diagnostics stay private; only fixed reasons can escape on failure."""
-    _safe_paths(paths, root, out)
-    out.mkdir(parents=True, exist_ok=True)
-    if (out / "results.json").exists():
-        raise Invalid("results already exist; choose a separate output directory")
-    with (out / "diagnostics.log").open("a") as log, redirect_stdout(log), redirect_stderr(log):
-        try:
-            return _run(paths, root, read_json(fixture), out, binary, prepare)
-        except Exception as err:
-            traceback.print_exc()
-            reason = str(err) if isinstance(err, Invalid) else "unreadable inputs or unavailable runtime"
-            raise Invalid(reason) from None
+    return eval_runner.run(
+        paths,
+        root,
+        out,
+        lambda: _run(paths, root, read_json(fixture), out, binary, prepare),
+        stem="results",
+        log=out / "diagnostics.log",
+    )

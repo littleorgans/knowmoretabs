@@ -1,26 +1,24 @@
 """Cross tag ranking, nested training cuts and paired comparisons on covered C pages.
 
-Model and cut fitting never sees an outer held out label. The two ranking choices
-for abstention and the best fusion scorer are exploratory selections by outer P.
+Model and cut fitting never sees an outer held out label. Abstention and fusion
+scorers are fixed; held out metrics are reported without selecting a winner.
 """
 
 import json
-import shlex
-import subprocess
-import traceback
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import numpy as np
 
-from . import tag_eval, tag_grid
+from . import eval_runner, tag_eval, tag_grid
 from .app import kmt
 from .archive import sha256_hex
 from .heads import SEED, inner_folds
-from .paths import Paths, read_json, write_json
-from .search_eval import Invalid, _files, _safe_paths, fingerprint
+from .paths import Paths, read_json
+from .eval_runner import Invalid
+from .search_eval import _files, fingerprint
 
-STRATEGIES = (*tag_eval.APP_RANKINGS, "knn")
+CALIB_STRATEGIES = (*tag_eval.APP_RANKINGS, "knn")
+FIXED_SCORERS = ("app", "knn")
 TARGETS = (1.0, 1.5, 2.0)
 CURVE_TARGETS = tuple(i / 4 for i in range(1, 13))
 
@@ -132,23 +130,16 @@ def abstention(corpus, rows, cuts):
 
 def evaluate(app, cmean, saved, baseline):
     tag_grid.validate_baseline(app, saved, baseline)
-    fitted = {strategy: {} for strategy in STRATEGIES}
+    fitted = {strategy: {} for strategy in CALIB_STRATEGIES}
     for fold, _, train, held in tag_eval.fold_indices(app, saved):
-        for strategy, view in fit_views(app, train, held, STRATEGIES).items():
+        for strategy, view in fit_views(app, train, held, CALIB_STRATEGIES).items():
             fitted[strategy][fold] = view
     rows = {}
-    for strategy in STRATEGIES:
-        row = tag_eval.cross_validate(app, saved, strategy, fitted_folds=fitted[strategy])
-        row.update(page_source="app", strategy=strategy)
-        row["paired_vs_baseline"] = tag_grid.paired_bootstrap(row, baseline)
-        rows[f"app/{strategy}"] = row
-    if rows["app/app"]["metrics"] != baseline["metrics"] or rows["app/app"]["predictions"] != baseline["predictions"]:
-        raise Invalid("recomputed app ranking or metrics differ from baseline")
-    alternatives = sorted(
-        STRATEGIES[1:], key=lambda s: -rows[f"app/{s}"]["metrics"]["overall"]["macro"]["precision_at_3"]
-    )
-    best = alternatives[0]
-    cuts = training_cuts(app, saved, ["app", *alternatives[:2]])
+    for strategy in CALIB_STRATEGIES:
+        rows[f"app/{strategy}"] = tag_grid.evaluate_row(
+            app, saved, baseline, "app", strategy, fitted_folds=fitted[strategy]
+        )
+    cuts = training_cuts(app, saved, FIXED_SCORERS)
     points = abstention(app, rows, cuts)
     if cmean.chunk_coverage is None or not cmean.chunk_coverage[app.labelled].any():
         raise Invalid("evaluated C coverage required")
@@ -162,24 +153,20 @@ def evaluate(app, cmean, saved, baseline):
             restricted[name], restricted["app/app covered"]
         )
     bc = tag_eval.bc_corpus(app, cmean)
-    bc_fitted = {strategy: {} for strategy in ("app", best)}
+    bc_fitted = {strategy: {} for strategy in FIXED_SCORERS}
     for fold, _, train, held in tag_eval.fold_indices(bc, saved):
         for strategy, view in fit_views(bc, train, held, bc_fitted).items():
             bc_fitted[strategy][fold] = view
     for strategy in bc_fitted:
-        row = tag_eval.cross_validate(bc, saved, strategy, fitted_folds=bc_fitted[strategy])
-        row.update(page_source="bc", strategy=strategy)
-        row["paired_vs_baseline"] = tag_grid.paired_bootstrap(row, baseline)
-        restricted[f"bc/{strategy}"] = row
-    all_rows = {**rows, **{name: row for name, row in restricted.items() if name.startswith("bc/")}}
+        restricted[f"bc/{strategy}"] = tag_grid.evaluate_row(
+            bc, saved, baseline, "bc", strategy, fitted_folds=bc_fitted[strategy]
+        )
     return {
         "rows": rows,
         "abstention": points,
         "training_cuts": cuts,
-        "abstention_strategies": ["app", *alternatives[:2]],
+        "abstention_strategies": list(FIXED_SCORERS),
         "fair_c": restricted,
-        "best_b_scorer": best,
-        "best_row": max(all_rows, key=lambda s: all_rows[s]["metrics"]["overall"]["macro"]["precision_at_3"]),
         "inputs": {"app": app.metadata, "cmean": cmean.metadata, "bc": bc.metadata},
     }
 
@@ -190,7 +177,7 @@ def report(result):
         "Heads only: app z among heads. Heads first: threshold passing heads by app z, then fallback by app z. Margin: raw score minus app threshold, all tags. kNN: raw weighted shares; k tuned on inner folds of tagged training rows.",
         f"Rare thresholds: app best F1 on tagged training rows; unseen: app training mean + {tag_eval.engine.ZERO_K_SD:g} SD. All ranking references use training pages only. Δ: paired page bootstrap, {tag_grid.BOOTSTRAP_SAMPLES} draws, seed {SEED}, 95% intervals, pp.",
         *tag_grid.grid_table(result["rows"]),
-        "Abstention: score cuts fit to inner OOF top 3 volume on each outer training pool; full ties kept. Choices of two scorers and best row use outer P and are exploratory. Shown P is pooled; R columns include pages with none.",
+        "Abstention: score cuts fit to inner OOF top 3 volume on each outer training pool; full ties kept. Scorers are fixed to app and knn. Shown P is pooled; R columns include pages with none.",
         "| Scorer | Target/page | Shown/page | Shown P % | Macro R % | Micro R % | None % |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
@@ -205,9 +192,9 @@ def report(result):
     lines += [
         f"Fair C: covered pair has {covered} identical evaluated pages; models still train on all training pages. Covered Δ uses covered app/app; bc Δ uses all page app/app. bc=unit(B+cmean), missing C retains B; heads refit per source.",
         *tag_grid.grid_table(result["fair_c"]),
-        f"Best deployable fixed top 3 row: {result['best_row']}. Untagged pages remain training reference only; missing owner labels count negative. No app behavior changed.",
+        "Untagged pages remain training reference only; missing owner labels count negative. No app behavior changed.",
         f"Run: `{result['command']}`",
-        "Checks: see calib-logs/checks.json and calib-logs/verification.json; source commit and full 0.25 to 3.0 training volume curves are in calib.json.",
+        "Source commit and full 0.25 to 3.0 training volume curves are in calib.json.",
     ]
     return "\n".join(lines) + "\n"
 
@@ -230,66 +217,39 @@ def input_snapshot(root: Path, data: Path):
 
 
 def run(paths: Paths, root: Path, split: Path, out: Path, baseline: Path, *, binary=kmt.BINARY):
-    _safe_paths(paths, root, out)
     if not split.is_file():
         raise Invalid("calibration requires an existing saved split")
-    if any((out / name).exists() for name in ("calib.json", "calib.md")):
-        raise Invalid("calibration outputs already exist; choose a separate output directory")
-    logs = out / "calib-logs"
-    logs.mkdir(parents=True, exist_ok=True)
-    with (logs / "tag-calib.log").open("a") as log, redirect_stdout(log), redirect_stderr(log):
-        try:
-            before = input_snapshot(root, paths.data)
-            split_before = split.read_bytes()
-            app = tag_eval.app_vectors(paths, root, binary)
-            cmean = tag_eval.cmean_corpus(app, paths)
-            saved = tag_eval.page_split(app, split)
-            reference = read_json(baseline)
-            evaluated = evaluate(app, cmean, saved, reference)
-            if input_snapshot(root, paths.data) != before or split.read_bytes() != split_before:
-                raise Invalid("frozen data or saved split changed during evaluation")
-            result = {
-                "schema": 1,
-                "source_revision": subprocess.run(
-                    ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
-                ).stdout.strip(),
-                "seed": SEED,
-                "k": tag_eval.K,
-                "counts": reference["counts"],
-                "split_digest": fingerprint(saved),
-                "baseline_digest": fingerprint(reference),
-                "frozen_data_digest": fingerprint(before),
-                **evaluated,
-            }
-            result["command"] = shlex.join(
-                [
-                    "uv",
-                    "run",
-                    "--locked",
-                    "--project",
-                    "lab/tagger",
-                    "tagger",
-                    "--root",
-                    str(root),
-                    "--data",
-                    str(paths.data),
-                    "tag-eval",
-                    "--split",
-                    str(split),
-                    "--out",
-                    str(out),
-                    "--calib-baseline",
-                    str(baseline),
-                    "--kmt-bin",
-                    binary,
-                ]
-            )
-            json.dumps(result, allow_nan=False)
-            write_json(out / "calib.json", result)
-            (out / "calib.md").write_text(report(result))
-            return result
-        except Exception as err:
-            traceback.print_exc()
-            raise Invalid(
-                str(err) if isinstance(err, Invalid) else "unreadable inputs or unavailable runtime"
-            ) from None
+
+    def evaluate_calibration():
+        before = input_snapshot(root, paths.data)
+        split_before = split.read_bytes()
+        app = tag_eval.app_vectors(paths, root, binary)
+        cmean = tag_eval.cmean_corpus(app, paths)
+        saved = tag_eval.page_split(app, split)
+        reference = read_json(baseline)
+        evaluated = evaluate(app, cmean, saved, reference)
+        if input_snapshot(root, paths.data) != before or split.read_bytes() != split_before:
+            raise Invalid("frozen data or saved split changed during evaluation")
+        return {
+            "schema": 1,
+            "seed": SEED,
+            "k": tag_eval.K,
+            "counts": reference["counts"],
+            "split_digest": fingerprint(saved),
+            "baseline_digest": fingerprint(reference),
+            "frozen_data_digest": fingerprint(before),
+            **evaluated,
+        }
+
+    return eval_runner.run(
+        paths,
+        root,
+        out,
+        evaluate_calibration,
+        stem="calib",
+        label="calibration outputs",
+        log=out / "calib-logs" / "tag-calib.log",
+        report=report,
+        binary=binary,
+        command=["tag-eval", "--split", str(split), "--calib-baseline", str(baseline)],
+    )

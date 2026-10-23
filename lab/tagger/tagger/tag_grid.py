@@ -1,19 +1,15 @@
 """Fixed split tag quality grid and paired page bootstrap against a saved baseline."""
 
-import json
-import shlex
-import subprocess
-import traceback
-from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import numpy as np
 
-from . import tag_eval
+from . import eval_runner, tag_eval
 from .app import kmt
 from .heads import SEED
-from .paths import Paths, read_json, write_json
-from .search_eval import Invalid, _safe_paths, fingerprint
+from .paths import Paths, read_json
+from .eval_runner import Invalid
+from .search_eval import fingerprint
 
 BOOTSTRAP_SAMPLES = 10_000
 GRID_STRATEGIES = ("app", "proto_fallback", "proto_all")
@@ -84,24 +80,26 @@ def validate_baseline(corpus: tag_eval.Corpus, saved: dict, baseline: dict) -> N
         raise Invalid("saved app baseline vectors or queries differ")
 
 
+def evaluate_row(corpus, saved, baseline, source, strategy, *, fitted_folds=None):
+    """One metric and pairing path, including exact app baseline reproduction."""
+    result = tag_eval.cross_validate(corpus, saved, strategy, fitted_folds=fitted_folds)
+    result.update(page_source=source, strategy=strategy)
+    if source == "app" and strategy == "app":
+        if result["metrics"] != baseline["metrics"] or result["predictions"] != baseline["predictions"]:
+            raise Invalid("recomputed app ranking or metrics differ from baseline")
+    result["paired_vs_baseline"] = paired_bootstrap(result, baseline)
+    return result
+
+
 def evaluate(corpora: dict, saved: dict, baseline: dict) -> dict:
     """Every model fits per fold; only the named ceiling reads held out truth."""
     validate_baseline(corpora["app"], saved, baseline)
     rows = {}
     for source, corpus in corpora.items():
         for strategy in GRID_STRATEGIES:
-            result = tag_eval.cross_validate(corpus, saved, strategy)
-            result.update(page_source=source, strategy=strategy)
-            result["paired_vs_baseline"] = paired_bootstrap(result, baseline)
-            rows[f"{source}/{strategy}"] = result
-    app = rows["app/app"]
-    if app["metrics"] != baseline["metrics"] or app["predictions"] != baseline["predictions"]:
-        raise Invalid("recomputed app ranking or metrics differ from baseline")
+            rows[f"{source}/{strategy}"] = evaluate_row(corpus, saved, baseline, source, strategy)
     for strategy in ("prior", "ceiling"):
-        result = tag_eval.cross_validate(corpora["app"], saved, strategy)
-        result.update(page_source="reference", strategy=strategy)
-        result["paired_vs_baseline"] = paired_bootstrap(result, baseline)
-        rows[strategy] = result
+        rows[strategy] = evaluate_row(corpora["app"], saved, baseline, "reference", strategy)
     return {
         "rows": rows,
         "best_row": max(
@@ -162,65 +160,38 @@ def report(result: dict) -> str:
 
 
 def run(paths: Paths, root: Path, split: Path, out: Path, baseline: Path, *, binary=kmt.BINARY) -> dict:
-    _safe_paths(paths, root, out)
     if not split.is_file():
         raise Invalid("grid requires an existing saved split")
-    if any((out / name).exists() for name in ("grid.json", "grid.md")):
-        raise Invalid("grid outputs already exist; choose a separate output directory")
-    logs = out / "grid-logs"
-    logs.mkdir(parents=True, exist_ok=True)
-    with (logs / "tag-grid.log").open("a") as log, redirect_stdout(log), redirect_stderr(log):
-        try:
-            app = tag_eval.app_vectors(paths, root, binary)
-            corpora = {"app": app, "cmean": tag_eval.cmean_corpus(app, paths)}
-            saved = tag_eval.page_split(app, split)
-            before = split.read_bytes()
-            reference = read_json(baseline)
-            evaluated = evaluate(corpora, saved, reference)
-            if split.read_bytes() != before:
-                raise Invalid("saved split changed during evaluation")
-            result = {
-                "schema": 1,
-                "source_revision": subprocess.run(
-                    ["git", "rev-parse", "HEAD"], check=True, capture_output=True, text=True
-                ).stdout.strip(),
-                "seed": SEED,
-                "k": tag_eval.K,
-                "split_digest": fingerprint(saved),
-                "baseline_digest": fingerprint(reference),
-                "inputs": {source: corpus.metadata for source, corpus in corpora.items()},
-                "counts": reference["counts"],
-                **evaluated,
-            }
-            result["command"] = shlex.join(
-                [
-                    "uv",
-                    "run",
-                    "--locked",
-                    "--project",
-                    "lab/tagger",
-                    "tagger",
-                    "--root",
-                    str(root),
-                    "--data",
-                    str(paths.data),
-                    "tag-eval",
-                    "--split",
-                    str(split),
-                    "--out",
-                    str(out),
-                    "--grid-baseline",
-                    str(baseline),
-                    "--kmt-bin",
-                    binary,
-                ]
-            )
-            json.dumps(result, allow_nan=False)
-            write_json(out / "grid.json", result)
-            (out / "grid.md").write_text(report(result))
-            return result
-        except Exception as err:
-            traceback.print_exc()
-            raise Invalid(
-                str(err) if isinstance(err, Invalid) else "unreadable inputs or unavailable runtime"
-            ) from None
+
+    def evaluate_grid():
+        app = tag_eval.app_vectors(paths, root, binary)
+        corpora = {"app": app, "cmean": tag_eval.cmean_corpus(app, paths)}
+        saved = tag_eval.page_split(app, split)
+        before = split.read_bytes()
+        reference = read_json(baseline)
+        evaluated = evaluate(corpora, saved, reference)
+        if split.read_bytes() != before:
+            raise Invalid("saved split changed during evaluation")
+        return {
+            "schema": 1,
+            "seed": SEED,
+            "k": tag_eval.K,
+            "split_digest": fingerprint(saved),
+            "baseline_digest": fingerprint(reference),
+            "inputs": {source: corpus.metadata for source, corpus in corpora.items()},
+            "counts": reference["counts"],
+            **evaluated,
+        }
+
+    return eval_runner.run(
+        paths,
+        root,
+        out,
+        evaluate_grid,
+        stem="grid",
+        label="grid outputs",
+        log=out / "grid-logs" / "tag-grid.log",
+        report=report,
+        binary=binary,
+        command=["tag-eval", "--split", str(split), "--grid-baseline", str(baseline)],
+    )
