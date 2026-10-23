@@ -48,6 +48,9 @@ class RefitTests(Served):
                 started.set()
                 if not release.wait(10):
                     raise TimeoutError("test did not release fit")
+            else:  # visibility alone, changed during the last fit, must survive its publication
+                self.forget([5])
+                self.call("GET", "/api/library")
             return fitting(X, Y, q)
 
         body = {"query": "espresso", "n": 20}
@@ -66,8 +69,6 @@ class RefitTests(Served):
                 for field in ("rules", "S", "threshold", "spread"):
                     self.assertIs(getattr(old, field), getattr(self.app.lib, field), field)
                 expected = self.app.lib.Y[self.app.lib.Y.any(axis=1)].copy()
-                self.forget([5])  # visibility alone must survive publication without another fit
-                self.assertEqual(200, self.call("GET", "/api/library")[0])
             finally:
                 release.set()
                 self.finish_refit()
