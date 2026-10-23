@@ -43,6 +43,7 @@ RANK_WAIT = 0.5
 BODY_LIMIT = 4 * 1024 * 1024
 RANK_REPLY_LIMIT = 8 * 1024 * 1024  # the signed client's existing response bound
 SNIPPET_CHARS = 200
+ADD_K_SD = 0.7  # training fitted margin for about 1.2 Add suggestions per page with three visible
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; "
     "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -89,11 +90,11 @@ class App:
 
     def suggested(self, row: int, held: list[str]) -> list[str]:
         """The active tags the page neither holds nor has turned down that the model would put on it, best first:
-        each whose score clears its threshold (`engine.prechecks`: a head's, or zero shot for a tag with too few
-        positives or made since the app started), by confidence; at most `engine.SUGGEST`."""
+        each whose score clears its threshold plus `ADD_K_SD` score SD (`engine.prechecks`: a head's, or zero shot
+        for a tag with too few positives or made since the app started), by confidence; at most `engine.SUGGEST`."""
         dismissed = self.lib.state.dismissed(self.lib.records[row]["key"])
         tags = [t for t in self.names() if t not in held and t.lower() not in dismissed]
-        checked = [s for s in engine.prechecks(self.lib, [row], tags)[0] if s["checked"]]
+        checked = [s for s in engine.prechecks(self.lib, [row], tags, margin_sd=ADD_K_SD)[0] if s["checked"]]
         return [s["tag"] for s in sorted(checked, key=lambda s: -s["p"])[: engine.SUGGEST]]
 
     def page(self, row: int) -> dict:
