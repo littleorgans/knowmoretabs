@@ -230,7 +230,7 @@ def ingest(paths: Paths, root: Path, binary: str = kmt.BINARY) -> dict:
             if not isinstance(limit, int) or limit <= 0:
                 raise ValueError("chunk encoder has no known token limit")
             over_capacity = int((embed.token_lengths(st, docs) > limit).sum())
-            vectors, _ = embed.encode(st, docs, embed.BATCH["B"])
+            vectors, _ = embed.encode(st, docs, embed.BATCH["B"], release_batches=True)
             return vectors
         finally:
             embed.release(st)

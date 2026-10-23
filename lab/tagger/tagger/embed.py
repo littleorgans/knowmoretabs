@@ -134,10 +134,30 @@ def page_texts(records: list[dict], with_text: bool, chars: int) -> list[tuple[s
     return out
 
 
-def encode(st, docs: list, batch: int) -> tuple[np.ndarray, dict]:
+def encode(st, docs: list, batch: int, *, release_batches: bool = False) -> tuple[np.ndarray, dict]:
+    """Optionally return each batch to CPU and release its MPS cache before the next call."""
     sync()
     start = time.perf_counter()
-    emb = st.encode(docs, prompt="", batch_size=batch, normalize_embeddings=True, convert_to_numpy=True)
+    # SentenceTransformer's own longest first order, so bounded calls keep its batches and padding.
+    order = np.argsort([-len(doc) for doc in docs]) if release_batches else None
+    groups = (
+        ([docs[i] for i in order[offset : offset + batch]] for offset in range(0, len(docs), batch))
+        if release_batches
+        else (docs,)
+    )
+    parts = []
+    for group in groups:
+        try:
+            parts.append(
+                st.encode(group, prompt="", batch_size=batch, normalize_embeddings=True, convert_to_numpy=True)
+            )
+        finally:
+            if release_batches:
+                # Varying sequence shapes otherwise retain a growing MPS allocator cache.
+                release(st)
+    emb = parts[0] if len(parts) == 1 else np.concatenate(parts)
+    if release_batches:
+        emb = emb[np.argsort(order)]
     sync()
     seconds = time.perf_counter() - start
     emb = np.asarray(emb, dtype=np.float32)

@@ -11,6 +11,7 @@ from test_sources import LOOSE, NOTE, UNPINNED, WEB, archive
 from tagger import chunks, dataset, embed
 from tagger.app import kmt
 from tagger.archive import Archive, sha256_hex
+from tagger.embed import encode as encode_documents
 from tagger.paths import Paths
 from tagger.vector_store import VectorStore
 
@@ -165,7 +166,7 @@ def chunk_run(tmp_path, monkeypatch):
     )
     load = Mock(return_value=(st, {}))
     encode = Mock(
-        side_effect=lambda st, docs, batch: (
+        side_effect=lambda st, docs, batch, **kwargs: (
             np.stack([np.full(embed.MODELS["eg2"].dim, len(doc), np.float32) for doc in docs]),
             {},
         )
@@ -189,6 +190,45 @@ def chunk_run(tmp_path, monkeypatch):
         reader=reader,
         store=VectorStore(paths.emb / "eg2", "C"),
     )
+
+
+def test_chunk_batches_release_memory(chunk_run, monkeypatch):
+    run = chunk_run
+    run.bodies[NOTE] = ("synthetic paragraph " * 60 + "\n\n") * 19
+    cached, encoded = [], []
+
+    def encode(docs, *, batch_size, **kwargs):
+        for start in range(0, len(docs), batch_size):
+            if cached:
+                raise RuntimeError("synthetic retained batch memory")
+            cached.extend(docs[start : start + batch_size])
+            encoded.extend(cached)
+        return np.array([[len(doc)] * embed.MODELS["eg2"].dim for doc in docs], dtype=np.float32)
+
+    run.st.encode = encode
+    run.release.side_effect = lambda st: cached.clear()
+    monkeypatch.setattr(embed, "sync", lambda: None)
+    monkeypatch.setattr(embed, "encode", encode_documents)
+    result = chunks.ingest(run.paths, run.root, "synthetic-reader")
+    assert result["embedded"] == len(encoded) > embed.BATCH["B"]
+    assert len(encoded) % embed.BATCH["B"]
+    vectors = run.store.read()[1]["vectors"]
+    np.testing.assert_array_equal(np.sort(vectors[:, 0]), sorted(len(doc) for doc in encoded))
+    assert not cached
+
+
+def test_bounded_batches_keep_length_order():
+    docs = [str(i) * n for i, n in enumerate((3, 9, 1, 7, 5, 9, 2, 8, 4, 6))]
+    calls = []
+
+    def encode(group, **kwargs):
+        calls.append([len(doc) for doc in group])
+        return np.array([[int(doc[0]), len(doc)] for doc in group], np.float32)
+
+    vectors, _ = encode_documents(SimpleNamespace(encode=encode), docs, 4, release_batches=True)
+    assert [len(call) for call in calls] == [4, 4, 2]
+    assert all(min(a) >= max(b) for a, b in zip(calls, calls[1:], strict=False))
+    np.testing.assert_array_equal(vectors[:, 0], range(len(docs)))
 
 
 def test_rerun_skips(chunk_run):
