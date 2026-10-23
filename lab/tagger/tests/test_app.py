@@ -173,6 +173,25 @@ class EngineTests(Fixture):
                 self.assertEqual(s["checked"], bool(self.lib.S[row, j] >= self.lib.threshold[j]))
                 self.assertEqual(s["checked"], s["p"] >= 0.5)
 
+    def test_add_suggestions_require_a_margin_in_each_tags_score_spread(self):
+        app = server.App.__new__(server.App)
+        threshold = np.ones(len(self.lib.tags))
+        spread = np.linspace(0.05, 0.2, len(self.lib.tags))
+        scores = np.zeros(self.lib.S.shape, dtype=float)
+        app.lib = dataclasses.replace(
+            self.lib, S=scores, threshold=threshold, spread=spread, Y=np.zeros_like(self.lib.Y)
+        )
+        heads = set(self.lib.rules.heads.tolist())
+        for j in (next(iter(heads)), next(j for j in range(len(self.lib.tags)) if j not in heads)):
+            tag = self.lib.tags[j]
+            boundary = threshold[j] + server.ADD_K_SD * spread[j]
+            for score, shown in ((np.nextafter(boundary, -np.inf), False), (boundary, True)):
+                with self.subTest(tag=tag, score=score):
+                    scores[0, j] = score
+                    self.assertTrue(engine.prechecks(app.lib, [0], [tag])[0][0]["checked"])
+                    self.assertEqual(shown, tag in app.suggested(0, []))
+            scores[0, j] = 0
+
     def test_a_name_the_vocabulary_gains_is_a_zero_shot_tag_queried_by_its_name(self):
         gained = {**self.lib.state.active, "sleeper cars": "Sleeper cars"}
         lib = engine.apply_state(self.lib, dataclasses.replace(self.lib.state, active=gained), fake_encode)

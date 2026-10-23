@@ -130,7 +130,7 @@ tag panel show (`static/panel.js`): Suggested, one line, and Recently used, thre
 filters the tags or, on Enter with no match, has the library make one, and every active name folded under "All N tags" in letter rows
 (`#` first, letters without tags hidden, case and accents folded) of same width cells. A cell is that page's tag, on or
 off; no stage, pick or write moves a cell. At Indexed, Suggested fills with the active names the model would put on
-the page (`App.suggested`: `engine.prechecks`, those clearing their threshold, by confidence), less those it holds,
+the page (`App.suggested`: `engine.prechecks`, those clearing their threshold plus `ADD_K_SD` of their score SD, by confidence), less those it holds,
 has turned down or was picked for, as many as its line holds, and stays put while the page is on screen. Recently used
 holds the active names by last use, latest first, as many as three rows of its columns fit, nine at most: a use is an add the library records as
 the term's `used_at`, which removing the tag or undoing the add leaves as it was; a write moves its tag to the front.

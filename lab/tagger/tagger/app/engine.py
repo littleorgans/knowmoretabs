@@ -469,11 +469,12 @@ def tag_info(lib: Library) -> list[dict]:
     ]
 
 
-def prechecks(lib: Library, rows: list[int], picked: list[str]) -> list[list[dict]]:
+def prechecks(lib: Library, rows: list[int], picked: list[str], *, margin_sd: float = 0.0) -> list[list[dict]]:
     """Per result page, one suggestion per picked tag it does not already hold: checked where the supervised
-    score clears the tag's threshold (S2 `decide`, supervised); p = sigmoid((s - threshold) / SD)."""
+    score clears the tag's threshold plus `margin_sd` times its score SD; p = sigmoid((s - threshold) / SD)."""
     cols = [lib.tags.index(t) for t in picked]
     heads = set(lib.rules.heads.tolist())
+    threshold = lib.threshold + margin_sd * lib.spread
     out = []
     for i in rows:
         page = []
@@ -484,8 +485,8 @@ def prechecks(lib: Library, rows: list[int], picked: list[str]) -> list[list[dic
             page.append(
                 {
                     "tag": lib.tags[j],
-                    "checked": bool(s >= lib.threshold[j]),
-                    "p": float(1 / (1 + np.exp(-(s - lib.threshold[j]) / lib.spread[j]))),
+                    "checked": bool(s >= threshold[j]),
+                    "p": float(1 / (1 + np.exp(-(s - threshold[j]) / lib.spread[j]))),
                     "source": "head" if j in heads else "zero shot",
                 }
             )
