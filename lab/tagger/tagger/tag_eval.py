@@ -24,7 +24,7 @@ from .archive import Archive, LibraryState, sha256_hex
 from .evaluate import OUTER_FOLDS, Labels, outer_folds
 from .features import Dense
 from .guided.search_tag import MIN_HEAD_POSITIVES, fit_rules
-from .heads import SEED, fit_prior, unit
+from .heads import SEED, fit_knn, fit_prior, unit
 from .metrics import best_threshold
 from .paths import Paths, read_json, write_json
 from .search_eval import Invalid, _safe_paths, fingerprint
@@ -38,6 +38,7 @@ class Corpus(Labels):
     X: np.ndarray
     q: np.ndarray
     metadata: dict
+    chunk_coverage: np.ndarray | None = None
 
 
 @dataclass
@@ -139,6 +140,7 @@ def cmean_corpus(corpus: Corpus, paths: Paths) -> Corpus:
     return replace(
         corpus,
         X=X,
+        chunk_coverage=covered,
         metadata={
             **corpus.metadata,
             "input": "cmean",
@@ -160,6 +162,21 @@ def cmean_vectors(paths: Paths, root: Path, binary: str) -> Corpus:
     return cmean_corpus(app_vectors(paths, root, binary), paths)
 
 
+def bc_corpus(app: Corpus, cmean: Corpus) -> Corpus:
+    """Equal unit B and C mean fusion, retaining B where C is absent."""
+    X = unit(app.X + cmean.X)
+    return replace(
+        cmean,
+        X=X,
+        metadata={**cmean.metadata, "input": "bc", "vectors_digest": hashlib.sha256(X.tobytes()).hexdigest()},
+    )
+
+
+def bc_vectors(paths: Paths, root: Path, binary: str) -> Corpus:
+    app = app_vectors(paths, root, binary)
+    return bc_corpus(app, cmean_corpus(app, paths))
+
+
 def prototype_queries(Xtrain, Ytrain, q):
     """Pure positive means, with the app query retained for unseen training tags."""
     counts = Ytrain.sum(axis=0)
@@ -175,12 +192,15 @@ def app_scorer(Xtrain, Ytrain, q, tags, Xtest, *, strategy="app") -> SuggestionV
     inverse = np.argsort(order)
     labelled = Ytrain.any(axis=1)
     Y = Ytrain[:, order]
-    queries = q if strategy in ("app", "prior") else prototype_queries(Xtrain, Ytrain, q)
+    queries = prototype_queries(Xtrain, Ytrain, q) if strategy in ("proto_fallback", "proto_all") else q
     params = {}
-    if strategy == "prior":
-        fitted = fit_prior(Dense("train", Xtrain), Y, np.arange(len(Xtrain)))
+    if strategy in ("prior", "knn"):
+        fit = fit_prior if strategy == "prior" else fit_knn
+        rows = np.arange(len(Xtrain)) if strategy == "prior" else np.flatnonzero(labelled)
+        fitted = fit(Dense("train", Xtrain), Y, rows)
         train, held = fitted.predict_matrix(Xtrain), fitted.predict_matrix(Xtest)
         threshold = fitted.thresholds.copy()
+        params = fitted.params
     elif strategy == "proto_all":
         train, held = Xtrain @ queries[order].T, Xtest @ queries[order].T
         threshold = np.array([best_threshold(train[labelled, j], Y[labelled, j]) for j in range(len(tags))])
@@ -196,8 +216,8 @@ def app_scorer(Xtrain, Ytrain, q, tags, Xtest, *, strategy="app") -> SuggestionV
     unseen = ~np.isfinite(threshold)
     threshold[unseen] = engine._zero_shot_threshold(train[:, unseen])
     return SuggestionView(
-        HeldOutScores(held, np.zeros(len(tags)) if strategy == "prior" else train.mean(axis=0)),
-        np.ones(len(tags)) if strategy == "prior" else engine._spread(train),
+        HeldOutScores(held, np.zeros(len(tags)) if strategy in ("prior", "knn") else train.mean(axis=0)),
+        np.ones(len(tags)) if strategy in ("prior", "knn") else engine._spread(train),
         [tags[j] for j in order],
         LibraryState(active={t.lower(): t for t in tags}),
         Ytrain.sum(axis=0) >= MIN_HEAD_POSITIVES,
@@ -206,8 +226,35 @@ def app_scorer(Xtrain, Ytrain, q, tags, Xtest, *, strategy="app") -> SuggestionV
     )
 
 
-PAGE_SOURCES = {"app": app_vectors, "cmean": cmean_vectors}
-STRATEGIES = {name: partial(app_scorer, strategy=name) for name in ("app", "proto_fallback", "proto_all", "prior")}
+APP_RANKINGS = ("app", "heads_only", "heads_first", "margin")
+PAGE_SOURCES = {"app": app_vectors, "cmean": cmean_vectors, "bc": bc_vectors}
+STRATEGIES = {
+    name: partial(app_scorer, strategy=name) for name in (*APP_RANKINGS, "knn", "proto_fallback", "proto_all", "prior")
+}
+
+
+def rank_suggestions(fitted: SuggestionView, row: int, strategy: str) -> list[dict]:
+    """App ties throughout; heads first admits heads only when prechecks clear."""
+    # Head eligibility and thresholds are canonical; scores follow fitted.tags.
+    canonical = {t: j for j, t in enumerate(fitted.state.active.values())}
+    columns = np.array([canonical[t] for t in fitted.tags])
+    if strategy == "margin":
+        fitted = replace(
+            fitted,
+            S=HeldOutScores(fitted.S.values, fitted.thresholds[columns]),
+            spread=np.ones(len(columns)),
+        )
+    ranked = engine.suggest(fitted, [row], k=len(fitted.tags))
+    if strategy == "heads_only":
+        return [h for h in ranked if fitted.heads[canonical[h["tag"]]]]
+    if strategy == "heads_first":
+        passing = {
+            t
+            for j, t in enumerate(fitted.tags)
+            if fitted.heads[columns[j]] and fitted.S[row, j] >= fitted.thresholds[columns[j]]
+        }
+        return [h for h in ranked if h["tag"] in passing] + [h for h in ranked if not fitted.heads[canonical[h["tag"]]]]
+    return ranked
 
 
 def page_split(corpus: Corpus, path: Path) -> dict:
@@ -297,26 +344,37 @@ def summaries(Y, pred, heads, full_heads) -> dict:
     }
 
 
-def cross_validate(corpus: Corpus, saved: dict, strategy: str) -> dict:
+def fold_indices(corpus: Corpus, saved: dict):
+    """Shared saved outer boundary, including untagged training reference pages."""
+    assigned = {p["key"]: p["fold"] for p in saved["pages"]}
+    folds = np.array([assigned[corpus.records[i]["key"]] for i in corpus.labelled])
+    for fold in range(OUTER_FOLDS):
+        local = np.flatnonzero(folds == fold)
+        held = corpus.labelled[local]
+        train = np.flatnonzero(~np.isin(np.arange(len(corpus.records)), held))
+        yield fold, local, train, held
+
+
+def cross_validate(corpus: Corpus, saved: dict, strategy: str, *, fitted_folds=None) -> dict:
     rows = corpus.labelled
     Y = corpus.Y[rows]
     if len(corpus.tags) < K:
         raise Invalid("at least three active tags required for precision at three")
     full_heads = corpus.Y.sum(axis=0) >= MIN_HEAD_POSITIVES
-    assigned = {p["key"]: p["fold"] for p in saved["pages"]}
-    folds = np.array([assigned[corpus.records[i]["key"]] for i in rows])
+    folds = np.empty(len(rows), int)
     pred, heads = np.zeros_like(Y, bool), np.zeros_like(Y, bool)
     details, rankings = [], [None] * len(rows)
     tag_columns = {t: j for j, t in enumerate(corpus.tags)}
-    for fold in range(OUTER_FOLDS):
-        local = np.flatnonzero(folds == fold)
-        held = rows[local]
-        train = np.flatnonzero(~np.isin(np.arange(len(corpus.records)), held))
-        scorer = STRATEGIES["prior" if strategy == "ceiling" else strategy]
-        fitted = scorer(corpus.X[train], corpus.Y[train], corpus.q, corpus.tags, corpus.X[held])
+    for fold, local, train, held in fold_indices(corpus, saved):
+        folds[local] = fold
+        if fitted_folds is None:
+            scorer = STRATEGIES["prior" if strategy == "ceiling" else strategy]
+            fitted = scorer(corpus.X[train], corpus.Y[train], corpus.q, corpus.tags, corpus.X[held])
+        else:
+            fitted = fitted_folds[fold]
         heads[local] = fitted.heads
         for i, page in enumerate(local):
-            suggested = engine.suggest(fitted, [i], k=len(corpus.tags))
+            suggested = rank_suggestions(fitted, i, strategy)
             if strategy == "ceiling":
                 # Oracle reference only: ties within truth and padding follow the prior.
                 suggested.sort(key=lambda h: not Y[page, tag_columns[h["tag"]]])

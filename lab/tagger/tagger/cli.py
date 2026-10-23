@@ -42,6 +42,7 @@ def main() -> None:
     tag_eval.add_argument("--strategy", default="app", help="named tag scorer (default: app LR with cosine fallback)")
     tag_eval.add_argument("--kmt-bin", help="the built knowmoretabs used to read pinned documents")
     tag_eval.add_argument("--grid-baseline", type=Path, help="run the fixed source/scorer grid against this baseline")
+    tag_eval.add_argument("--calib-baseline", type=Path, help="run calibration, abstention and paired C comparisons")
     steps.add_parser("search-tag", help="test S2: search, pick a few tags, tag the results with only those")
     steps.add_parser("cost", help="load time, RSS, throughput and single page latency per model")
     steps.add_parser("report", help="write out/results.md")
@@ -121,7 +122,13 @@ def main() -> None:
         if args.source not in tag_eval.PAGE_SOURCES or args.strategy not in tag_eval.STRATEGIES:
             parser.error("unknown tag evaluation source or strategy")
         try:
-            if args.grid_baseline is not None:
+            if args.calib_baseline is not None:
+                from . import tag_calib
+
+                if args.grid_baseline is not None or args.source != "app" or args.strategy != "app":
+                    parser.error("calibration selects all sources and strategies; choose only one study")
+                tag_calib.run(paths, root, args.split, args.out, args.calib_baseline, binary=args.kmt_bin or kmt.BINARY)
+            elif args.grid_baseline is not None:
                 from . import tag_grid
 
                 if args.source != "app" or args.strategy != "app":

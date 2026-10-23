@@ -28,10 +28,10 @@ def page_rates(result: dict) -> tuple[list, np.ndarray]:
     for p in pages:
         truth = set(p["truth"])
         predicted = [h["tag"] for h in p["top_3"]]
-        if not truth or len(predicted) != tag_eval.K or len(set(predicted)) != tag_eval.K:
+        if not truth or len(predicted) > tag_eval.K or len(set(predicted)) != len(predicted):
             raise Invalid("invalid paired page labels or predictions")
         tp = len(truth.intersection(predicted))
-        rates.append([tp / tag_eval.K, tp / len(truth)])
+        rates.append([tp / len(predicted) if predicted else np.nan, tp / len(truth)])
     identity = [(p["id"], p["fold"], sorted(p["truth"])) for p in pages]
     return identity, np.array(rates)
 
@@ -42,29 +42,34 @@ def paired_bootstrap(candidate: dict, baseline: dict) -> dict:
     baseline_identity, baseline_rates = page_rates(baseline)
     if identity != baseline_identity:
         raise Invalid("baseline paired pages, folds or truth differ")
-    delta = rates - baseline_rates
+
+    def average(values, axis):
+        # Match measure: precision averages pages with suggestions; recall all truth pages.
+        return tag_eval.ratio(np.nansum(values, axis=axis), np.isfinite(values).sum(axis=axis))
+
     rng = np.random.default_rng(SEED)
-    means = np.empty((BOOTSTRAP_SAMPLES, delta.shape[1]))
+    means = np.empty((BOOTSTRAP_SAMPLES, rates.shape[1]))
     for start in range(0, BOOTSTRAP_SAMPLES, 256):
         end = min(start + 256, BOOTSTRAP_SAMPLES)
-        indices = rng.integers(len(delta), size=(end - start, len(delta)))
-        means[start:end] = delta[indices].mean(axis=1)
+        indices = rng.integers(len(rates), size=(end - start, len(rates)))
+        means[start:end] = average(rates[indices], 1) - average(baseline_rates[indices], 1)
     bounds = np.quantile(means, [0.025, 0.975], axis=0)
+    delta = average(rates, 0) - average(baseline_rates, 0)
     return {
         "seed": SEED,
         "samples": BOOTSTRAP_SAMPLES,
-        "pages": len(delta),
+        "pages": len(rates),
         "confidence": 0.95,
         "method": "paired page percentile bootstrap",
         **{
-            name: {"difference": float(delta[:, j].mean()), "interval": bounds[:, j].tolist()}
+            name: {"difference": float(delta[j]), "interval": bounds[:, j].tolist()}
             for j, name in enumerate(("precision_at_3", "recall_at_3"))
         },
     }
 
 
-def evaluate(corpora: dict, saved: dict, baseline: dict) -> dict:
-    """Every model fits per fold; only the named ceiling reads held out truth."""
+def validate_baseline(corpus: tag_eval.Corpus, saved: dict, baseline: dict) -> None:
+    """Common provenance boundary for fixed split tag experiments."""
     if (
         baseline["split_digest"] != fingerprint(saved)
         or baseline["page_source"] != "app"
@@ -74,10 +79,14 @@ def evaluate(corpora: dict, saved: dict, baseline: dict) -> dict:
     ):
         raise Invalid("saved app baseline provenance differs")
     if any(
-        corpora["app"].metadata[k] != baseline["inputs"][k]
-        for k in ("vectors_digest", "queries_digest", "descriptions_digest")
+        corpus.metadata[k] != baseline["inputs"][k] for k in ("vectors_digest", "queries_digest", "descriptions_digest")
     ):
         raise Invalid("saved app baseline vectors or queries differ")
+
+
+def evaluate(corpora: dict, saved: dict, baseline: dict) -> dict:
+    """Every model fits per fold; only the named ceiling reads held out truth."""
+    validate_baseline(corpora["app"], saved, baseline)
     rows = {}
     for source, corpus in corpora.items():
         for strategy in GRID_STRATEGIES:
