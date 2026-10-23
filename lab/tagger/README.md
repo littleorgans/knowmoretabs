@@ -52,7 +52,25 @@ per result set to `search-tag/sets.jsonl`. Each owner tag's query searches a hel
 oracle picks the tags held by 3 or more results (plus 2 wrong ones as a variant); `guided/search_tag.decide`
 assigns them from fit fold rules alone: zero shot, LR heads (zero shot below 10 fit positives), or in set
 (the top share of the set, that share calibrated on fit fold slices). Baseline: the same heads over every tag.
+
+App suggestion quality: from the repository root, run `uv run --locked --project lab/tagger tagger --root <archive-copy>
+--data <archive-copy>/tagger tag-eval --split <private>/split.json --out <private>`. This evaluates every tagged page
+once in five saved page folds, using the app's B then A vectors, LR heads and cosine fallback, and `engine.suggest`.
+Training pages alone set fitted rules and ranking standardization. Outputs are `baseline.json`, `baseline.md` and
+`baseline-logs/tag-eval.log`; repeats reuse the split and require a fresh output directory. `tagger/tag_eval.py`
+exposes `PAGE_SOURCES` and `STRATEGIES` registries for adding experiments against the same split and metrics.
 The CLI sets umask 077, so every output is private (0600).
+
+With the saved baseline and split, run the source and scorer grid from the repository root:
+`uv run --locked --project lab/tagger tagger --root <archive-copy> --data <archive-copy>/tagger tag-eval
+--split <private>/split.json --out <grid-output> --grid-baseline <private>/baseline.json`.
+Outputs are `grid.json`, `grid.md` and `grid-logs/tag-grid.log`.
+For calibration, abstention and paired C comparisons, run
+`uv run --locked --project lab/tagger tagger --root <archive-copy> --data <archive-copy>/tagger tag-eval
+--split <private>/split.json --out <calib-output> --calib-baseline <private>/baseline.json`.
+Outputs are `calib.json`, `calib.md` and `calib-logs/tag-calib.log`. Both studies reuse the saved split,
+require a fresh output directory and validate the baseline's inputs. Calibration reports fixed app and knn
+abstention and fusion scorers without choosing a winner from held out precision.
 
 ## Search, select and tag app (P1, one screen since P5)
 

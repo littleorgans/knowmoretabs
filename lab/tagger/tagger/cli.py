@@ -35,6 +35,14 @@ def main() -> None:
     search_eval.add_argument("--out", type=Path, required=True)
     search_eval.add_argument("--kmt-bin", help="the built knowmoretabs used to read pinned documents")
     search_eval.add_argument("--prepare", action="store_true", help="prepare and freeze scratch vectors once")
+    tag_eval = steps.add_parser("tag-eval", help="page held out cross validation of app tag suggestions on a copy")
+    tag_eval.add_argument("--split", type=Path, required=True, help="page split, created once then reused")
+    tag_eval.add_argument("--out", type=Path, required=True, help="private baseline output directory")
+    tag_eval.add_argument("--source", default="app", help="named page vector source (default: app B then A)")
+    tag_eval.add_argument("--strategy", default="app", help="named tag scorer (default: app LR with cosine fallback)")
+    tag_eval.add_argument("--kmt-bin", help="the built knowmoretabs used to read pinned documents")
+    tag_eval.add_argument("--grid-baseline", type=Path, help="run the fixed source/scorer grid against this baseline")
+    tag_eval.add_argument("--calib-baseline", type=Path, help="run calibration, abstention and paired C comparisons")
     steps.add_parser("search-tag", help="test S2: search, pick a few tags, tag the results with only those")
     steps.add_parser("cost", help="load time, RSS, throughput and single page latency per model")
     steps.add_parser("report", help="write out/results.md")
@@ -48,8 +56,8 @@ def main() -> None:
     for step in (embed, chunks, app):
         step.add_argument("--root", default=argparse.SUPPRESS, help="archive directory (overrides KMT_ROOT)")
     args = parser.parse_args()
-    if args.step == "search-eval" and (args.root is None or args.data is None):
-        parser.error("search-eval requires explicit --root and --data scratch paths")
+    if args.step in ("search-eval", "tag-eval") and (args.root is None or args.data is None):
+        parser.error(f"{args.step} requires explicit --root and --data scratch paths")
     root = resolve_root(args.root, os.environ.get("KMT_ROOT"), Path.home())
     paths = resolve(args.data, root)
     if args.step == "dataset":
@@ -106,6 +114,38 @@ def main() -> None:
         from .guided import search_tag
 
         search_tag.run(paths)
+    elif args.step == "tag-eval":
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        from . import tag_eval
+        from .app import kmt
+
+        if args.source not in tag_eval.PAGE_SOURCES or args.strategy not in tag_eval.STRATEGIES:
+            parser.error("unknown tag evaluation source or strategy")
+        try:
+            if args.calib_baseline is not None:
+                from . import tag_calib
+
+                if args.grid_baseline is not None or args.source != "app" or args.strategy != "app":
+                    parser.error("calibration selects all sources and strategies; choose only one study")
+                tag_calib.run(paths, root, args.split, args.out, args.calib_baseline, binary=args.kmt_bin or kmt.BINARY)
+            elif args.grid_baseline is not None:
+                from . import tag_grid
+
+                if args.source != "app" or args.strategy != "app":
+                    parser.error("grid selects all sources and strategies")
+                tag_grid.run(paths, root, args.split, args.out, args.grid_baseline, binary=args.kmt_bin or kmt.BINARY)
+            else:
+                tag_eval.run(
+                    paths,
+                    root,
+                    args.split,
+                    args.out,
+                    source=args.source,
+                    strategy=args.strategy,
+                    binary=args.kmt_bin or kmt.BINARY,
+                )
+        except tag_eval.Invalid as err:
+            parser.exit(1, f"tag-eval: {err}\n")
     elif args.step == "cost":
         from . import cost
 
