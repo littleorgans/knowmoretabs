@@ -102,8 +102,7 @@ def load(model: Model, *, local_files_only: bool = False):
 
 
 def page_bodies(records: list[dict]) -> list[str | None]:
-    """Each page's kept text when it is ok, a local document's as `read` prints it, every document read by one call;
-    None for none."""
+    """Kept web text, or document bodies projected from the shared batched reader; None for none."""
     printed = iter(kmt.read([r["read"] for r in records if not r["text_ok"] and r.get("read")]))
     bodies = []
     for r in records:
