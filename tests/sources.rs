@@ -7,11 +7,13 @@
 
 mod common;
 
+#[cfg(unix)]
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
 use common::add::{intake, lines};
-use common::model_service::{Service, json_fields, key_file, proven};
+use common::model_service::{Service, detailed_rank, json_fields, key_file, proven, request_body};
 use common::pdf_builder::pdf;
 use common::serve::{Server, kept_text};
 use common::{Fixture, assert_success, stderr, stdout, write_snapshot};
@@ -106,9 +108,25 @@ impl Desk {
     }
 
     fn search(&self, query: &str) -> Value {
-        let output = self.run(&["search", "--json", query]);
-        assert_success(&output);
-        serde_json::from_str(&stdout(&output)).unwrap()
+        json_answer(self.run(&["search", "--json", query]))
+    }
+
+    #[cfg(unix)]
+    fn ranked(&self, service: &Service, args: &[&str]) -> Output {
+        let key = key_file(&self.fx);
+        let port = service.port.to_string();
+        self.run(
+            &[
+                args,
+                &[
+                    "--model-port",
+                    &port,
+                    "--model-secret-file",
+                    key.to_str().unwrap(),
+                ],
+            ]
+            .concat(),
+        )
     }
 
     /// A file outside the checkout.
@@ -725,7 +743,7 @@ fn search_modes_control_model_ranking_and_default_is_combined() {
     assert_success(&desk.add(&desk.loose("paper.md", paper)));
     let unindexed = b"# Late quokka\n";
     assert_success(&desk.add(&desk.loose("late.md", unindexed)));
-    let keys = json!({"keys": [loose, "https://not-added.test/", NOTE]}).to_string();
+    let keys = detailed_rank(&[&loose, NOTE]).to_string();
     let fields = json_fields(&desk.fx, &keys);
     let service = Service::start(move |request| Some(proven(request, "200 OK", &fields, &keys)));
     let key = key_file(&desk.fx);
@@ -770,7 +788,25 @@ fn search_modes_control_model_ranking_and_default_is_combined() {
     let seen = service.seen();
     assert_eq!(seen.len(), 2);
     assert!(String::from_utf8_lossy(&seen[0]).starts_with("POST /api/rank HTTP/1.1\r\n"));
-    assert!(String::from_utf8_lossy(&seen[0]).ends_with(r#"{"query":"quokka"}"#));
+    let request = request_body(&seen[0]);
+    assert_eq!(request["schema_version"], 1);
+    assert_eq!(request["query"], "quokka");
+    assert_eq!(request["snippet_chars"], 200);
+    assert_eq!(request["among"].as_array().unwrap().len(), 3);
+    for query in ["", " \t\n"] {
+        let output = desk.run(
+            &[args.as_slice(), &["--mode", "combined"]]
+                .concat()
+                .iter()
+                .map(|a| if *a == "quokka" { query } else { *a })
+                .collect::<Vec<_>>(),
+        );
+        assert_success(&output);
+        let listed: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        assert_eq!(listed["total"], 3);
+        assert_eq!(listed["fallback"], json!([]));
+    }
+    assert_eq!(service.seen().len(), 2);
 
     // A service that does not answer leaves search by keyword, said once.
     drop(service);
@@ -791,4 +827,329 @@ fn search_modes_control_model_ranking_and_default_is_combined() {
         "{}",
         stderr(&output)
     );
+}
+
+fn json_answer(output: Output) -> Value {
+    assert_success(&output);
+    let bytes = output.stdout;
+    serde_json::from_slice(&bytes).unwrap()
+}
+
+#[cfg(unix)]
+fn filtered_search_pages(desk: &Desk) -> (Vec<String>, Service) {
+    let keys: Vec<_> = (0..65).map(|i| format!("https://scope.test/{i}")).collect();
+    let pages = desk.fx.root.join("pages");
+    std::fs::create_dir_all(&pages).unwrap();
+    let mut rows = Vec::new();
+    let mut tags = json!({});
+    for (i, key) in keys.iter().enumerate() {
+        rows.push(json!({"schema_version":1,"url":key,"title":"Quokka",
+            "added_at": if i == 0 {"2026-01-01T00:00:00Z"} else if i == 1 {"2026-03-01T00:00:00Z"} else {"2026-02-01T00:00:00Z"}}).to_string());
+        tags[key] = json!({"add": if i == 2 {vec!["Research"]} else {vec!["Research","Notes"]}});
+    }
+    rows.push(json!({"schema_version":1,"url":"https://sub.scope.test/excluded","title":"Quokka","added_at":"2026-02-01T00:00:00Z"}).to_string());
+    tags["https://sub.scope.test/excluded"] = json!({"add":["Research","Notes"]});
+    std::fs::write(pages.join("added.jsonl"), rows.join("\n") + "\n").unwrap();
+    std::fs::write(desk.fx.root.join("library.json"), json!({"schema_version":1,"forgotten":[],
+        "tags":tags,"vocabulary":{"Research":{"created_at":"2026-01-01T00:00:00Z"},"Notes":{"created_at":"2026-01-01T00:00:00Z"}}}).to_string()).unwrap();
+    let service = Service::ranking(&desk.fx, move |body| {
+        let keys: Vec<_> = body["among"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|p| {
+                let key = p["key"].as_str().unwrap();
+                (!key.ends_with("/64")).then_some(key)
+            })
+            .rev()
+            .collect();
+        detailed_rank(&keys)
+    });
+    (keys, service)
+}
+
+#[cfg(unix)]
+fn detailed_passage(desk: &Desk, web: &str) -> (Value, String) {
+    use sha2::{Digest as _, Sha256};
+    assert_success(&desk.run(&["add", web, "--title", "Quokka note", "--no-content"]));
+    let body = format!("lead\n{}", "🙂é\r\n".repeat(70));
+    let quote: String = body[5..].chars().take(200).collect();
+    let hash = common::model_service::hex(&Sha256::digest(body.as_bytes()));
+    kept_text(
+        &desk.fx,
+        web,
+        &json!({"schema_version":1,"url":web,
+        "attempted_at":"2026-10-07T09:00:00Z","status":"thin","tier":"web"}),
+        Some(&body),
+    );
+    let mut valid = detailed_rank(&[web]);
+    let hit = &mut valid["hits"][0];
+    hit["sources"]["text"]["input"] = json!("C");
+    hit["semantic_source"] = json!("C");
+    hit["chunk_status"] = json!("ready");
+    hit["section"] = json!("Passage");
+    hit["chunk"] = json!({"id":"a".repeat(64),"start":5,"end":body.len(),
+        "hash":"b".repeat(64),"page_hash":"c".repeat(64),"score":0.5});
+    hit["snippet"] = json!(quote);
+    hit["snippet_range"] = json!({"start":5,"end":5+quote.len()});
+    hit["content_sha256"] = json!(hash);
+    valid["fallback"] = json!([]);
+    (valid, body)
+}
+
+#[cfg(unix)]
+fn walk_search_pages(desk: &Desk, service: &Service, args: &[&str]) -> Vec<Value> {
+    let mut cursor: Option<String> = None;
+    let mut gathered = Vec::new();
+    loop {
+        let mut request_args = args.to_vec();
+        request_args.extend(["--limit", "17"]);
+        if let Some(ref token) = cursor {
+            request_args.extend(["--cursor", token]);
+        }
+        let found = json_answer(desk.ranked(service, &request_args));
+        assert_eq!(found["total"], 62);
+        gathered.extend(found["results"].as_array().unwrap().iter().cloned());
+        assert_eq!(found["truncated"], !found["next_cursor"].is_null());
+        cursor = found["next_cursor"].as_str().map(ToOwned::to_owned);
+        if cursor.is_none() {
+            return gathered;
+        }
+    }
+}
+
+#[cfg(unix)]
+fn assert_stale_cursor(desk: &Desk, service: &Service, args: &[&str]) {
+    let output = desk.ranked(service, args);
+    assert_eq!(output.status.code(), Some(2));
+    let error: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(error["schema_version"], 1);
+    assert_eq!(error["error"]["kind"], "stale_cursor");
+}
+
+/// A detailed reply is used only as a whole, with exact current body bytes.
+#[cfg(unix)]
+#[test]
+fn signed_rank_checks_passages_and_rejects_invalid_or_legacy_details() {
+    use sha2::{Digest as _, Sha256};
+    use std::sync::{Arc, Mutex};
+    const WEB: &str = "https://passage.test/note";
+    let desk = Desk::new();
+    let (valid, body) = detailed_passage(&desk, WEB);
+    let quote = valid["hits"][0]["snippet"].as_str().unwrap();
+    let hash = valid["hits"][0]["content_sha256"].as_str().unwrap();
+    let reply = Arc::new(Mutex::new(valid.clone()));
+    let answer = Arc::clone(&reply);
+    let service = Service::ranking(&desk.fx, move |_| answer.lock().unwrap().clone());
+    let args = ["search", "quokka", "--json"];
+    let found = json_answer(desk.ranked(&service, &args));
+    let hit = result(&found, WEB);
+    assert_eq!(found["schema_version"], 1);
+    assert_eq!(hit["snippet"], quote);
+    assert_eq!(hit["content_sha256"], hash);
+    assert_eq!(
+        hit["id"],
+        common::model_service::hex(&Sha256::digest(WEB.as_bytes()))
+    );
+    assert_eq!(hit["rank"], 1);
+    assert_eq!(hit["section"], "Passage");
+    assert_eq!(hit["capture_status"], "thin");
+    assert_eq!(hit["readability"]["status"], "readable");
+    assert_eq!(hit["sources"]["text"]["rank"], 1);
+    assert_eq!(hit["chunk"]["score"], 0.5);
+    assert!(hit["score"].as_f64().unwrap().is_finite());
+    let request = request_body(&service.seen()[0]);
+    assert_eq!(request["among"][0]["content_sha256"], hash);
+
+    for (pointer, value) in [
+        ("/hits/0/score", Value::Null),
+        ("/hits/0/sources/text/rank", json!(2)),
+        ("/hits/0/semantic_source", json!("A")),
+        ("/hits/0/chunk/end", json!(body.len() + 1)),
+        ("/hits/0/snippet_range/end", json!(6)),
+        ("/hits/0/snippet", json!("rewritten")),
+        ("/hits/0/content_sha256", json!("0".repeat(64))),
+        ("/keys/0", json!("https://outside.test/")),
+    ] {
+        let mut bad = valid.clone();
+        *bad.pointer_mut(pointer).unwrap() = value;
+        *reply.lock().unwrap() = bad;
+        let found = json_answer(desk.ranked(&service, &args));
+        assert_eq!(found["ranking"], "keyword", "{pointer}");
+        assert_eq!(
+            found["fallback"][0]["code"], "rank_invalid_reply",
+            "{pointer}"
+        );
+        assert_eq!(found["results"][0]["snippet"], Value::Null);
+    }
+    let mut duplicate = valid.clone();
+    duplicate["keys"].as_array_mut().unwrap().push(json!(WEB));
+    duplicate["hits"]
+        .as_array_mut()
+        .unwrap()
+        .push(valid["hits"][0].clone());
+    *reply.lock().unwrap() = duplicate;
+    let output = desk.ranked(&service, &args);
+    let found: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(found["fallback"][0]["code"], "rank_invalid_reply");
+    for (response, code) in [
+        (json!({"keys":[WEB]}), "rank_contract_unsupported"),
+        (json!({"schema_version":2}), "rank_contract_unsupported"),
+        (
+            json!({"schema_version":1,"keys":[],"hits":[],"fallback":[{"stage":"rank","code":"rank_response_too_large"}]}),
+            "rank_response_too_large",
+        ),
+    ] {
+        *reply.lock().unwrap() = response;
+        let found = json_answer(desk.ranked(&service, &args));
+        assert_eq!(found["fallback"][0]["code"], code);
+    }
+    *reply.lock().unwrap() = valid.clone();
+    kept_text(
+        &desk.fx,
+        WEB,
+        &json!({"schema_version":1,"url":WEB,
+        "attempted_at":"2026-10-07T09:00:00Z","status":"ok"}),
+        Some("changed bytes"),
+    );
+    let output = desk.ranked(&service, &args);
+    let found: Value = serde_json::from_str(&stdout(&output)).unwrap();
+    assert_eq!(found["fallback"][0]["code"], "rank_invalid_reply");
+}
+
+#[cfg(unix)]
+#[test]
+fn filters_precede_ranking_and_complete_paging_reaches_the_literal_tail() {
+    let desk = Desk::new();
+    let (keys, service) = filtered_search_pages(&desk);
+    let pages = desk.fx.root.join("pages");
+    let args = [
+        "search",
+        "quokka",
+        "--json",
+        "--tag",
+        "RESEARCH",
+        "--tag",
+        "notes",
+        "--domain",
+        "WWW.SCOPE.TEST",
+        "--domain",
+        "elsewhere.test",
+        "--kind",
+        "web",
+        "--kind",
+        "blob",
+        "--after",
+        "2026-02-01T01:00:00+01:00",
+        "--before",
+        "2026-03-01T00:00:00Z",
+    ];
+    let all = json_answer(desk.ranked(&service, &args));
+    assert_eq!(all["total"], 62);
+    assert_eq!(all["returned"], 62);
+    assert_eq!(all["limit"], Value::Null);
+    assert_eq!(all["next_cursor"], Value::Null);
+    assert_eq!(all["results"][0]["url"], keys[63]);
+    let tail = &all["results"][61];
+    assert_eq!(tail["url"], keys[64]);
+    assert_eq!(tail["rank"], 62);
+    assert_eq!(tail["score"], Value::Null);
+    assert_eq!(tail["ranked"], false);
+    assert_eq!(tail["readability"]["status"], "unavailable");
+    assert_eq!(tail["capture_status"], Value::Null);
+    assert_eq!(tail["tags"], json!(["Notes", "Research"]));
+    let among = request_body(&service.seen()[0])["among"].clone();
+    assert_eq!(among.as_array().unwrap().len(), 62);
+    assert!(!among.to_string().contains("excluded"));
+    assert!(
+        !among
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| keys[..3].iter().any(|k| p["key"] == *k))
+    );
+    assert_eq!(all["results"][0]["sources"]["text"]["rank"], 1);
+
+    let gathered = walk_search_pages(&desk, &service, &args);
+    assert_eq!(json!(gathered), all["results"]);
+    let first = desk.ranked(&service, &[args.as_slice(), &["--limit", "1"]].concat());
+    let first: Value = serde_json::from_str(&stdout(&first)).unwrap();
+    let cursor = first["next_cursor"].as_str().unwrap();
+    let resized = desk.ranked(
+        &service,
+        &[args.as_slice(), &["--limit", "3", "--cursor", cursor]].concat(),
+    );
+    assert_success(&resized);
+    let resized: Value = serde_json::from_str(&stdout(&resized)).unwrap();
+    assert_eq!(
+        resized["results"],
+        json!(&all["results"].as_array().unwrap()[1..4])
+    );
+    for changed in ["--tag", "--mode"] {
+        let mut next = args.to_vec();
+        next.extend([
+            "--cursor",
+            cursor,
+            changed,
+            if changed == "--tag" {
+                "unknown"
+            } else {
+                "keyword"
+            },
+        ]);
+        assert_stale_cursor(&desk, &service, &next);
+    }
+    let empty = desk.ranked(&service, &[args.as_slice(), &["--tag", "unknown"]].concat());
+    assert_success(&empty);
+    assert_eq!(
+        serde_json::from_str::<Value>(&stdout(&empty)).unwrap()["total"],
+        0
+    );
+    let before = common::fingerprint(&desk.fx.root);
+    let mut file = std::fs::OpenOptions::new()
+        .append(true)
+        .open(pages.join("added.jsonl"))
+        .unwrap();
+    writeln!(file,"{}",json!({"schema_version":1,"url":keys[63],"title":"Changed title","added_at":"2026-02-01T00:00:00Z"})).unwrap();
+    assert_ne!(common::fingerprint(&desk.fx.root), before);
+    assert_stale_cursor(
+        &desk,
+        &service,
+        &[args.as_slice(), &["--cursor", cursor]].concat(),
+    );
+}
+
+#[test]
+fn search_usage_errors_are_versioned_and_json_after_the_terminator_is_query_text() {
+    let desk = Desk::new();
+    for args in [
+        vec!["search", "--json"],
+        vec!["search", "quokka", "--json", "--limit", "0"],
+        vec!["search", "quokka", "--json", "--limit", "bad"],
+        vec!["search", "quokka", "--json", "--cursor", "v2:0:bad"],
+        vec!["search", "quokka", "--json", "--kind", "other"],
+        vec!["search", "quokka", "--json", "--domain", "host/path"],
+        vec!["search", "quokka", "--json", "--after", "yesterday"],
+        vec![
+            "search",
+            "quokka",
+            "--json",
+            "--after",
+            "2026-03-01T00:00:00Z",
+            "--before",
+            "2026-02-01T00:00:00Z",
+        ],
+    ] {
+        let output = desk.run(&args);
+        assert_eq!(output.status.code(), Some(2), "{args:?}");
+        let error: Value = serde_json::from_str(&stdout(&output)).unwrap();
+        assert_eq!(error["schema_version"], 1);
+        assert_eq!(error["error"]["kind"], "usage");
+        assert_eq!(stderr(&output), "");
+    }
+    let output = desk.run(&["search", "--bad", "--", "--json"]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(stdout(&output), "");
+    assert!(stderr(&output).contains("--bad"));
+    assert!(!stderr(&output).ends_with("\n\n"), "{}", stderr(&output));
 }

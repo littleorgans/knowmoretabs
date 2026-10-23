@@ -58,6 +58,7 @@ mod metadata;
 mod metadata_fetch;
 mod metadata_writer;
 mod model;
+mod model_rank;
 mod model_routes;
 mod model_service;
 mod out;
@@ -96,7 +97,14 @@ use capture::{Log, Options};
 use cli::{Cli, Command};
 
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = match Cli::try_parse() {
+        Ok(cli) => cli,
+        Err(err) => return usage_error(&err),
+    };
+    run(&cli)
+}
+
+fn run(cli: &Cli) -> ExitCode {
     let log = Log {
         quiet: cli.quiet,
         verbose: cli.verbose,
@@ -111,7 +119,7 @@ fn main() -> ExitCode {
         roots.as_ref(),
     )
     else {
-        return fail(&error::Error::NoHome, &cli);
+        return fail(&error::Error::NoHome, cli);
     };
     // Before any command touches it: a root Windows cannot represent has to
     // say so by name, not as a mysterious failure three calls later.
@@ -121,22 +129,22 @@ fn main() -> ExitCode {
                 root: root.clone(),
                 problem,
             },
-            &cli,
+            cli,
         );
     }
-    warn_if_root_is_not_private(&cli, &root, roots.as_ref(), explicit);
+    warn_if_root_is_not_private(cli, &root, roots.as_ref(), explicit);
     let result = match &cli.command {
         Some(Command::List) => library_commands::list(&root, cli.json, log),
         Some(Command::Export { dir, with_history }) => {
             library_commands::export(&root, dir.as_deref(), *with_history, cli.json, log)
         }
-        Some(Command::Serve(args)) => serve(root, args, &cli, roots.as_ref(), log),
-        Some(Command::Add(args)) => match add(&root, args, &cli, roots.as_ref(), log) {
+        Some(Command::Serve(args)) => serve(root, args, cli, roots.as_ref(), log),
+        Some(Command::Add(args)) => match add(&root, args, cli, roots.as_ref(), log) {
             Ok(code) => return code,
             Err(err) => Err(err),
         },
-        Some(Command::Search(args)) => search(&root, args, &cli, roots.as_ref(), log),
-        Some(Command::Read { keys }) => match read(&root, keys, &cli, roots.as_ref(), log) {
+        Some(Command::Search(args)) => search(&root, args, cli, roots.as_ref(), log),
+        Some(Command::Read { keys }) => match read(&root, keys, cli, roots.as_ref(), log) {
             Ok(code) => return code,
             Err(err) => Err(err),
         },
@@ -186,16 +194,16 @@ fn main() -> ExitCode {
             doctor::command(&root, cli.browser.as_deref(), *live, cli.json, log)
         }
         Some(Command::History { refresh: true }) => {
-            library_history::refresh_command(&capture_options(&cli, root), cli.json, log)
+            library_history::refresh_command(&capture_options(cli, root), cli.json, log)
         }
         Some(Command::History { refresh: false }) => {
             library_history::status_command(&root, cli.json, log)
         }
-        _ => save(&cli, root, log),
+        _ => save(cli, root, log),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
-        Err(err) => fail(&err, &cli),
+        Err(err) => fail(&err, cli),
     }
 }
 
@@ -207,6 +215,27 @@ fn checkouts(cli: &Cli, roots: Option<&platform::Roots>) -> Option<std::path::Pa
         .or_else(|| roots.map(|roots| roots.config_file(sources::CHECKOUTS_FILE)))
 }
 
+/// Clap errors precede a parsed CLI, so inspect only flags before the terminator.
+fn usage_error(err: &clap::Error) -> ExitCode {
+    let json = std::env::args_os()
+        .take_while(|arg| arg != "--")
+        .any(|arg| arg == "--json");
+    // Clap's text ends in a newline of its own.
+    let text = err.to_string();
+    let text = text.trim_end();
+    if err.use_stderr() && json {
+        out::json(&error::render_json(&error::Error::Usage(text.to_owned())));
+        return ExitCode::from(2);
+    }
+    let code = u8::try_from(err.exit_code()).unwrap_or(2);
+    if err.use_stderr() {
+        out::problem(text);
+    } else {
+        out::block(&err.to_string());
+    }
+    ExitCode::from(code)
+}
+
 fn search(
     root: &std::path::Path,
     args: &cli::SearchArgs,
@@ -215,14 +244,7 @@ fn search(
     log: Log,
 ) -> Result<(), error::Error> {
     let checkouts = checkouts(cli, roots).ok_or(error::Error::NoHome)?;
-    let model = match args.mode {
-        cli::SearchMode::Keyword => None,
-        cli::SearchMode::Combined => args.model.model_port.and_then(|port| {
-            model_service::ModelService::new(port, args.model.model_secret_file.as_deref(), log)
-        }),
-    };
-    let query = args.query.join(" ");
-    search::command(root, &query, &checkouts, model.as_ref(), cli.json, log)
+    search::command(root, args, &checkouts, cli.json, log)
 }
 
 /// `read`, whose exit status is its own.

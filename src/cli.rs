@@ -313,6 +313,27 @@ pub struct SearchArgs {
     /// How pages match
     #[arg(long, value_enum, default_value = "combined")]
     pub mode: SearchMode,
+    /// Require every named active owner tag (case insensitive)
+    #[arg(long)]
+    pub tag: Vec<String>,
+    /// Match any exact host, using Library domain normalization
+    #[arg(long)]
+    pub domain: Vec<String>,
+    /// Match any of these page kinds
+    #[arg(long, value_enum)]
+    pub kind: Vec<crate::page_text::Kind>,
+    /// Added at or after this RFC 3339 instant
+    #[arg(long)]
+    pub after: Option<jiff::Timestamp>,
+    /// Added before this RFC 3339 instant
+    #[arg(long)]
+    pub before: Option<jiff::Timestamp>,
+    /// Maximum results on this page; omitted means all remaining results
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub limit: Option<u64>,
+    /// Continue an unchanged search from `next_cursor`
+    #[arg(long)]
+    pub cursor: Option<String>,
     #[command(flatten)]
     pub model: ModelArgs,
 }
@@ -981,7 +1002,7 @@ mod tests {
         .unwrap();
         assert!(matches!(
             &cli.command,
-            Some(Command::Search(SearchArgs { query, mode: SearchMode::Combined, model: ModelArgs { model_port: Some(41879), .. } }))
+            Some(Command::Search(SearchArgs { query, mode: SearchMode::Combined, model: ModelArgs { model_port: Some(41879), .. }, .. }))
                 if query == &["night", "train"]
         ));
         assert!(Cli::try_parse_from(["knowmoretabs", "search"]).is_err());

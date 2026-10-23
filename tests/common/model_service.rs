@@ -63,6 +63,26 @@ pub fn key_file(fx: &Fixture) -> PathBuf {
     path
 }
 
+/// Schema 1 ranking without chunks, in the supplied order.
+pub fn detailed_rank(keys: &[&str]) -> Value {
+    let hits: Vec<_> = keys.iter().enumerate().map(|(at, key)| serde_json::json!({
+        "key": key, "score": 1.0 / (61.0 + f64::from(u32::try_from(at).unwrap())),
+        "sources": {"text": {"score": 0.5, "rank": at + 1, "input": "B"},
+                    "keyword": {"score": 0.0, "rank": 0}},
+        "semantic_source": "B", "chunk_status": "missing",
+        "section": null, "chunk": null, "snippet": null, "snippet_range": null, "content_sha256": null,
+    })).collect();
+    serde_json::json!({"schema_version": 1, "keys": keys, "hits": hits,
+    "fallback": if keys.is_empty() { serde_json::json!([]) } else {
+        serde_json::json!([{"stage": "chunks", "code": "chunks_missing", "affected_pages": keys.len()}])
+    }})
+}
+
+pub fn request_body(request: &[u8]) -> Value {
+    let at = request.windows(4).position(|w| w == b"\r\n\r\n").unwrap() + 4;
+    serde_json::from_slice(&request[at..]).unwrap()
+}
+
 /// A head field of a request or reply, by name in any case.
 pub fn field<'a>(message: &'a [u8], name: &str) -> Option<&'a str> {
     let end = message.windows(4).position(|w| w == b"\r\n\r\n")?;
@@ -170,6 +190,20 @@ impl Service {
         Self { port, seen }
     }
 
+    /// A dynamic schema 1 fixture, signed for each request and this archive.
+    pub fn ranking(fx: &Fixture, answer: impl Fn(Value) -> Value + Send + 'static) -> Self {
+        let archive = identity(fx);
+        Self::start(move |request| {
+            let body = answer(request_body(request)).to_string();
+            Some(proven(
+                request,
+                "200 OK",
+                &json_fields_for(&archive, &body),
+                body,
+            ))
+        })
+    }
+
     /// Answers every request with the same bytes.
     pub fn replying(reply: Vec<u8>) -> Self {
         Self::start(move |_| Some(reply.clone()))
@@ -218,10 +252,14 @@ pub fn reply(status: &str, fields: &[String], body: impl AsRef<[u8]>) -> Vec<u8>
 
 /// The fields of a JSON reply over this archive.
 pub fn json_fields(fx: &Fixture, body: &str) -> Vec<String> {
+    json_fields_for(&identity(fx), body)
+}
+
+fn json_fields_for(archive: &str, body: &str) -> Vec<String> {
     vec![
         "Content-Type: application/json; charset=utf-8".to_owned(),
         format!("Content-Length: {}", body.len()),
-        format!("X-KMT-Archive: {}", identity(fx)),
+        format!("X-KMT-Archive: {archive}"),
     ]
 }
 

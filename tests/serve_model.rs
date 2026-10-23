@@ -816,6 +816,7 @@ fn a_model_port_without_a_usable_key_forwards_nothing() {
         drop(shell);
         let warned = std::fs::read_to_string(&stderr).unwrap();
         assert_eq!(warned.matches(said).count(), 1, "{warned}");
+        assert!(warned.contains("the model service is off: "), "{warned}");
         assert!(!warned.contains(secret.trim()), "the key was printed");
     }
     assert!(service.seen().is_empty(), "the service was contacted");

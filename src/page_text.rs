@@ -14,7 +14,6 @@
 //!      prints their text, so an agent or the tagger lab gets it from this
 //!      one reader rather than a second copy of it.
 
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -34,12 +33,22 @@ use crate::{content_store, intake, out};
 pub const SCHEMA_VERSION: u32 = 1;
 
 /// What a key is, by its prefix.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum Kind {
     Web,
     Git,
     Blob,
+}
+
+impl Kind {
+    pub fn of(key: &str) -> Self {
+        match source_key::parse(key) {
+            Some(Key::Git { .. }) => Self::Git,
+            Some(Key::Blob { .. }) => Self::Blob,
+            None => Self::Web,
+        }
+    }
 }
 
 /// A page's text, and the title it gives itself.
@@ -83,19 +92,16 @@ impl<'a> Reader<'a> {
     }
 
     pub fn text(&mut self, key: &str) -> Result<PageText, Error> {
-        let kind = match source_key::parse(key) {
-            Some(Key::Git { .. }) => Kind::Git,
-            Some(Key::Blob { .. }) => Kind::Blob,
-            None => {
-                return Ok(PageText {
-                    kind: Kind::Web,
-                    state: None,
-                    why: None,
-                    source: Value::Null,
-                    text: content_store::kept_text(self.root, key)?,
-                });
-            }
-        };
+        let kind = Kind::of(key);
+        if kind == Kind::Web {
+            return Ok(PageText {
+                kind,
+                state: None,
+                why: None,
+                source: Value::Null,
+                text: content_store::kept_text(self.root, key)?,
+            });
+        }
         let (pins, resolver) = match &mut self.documents {
             Some(documents) => documents,
             none => {
@@ -119,17 +125,17 @@ impl<'a> Reader<'a> {
 }
 
 /// The pages search and read answer: added pages the library lists, less
-/// forgotten ones, in intake order; and the forgotten set.
-pub fn added(root: &Path) -> Result<(Vec<Tab>, BTreeSet<String>), Error> {
-    let forgotten = State::read(root)?.forgotten;
+/// forgotten ones, in intake order; and the state already read for eligibility.
+pub fn added(root: &Path) -> Result<(Vec<Tab>, State), Error> {
+    let state = State::read(root)?;
     let tabs = intake::snapshot(root)?.map_or_else(Vec::new, |added| {
         added
             .tabs
             .into_iter()
-            .filter(|tab| library::is_listed(&tab.url) && !forgotten.contains(&tab.url))
+            .filter(|tab| library::is_listed(&tab.url) && !state.forgotten.contains(&tab.url))
             .collect()
     });
-    Ok((tabs, forgotten))
+    Ok((tabs, state))
 }
 
 /// One key's line under `--json`.
@@ -157,8 +163,9 @@ pub fn read_command(
     if !json && keys.len() > 1 {
         return Err(Error::ReadSeveral);
     }
-    let (added, forgotten) = added(root)?;
-    let added: BTreeSet<&str> = added.iter().map(|tab| tab.url.as_str()).collect();
+    let (added, state) = added(root)?;
+    let added: std::collections::BTreeSet<&str> =
+        added.iter().map(|tab| tab.url.as_str()).collect();
     let mut reader = Reader::new(root, Some(checkouts));
     // Every key is read before a line is printed, so a failure to read at
     // all is the one error, never a line among answers.
@@ -169,7 +176,7 @@ pub fn read_command(
                 key: key.clone(),
                 reason: reason.to_owned(),
             };
-            if forgotten.contains(key) {
+            if state.forgotten.contains(key) {
                 return Ok(Err(refused("it is forgotten; restore it first")));
             }
             if !added.contains(key.as_str()) {
@@ -208,7 +215,6 @@ pub fn read_command(
             }),
             Err(err) => {
                 let mut line = error::render_json(err);
-                line["schema_version"] = json!(SCHEMA_VERSION);
                 line["url"] = json!(key);
                 line
             }

@@ -247,8 +247,9 @@ const ranked = () => (S.rank && S.rank.q === S.q.trim() ? S.rank : null);
 const place = (p) => S.rank?.at.get(p.url) ?? Infinity;
 // What the list shows, and what a picker counts. Ranked: the model's best
 // RANK_TOP pages that pass the facets, then the pages it has not indexed yet
-// that the words match, as keyword search would show them. `knowmoretabs
-// search` merges the same way: tests/fixtures/search_vectors.json holds both.
+// that the words match, as keyword search would show them. Uncapped merge
+// cases are shared with CLI search in tests/fixtures/search_vectors.json.
+// The CLI returns the complete order and owns its paging separately.
 function pick(skip) {
   const r = ranked();
   if (!r) return S.pages.filter(matcher(skip));
