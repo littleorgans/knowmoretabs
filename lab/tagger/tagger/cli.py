@@ -41,6 +41,7 @@ def main() -> None:
     tag_eval.add_argument("--source", default="app", help="named page vector source (default: app B then A)")
     tag_eval.add_argument("--strategy", default="app", help="named tag scorer (default: app LR with cosine fallback)")
     tag_eval.add_argument("--kmt-bin", help="the built knowmoretabs used to read pinned documents")
+    tag_eval.add_argument("--grid-baseline", type=Path, help="run the fixed source/scorer grid against this baseline")
     steps.add_parser("search-tag", help="test S2: search, pick a few tags, tag the results with only those")
     steps.add_parser("cost", help="load time, RSS, throughput and single page latency per model")
     steps.add_parser("report", help="write out/results.md")
@@ -120,15 +121,22 @@ def main() -> None:
         if args.source not in tag_eval.PAGE_SOURCES or args.strategy not in tag_eval.STRATEGIES:
             parser.error("unknown tag evaluation source or strategy")
         try:
-            tag_eval.run(
-                paths,
-                root,
-                args.split,
-                args.out,
-                source=args.source,
-                strategy=args.strategy,
-                binary=args.kmt_bin or kmt.BINARY,
-            )
+            if args.grid_baseline is not None:
+                from . import tag_grid
+
+                if args.source != "app" or args.strategy != "app":
+                    parser.error("grid selects all sources and strategies")
+                tag_grid.run(paths, root, args.split, args.out, args.grid_baseline, binary=args.kmt_bin or kmt.BINARY)
+            else:
+                tag_eval.run(
+                    paths,
+                    root,
+                    args.split,
+                    args.out,
+                    source=args.source,
+                    strategy=args.strategy,
+                    binary=args.kmt_bin or kmt.BINARY,
+                )
         except tag_eval.Invalid as err:
             parser.exit(1, f"tag-eval: {err}\n")
     elif args.step == "cost":

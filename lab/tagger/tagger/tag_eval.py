@@ -12,7 +12,8 @@ import shlex
 import subprocess
 import traceback
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 
 import numpy as np
@@ -21,11 +22,13 @@ from . import dataset, embed, zeroshot
 from .app import engine, kmt
 from .archive import Archive, LibraryState, sha256_hex
 from .evaluate import OUTER_FOLDS, Labels, outer_folds
+from .features import Dense
 from .guided.search_tag import MIN_HEAD_POSITIVES, fit_rules
-from .heads import SEED
+from .heads import SEED, fit_prior, unit
+from .metrics import best_threshold
 from .paths import Paths, read_json, write_json
 from .search_eval import Invalid, _safe_paths, fingerprint
-from .vector_store import VectorStore
+from .vector_store import COUNT_KEYS, VectorStore
 
 K = 3
 
@@ -59,7 +62,7 @@ class SuggestionView:
     spread: np.ndarray
     tags: list[str]
     state: LibraryState
-    heads: np.ndarray  # canonical corpus columns, independent of tie ordering
+    heads: np.ndarray  # app head eligibility in canonical columns, also for reference scorers
     thresholds: np.ndarray  # canonical columns, trained even though top k ignores them
     params: dict
 
@@ -67,22 +70,26 @@ class SuggestionView:
 def app_vectors(paths: Paths, root: Path, binary: str) -> Corpus:
     """The app's archive records, tag queries and global B then A store selection."""
     archive = Archive.load(root)
-    legacy, records = dataset.app_records(paths, archive, binary=binary)
+    _, records = dataset.app_records(paths, archive, binary=binary)
     tags = sorted(archive.state.active.values(), key=lambda t: (-sum(t in r["tags"] for r in records), t.lower()))
     Y = engine._labels(records, tags)
     engine.require_vectors(paths)
     name = next(n for n in engine.TEXT_INPUTS if VectorStore(paths.emb / engine.MODEL, n).exists)
+    # These are frozen private copies. _read validates without creating a lock or
+    # letting reconciliation publish a generation in the read only input tree.
+    cached = VectorStore(paths.emb / engine.MODEL, name)._read()
+    spec = embed.MODELS[engine.MODEL]
+    if cached is None or cached[0]["model"] != embed.model_identity(spec):
+        raise Invalid("matching frozen app vectors required")
+    manifest, arrays = cached
+    positions = {r["id"]: i for i, r in enumerate(manifest["rows"])}
+    requested = embed.input_rows(records, spec, name)
+    if any(r["id"] not in positions or manifest["rows"][positions[r["id"]]] != r for r in requested):
+        raise Invalid("frozen app vectors need refresh")
+    X = arrays["vectors"][[positions[r["id"]] for r in requested]]
+    counts = {**dict.fromkeys(COUNT_KEYS, 0), "reused": len(X)}
     st, runtime = embed.load_text(embed.MODELS[engine.MODEL], local_files_only=True)
     try:
-        X, _, _, counts = engine._vectors(
-            paths,
-            records,
-            name,
-            lambda rows, n: embed.embed_input(st, embed.MODELS[engine.MODEL], rows, n)[0],
-            None,
-            embed.MODELS[engine.MODEL].dim,
-            legacy_records=legacy,
-        )
         description_path = paths.data / "zeroshot" / "descriptions.json"
         descriptions = read_json(description_path) if description_path.exists() else {}
         texts = zeroshot.query_variants(tags, descriptions)["description"]
@@ -113,32 +120,94 @@ def app_vectors(paths: Paths, root: Path, binary: str) -> Corpus:
     )
 
 
-def app_scorer(Xtrain, Ytrain, q, tags, Xtest) -> SuggestionView:
-    """Refit the app on training pages; held out labels never enter this function."""
-    order = np.array(sorted(range(len(tags)), key=lambda j: (-int(Ytrain[:, j].sum()), tags[j].lower())))
-    inverse = np.argsort(order)
-    labelled = Ytrain.any(axis=1)
-    rules = fit_rules(Xtrain[labelled], Ytrain[labelled][:, order], q[order])
-    train = rules.scores(Xtrain)["supervised"]
-    held = rules.scores(Xtest)["supervised"]
-    threshold = rules.thresholds["supervised"].copy()
-    unseen = ~np.isfinite(threshold)
-    threshold[unseen] = engine._zero_shot_threshold(train[:, unseen])
-    heads = np.zeros(len(tags), bool)
-    heads[order[rules.heads]] = True
-    return SuggestionView(
-        HeldOutScores(held, train.mean(axis=0)),
-        engine._spread(train),
-        [tags[j] for j in order],
-        LibraryState(active={t.lower(): t for t in tags}),
-        heads,
-        threshold[inverse],
-        {tags[order[j]]: {k: v[i] for k, v in rules.fitted.params.items()} for i, j in enumerate(rules.heads)},
+def cmean_corpus(corpus: Corpus, paths: Paths) -> Corpus:
+    """Store C page_id is the archive key, as in Library.__post_init__."""
+    cached = VectorStore(paths.emb / engine.MODEL, "C")._read()
+    if cached is None or cached[0]["model"]["dim"] != corpus.X.shape[1]:
+        raise Invalid("matching frozen C vectors required")
+    manifest, arrays = cached
+    positions = {r["key"]: i for i, r in enumerate(corpus.records)}
+    sums = np.zeros_like(corpus.X)
+    counts = np.zeros(len(sums), int)
+    for row, vector in zip(manifest["rows"], arrays["vectors"], strict=True):
+        if (i := positions.get(row["page_id"])) is not None:
+            sums[i] += vector
+            counts[i] += 1
+    covered = counts > 0
+    X = corpus.X.copy()
+    X[covered] = unit(sums[covered] / counts[covered, None])
+    return replace(
+        corpus,
+        X=X,
+        metadata={
+            **corpus.metadata,
+            "input": "cmean",
+            "fallback_input": corpus.metadata["input"],
+            "app_vectors_digest": corpus.metadata["vectors_digest"],
+            "vectors_digest": hashlib.sha256(X.tobytes()).hexdigest(),
+            "chunks_digest": fingerprint(manifest),
+            "chunk_vectors_digest": hashlib.sha256(arrays["vectors"].tobytes()).hexdigest(),
+            "chunks_used": int(counts.sum()),
+            "chunks_ignored": len(manifest["rows"]) - int(counts.sum()),
+            "pages_with_chunks": int(covered.sum()),
+            "pages_without_chunks": int((~covered).sum()),
+            "evaluated_pages_without_chunks": int((~covered[corpus.labelled]).sum()),
+        },
     )
 
 
-PAGE_SOURCES = {"app": app_vectors}
-STRATEGIES = {"app": app_scorer}
+def cmean_vectors(paths: Paths, root: Path, binary: str) -> Corpus:
+    return cmean_corpus(app_vectors(paths, root, binary), paths)
+
+
+def prototype_queries(Xtrain, Ytrain, q):
+    """Pure positive means, with the app query retained for unseen training tags."""
+    counts = Ytrain.sum(axis=0)
+    seen = counts > 0
+    queries = q.copy()
+    queries[seen] = unit((Ytrain[:, seen].T @ Xtrain) / counts[seen, None])
+    return queries
+
+
+def app_scorer(Xtrain, Ytrain, q, tags, Xtest, *, strategy="app") -> SuggestionView:
+    """One training boundary and app ranking path for all deployable scorers."""
+    order = np.array(sorted(range(len(tags)), key=lambda j: (-int(Ytrain[:, j].sum()), tags[j].lower())))
+    inverse = np.argsort(order)
+    labelled = Ytrain.any(axis=1)
+    Y = Ytrain[:, order]
+    queries = q if strategy in ("app", "prior") else prototype_queries(Xtrain, Ytrain, q)
+    params = {}
+    if strategy == "prior":
+        fitted = fit_prior(Dense("train", Xtrain), Y, np.arange(len(Xtrain)))
+        train, held = fitted.predict_matrix(Xtrain), fitted.predict_matrix(Xtest)
+        threshold = fitted.thresholds.copy()
+    elif strategy == "proto_all":
+        train, held = Xtrain @ queries[order].T, Xtest @ queries[order].T
+        threshold = np.array([best_threshold(train[labelled, j], Y[labelled, j]) for j in range(len(tags))])
+    else:
+        rules = fit_rules(Xtrain[labelled], Y[labelled], queries[order])
+        train = rules.scores(Xtrain)["supervised"]
+        held = rules.scores(Xtest)["supervised"]
+        threshold = rules.thresholds["supervised"].copy()
+        if rules.fitted is not None:
+            params = {
+                tags[order[j]]: {k: v[i] for k, v in rules.fitted.params.items()} for i, j in enumerate(rules.heads)
+            }
+    unseen = ~np.isfinite(threshold)
+    threshold[unseen] = engine._zero_shot_threshold(train[:, unseen])
+    return SuggestionView(
+        HeldOutScores(held, np.zeros(len(tags)) if strategy == "prior" else train.mean(axis=0)),
+        np.ones(len(tags)) if strategy == "prior" else engine._spread(train),
+        [tags[j] for j in order],
+        LibraryState(active={t.lower(): t for t in tags}),
+        Ytrain.sum(axis=0) >= MIN_HEAD_POSITIVES,
+        threshold[inverse],
+        params,
+    )
+
+
+PAGE_SOURCES = {"app": app_vectors, "cmean": cmean_vectors}
+STRATEGIES = {name: partial(app_scorer, strategy=name) for name in ("app", "proto_fallback", "proto_all", "prior")}
 
 
 def page_split(corpus: Corpus, path: Path) -> dict:
@@ -243,10 +312,14 @@ def cross_validate(corpus: Corpus, saved: dict, strategy: str) -> dict:
         local = np.flatnonzero(folds == fold)
         held = rows[local]
         train = np.flatnonzero(~np.isin(np.arange(len(corpus.records)), held))
-        fitted = STRATEGIES[strategy](corpus.X[train], corpus.Y[train], corpus.q, corpus.tags, corpus.X[held])
+        scorer = STRATEGIES["prior" if strategy == "ceiling" else strategy]
+        fitted = scorer(corpus.X[train], corpus.Y[train], corpus.q, corpus.tags, corpus.X[held])
         heads[local] = fitted.heads
         for i, page in enumerate(local):
             suggested = engine.suggest(fitted, [i], k=len(corpus.tags))
+            if strategy == "ceiling":
+                # Oracle reference only: ties within truth and padding follow the prior.
+                suggested.sort(key=lambda h: not Y[page, tag_columns[h["tag"]]])
             rankings[page] = suggested[:K]
             pred[page, [tag_columns[h["tag"]] for h in suggested[:K]]] = True
         details.append(
