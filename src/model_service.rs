@@ -94,28 +94,33 @@ impl Failure {
             Self::Busy => "rank_busy",
             Self::Upstream(_) => "rank_failed",
         };
-        let stage = if matches!(
+        Fallback {
+            stage: if self.setup() { "setup" } else { "rank" }.into(),
+            code: code.into(),
+            affected_pages: None,
+        }
+    }
+
+    /// Whether the service was never usable, before any request.
+    fn setup(self) -> bool {
+        matches!(
             self,
             Self::Off
                 | Self::KeyMissing
                 | Self::KeyUnreadable
                 | Self::KeyUnsafe
                 | Self::KeyMalformed
-        ) {
-            "setup"
-        } else {
-            "rank"
-        };
-        Fallback {
-            stage: stage.into(),
-            code: code.into(),
-            affected_pages: None,
-        }
+        )
     }
 
     pub fn warn(self, log: Log) {
+        let what = if self.setup() {
+            "is off"
+        } else {
+            "did not rank"
+        };
         log.warn(&format!(
-            "the model service did not rank: {}; search is by keyword",
+            "the model service {what}: {}; search is by keyword",
             self.said().1
         ));
     }

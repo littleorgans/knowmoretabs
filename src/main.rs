@@ -220,13 +220,16 @@ fn usage_error(err: &clap::Error) -> ExitCode {
     let json = std::env::args_os()
         .take_while(|arg| arg != "--")
         .any(|arg| arg == "--json");
+    // Clap's text ends in a newline of its own.
+    let text = err.to_string();
+    let text = text.trim_end();
     if err.use_stderr() && json {
-        out::json(&error::render_json(&error::Error::Usage(err.to_string())));
+        out::json(&error::render_json(&error::Error::Usage(text.to_owned())));
         return ExitCode::from(2);
     }
     let code = u8::try_from(err.exit_code()).unwrap_or(2);
     if err.use_stderr() {
-        out::problem(&err.to_string());
+        out::problem(text);
     } else {
         out::block(&err.to_string());
     }

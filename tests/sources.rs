@@ -1151,4 +1151,5 @@ fn search_usage_errors_are_versioned_and_json_after_the_terminator_is_query_text
     assert_eq!(output.status.code(), Some(2));
     assert_eq!(stdout(&output), "");
     assert!(stderr(&output).contains("--bad"));
+    assert!(!stderr(&output).ends_with("\n\n"), "{}", stderr(&output));
 }
