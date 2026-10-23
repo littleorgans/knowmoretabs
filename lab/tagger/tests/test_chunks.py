@@ -213,8 +213,22 @@ def test_chunk_batches_release_memory(chunk_run, monkeypatch):
     assert result["embedded"] == len(encoded) > embed.BATCH["B"]
     assert len(encoded) % embed.BATCH["B"]
     vectors = run.store.read()[1]["vectors"]
-    np.testing.assert_array_equal(vectors[:, 0], [len(doc) for doc in encoded])
+    np.testing.assert_array_equal(np.sort(vectors[:, 0]), sorted(len(doc) for doc in encoded))
     assert not cached
+
+
+def test_bounded_batches_keep_length_order():
+    docs = [str(i) * n for i, n in enumerate((3, 9, 1, 7, 5, 9, 2, 8, 4, 6))]
+    calls = []
+
+    def encode(group, **kwargs):
+        calls.append([len(doc) for doc in group])
+        return np.array([[int(doc[0]), len(doc)] for doc in group], np.float32)
+
+    vectors, _ = encode_documents(SimpleNamespace(encode=encode), docs, 4, release_batches=True)
+    assert [len(call) for call in calls] == [4, 4, 2]
+    assert all(min(a) >= max(b) for a, b in zip(calls, calls[1:], strict=False))
+    np.testing.assert_array_equal(vectors[:, 0], range(len(docs)))
 
 
 def test_rerun_skips(chunk_run):
