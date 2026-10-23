@@ -2,10 +2,13 @@
 
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
+
+import numpy as np
 
 from . import dataset, embed
 from .app import kmt
@@ -180,10 +183,39 @@ def chunk_page(page_id: str, title: str, body: str, *, page_hash: str | None = N
     ]
 
 
-def ingest(paths: Paths, root: Path, binary: str = kmt.BINARY) -> dict:
-    """Freeze visible bodies, reuse segmentation, then embed only stale or missing rows."""
+Encoder = Callable[[list[str]], tuple[np.ndarray, int]]
+
+
+@dataclass(frozen=True)
+class Body:
+    title: str
+    raw: bytes
+    page_hash: str
+    content_sha256: str
+
+
+@dataclass(frozen=True)
+class Snapshot:
+    rows: list[dict]
+    vectors: np.ndarray
+    bodies: dict[str, Body]
+    counts: dict
+
+
+def encode_docs(st, docs: list[str]) -> tuple[np.ndarray, int]:
+    """Use the loaded EG2 encoder, counting its normal truncation before embedding."""
+    limit = st.max_seq_length
+    if not isinstance(limit, int) or limit <= 0:
+        raise ValueError("chunk encoder has no known token limit")
+    over_capacity = int((embed.token_lengths(st, docs) > limit).sum())
+    vectors, _ = embed.encode(st, docs, embed.BATCH["B"], release_batches=True)
+    return vectors, over_capacity
+
+
+def reconcile(paths: Paths, records: list[dict], encoder: Encoder | None = None, *, dim: int | None = None) -> Snapshot:
+    """Freeze the full desired set, then reconcile once. No publication precedes successful reading/encoding."""
     spec = embed.MODELS["eg2"]
-    model = embed.model_identity(spec)
+    model = embed.model_identity(spec, dim=dim)
     del model["char_cap"]
     model.update(chunker=CHUNKER, input_version="section-chunk-v1")
     store = VectorStore(paths.emb / "eg2", "C")
@@ -192,10 +224,6 @@ def ingest(paths: Paths, root: Path, binary: str = kmt.BINARY) -> dict:
     if old and old[0]["model"].get("chunker") == CHUNKER:
         for row in old[0]["rows"]:
             previous[row["page_id"]].append(row)
-    archive = Archive.load(root)
-    _, records = dataset.app_records(
-        paths, archive, keys=[key for key in archive.known if key not in archive.state.forgotten], binary=binary
-    )
     pages = embed.body_pages(records, strict=True)
     sources = {}
     rows, skipped = [], 0
@@ -205,7 +233,7 @@ def ingest(paths: Paths, root: Path, binary: str = kmt.BINARY) -> dict:
             continue
         title = page.get("title") or record["title"] or "none"
         page_hash = _hash(title, body)
-        sources[record["key"]] = title, body.encode("utf-8"), page_hash
+        sources[record["key"]] = Body(title, body.encode("utf-8"), page_hash, sha256_hex(body))
         prior = previous[record["key"]]
         if prior and all(row.get("page_hash") == page_hash for row in prior):
             rows.extend(prior)
@@ -219,24 +247,23 @@ def ingest(paths: Paths, root: Path, binary: str = kmt.BINARY) -> dict:
         docs = []
         for i in indices:
             row = rows[i]
-            title, raw, page_hash = sources[row["page_id"]]
-            text = raw[row["start"] : row["end"]].decode("utf-8")
-            if row["page_hash"] != page_hash or row["hash"] != _hash(title, row["section"], text):
+            body = sources[row["page_id"]]
+            text = body.raw[row["start"] : row["end"]].decode("utf-8")
+            if row["page_hash"] != body.page_hash or row["hash"] != _hash(body.title, row["section"], text):
                 raise ValueError("chunk reference does not match the frozen body")
-            docs.append(spec.format(title, f"{row['section']} - {text}"))
+            docs.append(spec.format(body.title, f"{row['section']} - {text}"))
+        if encoder is not None:
+            vectors, over_capacity = encoder(docs)
+            return vectors
         st, _ = embed.load_text(spec, local_files_only=True)
         try:
-            limit = st.max_seq_length
-            if not isinstance(limit, int) or limit <= 0:
-                raise ValueError("chunk encoder has no known token limit")
-            over_capacity = int((embed.token_lengths(st, docs) > limit).sum())
-            vectors, _ = embed.encode(st, docs, embed.BATCH["B"], release_batches=True)
+            vectors, over_capacity = encode_docs(st, docs)
             return vectors
         finally:
             embed.release(st)
 
-    _, counts = store.reconcile(rows, model, encode, retain=False)
-    return {
+    arrays, counts = store.reconcile(rows, model, encode, retain=False)
+    counts = {
         "pages": len(records),
         "chunks": len(rows),
         "skipped": skipped,
@@ -244,3 +271,13 @@ def ingest(paths: Paths, root: Path, binary: str = kmt.BINARY) -> dict:
         "over_capacity": over_capacity,
         **counts,
     }
+    return Snapshot(rows, arrays["vectors"], sources, counts)
+
+
+def ingest(paths: Paths, root: Path, binary: str = kmt.BINARY) -> dict:
+    """Acquire every visible archive record; the CLI alone may lazily load a cached encoder."""
+    archive = Archive.load(root)
+    _, records = dataset.app_records(
+        paths, archive, keys=[key for key in archive.known if key not in archive.state.forgotten], binary=binary
+    )
+    return reconcile(paths, records).counts
