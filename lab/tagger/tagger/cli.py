@@ -30,6 +30,11 @@ def main() -> None:
     steps.add_parser("cluster", help="unsupervised clusters of the best config against the owner's tags")
     steps.add_parser("gate", help="guided discovery gate: description query plus 5 to 20 answers per tag")
     steps.add_parser("retrieval", help="test R1: tags as saved searches, a ticked grid re-ranks the library")
+    search_eval = steps.add_parser("search-eval", help="score fixed title judgements on a private engine copy")
+    search_eval.add_argument("--fixture", type=Path, required=True)
+    search_eval.add_argument("--out", type=Path, required=True)
+    search_eval.add_argument("--kmt-bin", help="the built knowmoretabs used to read pinned documents")
+    search_eval.add_argument("--prepare", action="store_true", help="prepare and freeze scratch vectors once")
     steps.add_parser("search-tag", help="test S2: search, pick a few tags, tag the results with only those")
     steps.add_parser("cost", help="load time, RSS, throughput and single page latency per model")
     steps.add_parser("report", help="write out/results.md")
@@ -43,6 +48,8 @@ def main() -> None:
     for step in (embed, chunks, app):
         step.add_argument("--root", default=argparse.SUPPRESS, help="archive directory (overrides KMT_ROOT)")
     args = parser.parse_args()
+    if args.step == "search-eval" and (args.root is None or args.data is None):
+        parser.error("search-eval requires explicit --root and --data scratch paths")
     root = resolve_root(args.root, os.environ.get("KMT_ROOT"), Path.home())
     paths = resolve(args.data, root)
     if args.step == "dataset":
@@ -84,6 +91,17 @@ def main() -> None:
         from .guided import retrieval
 
         retrieval.run(paths)
+    elif args.step == "search-eval":
+        os.environ["HF_HUB_OFFLINE"] = "1"
+        from . import search_eval
+        from .app import kmt
+
+        try:
+            search_eval.run(
+                paths, root, args.fixture, args.out, binary=args.kmt_bin or kmt.BINARY, prepare=args.prepare
+            )
+        except search_eval.Invalid as err:
+            parser.exit(1, f"search-eval: {err}\n")
     elif args.step == "search-tag":
         from .guided import search_tag
 
