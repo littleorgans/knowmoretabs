@@ -1,6 +1,6 @@
 {
  "corpus_digest": "922c01070b2b772ceab898f2ef514bcc30905f871edea25471f49414c7429954",
- "fixture_digest": "24c0ecca82586ee647d09bf9e12aa131200923f432770d428575299311e15e7c",
+ "fixture_digest": "c768f7a8d58dcaf14fb8b9afe1cc6787a8bd00d680871ce2ec59730142efddb5",
  "input_name": "B",
  "inputs_digest": "ff073e67b8c8a1a9fb57ba3045112e3d3344624b1e3a747ac3eddd5d69e12a51",
  "k": 10,
@@ -2097,7 +2097,7 @@
   "weights_digest": "b47cee84899dd63c6540c879c266d0f9377627d74df2ecddb0e90b6be391b58f"
  },
  "schema": 1,
- "source_revision": "7c236c3ed4643e46a58316aff59407b20b6f5097",
+ "source_revision": "62110598314ae488f0c10f39624d72daf1935ca2",
  "vectors_digest": "82f0e26ec15039bf76cde6521c0cbfc57f2737016afb0bd0aecf6d766d0e0469",
  "visibility_digest": "fe5f23262c6c278fc058db1f637e8279400bcad1f6d72e15eba67c7a7e359542"
 }

@@ -1,6 +1,6 @@
 {
  "corpus_digest": "922c01070b2b772ceab898f2ef514bcc30905f871edea25471f49414c7429954",
- "judge": "Generalist, Codex GPT-6, 2026-10-23",
+ "judge": "Generalist, Codex GPT-6, 2026-10-23; two corrections in cross vendor review, 2026-10-23",
  "k": 10,
  "pages": [
   {
@@ -4998,7 +4998,7 @@
    "intent": "Find tools and methods that preserve assistant knowledge across sessions",
    "relevant": [
     "00648f9d8ddb15651be7d4f0d4d95ab71d696814e023722abb419953c98ee273",
-    "0737f6e2f61201f5abbfcd12ad7366822fda9a750de08a7011ad5424f9587caf",
+    "055d5188bd71e70cc16d7d18c359094a60f076fdc858ba17d6fdff03ebd870b9",
     "1e29591528f2551448c0f7e07bb5b64ee037c60dc713e4d5a5db157f931e836e",
     "3195ed65b96cb9ebb3c3eb5e79e5a89a305fb1bc669f7d6a801d38ebddb5db88",
     "374cdbc47da40d36d2e59d4eec93396576fbeb304b2a3443913db3924d94afa1",
@@ -5150,7 +5150,7 @@
    "intent": "Find editors or extensions that render lightweight prose markup while editing",
    "relevant": [
     "1235d9ddfedace1c904ea9760294b12ee22262ed74e73feb050a310d9453f7a3",
-    "142c10426e840e0a33cba873afcb6cc1c8865f8802aa9887f84e933e2c59938a"
+    "1433a6a74ff8b0ba9203afa9905f1c7a1379ce8dccfd5d73628361bc73b20168"
    ],
    "rubric": "The title explicitly identifies a markdown preview or an editor with rendered preview support",
    "text": "see a formatted note beside its plain source",
@@ -5161,7 +5161,7 @@
    "intent": "Find systems that let a software helper remember earlier interactions",
    "relevant": [
     "00648f9d8ddb15651be7d4f0d4d95ab71d696814e023722abb419953c98ee273",
-    "0737f6e2f61201f5abbfcd12ad7366822fda9a750de08a7011ad5424f9587caf",
+    "055d5188bd71e70cc16d7d18c359094a60f076fdc858ba17d6fdff03ebd870b9",
     "1e29591528f2551448c0f7e07bb5b64ee037c60dc713e4d5a5db157f931e836e",
     "3195ed65b96cb9ebb3c3eb5e79e5a89a305fb1bc669f7d6a801d38ebddb5db88",
     "374cdbc47da40d36d2e59d4eec93396576fbeb304b2a3443913db3924d94afa1",

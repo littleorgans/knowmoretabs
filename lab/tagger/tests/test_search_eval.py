@@ -2,6 +2,7 @@
 
 import copy
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -143,3 +144,13 @@ def test_fixture_and_rankings_refuse_invalid_inputs(evaluation):
         rankings = {q["id"]: [{"id": p} for p in ids] for q in fixture["queries"]}
         with pytest.raises(search_eval.Invalid, match="duplicate or ineligible"):
             search_eval.score(fixture, rankings)
+
+
+def test_committed_baseline_scores_committed_judgements():
+    """A judgement change without a fresh baseline run leaves slice 3 comparing against stale numbers."""
+    evals = Path(__file__).parents[1] / "evals" / "search-v1"
+    fixture = read_json(evals / "judgements.json")
+    baseline = read_json(evals / "baseline.json")
+    assert baseline["fixture_digest"] == search_eval.fingerprint(fixture)
+    rescored = search_eval.score(fixture, {q["id"]: q["ranked"] for q in baseline["queries"]})
+    assert {key: baseline[key] for key in rescored} == rescored
