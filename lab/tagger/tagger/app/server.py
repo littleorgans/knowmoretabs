@@ -16,12 +16,13 @@ archive header names its own archive.
 import json
 import mimetypes
 from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 import re
 import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock
+from threading import Lock, Thread
 
 import numpy as np
 
@@ -55,19 +56,50 @@ class App:
         """`folder`: the app's own lists, `<data>/app`."""
         self.lib, self.encode, self.embed = lib, encode, embed
         self.lock = Lock()  # the model and mutable app state have one caller at a time
+        self._refit_thread: Thread | None = None
+        self._refit_pending = False
         self.binary = kmt.BINARY
         self.adds = add.Jobs(self)
         self.exclusions = Exclusions(folder)
         self.selection = Keys(folder, "selection.json")
         self.pins = Keys(folder, "pinned.json")
-        self.follow()  # the file may have changed while the heads were fitted
+        with self.lock:
+            self.follow()  # the file may have changed while the heads were fitted
 
     def follow(self) -> None:
         """The library in line with `library.json` as it is now: read again, and applied, only once its signature
         moved from the one the library follows. A damaged file raises `Unreadable`, leaving the library as it was,
         and is read again on the next call. Hold the lock."""
         if signature(self.lib.root / STATE_FILE) != self.lib.state.signature:
+            previous = self.lib
             self.lib = engine.apply_state(self.lib, LibraryState.read(self.lib.root), self.encode)
+            if self.lib.tags != previous.tags or not np.array_equal(self.lib.Y, previous.Y):
+                self._queue_refit()
+
+    def _queue_refit(self) -> None:
+        """Hold the app lock: one worker, with at most one follow up on the latest library."""
+        self._refit_pending = True
+        if self._refit_thread is None:
+            self._refit_thread = Thread(target=self._refit, daemon=True)
+            self._refit_thread.start()
+
+    def _refit(self) -> None:
+        while True:
+            with self.lock:
+                lib = self.lib
+                self._refit_pending = False
+            try:
+                fitted = engine.fit(lib.X, lib.Y, np.vstack([lib.rules.q, lib.added_q]))
+            except Exception as err:
+                print(json.dumps({"refit_failed": type(err).__name__}), flush=True)
+                fitted = None
+            with self.lock:
+                if self._refit_pending:
+                    continue  # a newer label or vector snapshot superseded this fit
+                if fitted is not None:
+                    self.lib = replace(self.lib, **fitted, added_q=lib.added_q[:0])
+                self._refit_thread = None
+                return
 
     def gone(self) -> list[int]:
         """Rows of the forgotten pages."""
@@ -80,8 +112,11 @@ class App:
     def sync(self, url: str, archive) -> dict | None:
         """After knowmoretabs changed one page: the library in line with the archive for it, and the page as the
         screen shows it with the tags `suggested` for it, or None when the screen does not show it. Hold the lock."""
+        previous = self.lib
         self.lib = engine.sync(self.lib, archive, [url], self.embed)
         self.follow()
+        if self._refit_thread is not None or not np.array_equal(self.lib.Y, previous.Y):
+            self._queue_refit()  # a running fit must not publish scores for old page vectors
         row = self.lib.rows.get(url)
         if row is None or not self.lib.live[row]:
             return None
@@ -91,7 +126,7 @@ class App:
     def suggested(self, row: int, held: list[str]) -> list[str]:
         """The active tags the page neither holds nor has turned down that the model would put on it, best first:
         each whose score clears its threshold plus `ADD_K_SD` score SD (`engine.prechecks`: a head's, or zero shot
-        for a tag with too few positives or made since the app started), by confidence; at most `engine.SUGGEST`."""
+        for a tag with too few positives or awaiting its refit), by confidence; at most `engine.SUGGEST`."""
         dismissed = self.lib.state.dismissed(self.lib.records[row]["key"])
         tags = [t for t in self.names() if t not in held and t.lower() not in dismissed]
         checked = [s for s in engine.prechecks(self.lib, [row], tags, margin_sd=ADD_K_SD)[0] if s["checked"]]
