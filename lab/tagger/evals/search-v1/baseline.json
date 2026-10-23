@@ -1,0 +1,2103 @@
+{
+ "corpus_digest": "922c01070b2b772ceab898f2ef514bcc30905f871edea25471f49414c7429954",
+ "fixture_digest": "c768f7a8d58dcaf14fb8b9afe1cc6787a8bd00d680871ce2ec59730142efddb5",
+ "input_name": "B",
+ "inputs_digest": "ff073e67b8c8a1a9fb57ba3045112e3d3344624b1e3a747ac3eddd5d69e12a51",
+ "k": 10,
+ "macro": {
+  "keyword": {
+   "p_at_10": 0.44999999999999996,
+   "r_at_10": 0.6728502415458938
+  },
+  "overall": {
+   "p_at_10": 0.28333333333333327,
+   "r_at_10": 0.3914251207729469
+  },
+  "semantic": {
+   "p_at_10": 0.11666666666666668,
+   "r_at_10": 0.10999999999999999
+  }
+ },
+ "pages": 1651,
+ "preparation": {
+  "cold_migration": 0,
+  "dropped": 0,
+  "embedded": 0,
+  "failed": 0,
+  "migrated": 0,
+  "reused": 1658,
+  "stale": 0
+ },
+ "queries": [
+  {
+   "hits": 5,
+   "id": "keyword-1",
+   "p_at_10": 0.5,
+   "r_at_10": 0.8333333333333334,
+   "ranked": [
+    {
+     "fused": 0.032266458495966696,
+     "id": "0789f87261fea153e2782eef8039e114ff9b380957597852705569aa4053ea5b",
+     "signals": [
+      {
+       "rank": 1,
+       "score": 0.790762722492218,
+       "source": "text"
+      },
+      {
+       "rank": 3,
+       "score": 0.24903334383002274,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.03200204813108039,
+     "id": "02b555035a259ac9dc6d855fdb69a5fb31862c2c2dbbe61c71d6213e04e8140a",
+     "signals": [
+      {
+       "rank": 3,
+       "score": 0.7144421935081482,
+       "source": "text"
+      },
+      {
+       "rank": 2,
+       "score": 0.5018026050835072,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.031754032258064516,
+     "id": "56ad95c15d441acff5acc4bcfecdc05e799c8407d88d1e9a2a1d5921cd5d5325",
+     "signals": [
+      {
+       "rank": 2,
+       "score": 0.7523503303527832,
+       "source": "text"
+      },
+      {
+       "rank": 4,
+       "score": 0.24647806685825058,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.031544957774465976,
+     "id": "e09b259f0bd6b55b497c349df08f8b764622058096526b54812a7d07f11e8bb0",
+     "signals": [
+      {
+       "rank": 6,
+       "score": 0.6846331357955933,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.5215391146128427,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.031009615384615385,
+     "id": "45e3491620ba09357424013e50dc727c43ad9c09fcbce49f5fb9623e655f65b2",
+     "signals": [
+      {
+       "rank": 4,
+       "score": 0.7027459144592285,
+       "source": "text"
+      },
+      {
+       "rank": 5,
+       "score": 0.1605061212913957,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.030309988518943745,
+     "id": "e5e5441e900bf54a432ca34270b8867d7825f86b853bad1ab0214e5889b15762",
+     "signals": [
+      {
+       "rank": 5,
+       "score": 0.697330117225647,
+       "source": "text"
+      },
+      {
+       "rank": 7,
+       "score": 0.12882843222812546,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02964426877470356,
+     "id": "809313bc986f6fc5d9cb9ebfb952cd415f1b1048eb0667b9e46b6171d0f97e33",
+     "signals": [
+      {
+       "rank": 9,
+       "score": 0.6549873352050781,
+       "source": "text"
+      },
+      {
+       "rank": 6,
+       "score": 0.14038561406978023,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.028258706467661692,
+     "id": "dcfddbac31946d4671d2dc52257ea32fe509a589146783319aaf5f7c53bc977e",
+     "signals": [
+      {
+       "rank": 7,
+       "score": 0.6801631450653076,
+       "source": "text"
+      },
+      {
+       "rank": 15,
+       "score": 0.056473667666402945,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.027364110201042444,
+     "id": "77fce1b0da5d6f4686d2227c48c2979e01f05d60fe5553d5dcacae2510697d89",
+     "signals": [
+      {
+       "rank": 19,
+       "score": 0.6337754726409912,
+       "source": "text"
+      },
+      {
+       "rank": 8,
+       "score": 0.0999242538837999,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.026334026334026334,
+     "id": "26076624b6b7fb56dd7f5358abdf8551e8a8956db5cde6cbd4ccd9909d5a5550",
+     "signals": [
+      {
+       "rank": 14,
+       "score": 0.6388634443283081,
+       "source": "text"
+      },
+      {
+       "rank": 18,
+       "score": 0.054387652114679,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 6,
+   "type": "keyword"
+  },
+  {
+   "hits": 1,
+   "id": "keyword-2",
+   "p_at_10": 0.1,
+   "r_at_10": 1.0,
+   "ranked": [
+    {
+     "fused": 0.03278688524590164,
+     "id": "ef37780f6055b589aa8350ec622e6cd8ca88b400e1f93d1dc47f84add08df01b",
+     "signals": [
+      {
+       "rank": 1,
+       "score": 0.8152532577514648,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.250180805485792,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.03225806451612903,
+     "id": "03443c8ae26742d739bcac56070e4e42fa0e508fc5a7130289db73ae769a6abd",
+     "signals": [
+      {
+       "rank": 2,
+       "score": 0.812840461730957,
+       "source": "text"
+      },
+      {
+       "rank": 2,
+       "score": 0.10430339431400303,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.03125763125763126,
+     "id": "694d7119df4fbc8592fa25c88558cc627226390c6d268065de205e5299e555a5",
+     "signals": [
+      {
+       "rank": 3,
+       "score": 0.7255154848098755,
+       "source": "text"
+      },
+      {
+       "rank": 5,
+       "score": 0.07651135964007766,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.029386529386529386,
+     "id": "55c5e35b9bbd92d15c88e3a7d0d8a7800ee1a3c0f0ad444c77ed2d5b62b143aa",
+     "signals": [
+      {
+       "rank": 14,
+       "score": 0.688224732875824,
+       "source": "text"
+      },
+      {
+       "rank": 3,
+       "score": 0.09111222529886394,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.028814262023217248,
+     "id": "7243e729721b38daaa3904b6c738e1dba66123cae92cde8a6939353950ca34d5",
+     "signals": [
+      {
+       "rank": 12,
+       "score": 0.6911524534225464,
+       "source": "text"
+      },
+      {
+       "rank": 7,
+       "score": 0.06479974313963635,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.028612012987012988,
+     "id": "9d6bf6e38ac9409b505280a499192086f234e46105be7aa0b96cc03ca8eee776",
+     "signals": [
+      {
+       "rank": 4,
+       "score": 0.7176013588905334,
+       "source": "text"
+      },
+      {
+       "rank": 17,
+       "score": 0.04249042927690999,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02666666666666667,
+     "id": "9a082b67929ac272c9cf6ba780011280fe5b43d84c39fdd52054d2ef0607b7df",
+     "signals": [
+      {
+       "rank": 15,
+       "score": 0.6876009702682495,
+       "source": "text"
+      },
+      {
+       "rank": 15,
+       "score": 0.049765971520207467,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.024809741248097414,
+     "id": "668711a6e10728221dfc0e58ed3e65581e60a3a7cd968a3e9110412dde1b6442",
+     "signals": [
+      {
+       "rank": 13,
+       "score": 0.6908446550369263,
+       "source": "text"
+      },
+      {
+       "rank": 30,
+       "score": 0.033331681506436485,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02472929470295581,
+     "id": "5d291418297aa0f518dd34808658698182ff64856f7053515ef5ea75c9244367",
+     "signals": [
+      {
+       "rank": 7,
+       "score": 0.6954038143157959,
+       "source": "text"
+      },
+      {
+       "rank": 42,
+       "score": 0.025185075927118192,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.024386724386724387,
+     "id": "493d4abb62f5f394b3463f171c9da4df0521a3d7f7e4792198a704fd82e9de49",
+     "signals": [
+      {
+       "rank": 39,
+       "score": 0.6670066118240356,
+       "source": "text"
+      },
+      {
+       "rank": 10,
+       "score": 0.0632409733527911,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 1,
+   "type": "keyword"
+  },
+  {
+   "hits": 1,
+   "id": "keyword-3",
+   "p_at_10": 0.1,
+   "r_at_10": 1.0,
+   "ranked": [
+    {
+     "fused": 0.03252247488101534,
+     "id": "1235d9ddfedace1c904ea9760294b12ee22262ed74e73feb050a310d9453f7a3",
+     "signals": [
+      {
+       "rank": 2,
+       "score": 0.7466703653335571,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.2560668052367053,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.03252247488101534,
+     "id": "7150d444916e07f546aea5b741b3155033e55f5b138ded854800bf8410656fc4",
+     "signals": [
+      {
+       "rank": 1,
+       "score": 0.7804476022720337,
+       "source": "text"
+      },
+      {
+       "rank": 2,
+       "score": 0.22736267075168728,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.03007688828584351,
+     "id": "a34e1efd2b6ddfe0fa8cd6e878a502b2eae52e1a4fe80e691b52d4d1055d15ab",
+     "signals": [
+      {
+       "rank": 7,
+       "score": 0.6686995029449463,
+       "source": "text"
+      },
+      {
+       "rank": 6,
+       "score": 0.04111565570964045,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.023959827833572454,
+     "id": "304120eec7037386c0d076388ecd26238fa323c91da981df45a2a6ccec90d270",
+     "signals": [
+      {
+       "rank": 25,
+       "score": 0.6465901136398315,
+       "source": "text"
+      },
+      {
+       "rank": 22,
+       "score": 0.023741148635924917,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.0225,
+     "id": "602e2057d190193161a1583b77b97bcaeed8347acc84ae44d6e46fb013a88926",
+     "signals": [
+      {
+       "rank": 40,
+       "score": 0.6397931575775146,
+       "source": "text"
+      },
+      {
+       "rank": 20,
+       "score": 0.025785671268858845,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.019548987916570462,
+     "id": "663615e8f5ae2bc6cac6c213dc259cee4de1b5fd0b31a324d0a6d5901224433e",
+     "signals": [
+      {
+       "rank": 11,
+       "score": 0.6657202243804932,
+       "source": "text"
+      },
+      {
+       "rank": 123,
+       "score": 0.011113310738773426,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01903820816864295,
+     "id": "c5d3fe2948643ba051e628fb69722722d8bdc64fc07f191fa5ea2cc69a70e67f",
+     "signals": [
+      {
+       "rank": 9,
+       "score": 0.667980968952179,
+       "source": "text"
+      },
+      {
+       "rank": 160,
+       "score": 0.008487919737521953,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01888276947285602,
+     "id": "c8eb9a04ac7060e9c43ad1232234e7ea7350adac8a316b05e83a42fbf421474d",
+     "signals": [
+      {
+       "rank": 63,
+       "score": 0.6309363842010498,
+       "source": "text"
+      },
+      {
+       "rank": 33,
+       "score": 0.020460736902627882,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.018721946609969287,
+     "id": "77d109dbb30aa7a51423e12c3a599fb92eb29eccace7fb311a9b223d2f97438d",
+     "signals": [
+      {
+       "rank": 8,
+       "score": 0.6682126522064209,
+       "source": "text"
+      },
+      {
+       "rank": 189,
+       "score": 0.007359751660913557,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.018622375611159044,
+     "id": "a25fce7d21e69b6fbc44ae388ea77516c6a0c527308e2275f60ab73d4dd8307e",
+     "signals": [
+      {
+       "rank": 123,
+       "score": 0.6209392547607422,
+       "source": "text"
+      },
+      {
+       "rank": 16,
+       "score": 0.029380686225201836,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 1,
+   "type": "keyword"
+  },
+  {
+   "hits": 6,
+   "id": "keyword-4",
+   "p_at_10": 0.6,
+   "r_at_10": 0.24,
+   "ranked": [
+    {
+     "fused": 0.031024531024531024,
+     "id": "a1dc6fc4d59779bba8570dea1fd91556e97a3744e178f24f44887b11113dc707",
+     "signals": [
+      {
+       "rank": 3,
+       "score": 0.7656758427619934,
+       "source": "text"
+      },
+      {
+       "rank": 6,
+       "score": 0.08965446565666506,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02964254577157803,
+     "id": "80cc93ac6e4b79c2a719cd4b5f29d35133a2ec543480dae9213b17ca1ec3b325",
+     "signals": [
+      {
+       "rank": 14,
+       "score": 0.7396756410598755,
+       "source": "text"
+      },
+      {
+       "rank": 2,
+       "score": 0.0959965113898794,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.028588564574170333,
+     "id": "595634155868b0c6f1f3364d136fa6a5ecc67fcdbcff3c94164cdfab234d71f4",
+     "signals": [
+      {
+       "rank": 1,
+       "score": 0.789440929889679,
+       "source": "text"
+      },
+      {
+       "rank": 22,
+       "score": 0.06787679791941166,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.028381642512077296,
+     "id": "9c7b98cfc1abb6b439dec84b7f5a27f2c84bb2e293c234f56e02b06a387a75b2",
+     "signals": [
+      {
+       "rank": 9,
+       "score": 0.7587518095970154,
+       "source": "text"
+      },
+      {
+       "rank": 12,
+       "score": 0.07726359009833955,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02782608695652174,
+     "id": "6c1746078f385263ab227358c1e443bbe90ce76f97ddbc6c7b44b838f244e742",
+     "signals": [
+      {
+       "rank": 15,
+       "score": 0.7380726933479309,
+       "source": "text"
+      },
+      {
+       "rank": 9,
+       "score": 0.08013391847144685,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.027402402402402402,
+     "id": "f35cdb35c3b7534744abfd31e037220c10a717f16961a2fd571079141284be24",
+     "signals": [
+      {
+       "rank": 12,
+       "score": 0.749504566192627,
+       "source": "text"
+      },
+      {
+       "rank": 14,
+       "score": 0.07445021127594151,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.026399331662489554,
+     "id": "f5e32d7a9e34a0e9e0582e56abff8b2786298975851059a9ed8cf47b61b5fda7",
+     "signals": [
+      {
+       "rank": 35,
+       "score": 0.7199450731277466,
+       "source": "text"
+      },
+      {
+       "rank": 3,
+       "score": 0.09576800771207897,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.026137303556658397,
+     "id": "040175d528178fd2ff5dc2c2f78e94933357eb52ac1afb8af0470be38ecb4f45",
+     "signals": [
+      {
+       "rank": 33,
+       "score": 0.7210065722465515,
+       "source": "text"
+      },
+      {
+       "rank": 5,
+       "score": 0.08990660867034468,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02591362126245847,
+     "id": "3c8e528af2af36bb60406851bf84db8c9e1ff1b25845d8f1caf9761d9bbdabd3",
+     "signals": [
+      {
+       "rank": 26,
+       "score": 0.7258560061454773,
+       "source": "text"
+      },
+      {
+       "rank": 10,
+       "score": 0.07939093713239669,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02557875991581674,
+     "id": "f4003266c381bdfea43769d9811f28c1df983c067bbc3d3f45a5b9a00c18b079",
+     "signals": [
+      {
+       "rank": 27,
+       "score": 0.7257606983184814,
+       "source": "text"
+      },
+      {
+       "rank": 11,
+       "score": 0.07862005298270558,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 25,
+   "type": "keyword"
+  },
+  {
+   "hits": 5,
+   "id": "keyword-5",
+   "p_at_10": 0.5,
+   "r_at_10": 0.8333333333333334,
+   "ranked": [
+    {
+     "fused": 0.03200204813108039,
+     "id": "651d5d4131fcec8ac936b56b4f2a89be83d3689a9839bf3850626bf82a634f50",
+     "signals": [
+      {
+       "rank": 3,
+       "score": 0.7142617702484131,
+       "source": "text"
+      },
+      {
+       "rank": 2,
+       "score": 0.1303752505054048,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.029850746268656716,
+     "id": "1bb8532398b9c7b20fbcb3e8809209fa765abe4f65c8a5a20ff91fe2a64d4f20",
+     "signals": [
+      {
+       "rank": 7,
+       "score": 0.6979106664657593,
+       "source": "text"
+      },
+      {
+       "rank": 7,
+       "score": 0.07054608944420407,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02871794871794872,
+     "id": "9d6bf6e38ac9409b505280a499192086f234e46105be7aa0b96cc03ca8eee776",
+     "signals": [
+      {
+       "rank": 5,
+       "score": 0.7052885293960571,
+       "source": "text"
+      },
+      {
+       "rank": 15,
+       "score": 0.059571705263293945,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.026597524255603883,
+     "id": "52862f7a674241214e19f6eec38111c41cd882322b663606c6361ccc86002a23",
+     "signals": [
+      {
+       "rank": 38,
+       "score": 0.6694542169570923,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.14516316217662328,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.026515151515151516,
+     "id": "bedb4e653df32d572b82bceda535f9f834037269b7060127378dfc760f31b0e2",
+     "signals": [
+      {
+       "rank": 6,
+       "score": 0.6982739567756653,
+       "source": "text"
+      },
+      {
+       "rank": 28,
+       "score": 0.04507769531846804,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.026333113890717574,
+     "id": "9be9e1df7986f1cd18a4f94af3397f109e53b746d4a428601d2acb303ba739bb",
+     "signals": [
+      {
+       "rank": 2,
+       "score": 0.7320958971977234,
+       "source": "text"
+      },
+      {
+       "rank": 38,
+       "score": 0.03800218343912151,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02571241401899771,
+     "id": "d9eb28b7b7a886b17340fabecfd82eace41039af2e437c3036b451bd91eb4706",
+     "signals": [
+      {
+       "rank": 11,
+       "score": 0.6904470920562744,
+       "source": "text"
+      },
+      {
+       "rank": 26,
+       "score": 0.04740250966413829,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.024687641125997292,
+     "id": "692d8555158012e153daaa2fa6bcbf353e7d3d2e22f3aead5f926047722e2dfe",
+     "signals": [
+      {
+       "rank": 13,
+       "score": 0.6835617423057556,
+       "source": "text"
+      },
+      {
+       "rank": 31,
+       "score": 0.042424656037284576,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02454080096356519,
+     "id": "04fe383423a611673e0f3e0af8bbce086991e3b4ee846c7929d50d9124224701",
+     "signals": [
+      {
+       "rank": 22,
+       "score": 0.6745356917381287,
+       "source": "text"
+      },
+      {
+       "rank": 21,
+       "score": 0.05379043871431927,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.024320652173913042,
+     "id": "8ed13d186abdc6c93ee6284087b3d6499dfc2fedfad8badd687efe8ae0bc271c",
+     "signals": [
+      {
+       "rank": 55,
+       "score": 0.6611076593399048,
+       "source": "text"
+      },
+      {
+       "rank": 4,
+       "score": 0.0821817909770129,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 6,
+   "type": "keyword"
+  },
+  {
+   "hits": 9,
+   "id": "keyword-6",
+   "p_at_10": 0.9,
+   "r_at_10": 0.13043478260869565,
+   "ranked": [
+    {
+     "fused": 0.03177805800756621,
+     "id": "a325c992f1d7fd80a764d9600d981dc94f81d7d91e662205d684137756f816b1",
+     "signals": [
+      {
+       "rank": 5,
+       "score": 0.7491057515144348,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.3599169801566158,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.03125,
+     "id": "6c9fe5e1ea7ba09aa68529b8925a269289a71ccfd73db7640bfbc35391793f3b",
+     "signals": [
+      {
+       "rank": 4,
+       "score": 0.7507085800170898,
+       "source": "text"
+      },
+      {
+       "rank": 4,
+       "score": 0.18588899298301842,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02976190476190476,
+     "id": "7f65e38093a8c0c183c86a0b663c68478fb5730b55a21ef4205f037039b03519",
+     "signals": [
+      {
+       "rank": 3,
+       "score": 0.7552728056907654,
+       "source": "text"
+      },
+      {
+       "rank": 12,
+       "score": 0.10461951174200834,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.027799227799227798,
+     "id": "10c4aba0cd5b56d5d6cba3b2e5b13e0cd467b167d92d7ffb14bd51461f3675f1",
+     "signals": [
+      {
+       "rank": 14,
+       "score": 0.7264453172683716,
+       "source": "text"
+      },
+      {
+       "rank": 10,
+       "score": 0.11220708009761772,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.027745885954841176,
+     "id": "236593dbf88eb30d1fa27cb2e539056cb76659786607645b6b219911f2550567",
+     "signals": [
+      {
+       "rank": 18,
+       "score": 0.7139854431152344,
+       "source": "text"
+      },
+      {
+       "rank": 7,
+       "score": 0.1311144155443357,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02761904761904762,
+     "id": "9c3ee1630d08ca2f6925081a2b68ecddc9a9df20f3f20b6c306ceebc3130fa12",
+     "signals": [
+      {
+       "rank": 10,
+       "score": 0.7311370372772217,
+       "source": "text"
+      },
+      {
+       "rank": 15,
+       "score": 0.09599089792291172,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02750455373406193,
+     "id": "3fc1bbdc29d225a1b0dfbb80d78a6d0959500b500fafb5bae3d0da5fb7ac052d",
+     "signals": [
+      {
+       "rank": 1,
+       "score": 0.7611664533615112,
+       "source": "text"
+      },
+      {
+       "rank": 30,
+       "score": 0.059244242159272265,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.026132699813337858,
+     "id": "877fa1b65dd196c7dc8bcbad3565d67fa04f8385fd4a89f423419bf3e6bd49c0",
+     "signals": [
+      {
+       "rank": 23,
+       "score": 0.7047510743141174,
+       "source": "text"
+      },
+      {
+       "rank": 11,
+       "score": 0.10508438043348205,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.025974025974025976,
+     "id": "64d4c719409f9330e69996cccc5865e2b2b55850807b30f2dcaaa65e9c48f56b",
+     "signals": [
+      {
+       "rank": 17,
+       "score": 0.7154343724250793,
+       "source": "text"
+      },
+      {
+       "rank": 17,
+       "score": 0.08310251982653294,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02571241401899771,
+     "id": "02a5025dc064584d737ad2f80a85c256d3b680ca2a56c246198a0a8982dc5e51",
+     "signals": [
+      {
+       "rank": 11,
+       "score": 0.7298468351364136,
+       "source": "text"
+      },
+      {
+       "rank": 26,
+       "score": 0.0643822243142228,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 69,
+   "type": "keyword"
+  },
+  {
+   "hits": 2,
+   "id": "semantic-1",
+   "p_at_10": 0.2,
+   "r_at_10": 0.3333333333333333,
+   "ranked": [
+    {
+     "fused": 0.03252247488101534,
+     "id": "e5e5441e900bf54a432ca34270b8867d7825f86b853bad1ab0214e5889b15762",
+     "signals": [
+      {
+       "rank": 2,
+       "score": 0.7383722066879272,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.3048787242563742,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.032266458495966696,
+     "id": "0789f87261fea153e2782eef8039e114ff9b380957597852705569aa4053ea5b",
+     "signals": [
+      {
+       "rank": 1,
+       "score": 0.7386839389801025,
+       "source": "text"
+      },
+      {
+       "rank": 3,
+       "score": 0.11521055975519863,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.03055037313432836,
+     "id": "c405c5769be0bbbefdeedd2ab130166b40d5427dd2ba51ec693dba371e2c3faa",
+     "signals": [
+      {
+       "rank": 7,
+       "score": 0.6661016345024109,
+       "source": "text"
+      },
+      {
+       "rank": 4,
+       "score": 0.07442549066218507,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.030117753623188408,
+     "id": "dcfddbac31946d4671d2dc52257ea32fe509a589146783319aaf5f7c53bc977e",
+     "signals": [
+      {
+       "rank": 4,
+       "score": 0.6879675388336182,
+       "source": "text"
+      },
+      {
+       "rank": 9,
+       "score": 0.06163636093934543,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.029418126757516764,
+     "id": "0c5d8b1ca1125bdeb486133ea3e400ed18e01143c4688d3d24250d56d3b5ce1d",
+     "signals": [
+      {
+       "rank": 9,
+       "score": 0.6635144948959351,
+       "source": "text"
+      },
+      {
+       "rank": 7,
+       "score": 0.06717829943741001,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.029116045245077504,
+     "id": "45e3491620ba09357424013e50dc727c43ad9c09fcbce49f5fb9623e655f65b2",
+     "signals": [
+      {
+       "rank": 17,
+       "score": 0.6567330360412598,
+       "source": "text"
+      },
+      {
+       "rank": 2,
+       "score": 0.12116490499441887,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.027402402402402402,
+     "id": "48df531f7acf9f98a3b7cd58626237daa4e9514420c60fe515f75b01a81b6770",
+     "signals": [
+      {
+       "rank": 12,
+       "score": 0.6596020460128784,
+       "source": "text"
+      },
+      {
+       "rank": 14,
+       "score": 0.0596682521259091,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02606951871657754,
+     "id": "b055fedb1e42e3bfba7f1ae9e61abeecce53be72dde323baba7c9a74b763ef63",
+     "signals": [
+      {
+       "rank": 8,
+       "score": 0.6640034914016724,
+       "source": "text"
+      },
+      {
+       "rank": 28,
+       "score": 0.050788205074409384,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.025478740668614087,
+     "id": "6c107efa9abffb599f2db150d5a588bc8a4317cdaf3bf598d3cdc6b4627e776f",
+     "signals": [
+      {
+       "rank": 18,
+       "score": 0.656489372253418,
+       "source": "text"
+      },
+      {
+       "rank": 19,
+       "score": 0.05565745942258817,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.025458570524984188,
+     "id": "3acd02953ec53286a5da8fc813e0ce27828154966ab79ee146bba691495b5772",
+     "signals": [
+      {
+       "rank": 33,
+       "score": 0.6429979205131531,
+       "source": "text"
+      },
+      {
+       "rank": 8,
+       "score": 0.06606319415568074,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 6,
+   "type": "semantic"
+  },
+  {
+   "hits": 0,
+   "id": "semantic-2",
+   "p_at_10": 0.0,
+   "r_at_10": 0.0,
+   "ranked": [
+    {
+     "fused": 0.02661064425770308,
+     "id": "a25fce7d21e69b6fbc44ae388ea77516c6a0c527308e2275f60ab73d4dd8307e",
+     "signals": [
+      {
+       "rank": 24,
+       "score": 0.6894692182540894,
+       "source": "text"
+      },
+      {
+       "rank": 8,
+       "score": 0.05070239939978265,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.026171741361614778,
+     "id": "1bb8532398b9c7b20fbcb3e8809209fa765abe4f65c8a5a20ff91fe2a64d4f20",
+     "signals": [
+      {
+       "rank": 14,
+       "score": 0.6971213817596436,
+       "source": "text"
+      },
+      {
+       "rank": 19,
+       "score": 0.041718885060598704,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.025728708679368183,
+     "id": "a53710d4cd44743eca302d03d3f23eef9e379daba02cb052684dbd086c292da0",
+     "signals": [
+      {
+       "rank": 29,
+       "score": 0.6871598362922668,
+       "source": "text"
+      },
+      {
+       "rank": 9,
+       "score": 0.04716203494194837,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.025396825396825397,
+     "id": "9d6bf6e38ac9409b505280a499192086f234e46105be7aa0b96cc03ca8eee776",
+     "signals": [
+      {
+       "rank": 3,
+       "score": 0.7187381982803345,
+       "source": "text"
+      },
+      {
+       "rank": 45,
+       "score": 0.027487797098619954,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.023888428610880974,
+     "id": "00f468355476fca4b0c357671942099cda85dabd1570ce8775a478b2ac3b5b03",
+     "signals": [
+      {
+       "rank": 42,
+       "score": 0.6825470924377441,
+       "source": "text"
+      },
+      {
+       "rank": 11,
+       "score": 0.046544440331520616,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.023752012882447666,
+     "id": "31b059281eee27e4e251441190acdec8e80c946ceee9ed486bda433209ee694e",
+     "signals": [
+      {
+       "rank": 9,
+       "score": 0.7005699872970581,
+       "source": "text"
+      },
+      {
+       "rank": 48,
+       "score": 0.0271454931516354,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.023597626752966557,
+     "id": "ab30dca0100e350cac7a57d95de24586ca2554bc905d0274b32f63a25b1bbd5a",
+     "signals": [
+      {
+       "rank": 43,
+       "score": 0.6825470924377441,
+       "source": "text"
+      },
+      {
+       "rank": 12,
+       "score": 0.046544440331520616,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02325858778625954,
+     "id": "96afdb96fa08241e33b3d7e0fa8e0e034032430e55acedb99ab06a4692e2800a",
+     "signals": [
+      {
+       "rank": 71,
+       "score": 0.6745576858520508,
+       "source": "text"
+      },
+      {
+       "rank": 4,
+       "score": 0.0652065133248759,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.022737556561085975,
+     "id": "ef37780f6055b589aa8350ec622e6cd8ca88b400e1f93d1dc47f84add08df01b",
+     "signals": [
+      {
+       "rank": 76,
+       "score": 0.6734203100204468,
+       "source": "text"
+      },
+      {
+       "rank": 5,
+       "score": 0.0623219482875448,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.021780303030303032,
+     "id": "374cdbc47da40d36d2e59d4eec93396576fbeb304b2a3443913db3924d94afa1",
+     "signals": [
+      {
+       "rank": 36,
+       "score": 0.6836788058280945,
+       "source": "text"
+      },
+      {
+       "rank": 28,
+       "score": 0.03631836494821633,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 1,
+   "type": "semantic"
+  },
+  {
+   "hits": 0,
+   "id": "semantic-3",
+   "p_at_10": 0.0,
+   "r_at_10": 0.0,
+   "ranked": [
+    {
+     "fused": 0.022675736961451247,
+     "id": "78d107e388b544a7035f83030726a185af1513be73b1fa1434d9494d893f2ac2",
+     "signals": [
+      {
+       "rank": 87,
+       "score": 0.6773257255554199,
+       "source": "text"
+      },
+      {
+       "rank": 3,
+       "score": 0.05541310348399651,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.021948998178506377,
+     "id": "a34e1efd2b6ddfe0fa8cd6e878a502b2eae52e1a4fe80e691b52d4d1055d15ab",
+     "signals": [
+      {
+       "rank": 120,
+       "score": 0.6683120131492615,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.0678187681753075,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01834319526627219,
+     "id": "a5c96be7a6d17f471cb3390329c61dbd1752ef1b2f9202569fae15da8ff6155a",
+     "signals": [
+      {
+       "rank": 278,
+       "score": 0.6503057479858398,
+       "source": "text"
+      },
+      {
+       "rank": 5,
+       "score": 0.0468627216071836,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01688374923919659,
+     "id": "e8b8c16dfdd1260306d040f1b40456d7e9d41760326dbf88383dfb9c4722d20e",
+     "signals": [
+      {
+       "rank": 1265,
+       "score": 0.60332190990448,
+       "source": "text"
+      },
+      {
+       "rank": 2,
+       "score": 0.060409523924538494,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01677906229929351,
+     "id": "dc19d0a9c88a6e0286a3d4bdd8443b47ac02224c5f918fbbd15bbb10d32bb788",
+     "signals": [
+      {
+       "rank": 286,
+       "score": 0.6496536135673523,
+       "source": "text"
+      },
+      {
+       "rank": 12,
+       "score": 0.03900276530705342,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.0167680030400912,
+     "id": "a25fce7d21e69b6fbc44ae388ea77516c6a0c527308e2275f60ab73d4dd8307e",
+     "signals": [
+      {
+       "rank": 217,
+       "score": 0.6555423736572266,
+       "source": "text"
+      },
+      {
+       "rank": 16,
+       "score": 0.03759843378904377,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01675494350282486,
+     "id": "6734eed3c8b4c2a00ba55203aea54fa8f76d34f10ff3e1abf9f3c19559fcf72c",
+     "signals": [
+      {
+       "rank": 825,
+       "score": 0.6226191520690918,
+       "source": "text"
+      },
+      {
+       "rank": 4,
+       "score": 0.05085743754031918,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01648543553682446,
+     "id": "badc65df886a7b1909efb23f3fd32c1764f147e5cb1e582b164b3d9e808544bd",
+     "signals": [
+      {
+       "rank": 581,
+       "score": 0.6334134340286255,
+       "source": "text"
+      },
+      {
+       "rank": 7,
+       "score": 0.04379699079473203,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01639344262295082,
+     "id": "01dd89582d29bc2e5b97ecd3c307fae386ad3ca40875934a1d3cae13114e61db",
+     "signals": [
+      {
+       "rank": 1,
+       "score": 0.7263840436935425,
+       "source": "text"
+      },
+      {
+       "rank": 0,
+       "score": 0.0,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01633149459236416,
+     "id": "602e2057d190193161a1583b77b97bcaeed8347acc84ae44d6e46fb013a88926",
+     "signals": [
+      {
+       "rank": 239,
+       "score": 0.653468132019043,
+       "source": "text"
+      },
+      {
+       "rank": 17,
+       "score": 0.03712884327702764,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 2,
+   "type": "semantic"
+  },
+  {
+   "hits": 4,
+   "id": "semantic-4",
+   "p_at_10": 0.4,
+   "r_at_10": 0.16,
+   "ranked": [
+    {
+     "fused": 0.031544957774465976,
+     "id": "99bd95e9370208a9e3b0af55352cb184f9b9bc43b3704a38e303d3bd815bd87b",
+     "signals": [
+      {
+       "rank": 6,
+       "score": 0.6992522478103638,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.1068958483179051,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.030621785881252923,
+     "id": "7e8151e8d3fb83edade0158d01dc356284bba66a06c59fe67d9600a135c11a1d",
+     "signals": [
+      {
+       "rank": 2,
+       "score": 0.7132184505462646,
+       "source": "text"
+      },
+      {
+       "rank": 9,
+       "score": 0.06176534003148229,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.027777777777777776,
+     "id": "393f9bac114e26493014bc578fc0f2766dde4ca2d806b478c3480ab98c4acfbd",
+     "signals": [
+      {
+       "rank": 3,
+       "score": 0.7121564745903015,
+       "source": "text"
+      },
+      {
+       "rank": 24,
+       "score": 0.044771987296167014,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02681010928961749,
+     "id": "374cdbc47da40d36d2e59d4eec93396576fbeb304b2a3443913db3924d94afa1",
+     "signals": [
+      {
+       "rank": 1,
+       "score": 0.724058985710144,
+       "source": "text"
+      },
+      {
+       "rank": 36,
+       "score": 0.03981898735271586,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02512945476698142,
+     "id": "8537165d23c701b725b2bce439662fb49ed4f754c559a7da693b26df6360b710",
+     "signals": [
+      {
+       "rank": 7,
+       "score": 0.6977092027664185,
+       "source": "text"
+      },
+      {
+       "rank": 38,
+       "score": 0.03959828347017644,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.024502524502524506,
+     "id": "ff92fd7e579e1a691040c0175ceb7a3cefe3c4421ea2bd5e3efb54070bb0bf7d",
+     "signals": [
+      {
+       "rank": 31,
+       "score": 0.6762228012084961,
+       "source": "text"
+      },
+      {
+       "rank": 14,
+       "score": 0.050655608862414506,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.024501173708920188,
+     "id": "70b5977d4e1d4d10d89cec440cb3449f8346e0032a3a1ba5bcb0eaf850e94a93",
+     "signals": [
+      {
+       "rank": 36,
+       "score": 0.6729224324226379,
+       "source": "text"
+      },
+      {
+       "rank": 11,
+       "score": 0.0559014828807312,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02420289855072464,
+     "id": "fb8a0e26e273a8a8c5ae2d8cd1b45256de68b52d043cf400520b688d3757b3e0",
+     "signals": [
+      {
+       "rank": 32,
+       "score": 0.675841212272644,
+       "source": "text"
+      },
+      {
+       "rank": 15,
+       "score": 0.049244475416932824,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.023055454435141367,
+     "id": "f0f19c553dba742a2a54e9cb597f4f3a7137fa6709383f0f38085ba8a397b298",
+     "signals": [
+      {
+       "rank": 63,
+       "score": 0.6594058275222778,
+       "source": "text"
+      },
+      {
+       "rank": 7,
+       "score": 0.07222564695125086,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.022760290556900726,
+     "id": "cb26df90adeb157affe7f51f4d0fe9f407c3c8cd510b218020fdbb2b2aa01676",
+     "signals": [
+      {
+       "rank": 58,
+       "score": 0.6617352962493896,
+       "source": "text"
+      },
+      {
+       "rank": 10,
+       "score": 0.05743840372933968,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 25,
+   "type": "semantic"
+  },
+  {
+   "hits": 1,
+   "id": "semantic-5",
+   "p_at_10": 0.1,
+   "r_at_10": 0.16666666666666666,
+   "ranked": [
+    {
+     "fused": 0.025353016688061617,
+     "id": "1bb8532398b9c7b20fbcb3e8809209fa765abe4f65c8a5a20ff91fe2a64d4f20",
+     "signals": [
+      {
+       "rank": 16,
+       "score": 0.6754148006439209,
+       "source": "text"
+      },
+      {
+       "rank": 22,
+       "score": 0.03406286232596298,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.0237879767291532,
+     "id": "55c5e35b9bbd92d15c88e3a7d0d8a7800ee1a3c0f0ad444c77ed2d5b62b143aa",
+     "signals": [
+      {
+       "rank": 59,
+       "score": 0.6518443822860718,
+       "source": "text"
+      },
+      {
+       "rank": 5,
+       "score": 0.050043902530636813,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02227361246348588,
+     "id": "544c183cb3333ce4b72840965d155ade353524a8bb49719371e67db8e5ae58bb",
+     "signals": [
+      {
+       "rank": 44,
+       "score": 0.656073808670044,
+       "source": "text"
+      },
+      {
+       "rank": 19,
+       "score": 0.03615258350440868,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02165032679738562,
+     "id": "374cdbc47da40d36d2e59d4eec93396576fbeb304b2a3443913db3924d94afa1",
+     "signals": [
+      {
+       "rank": 84,
+       "score": 0.6462851762771606,
+       "source": "text"
+      },
+      {
+       "rank": 8,
+       "score": 0.04186977842890003,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.0207597645799893,
+     "id": "00f468355476fca4b0c357671942099cda85dabd1570ce8775a478b2ac3b5b03",
+     "signals": [
+      {
+       "rank": 29,
+       "score": 0.6620237827301025,
+       "source": "text"
+      },
+      {
+       "rank": 45,
+       "score": 0.025873969603307612,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.020545073375262055,
+     "id": "ab30dca0100e350cac7a57d95de24586ca2554bc905d0274b32f63a25b1bbd5a",
+     "signals": [
+      {
+       "rank": 30,
+       "score": 0.6620237827301025,
+       "source": "text"
+      },
+      {
+       "rank": 46,
+       "score": 0.025873969603307612,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.020359848484848484,
+     "id": "1f76f381b414ab25c6aa633834a41365ac30655d2cb1b253cb9933d5f33bd6ab",
+     "signals": [
+      {
+       "rank": 132,
+       "score": 0.6386525630950928,
+       "source": "text"
+      },
+      {
+       "rank": 6,
+       "score": 0.0496213117745215,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.02021023651608059,
+     "id": "493d4abb62f5f394b3463f171c9da4df0521a3d7f7e4792198a704fd82e9de49",
+     "signals": [
+      {
+       "rank": 202,
+       "score": 0.6307229399681091,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.08379398964715803,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.019119092289824,
+     "id": "cb998e2e4526091772e18f0301534bc670e2a3605918e7d00ccb8ce9d345e3da",
+     "signals": [
+      {
+       "rank": 63,
+       "score": 0.6505813598632812,
+       "source": "text"
+      },
+      {
+       "rank": 31,
+       "score": 0.03028959337578551,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01868112947658402,
+     "id": "a5c96be7a6d17f471cb3390329c61dbd1752ef1b2f9202569fae15da8ff6155a",
+     "signals": [
+      {
+       "rank": 61,
+       "score": 0.6511830687522888,
+       "source": "text"
+      },
+      {
+       "rank": 36,
+       "score": 0.027904717814254236,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 6,
+   "type": "semantic"
+  },
+  {
+   "hits": 0,
+   "id": "semantic-6",
+   "p_at_10": 0.0,
+   "r_at_10": 0.0,
+   "ranked": [
+    {
+     "fused": 0.02296037296037296,
+     "id": "1c24cfc180cb7fb0fb90eefbdb1d6f48a8cfa6137dfce6aede5923998fa6dee2",
+     "signals": [
+      {
+       "rank": 72,
+       "score": 0.6712013483047485,
+       "source": "text"
+      },
+      {
+       "rank": 5,
+       "score": 0.056742835004950955,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.0209862601166949,
+     "id": "072e30816c92092476b253031083880ae58c6dde2665b0de9d623386877f4a55",
+     "signals": [
+      {
+       "rank": 94,
+       "score": 0.6616491675376892,
+       "source": "text"
+      },
+      {
+       "rank": 9,
+       "score": 0.04416030748996728,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.020319835680751172,
+     "id": "79071710ebc233fff69998bebfee7c42bcc7e530ca3d2d50adf232a191df340e",
+     "signals": [
+      {
+       "rank": 153,
+       "score": 0.6465461254119873,
+       "source": "text"
+      },
+      {
+       "rank": 4,
+       "score": 0.05690096992166951,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.019399460188933872,
+     "id": "c5d3fe2948643ba051e628fb69722722d8bdc64fc07f191fa5ea2cc69a70e67f",
+     "signals": [
+      {
+       "rank": 92,
+       "score": 0.6626142263412476,
+       "source": "text"
+      },
+      {
+       "rank": 18,
+       "score": 0.03708707910675762,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.017962137365122442,
+     "id": "745308b2b70850959b645a0f6de2434187953cd4a4a5ac92caf4aa547577a4e3",
+     "signals": [
+      {
+       "rank": 141,
+       "score": 0.6487730741500854,
+       "source": "text"
+      },
+      {
+       "rank": 17,
+       "score": 0.03733591187181266,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.017689094660560616,
+     "id": "8b8c76d409be074bec0e66d2bd8b26b5cc7e59e7aa1e374b2f721d8f601d25fc",
+     "signals": [
+      {
+       "rank": 581,
+       "score": 0.5976372957229614,
+       "source": "text"
+      },
+      {
+       "rank": 2,
+       "score": 0.06331433325520888,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.017657780815675553,
+     "id": "80a500f877f6b94d0b5cdd48fa92fdc8c8be99edf72fcad8d7ed75896609e5e2",
+     "signals": [
+      {
+       "rank": 339,
+       "score": 0.618748128414154,
+       "source": "text"
+      },
+      {
+       "rank": 6,
+       "score": 0.04725855947250509,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.01762194385145205,
+     "id": "5296c7a0f81cc1ae4bd699959c895a7e7e62d08f6f9ec0635a363098f8424c67",
+     "signals": [
+      {
+       "rank": 754,
+       "score": 0.5858504176139832,
+       "source": "text"
+      },
+      {
+       "rank": 1,
+       "score": 0.06563241499030698,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.016829983945081103,
+     "id": "3da31db34fc4cc8104837bf529e199243fabd00907499790eedca79df9a728ed",
+     "signals": [
+      {
+       "rank": 163,
+       "score": 0.6438182592391968,
+       "source": "text"
+      },
+      {
+       "rank": 21,
+       "score": 0.03518390832814313,
+       "source": "keyword"
+      }
+     ]
+    },
+    {
+     "fused": 0.016783762685402027,
+     "id": "aa8d4a195e2656ec1a0d41d8e67d63b2a68bc7a0527543e11e0092b8679b076a",
+     "signals": [
+      {
+       "rank": 1038,
+       "score": 0.5684460401535034,
+       "source": "text"
+      },
+      {
+       "rank": 3,
+       "score": 0.05767585357588984,
+       "source": "keyword"
+      }
+     ]
+    }
+   ],
+   "relevant": 69,
+   "type": "semantic"
+  }
+ ],
+ "queries_digest": "7259392aeb361df61ec0091a557f5e37e8e1b68dcd9bb19d9359145c5e77a2f4",
+ "runtime": {
+  "model": {
+   "char_cap": 16,
+   "config": {
+    "audio_config": null,
+    "vision_config": null
+   },
+   "dim": 768,
+   "dtype": "torch.float32",
+   "max_tokens": 2048,
+   "model": "google/embeddinggemma-2",
+   "normalize": true,
+   "prompt": "title: {title} | text: {text}"
+  },
+  "query_prompt": "task: search result | query: ",
+  "versions": {
+   "numpy": "2.5.3",
+   "python": "3.12.5",
+   "scikit-learn": "1.9.1",
+   "sentence-transformers": "6.1.0",
+   "torch": "2.14.1",
+   "transformers": "5.19.0"
+  },
+  "weights_digest": "b47cee84899dd63c6540c879c266d0f9377627d74df2ecddb0e90b6be391b58f"
+ },
+ "schema": 1,
+ "source_revision": "62110598314ae488f0c10f39624d72daf1935ca2",
+ "vectors_digest": "82f0e26ec15039bf76cde6521c0cbfc57f2737016afb0bd0aecf6d766d0e0469",
+ "visibility_digest": "fe5f23262c6c278fc058db1f637e8279400bcad1f6d72e15eba67c7a7e359542"
+}
