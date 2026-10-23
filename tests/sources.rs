@@ -744,7 +744,7 @@ fn search_modes_control_model_ranking_and_default_is_combined() {
     let keyword: Value = serde_json::from_str(&stdout(&keyword)).unwrap();
     assert_eq!(keyword["ranking"], "keyword");
     assert_eq!(urls(&keyword), [NOTE, blob_key(unindexed).as_str()]);
-    assert!(service.seen().is_empty());
+    assert_eq!(service.seen(), [] as [Vec<u8>; 0]);
 
     let output = desk.run(&args);
     assert_success(&output);
