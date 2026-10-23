@@ -1,4 +1,4 @@
-"""Full reader bodies to structural UTF-8 references, published without embeddings in Store C."""
+"""Full bodies to structural UTF-8 references and incremental EG2 embeddings in Store C."""
 
 from bisect import bisect_left, bisect_right
 from collections import defaultdict
@@ -7,9 +7,7 @@ import json
 from pathlib import Path
 import re
 
-import numpy as np
-
-from . import dataset
+from . import dataset, embed
 from .app import kmt
 from .archive import Archive, sha256_hex
 from .paths import Paths
@@ -19,14 +17,11 @@ MIN_TOKENS = 256
 MAX_TOKENS = 512
 OVERLAP_TOKENS = 32
 BYTES_PER_TOKEN = 4
-REFERENCE_MODEL = {
-    "dim": 0,
-    "chunker": {
-        "grammar": "markdown-blocks-v1",
-        "counter": "utf8-bytes-div4-v1",
-        "target": [MIN_TOKENS, MAX_TOKENS],
-        "overlap": OVERLAP_TOKENS,
-    },
+CHUNKER = {
+    "grammar": "markdown-blocks-v1",
+    "counter": "utf8-bytes-div4-v1",
+    "target": [MIN_TOKENS, MAX_TOKENS],
+    "overlap": OVERLAP_TOKENS,
 }
 ATX = re.compile(r" {0,3}(#{1,6})(?:[ \t]+(.*?)|[ \t]*)$")
 SETEXT = re.compile(r" {0,3}(?:=+|-+)[ \t]*$")
@@ -145,7 +140,7 @@ def _paragraph_spans(body: str, start: int, end: int, offsets: list[int]):
 
 
 def chunk_page(page_id: str, title: str, body: str, *, page_hash: str | None = None) -> list[dict]:
-    """Reference rows only. Hash original text and title before any future model formatting."""
+    """Reference rows only. Hash original text and title before model formatting."""
     title = title or "none"
     page_hash = page_hash or _hash(title, body)
     offsets = [0]
@@ -186,20 +181,23 @@ def chunk_page(page_id: str, title: str, body: str, *, page_hash: str | None = N
 
 
 def ingest(paths: Paths, root: Path, binary: str = kmt.BINARY) -> dict:
-    """Read all visible pages before reconciling a complete reference generation. No model is loaded."""
+    """Freeze visible bodies, reuse segmentation, then embed only stale or missing rows."""
+    spec = embed.MODELS["eg2"]
+    model = embed.model_identity(spec)
+    del model["char_cap"]
+    model.update(chunker=CHUNKER, input_version="section-chunk-v1")
     store = VectorStore(paths.emb / "eg2", "C")
     old = store.read()
-    if old and old[0]["model"]["dim"] != 0:
-        raise ValueError("Store C already contains embeddings; reference mode cannot replace them")
     previous = defaultdict(list)
-    if old and old[0]["model"] == REFERENCE_MODEL:
+    if old and old[0]["model"].get("chunker") == CHUNKER:
         for row in old[0]["rows"]:
             previous[row["page_id"]].append(row)
     archive = Archive.load(root)
     _, records = dataset.app_records(
         paths, archive, keys=[key for key in archive.known if key not in archive.state.forgotten], binary=binary
     )
-    pages = kmt.read_pages([kmt.read_argv(binary, root, record["key"]) for record in records])
+    pages = embed.body_pages(records, strict=True)
+    sources = {}
     rows, skipped = [], 0
     for record, page in zip(records, pages, strict=True):
         body = page.get("text")
@@ -207,16 +205,42 @@ def ingest(paths: Paths, root: Path, binary: str = kmt.BINARY) -> dict:
             continue
         title = page.get("title") or record["title"] or "none"
         page_hash = _hash(title, body)
+        sources[record["key"]] = title, body.encode("utf-8"), page_hash
         prior = previous[record["key"]]
         if prior and all(row.get("page_hash") == page_hash for row in prior):
             rows.extend(prior)
             skipped += 1
         else:
             rows.extend(chunk_page(record["key"], title, body, page_hash=page_hash))
-    store.reconcile(rows, REFERENCE_MODEL, lambda indices: np.empty((len(indices), 0), np.float32), retain=False)
+    over_capacity = 0
+
+    def encode(indices):
+        nonlocal over_capacity
+        docs = []
+        for i in indices:
+            row = rows[i]
+            title, raw, page_hash = sources[row["page_id"]]
+            text = raw[row["start"] : row["end"]].decode("utf-8")
+            if row["page_hash"] != page_hash or row["hash"] != _hash(title, row["section"], text):
+                raise ValueError("chunk reference does not match the frozen body")
+            docs.append(spec.format(title, f"{row['section']} - {text}"))
+        st, _ = embed.load_text(spec, local_files_only=True)
+        try:
+            limit = st.max_seq_length
+            if not isinstance(limit, int) or limit <= 0:
+                raise ValueError("chunk encoder has no known token limit")
+            over_capacity = int((embed.token_lengths(st, docs) > limit).sum())
+            vectors, _ = embed.encode(st, docs, embed.BATCH["B"])
+            return vectors
+        finally:
+            embed.release(st)
+
+    _, counts = store.reconcile(rows, model, encode, retain=False)
     return {
         "pages": len(records),
         "chunks": len(rows),
         "skipped": skipped,
         "oversize": sum(row["end"] - row["start"] > MAX_TOKENS * BYTES_PER_TOKEN for row in rows),
+        "over_capacity": over_capacity,
+        **counts,
     }

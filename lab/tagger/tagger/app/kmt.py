@@ -33,12 +33,6 @@ def read_argv(binary: str, root, key: str) -> list[str]:
     return command(binary, root, ["read", "--", key])
 
 
-def read(argvs: list[list[str]]) -> list[str]:
-    """The text `read` prints for each `read_argv`, or "" where it gives none: a refused key, no binary, a timeout.
-    One `--json read` per binary and archive answers each bounded batch of keys. Never shown; only embedded."""
-    return [(page or {}).get("text") or "" for page in read_pages(argvs, strict=False)]
-
-
 def read_pages(argvs: list[list[str]], *, strict: bool = True) -> list[dict | None]:
     """Structured answers, including empty bodies and source refusals. Strict callers abort on failed batches."""
     batches: dict[tuple[str, ...], list[str]] = {}
