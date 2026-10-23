@@ -215,6 +215,8 @@ def _run(paths: Paths, root: Path, fixture: dict, out: Path, binary: str, prepar
         return embed.embed_input(st, embed.MODELS[engine.MODEL], rows, name)[0]
 
     lib, stats = engine.load(paths, root, encode, document_vectors, binary=binary)
+    if stats.get("chunks", {}).get("code") == "chunks_unavailable":
+        raise Invalid("frozen C could not be reused; chunk refresh is prohibited")
     if corpus(lib.records) != fixture["pages"]:
         raise Invalid("loaded corpus drift")
     after = _inputs(paths, root, lib.records)

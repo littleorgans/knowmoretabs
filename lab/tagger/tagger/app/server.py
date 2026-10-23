@@ -25,6 +25,7 @@ from threading import Lock
 
 import numpy as np
 
+from .. import chunks
 from ..archive import STATE_FILE, LibraryState, Unreadable, signature
 from ..paths import Paths, read_json
 from ..zeroshot import prototype, query_variants
@@ -40,6 +41,8 @@ ARCHIVE_HEADER = "X-KMT-Archive"
 RANK_WAIT = 0.5
 # The largest request body read; the shell forwards nothing larger (src/http.rs BODY_LIMIT)
 BODY_LIMIT = 4 * 1024 * 1024
+RANK_REPLY_LIMIT = 8 * 1024 * 1024  # the signed client's existing response bound
+SNIPPET_CHARS = 200
 CSP = (
     "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self'; connect-src 'self'; "
     "base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
@@ -166,14 +169,91 @@ class App:
         }
 
     def rank(self, body: dict) -> dict:
-        """Every page this service holds, forgotten ones included, best first for `query` by text and keywords:
-        their keys. The Library applies its own filters to the order."""
+        """Legacy all-page keys, or schema 1 details among the client's live page/body identities."""
         query = str(body.get("query", ""))
         if not query.strip():
             raise ValueError("type a search")
+        if "schema_version" not in body:
+            q = self.encode([query])[0]
+            rows = engine.order(self.lib, q, query, np.ones(len(self.lib.records), bool))
+            return {"keys": [self.lib.records[i]["key"] for i in rows]}
+        if type(body["schema_version"]) is not int or body["schema_version"] != 1:
+            raise ValueError("unsupported rank schema_version")
+        candidates, chars = body.get("among"), body.get("snippet_chars", SNIPPET_CHARS)
+        if not isinstance(candidates, list) or type(chars) is not int or not 1 <= chars <= SNIPPET_CHARS:
+            raise ValueError("rank requires among and snippet_chars between 1 and 200")
+        identities = {}
+        for candidate in candidates:
+            if not isinstance(candidate, dict) or not isinstance(candidate.get("key"), str):
+                raise ValueError("invalid rank candidate")
+            key, digest = candidate["key"], candidate.get("content_sha256")
+            if "content_sha256" not in candidate or (
+                digest is not None and (not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest))
+            ):
+                raise ValueError("invalid rank body identity")
+            if key in identities:
+                raise ValueError("duplicate rank candidate")
+            identities[key] = digest
+        among = self.live() & np.array([r["key"] in identities for r in self.lib.records], bool)
+        chunk_among = among.copy()
+        stale = set()
+        if self.lib.chunks is not None:
+            for i in np.flatnonzero(among):
+                key = self.lib.records[i]["key"]
+                frozen = self.lib.chunks.bodies.get(key)
+                if frozen is not None and identities[key] != frozen.content_sha256:
+                    chunk_among[i] = False
+                    stale.add(int(i))
+        if not among.any():
+            return {"schema_version": 1, "keys": [], "hits": [], "fallback": []}
         q = self.encode([query])[0]
-        rows = engine.order(self.lib, q, query, np.ones(len(self.lib.records), bool))
-        return {"keys": [self.lib.records[i]["key"] for i in rows]}
+        ranked = engine.search(self.lib, q, query, int(among.sum()), among=among, chunk_among=chunk_among)
+        hits, fallback_counts = [], {}
+        for hit in ranked:
+            i, ref = hit["row"], hit["chunk"]
+            key = self.lib.records[i]["key"]
+            status = "ready" if ref else "stale" if i in stale else self.lib.chunk_status.removeprefix("chunks_")
+            if status == "ready" and ref is None:
+                status = "missing"
+            snippet, span, digest = None, None, None
+            if ref is not None:
+                frozen = self.lib.chunks.bodies[key]
+                snippet = frozen.raw[ref["start"] : ref["end"]].decode("utf-8")[:chars]
+                span = {"start": ref["start"], "end": ref["start"] + len(snippet.encode("utf-8"))}
+                digest = frozen.content_sha256
+            else:
+                code = "chunks_" + status
+                fallback_counts[code] = fallback_counts.get(code, 0) + 1
+            hits.append(
+                {
+                    "key": key,
+                    "score": hit["fused"],
+                    "sources": hit["sources"],
+                    "semantic_source": hit["semantic_source"],
+                    "chunk_status": status,
+                    "section": ref["section"] if ref else None,
+                    "chunk": {k: ref[k] for k in ("id", "start", "end", "hash", "page_hash", "score")} if ref else None,
+                    "snippet": snippet,
+                    "snippet_range": span,
+                    "content_sha256": digest,
+                }
+            )
+        result = {
+            "schema_version": 1,
+            "keys": [h["key"] for h in hits],
+            "hits": hits,
+            "fallback": [
+                {"stage": "chunks", "code": code, "affected_pages": n} for code, n in sorted(fallback_counts.items())
+            ],
+        }
+        if len(json.dumps(result, ensure_ascii=False).encode()) > RANK_REPLY_LIMIT:
+            return {
+                "schema_version": 1,
+                "keys": [],
+                "hits": [],
+                "fallback": [{"stage": "rank", "code": "rank_response_too_large"}],
+            }
+        return result
 
     def refined(self, query: str, q: np.ndarray, hits: list[dict]) -> np.ndarray:
         """The query moved toward the plain ranking's included results and away from every excluded page."""
@@ -480,7 +560,15 @@ def run(
             release(image_st)
 
     binary = kmt_bin or kmt.BINARY
-    lib, stats = engine.load(paths, root.resolve(), encode, embed, embed_image=embed_image, binary=binary)
+    lib, stats = engine.load(
+        paths,
+        root.resolve(),
+        encode,
+        embed,
+        embed_image=embed_image,
+        embed_chunks=lambda docs: chunks.encode_docs(st, docs),
+        binary=binary,
+    )
     app = App(lib, paths.data / "app", encode, embed)
     app.binary = binary
     stats |= {"model_load_s": model["load_s"], "startup_s": round(time.perf_counter() - start, 2)}

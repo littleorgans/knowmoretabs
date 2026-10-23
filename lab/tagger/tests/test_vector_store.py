@@ -1,6 +1,7 @@
 """Durable vectors with deterministic fake embeddings and injected publication failures."""
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -10,6 +11,7 @@ from test_app import DIM, build, fake_embed, fake_encode, fake_image
 from test_add import capture, NEW
 
 from tagger.app import engine
+from tagger import chunks, dataset
 from tagger.archive import Archive
 from tagger.vector_store import VectorStore
 
@@ -251,6 +253,109 @@ def test_text_and_image_hash_the_frozen_input(tmp_path):
     embed.persist_images(paths, [record], image_encoder, dim=2)
     assert VectorStore(paths.emb / "fake", "B").read()[0]["rows"] == expected_text
     assert VectorStore(paths.emb / "image", "eg2-full").read()[0]["rows"] == expected_image
+
+
+@pytest.fixture
+def chunk_library(tmp_path):
+    paths, root = build(tmp_path), tmp_path / "archive"
+    archive = Archive.load(root)
+    _, records = dataset.app_records(paths, archive)
+    visible = [r for r in records if not r["forgotten"]]
+    readable = [r for r in visible if r["text_ok"]][:4]
+    for record in readable:
+        Path(record["content_path"]).write_bytes(b"# Stable\r\n\r\nsame\r\n\r\n# Obsolete\r\n\r\nold\r\n")
+    encoder = Mock(side_effect=lambda docs: (fake_encode(docs), 0))
+    snapshot = chunks.reconcile(paths, visible, encoder, dim=DIM)
+    store = VectorStore(paths.emb / "eg2", "C")
+    encoder.reset_mock()
+    lib, stats = engine.load(paths, root, fake_encode, fake_embed, embed_chunks=encoder, dim=DIM)
+    assert stats["chunks"]["embedded"] == 0
+    encoder.assert_not_called()
+    return lib, archive, readable, store, encoder, snapshot
+
+
+def test_c_partial_sync_reconciles_full_set_removals_and_zero_work_rerun(chunk_library):
+    lib, archive, readable, store, encoder, snapshot = chunk_library
+    changed, textless, forgotten, unchanged = readable
+    old_manifest, old_arrays = store.read()
+    Path(changed["content_path"]).write_bytes(b"# Stable\r\n\r\nchanged\r\n")
+    Path(textless["content_path"]).write_bytes(b"")
+    state = replace(lib.state, forgotten=lib.state.forgotten | {forgotten["key"]})
+    lib = engine.project(replace(lib, state=state))
+    assert not lib.live[lib.rows[forgotten["key"]]], "projection hides C before durable cleanup"
+    lib = engine.sync(lib, archive, [changed["key"]], fake_embed)
+    encoder.assert_called_once()
+    current, arrays = store.read()
+    assert {row["page_id"] for row in current["rows"]} == set(snapshot.bodies) - {textless["key"], forgotten["key"]}
+    updated = [r for r in current["rows"] if r["page_id"] == changed["key"]]
+    assert len(updated) == len(encoder.call_args.args[0]) == 1
+    assert not any(r["section"] == "Obsolete" for r in updated)
+    for i, row in enumerate(current["rows"]):
+        if row["page_id"] == unchanged["key"]:
+            np.testing.assert_array_equal(arrays["vectors"][i], old_arrays["vectors"][old_manifest["rows"].index(row)])
+    encoder.reset_mock()
+    with patch.object(VectorStore, "_publish", side_effect=AssertionError("unchanged C must not republish")):
+        lib = engine.sync(lib, archive, [changed["key"]], fake_embed)
+    assert lib.chunks.counts["embedded"] == 0
+    encoder.assert_not_called()
+    # A dropped key must be cleaned up even when none of the requested A/B keys is known.
+    archive = replace(archive, known=[k for k in archive.known if k != unchanged["key"]])
+    lib = engine.sync(lib, archive, ["synthetic-unknown"], fake_embed)
+    assert unchanged["key"] not in lib.chunks.bodies
+    assert unchanged["key"] not in {r["page_id"] for r in store.read()[0]["rows"]}
+    encoder.assert_not_called()
+
+
+@pytest.mark.parametrize("failure", ["read", "hash", "model", "tokenizer", "encoder"])
+def test_c_failure_keeps_generation_disables_offsets_and_retries(chunk_library, failure):
+    lib, archive, readable, store, encoder, _ = chunk_library
+    old_manifest, old_arrays = store.read()
+    Path(readable[0]["content_path"]).write_bytes(b"changed synthetic body")
+    original_encoder = encoder.side_effect
+    target = {"read": "body_pages", "hash": "_hash"}.get(failure)
+    if target:
+        failing = patch.object(
+            chunks.embed if failure == "read" else chunks, target, side_effect=ValueError("synthetic failure")
+        )
+    elif failure == "model":
+        failing = patch.object(chunks.embed, "model_identity", side_effect=ValueError("synthetic model failure"))
+    elif failure == "tokenizer":
+        st = Mock(max_seq_length=2048)
+        st.tokenizer.side_effect = ValueError("synthetic tokenizer failure")
+        failing = patch.object(encoder, "side_effect", lambda docs: chunks.encode_docs(st, docs))
+    else:
+        failing = patch.object(encoder, "side_effect", ValueError("synthetic encoder failure"))
+    try:
+        with failing:
+            failed = engine.sync(lib, archive, [], fake_embed)
+    finally:
+        encoder.side_effect = original_encoder
+    assert failed.chunks is None and failed.chunk_status == "chunks_unavailable"
+    hit = engine.search(failed, fake_encode(["synthetic"])[0], "synthetic", 1)[0]
+    assert hit["chunk"] is None and hit["semantic_source"] == "B"
+    manifest, arrays = store.read()
+    assert manifest == old_manifest
+    np.testing.assert_array_equal(arrays["vectors"], old_arrays["vectors"])
+    encoder.reset_mock()
+    retried = engine.sync(failed, archive, [], fake_embed)
+    assert retried.chunks is not None and retried.chunk_status == "ready"
+    encoder.assert_called_once()
+
+
+def test_c_missing_is_optional_and_detected_after_explicit_preparation(tmp_path):
+    paths, root = build(tmp_path), tmp_path / "archive"
+    encoder = Mock(side_effect=lambda docs: (fake_encode(docs), 0))
+    lib, stats = engine.load(paths, root, fake_encode, fake_embed, embed_chunks=encoder, dim=DIM)
+    assert stats["chunks"] == {"code": "chunks_missing"}
+    assert not (paths.emb / "eg2" / "C").exists()
+    encoder.assert_not_called()
+    archive = Archive.load(root)
+    _, records = dataset.app_records(paths, archive, keys=[k for k in archive.known if k not in lib.state.forgotten])
+    chunks.reconcile(paths, records, encoder, dim=DIM)
+    encoder.reset_mock()
+    refreshed = engine.sync(lib, archive, [], fake_embed)
+    assert refreshed.chunks is not None and refreshed.chunk_status == "ready"
+    encoder.assert_not_called()
 
 
 def test_concurrent_writers_reconcile_under_lock(tmp_path):

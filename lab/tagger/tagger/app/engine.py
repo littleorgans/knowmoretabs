@@ -20,7 +20,7 @@ from pathlib import Path
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
-from .. import dataset
+from .. import chunks as chunk_store, dataset
 from . import kmt
 from ..archive import Archive, LibraryState
 from ..embed import CHAR_CAP, MAX_TOKENS, MODELS, page_texts, persist_text, persist_images
@@ -68,10 +68,21 @@ class Library:
     dim: int
     added_q: np.ndarray  # queries of the tags `add_tags` appended, in tag order after the rules' own
     binary: str = kmt.BINARY  # the knowmoretabs that prints a local document's text (`kmt.read_argv`)
+    chunks: chunk_store.Snapshot | None = None
+    chunk_status: str = "chunks_missing"
+    embed_chunks: chunk_store.Encoder | None = None
     rows: dict = field(init=False)  # page key -> row
+    chunk_rows: dict = field(init=False)  # page row -> chunk indices, in stable reference order
 
     def __post_init__(self):
         self.rows = {r["key"]: i for i, r in enumerate(self.records)}
+        self.chunk_rows = {}
+        if self.chunks is not None:
+            for j, ref in sorted(
+                enumerate(self.chunks.rows), key=lambda pair: (pair[1]["start"], pair[1]["end"], pair[1]["id"])
+            ):
+                if (i := self.rows.get(ref["page_id"])) is not None:
+                    self.chunk_rows.setdefault(i, []).append(j)
 
 
 def _vectors(paths, records, name, embed, embed_image, dim, *, legacy_records=None, retain=False):
@@ -111,7 +122,15 @@ def _keyword_index(records: list[dict]) -> tuple[TfidfVectorizer, object]:
 
 
 def load(
-    paths: Paths, root: Path, encode: Encode, embed: Embed, *, embed_image=None, dim=None, binary: str = kmt.BINARY
+    paths: Paths,
+    root: Path,
+    encode: Encode,
+    embed: Embed,
+    *,
+    embed_image=None,
+    embed_chunks: chunk_store.Encoder | None = None,
+    dim=None,
+    binary: str = kmt.BINARY,
 ) -> tuple[Library, dict]:
     dim = MODELS[MODEL].dim if dim is None else dim
     timings = {}
@@ -177,7 +196,9 @@ def load(
         dim=dim,
         added_q=np.zeros((0, X.shape[1]), X.dtype),
         binary=binary,
+        embed_chunks=embed_chunks,
     )
+    lib = _refresh_chunks(lib, archive)
 
     stats = {
         "pages": len(lib.records),
@@ -189,6 +210,7 @@ def load(
         "image_pages": int(lib.has_image.sum()),
         "input": input_name,
         "vectors": vector_counts,
+        "chunks": lib.chunks.counts if lib.chunks is not None else {"code": lib.chunk_status},
         **{k: round(v, 2) for k, v in timings.items()},
     }
     return lib, stats
@@ -264,13 +286,37 @@ def add_tags(lib: Library, names: list[str], encode: Encode) -> Library:
     )
 
 
+def _cached_chunks_only(docs: list[str]):
+    raise ValueError("chunk refresh requires the app's loaded encoder")
+
+
+def _refresh_chunks(lib: Library, archive: Archive) -> Library:
+    """C always sees the complete visible known set, independently of the partial A/B refresh."""
+    try:
+        if not (lib.paths.emb / MODEL / "C" / "manifest.json").exists():
+            if lib.chunks is None and lib.chunk_status == "chunks_missing":
+                return lib
+            return replace(lib, chunks=None, chunk_status="chunks_missing")
+        _, records = dataset.app_records(
+            lib.paths,
+            archive,
+            keys=[key for key in archive.known if key not in lib.state.forgotten],
+            binary=lib.binary,
+        )
+        snapshot = chunk_store.reconcile(lib.paths, records, lib.embed_chunks or _cached_chunks_only, dim=lib.dim)
+    except Exception:
+        # Reconciliation publishes only after all inputs and vectors succeed. Never expose old offsets.
+        return replace(lib, chunks=None, chunk_status="chunks_unavailable")
+    return replace(lib, chunks=snapshot, chunk_status="ready")
+
+
 def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Library:
     """Refresh and persist the given known pages, preserving all other keyed cache rows. Their decisions are the ones
     `lib.state` holds, not the archive's, which may be older: the caller follows the file afterwards."""
     known = set(archive.known)
     urls = [url for url in dict.fromkeys(urls) if url in known]
     if not urls:
-        return lib
+        return _refresh_chunks(lib, archive)
     _, fresh = dataset.app_records(lib.paths, archive, keys=urls, binary=lib.binary)
     vectors, image_rows, mask, counts = _vectors(
         lib.paths,
@@ -303,7 +349,7 @@ def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Libra
             has_image[row] = mask[i]
     S = np.hstack([lib.rules.scores(X)["supervised"], X @ lib.added_q.T])
     keywords, K = _keyword_index(records)
-    return project(
+    lib = project(
         replace(
             lib,
             records=records,
@@ -316,6 +362,7 @@ def sync(lib: Library, archive: Archive, urls: list[str], embed: Embed) -> Libra
             K=K,
         )
     )
+    return _refresh_chunks(lib, archive)
 
 
 def _ranks(scores: np.ndarray, eligible: np.ndarray) -> np.ndarray:
@@ -326,10 +373,25 @@ def _ranks(scores: np.ndarray, eligible: np.ndarray) -> np.ndarray:
     return rank
 
 
-def _fused(lib: Library, q: np.ndarray, text: str, images: bool, among: np.ndarray) -> tuple[np.ndarray, dict, dict]:
+def _fused(
+    lib: Library, q: np.ndarray, text: str, images: bool, among: np.ndarray, chunk_among: np.ndarray | None = None
+) -> list[dict]:
     """Reciprocal rank fusion over the rows `among` of EG2 cosine, keyword score and, with `images`, the image
-    cosine: the fused score (-inf outside `among`), each source's scores and its 1 based ranks (0: not ranked)."""
-    sources = {"text": (lib.X @ q, among)}
+    cosine. C replaces the page's text score when usable; source ranks see only eligible pages."""
+    semantic = lib.X @ q
+    inputs = np.full(len(lib.records), lib.input_name, dtype=object)
+    winners = {}
+    if lib.chunks is not None:
+        eligible = among if chunk_among is None else among & chunk_among
+        indices = [j for i, group in lib.chunk_rows.items() if eligible[i] for j in group]
+        scores = dict(zip(indices, lib.chunks.vectors[indices] @ q, strict=True))
+        for i, group in lib.chunk_rows.items():
+            if not eligible[i]:
+                continue
+            j = max(group, key=scores.__getitem__)  # stable reference order breaks equal chunk scores
+            semantic[i], inputs[i] = scores[j], "C"
+            winners[i] = {**lib.chunks.rows[j], "score": float(scores[j])}
+    sources = {"text": (semantic, among)}
     kw = np.asarray((lib.K @ lib.keywords.transform([text]).T).todense()).ravel()
     sources["keyword"] = (kw, among & (kw > 0))
     if images and lib.image is not None:
@@ -339,8 +401,21 @@ def _fused(lib: Library, q: np.ndarray, text: str, images: bool, among: np.ndarr
     for name, (scores, eligible) in sources.items():
         ranks[name] = _ranks(scores, eligible)
         fused += np.where(ranks[name] > 0, 1 / (RRF_K + ranks[name]), 0)
-    fused[~among] = -np.inf
-    return fused, sources, ranks
+    top = np.flatnonzero(among)
+    top = top[np.argsort(-fused[top], kind="stable")]
+    return [
+        {
+            "row": int(i),
+            "fused": float(fused[i]),
+            "sources": {
+                k: {"score": float(s[i]), "rank": int(ranks[k][i]), **({"input": inputs[i]} if k == "text" else {})}
+                for k, (s, _) in sources.items()
+            },
+            "semantic_source": inputs[i],
+            "chunk": winners.get(i),
+        }
+        for i in top
+    ]
 
 
 def search(
@@ -351,27 +426,19 @@ def search(
     images: bool = False,
     among: np.ndarray | None = None,
     offset: int = 0,
+    *,
+    chunk_among: np.ndarray | None = None,
 ) -> list[dict]:
     """The `n` pages `among` (default: the live ones) from rank `offset` (0 based) by reciprocal rank fusion of EG2
     cosine, keyword score and, with `images`, the image cosine. Each hit carries every source's score and rank (0:
     the source did not rank it)."""
     among = lib.live if among is None else among
-    fused, sources, ranks = _fused(lib, q, text, images, among)
-    top = np.argsort(-fused, kind="stable")[offset : min(offset + n, int(among.sum()))]
-    return [
-        {
-            "row": int(i),
-            "fused": float(fused[i]),
-            "sources": {k: {"score": float(s[i]), "rank": int(ranks[k][i])} for k, (s, _) in sources.items()},
-        }
-        for i in top
-    ]
+    return _fused(lib, q, text, images, among, chunk_among)[offset : offset + n]
 
 
 def order(lib: Library, q: np.ndarray, text: str, among: np.ndarray) -> np.ndarray:
     """Every row `among`, best first, as `search` ranks text and keywords; ties keep row order."""
-    fused, _, _ = _fused(lib, q, text, False, among)
-    return np.argsort(-fused, kind="stable")[: int(among.sum())]
+    return np.array([h["row"] for h in _fused(lib, q, text, False, among)], dtype=int)
 
 
 def newest(lib: Library, among: np.ndarray) -> np.ndarray:
