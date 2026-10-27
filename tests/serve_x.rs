@@ -101,9 +101,27 @@ fn linked_thread_answer(focal: u64) -> Vec<u8> {
     serde_json::to_vec(&json!({"code": 200, "status": status, "thread": [first, second]})).unwrap()
 }
 
+/// Post 600, an X Article: its post text is empty, its title, body and
+/// cover are the article's, and its only link is the article on X itself.
+fn article_answer() -> Vec<u8> {
+    let mut status = thread_post("example_author", 600, "");
+    status["raw_text"] = json!({"text": "https://t.co/EXAMPLE6",
+        "facets": [{"type": "url", "original": "https://t.co/EXAMPLE6",
+            "replacement": "https://x.com/i/article/600", "display": "x.com/i/article/600"}]});
+    status["article"] = json!({"id": "600", "title": "A synthetic article title",
+        "preview_text": "The opening paragraph",
+        "media_entities": [],
+        "content": {"entityMap": [], "blocks": [
+            {"type": "unstyled", "text": "The opening paragraph of the article.", "entityRanges": []},
+            {"type": "header-two", "text": "A section", "entityRanges": []},
+            {"type": "unordered-list-item", "text": "A point in a list.", "entityRanges": []},
+            {"type": "unstyled", "text": "The closing paragraph of the article.", "entityRanges": []}]}});
+    serde_json::to_vec(&json!({"code": 200, "status": status.clone(), "thread": [status]})).unwrap()
+}
+
 /// The X post API, standing in: post 100 is a post alone, post 401 is
 /// private, posts 200 to 204 are one thread, 500 and 501 another with a
-/// link; and the article at `blog.example.test`.
+/// link, 600 an X Article; and the article at `blog.example.test`.
 fn x_api() -> Site {
     Site::start(|host, path, _| {
         let id = path
@@ -114,6 +132,7 @@ fn x_api() -> Site {
             ("api.fxtwitter.com", Some(401)) => site::Reply::status(401),
             ("api.fxtwitter.com", Some(id @ 200..=204)) => json_reply(thread_answer(id)),
             ("api.fxtwitter.com", Some(id @ 500..=501)) => json_reply(linked_thread_answer(id)),
+            ("api.fxtwitter.com", Some(600)) => json_reply(article_answer()),
             ("blog.example.test", _) if path == "/post" => {
                 site::Reply::html(article("A synthetic article"))
             }
@@ -173,6 +192,60 @@ fn bookmark_read(server: &Server, post: &str, read: &Value) -> Value {
     );
     assert_eq!(reply.status, 200, "{}", reply.text());
     reply.json()
+}
+
+/// Saves while a background request is paused, proving that the reply,
+/// another archive writer and another bookmark can all finish first.
+fn bookmark_while_read_waits(
+    server: &Server,
+    post: &str,
+    read: &Value,
+    waiting: &mpsc::Receiver<()>,
+    release: &mpsc::Sender<()>,
+) -> Value {
+    std::thread::scope(|scope| {
+        let (saved, reply) = mpsc::channel();
+        scope.spawn(move || {
+            let _ = saved.send(bookmark_read(server, post, read));
+        });
+        waiting
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the background request started");
+        let reply = reply.recv_timeout(Duration::from_secs(2));
+        let (changed, change) = mpsc::channel();
+        scope.spawn(move || {
+            let _ = changed.send(server.post("/api/forget", &json!({"urls": [A]})));
+        });
+        let change = change.recv_timeout(Duration::from_secs(2));
+        let (saved_next, next) = mpsc::channel();
+        scope.spawn(move || {
+            let _ = saved_next.send(bookmark_read(
+                server,
+                &status_of(610),
+                &page_read(
+                    "example_author",
+                    610,
+                    &[shown("example_author", 610, "Another saved post.")],
+                    true,
+                ),
+            ));
+        });
+        let next = next.recv_timeout(Duration::from_secs(2));
+        // Release the site before asserting, including on a regression.
+        release.send(()).unwrap();
+        let reply = reply.expect("bookmark replied while its background read was waiting");
+        assert_eq!(
+            change
+                .expect("another writer acquired the archive lock")
+                .status,
+            200
+        );
+        assert_eq!(
+            next.expect("another bookmark saved while the read waited")["value"],
+            "added"
+        );
+        reply
+    })
 }
 
 /// A post as the extension reads it from the page.
@@ -487,6 +560,149 @@ fn a_thread_shown_in_part_is_filled_from_the_public_thread_and_later_bookmarks_j
             .all(|page| page["url"] != status_of(204)),
         "one page for the thread"
     );
+}
+
+#[test]
+fn an_x_articles_page_read_that_shows_no_text_is_filled_from_the_public_article() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let key = status_of(600);
+    // The Article view on the post's own page: the post is named, and its
+    // title and body are drawn apart from the post's text.
+    let line = bookmark_read(
+        &server,
+        &key,
+        &page_read(
+            "example_author",
+            600,
+            &[shown("example_author", 600, "")],
+            true,
+        ),
+    );
+    assert_eq!(
+        (&line["value"], &line["content"], &line["read"]),
+        (&json!("added"), &json!("ok"), &json!("replaced")),
+        "{line}"
+    );
+    assert_eq!(
+        line.get("article"),
+        None,
+        "the article on X is no page of its own: {line}"
+    );
+    assert_eq!(site.paths(), ["api.fxtwitter.com/2/thread/600"]);
+    let front = kept_front(&fx, &key);
+    assert!(front.contains("tier: \"x\""), "{front}");
+    for part in [
+        "The opening paragraph of the article.",
+        "#### A section",
+        "- A point in a list.",
+        "The closing paragraph of the article.",
+    ] {
+        assert!(front.contains(part), "{part}: {front}");
+    }
+    assert_eq!(
+        log_lines(&fx, "added.jsonl").last().unwrap()["title"],
+        "A synthetic article title"
+    );
+}
+
+#[test]
+fn a_waiting_x_article_cover_holds_neither_the_bookmark_reply_nor_the_archive_lock() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let key = status_of(600);
+    let mut answer: Value = serde_json::from_slice(&article_answer()).unwrap();
+    // HTTP matches the stand-in's transport; HTTPS would stall in TLS
+    // before the stand-in could see the request.
+    answer["status"]["article"]["cover_media"] = json!({"media_info": {
+        "original_img_url": "http://pbs.twimg.com/media/synthetic-cover.png"}});
+    answer["thread"][0] = answer["status"].clone();
+    let answer = serde_json::to_vec(&answer).unwrap();
+    let (started, waiting) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let released = Mutex::new(released);
+    let site = Site::start(move |host, path, _| match (host, path) {
+        ("api.fxtwitter.com", "/2/thread/600") => json_reply(answer.clone()),
+        ("pbs.twimg.com", "/media/synthetic-cover.png") => {
+            started.send(()).unwrap();
+            let _ = released
+                .lock()
+                .unwrap()
+                .recv_timeout(Duration::from_secs(15));
+            let picture = image::RgbImage::from_pixel(320, 240, image::Rgb([40, 80, 120]));
+            let mut bytes = std::io::Cursor::new(Vec::new());
+            picture
+                .write_to(&mut bytes, image::ImageFormat::Png)
+                .unwrap();
+            site::Reply {
+                status: 200,
+                headers: vec![("Content-Type", "image/png".into())],
+                body: bytes.into_inner(),
+                stall: None,
+            }
+        }
+        _ => site::Reply::status(404),
+    });
+    let server = Server::from_child(
+        serve_command(&fx, &site)
+            .env("KNOWMORETABS_TEST_TIMEOUT_MS", "30000")
+            .spawn()
+            .expect("spawn serve"),
+    );
+    let reply = bookmark_while_read_waits(
+        &server,
+        &key,
+        &page_read(
+            "example_author",
+            600,
+            &[shown("example_author", 600, "")],
+            true,
+        ),
+        &waiting,
+        &release,
+    );
+    assert_eq!(
+        (&reply["content"], &reply["read"]),
+        (&json!("ok"), &json!("replaced"))
+    );
+    assert_eq!(
+        page(&server.library(), &key)["title"],
+        "A synthetic article title"
+    );
+    assert!(kept_front(&fx, &key).contains("The closing paragraph of the article."));
+    // The background step still stores the cover through the ordinary
+    // image path, and the Library serves that JPEG.
+    for _ in 0..100 {
+        let lines: Vec<Value> = log_lines(&fx, "images.jsonl")
+            .into_iter()
+            .filter(|line| line["url"] == key)
+            .collect();
+        if lines.iter().any(|line| line["status"] == "ok") {
+            // The replaced page read's image is never tried: its line would
+            // say the page has none while the cover waits.
+            assert_eq!(lines.len(), 1, "one image attempt: {lines:?}");
+            let jpeg = fs::read(
+                fx.root
+                    .join("pages/images")
+                    .join(format!("{}.jpg", kept_name(&key))),
+            )
+            .unwrap();
+            assert_eq!(
+                image::guess_format(&jpeg).unwrap(),
+                image::ImageFormat::Jpeg
+            );
+            assert_eq!(server.served(&key)["image"]["status"], "ok");
+            assert_eq!(
+                server.get(&format!("/api/image/{}", kept_name(&key))).body,
+                jpeg
+            );
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    panic!("the Article cover was never kept");
 }
 
 #[test]
@@ -871,42 +1087,14 @@ fn a_waiting_article_holds_neither_the_bookmark_reply_nor_the_archive_lock() {
             .spawn()
             .expect("spawn serve"),
     );
-    std::thread::scope(|scope| {
-        let server = &server;
-        let (saved, reply) = mpsc::channel();
-        scope.spawn(move || {
-            saved
-                .send(bookmark_read(
-                    server,
-                    &status_of(340),
-                    &page_read("example_author", 340, &[linking(340, Some(ARTICLE))], true),
-                ))
-                .unwrap();
-        });
-        waiting
-            .recv_timeout(Duration::from_secs(5))
-            .expect("the article request started");
-        let reply = reply.recv_timeout(Duration::from_secs(2));
-        let (changed, change) = mpsc::channel();
-        scope.spawn(move || {
-            changed
-                .send(server.post("/api/forget", &json!({"urls": [A]})))
-                .unwrap();
-        });
-        let change = change.recv_timeout(Duration::from_secs(2));
-        // Release the site before asserting, including on a regression.
-        release.send(()).unwrap();
-        assert_eq!(
-            reply.expect("bookmark replied while the article was waiting")["article"],
-            json!({"url": ARTICLE, "value": "added"})
-        );
-        assert_eq!(
-            change
-                .expect("another writer acquired the archive lock")
-                .status,
-            200
-        );
-    });
+    let reply = bookmark_while_read_waits(
+        &server,
+        &status_of(340),
+        &page_read("example_author", 340, &[linking(340, Some(ARTICLE))], true),
+        &waiting,
+        &release,
+    );
+    assert_eq!(reply["article"], json!({"url": ARTICLE, "value": "added"}));
     assert_eq!(titled_in_time(&fx, ARTICLE), "A synthetic article");
 }
 
