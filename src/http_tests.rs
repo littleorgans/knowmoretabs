@@ -38,7 +38,15 @@ fn host_must_be_loopback_by_name_and_this_port() {
 fn origin_must_be_http_and_our_host() {
     assert!(origin_allowed("http://127.0.0.1:7878", 7878));
     assert!(origin_allowed("http://localhost:7878", 7878));
+    assert!(
+        origin_allowed(EXTENSION_ORIGIN, 7878),
+        "the toolbar extension"
+    );
     for origin in [
+        "chrome-extension://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        &format!("{EXTENSION_ORIGIN}/"),
+        &EXTENSION_ORIGIN.to_ascii_uppercase(),
+        "https://x.com",
         "null",
         "http://evil.example",
         "https://127.0.0.1:7878",

@@ -1,6 +1,6 @@
 //! `knowmoretabs serve`: the library over HTTP/1.1 on 127.0.0.1.
 //!
-//! slice: triage, platforms, tags
+//! slice: triage, platforms, tags, x-bookmarks
 //! why: Routing over the archive: one client, each request answered
 //!      from the archive on disk and every write through the same locked
 //!      paths the commands use, plus one prefix forwarded to the model
@@ -8,7 +8,9 @@
 //!      bounds and the Host and Origin checks are `http`'s. The image
 //!      route's name is checked where the images live
 //!      (`image_store::served`); the content route answers only a page the
-//!      library lists (`content_view::served`).
+//!      library lists (`content_view::served`). The toolbar extension
+//!      saves a post bookmarked on X (`xbookmark`) and reports what it sees
+//!      there (`xhealth`) through two routes of their own.
 
 use std::io;
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
@@ -31,7 +33,7 @@ use crate::model_service::{self, ModelService};
 use crate::triage::{self, Action};
 use crate::{
     assets, content_store, content_view, export, image_store, library_history, out, suggestions,
-    tags,
+    tags, xbookmark, xbookmark_log, xhealth,
 };
 
 pub struct Options {
@@ -166,7 +168,7 @@ type Handler = fn(&Server, &Head, &[u8]) -> Response;
 /// Every exact path the server answers, query cut, with its one method and
 /// its handler; any other method on one of these paths is a 405 naming that
 /// method. The image and model service prefixes are matched after these.
-const ROUTES: [(&str, &str, Handler); 11] = [
+const ROUTES: [(&str, &str, Handler); 13] = [
     ("/", "GET", |s, _, _| s.page()),
     ("/index.html", "GET", |s, _, _| s.page()),
     ("/app.css", "GET", |_, _, _| asset("app.css", Kind::Css)),
@@ -185,6 +187,12 @@ const ROUTES: [(&str, &str, Handler); 11] = [
     ("/api/tags", "POST", |s, head, body| s.tags(head, body)),
     ("/api/vocabulary", "POST", |s, head, body| {
         s.vocabulary(head, body)
+    }),
+    ("/api/x/bookmark", "POST", |s, head, body| {
+        s.x_bookmark(head, body)
+    }),
+    ("/api/x/health", "POST", |s, head, body| {
+        s.x_health(head, body)
     }),
 ];
 
@@ -319,7 +327,8 @@ impl Server {
             &suggested,
             Shape::Serve,
         )
-        .with_images(image_store::kept(&self.root, self.log));
+        .with_images(image_store::kept(&self.root, self.log))
+        .with_x(xbookmark_log::marks(&self.root)?);
         serde_json::to_vec(&library).map_err(|source| Error::Json {
             path: self.root.join(library::STATE_FILE),
             source,
@@ -428,6 +437,40 @@ impl Server {
         }
     }
 
+    /// A post bookmarked on X, saved as `add` saves a page; the reply is
+    /// `add`'s last line.
+    fn x_bookmark(&self, head: &Head, body: &[u8]) -> Response {
+        let request: XBookmarkRequest = match json_request(head, body, "{\"post\":\"...\"}") {
+            Ok(request) => request,
+            Err(response) => return response,
+        };
+        let Some(post) = xbookmark::Post::parse(&request.post) else {
+            return Response::error(
+                Status::BadRequest,
+                "post: name an X post as https://x.com/<handle>/status/<id>",
+            );
+        };
+        match xbookmark::save(&self.root, &post) {
+            Ok(line) => Response::ok("application/json", line.to_string().into_bytes()),
+            Err(err) => self.failure(&err),
+        }
+    }
+
+    /// The toolbar extension's report on what it sees on X, kept whole.
+    fn x_health(&self, head: &Head, body: &[u8]) -> Response {
+        let report: xhealth::Report = match json_request(head, body, "an extension report") {
+            Ok(report) => report,
+            Err(response) => return response,
+        };
+        if let Some(why) = report.refusal() {
+            return Response::error(Status::BadRequest, why);
+        }
+        match xhealth::record(&self.root, &report) {
+            Ok(()) => Response::ok("application/json", b"{}".to_vec()),
+            Err(err) => self.failure(&err),
+        }
+    }
+
     /// A tag name the rules refuse is the request's fault, not the server's.
     fn refusal(&self, err: &Error) -> Response {
         match err {
@@ -505,6 +548,11 @@ struct TagsRequest {
     add: Vec<String>,
     #[serde(default)]
     remove: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct XBookmarkRequest {
+    post: String,
 }
 
 #[derive(Deserialize)]

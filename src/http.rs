@@ -7,8 +7,10 @@
 //!      library. Owning the HTTP layer keeps the defences (loopback bind in
 //!      `server::run`, the Host and Origin checks here) and every input bound
 //!      in one place a reviewer can read top to bottom, with no dormant
-//!      dependency between them and the socket. No keep-alive: each
-//!      connection carries one request and is closed.
+//!      dependency between them and the socket. The toolbar extension is
+//!      this repo's own code, so its one origin, pinned by the manifest's
+//!      `key`, counts as the Library's own; every other page stays refused.
+//!      No keep-alive: each connection carries one request and is closed.
 
 use std::fmt::Write as _;
 use std::io::{self, Read, Write};
@@ -130,10 +132,16 @@ fn host_allowed(host: &str, port: u16) -> bool {
     name_ok && port_ok
 }
 
+/// The toolbar extension's origin: its id follows from the public key in
+/// `extension/manifest.json`, and `tests/extension.cjs` derives it from
+/// there.
+pub(crate) const EXTENSION_ORIGIN: &str = "chrome-extension://oofnnpebjekkafagdpemknaofoemgpbk";
+
 fn origin_allowed(origin: &str, port: u16) -> bool {
-    origin
-        .strip_prefix("http://")
-        .is_some_and(|host| host_allowed(host, port))
+    origin == EXTENSION_ORIGIN
+        || origin
+            .strip_prefix("http://")
+            .is_some_and(|host| host_allowed(host, port))
 }
 
 pub(crate) struct Head {

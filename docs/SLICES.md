@@ -25,6 +25,7 @@
 | `keep-page-text` | Keep what a page says, not just what it is called | 8 `content` |
 | `add-a-page` | Add the page I am reading without saving every tab | 9 `add` |
 | `my-documents` | Find my own notes and papers beside the pages I read, without copying them | 10 `sources` |
+| `save-from-x` | Keep what I bookmark on X without leaving X | 11 `x-bookmarks` |
 
 ## Build order
 
@@ -281,6 +282,34 @@ the owner's documents or a record of where they live. The archive keeps the
 key and the pin; git and the shelf keep the bytes. Search reads only what was
 added and the library state, never a snapshot or the History record, so an
 agent is never handed the owner's browsing.
+
+### 11. Save what I bookmark on X (`x-bookmarks`) — building
+
+- Delivers: save-from-x
+- Depends on: add, content, tags
+
+**Ships.** Clicking X's own bookmark button on a post on x.com or twitter.com saves the
+post to the library. The toolbar extension sees the click before X handles
+it, names the post that owns the button and nothing else, and its service
+worker posts it to `serve`'s `POST /api/x/bookmark`, the only origin besides
+the Library's own that `serve` accepts, pinned by the manifest's key. The post
+is kept as one page under `https://x.com/<handle>/status/<id>`, through
+`add`'s admission and content stage, so its text and image come from the X
+post API as any X page's do; removing a bookmark does nothing. Each click is
+one line in `pages/xbookmarks.jsonl`, and the Library is served each page's
+latest bookmark time and clicked posts. While the Library is not running the
+extension keeps up to 50 saves for 7 days and sends them later. The extension
+reports what it sees on X to `POST /api/x/health`, kept as `extension.json`,
+and `doctor` says when it sees posts but no bookmark button. Reading the
+author's whole thread from the page, the linked article, the note on x.com
+and the From X list follow.
+
+**Intent.** Bookmarking on X is where the owner already says "keep this", so a second
+step in the Library is the wrong cost. The extension stays a messenger: it
+names a post, never a URL to fetch, and `serve` keeps every rule of what is
+written and what leaves the machine, by the same paths `add` uses. X changes
+its markup without notice, so the extension's health is part of the slice,
+not an afterthought.
 
 ## Prepared for, deliberately not built
 
