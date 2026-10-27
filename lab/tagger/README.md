@@ -163,6 +163,18 @@ path. Run `./run.sh`; both embed steps pass that snapshot explicitly as `--root`
 The pipeline refuses missing or empty `KMT_TAGGER_DATA` and never defaults to library/tagger. Then run
 `uv run --locked tagger --data <fresh> compare <original>` (metrics only; timings and memory excluded; exit 1 on any difference above 1e-3).
 
+## Startup after a chunker or model change
+
+A change to the chunker (`chunks.CHUNKER`) or to the embedding model re-embeds every chunk of Store C at startup.
+A model change also re-embeds stores A and B first. The app listens only once these rebuilds finish, so until then
+the tagger answers nothing: the Library falls back to keyword search without saying so, and Tag and Add link are
+unavailable. `just up` waits 120 seconds for the port, then reports that the tagger did not listen and exits 1, while
+the build keeps running. Wait for port 41879 to listen rather than restarting: a store publishes only when its rebuild
+completes, so a restart starts it over. Store C took about 35 minutes on an archive of about 1,650 pages (install of
+2026-10-24); the time scales with page count. If the startup build of Store C fails, the app starts without it and
+retries the full rebuild at the next Add link sync, holding the app lock throughout: search answers busy (the Library
+again uses keyword search), the other Tag requests wait, and that job's Search stage ends only with the rebuild.
+
 ## Leakage boundary
 
 `evaluate.cross_validate` receives only the CV pool rows; `evaluate.score_test_once` is the only scoring path for held out rows.

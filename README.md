@@ -38,6 +38,9 @@ Library uses port 41878 and Tagger 41879; override them with
 `just lib_port=42078 tagger_port=42079 up` (use the same overrides for `down`).
 Logs and pid files live under `<resolved root>/logs`. Startup waits up to
 120 seconds per app. Existing processes on either port are left running.
+After a chunker or embedding model change the Tagger rebuilds its stores before
+it listens, which can take far longer; `just up` then reports a failure while
+the build goes on. See the tagger guide's startup section before restarting.
 
 Put the installed tools on your `PATH`. The app needs prepared tagger data
 and cached model weights; it refuses missing data instead of rebuilding it.
