@@ -1,6 +1,7 @@
 // The content script on x.com and twitter.com. It hears X's own bookmark clicks before X
-// handles them and tells the service worker which post; it counts what each page shows so the
-// worker can report health. It never fetches, clicks, scrolls or opens anything.
+// handles them and tells the service worker which post, with what the page shows of its
+// author's thread; it counts what each page shows so the worker can report health. It never
+// fetches, clicks, scrolls or opens anything.
 const CONFIRM_MS = 5000; // how long X may take to show a bookmark as saved
 const POLL_MS = 250;
 const SETTLE_MS = 2000; // a page view is counted once the page stops changing this long
@@ -26,10 +27,13 @@ document.addEventListener(
   'click',
   (event) => {
     if (!event.isTrusted) return;
-    const intent = clickIntent(event.composedPath(), location.href);
+    const path = event.composedPath();
+    const intent = clickIntent(path, location.href);
     if (intent.kind !== 'add') return;
     if (intent.missing) return tell({ kind: 'intent', confirmed: false });
-    tell({ kind: 'bookmark', post: intent.post });
+    // Read now, before X draws the page again; the Library checks it and asks the public
+    // service for what it lacks.
+    tell({ kind: 'bookmark', post: intent.post, read: pageRead(path, location.href) });
     watch(intent.id);
   },
   true,

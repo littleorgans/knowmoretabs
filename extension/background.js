@@ -34,13 +34,16 @@ function fromX(sender) {
   return sender.id === chrome.runtime.id && Boolean(sender.tab) && typeof sender.url === 'string' && X_PAGES.some((page) => sender.url.startsWith(page));
 }
 
+const isObject = (value) => typeof value === 'object' && value !== null && !Array.isArray(value);
 const isCount = (n) => Number.isInteger(n) && n >= 0 && n <= VIEW_MAX;
 
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (!fromX(sender) || typeof message !== 'object' || message === null) return;
   const now = Date.now();
   if (message.kind === 'bookmark' && typeof message.post === 'string' && canonicalPost(message.post)?.post === message.post) {
-    serial(() => deliver(message.post, now));
+    // The Library checks the page read; one of the wrong shape is left out, never the save.
+    const read = isObject(message.read) ? message.read : undefined;
+    serial(() => deliver(message.post, read, now));
   } else if (message.kind === 'view' && isCount(message.posts) && isCount(message.controls) && message.controls <= message.posts) {
     const counts = { posts: message.posts, controls: message.controls };
     serial(() => health((h) => afterView(h, counts, iso(now)), now));
@@ -63,8 +66,8 @@ async function reply({ url, init }) {
 // Sends the post once. When the Library does not answer, or answers that its archive failed,
 // the save is dropped: only the count of drops and the time of the last are kept, never the
 // post, and the health report carries them. Any other reply, a refusal included, ends it.
-async function deliver(post, now) {
-  const answer = await reply(bookmarkRequest(post));
+async function deliver(post, read, now) {
+  const answer = await reply(bookmarkRequest(post, read));
   if (answer && answer.status < 500) return;
   const { drops } = await chrome.storage.local.get('drops');
   const counting = drops && now - Date.parse(drops.last) < DROPS_MS;

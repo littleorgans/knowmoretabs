@@ -78,6 +78,7 @@ class Text extends Node {
   constructor(text) {
     super();
     this.text = text;
+    this.nodeType = 3;
   }
 
   get textContent() {
@@ -88,6 +89,7 @@ class Text extends Node {
 class Element extends Node {
   constructor(localName, attributes) {
     super();
+    this.nodeType = 1;
     this.localName = localName;
     this.tagName = localName.toUpperCase();
     this.attributes = attributes;
