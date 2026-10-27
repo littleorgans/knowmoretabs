@@ -617,10 +617,10 @@ and then the platform default. Empty `KMT_ROOT` means unset.
 with a `schema_version`; it is the source of truth and readable in any
 editor. Everything under `export/` is derived and can be deleted.
 
-Nothing leaves the machine unless you run `enrich` or `content`. `save`,
-`export`, the tag commands and `add --file` make no network requests. `serve`
-and `search --mode combined` make none unless `--model-port` is set; then they
-send each query to the model service over loopback on this machine. CLI search
+`enrich`, `content`, `add` and `serve`'s X bookmark route can contact outside
+services. `save`, `export`, the tag commands and `add --file` make no network
+requests. With `--model-port`, `serve` and `search --mode combined` also send
+each query to the model service over loopback on this machine. CLI search
 also supplies the filtered page keys and current body digests.
 `search --mode keyword` makes no network requests.
 A post you bookmark on X reaches `serve` through the toolbar extension with
@@ -629,11 +629,11 @@ the page showed only part, the X post API is asked for the thread by the
 post's number, and the longer text is kept. The post's preview image is
 downloaded, from X's own image host when it comes from the page. The
 first web link of the thread that leaves X is then added and read as `add`
-reads a page: a request to that link's site, and its preview image.
-`enrich` and `content` are the only code that sends your pages' addresses,
-or a video's id to YouTube through yt-dlp, and what each sends is described
-above; `content` also downloads one preview image per page from the address
-the page names, which may be on another host, and images stay in the
+reads a page: its site and preview image, `gh` for repositories, yt-dlp for
+video, or a headless browser for thin pages. These reads send page addresses
+to their sites, or a video's id to YouTube through yt-dlp. `content` also
+downloads one preview image per page from the address the page names, which
+may be on another host, and images stay in the
 private archive. `content --signed-in` has your own Chrome open pages,
 signed in as you, as described above. `doctor` is offline by default.
 `doctor --live` lets gh check its own sign in with GitHub, asks the X

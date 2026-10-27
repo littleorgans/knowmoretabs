@@ -15,10 +15,9 @@
 //!      post's thread instead, and keeps only its author's posts, in the
 //!      API's order, a deleted one as one line, and where their links lead,
 //!      so the article the thread links to can be saved beside it. A
-//!      deleted post is final, a
-//!      private one waits for a signed in browser, and a busy API is
-//!      retried as any site is. The markdown is `xpost_page`'s, shared
-//!      with the page read of X itself.
+//!      deleted post is final, a private one waits for a signed in
+//!      browser, and a busy API is retried as any site is. The markdown
+//!      is `xpost_page`'s, shared with the page read of X itself.
 
 use jiff::Timestamp;
 use serde::Deserialize;
