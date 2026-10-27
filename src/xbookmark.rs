@@ -184,7 +184,8 @@ struct Captured {
 
 /// Library page `url`'s text from what the page showed, then from the
 /// public post API's thread unless the page showed it whole, and its title
-/// when it had none. Its images follow in the background.
+/// when it had none. Its images follow in the background, the public
+/// capture's alone when it replaced the page read.
 fn capture(root: &Path, url: &str, post: &Post, shown: &Shown) -> Result<Captured, Error> {
     let fetcher = Fetcher::new(&State::read(root)?.forgotten);
     let mut images = Vec::new();
@@ -209,6 +210,9 @@ fn capture(root: &Path, url: &str, post: &Post, shown: &Shown) -> Result<Capture
         let public = content_keep::keep(root, url, &thread.capture, "public read added no text")?;
         if said == "kept" && public.taken {
             said = "replaced";
+            // The public capture's image stands for the page: the page
+            // read's would only be overwritten.
+            images.clear();
         }
         content = Some(public.line.clone());
         images.push(public);

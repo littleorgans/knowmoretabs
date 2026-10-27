@@ -675,10 +675,14 @@ fn a_waiting_x_article_cover_holds_neither_the_bookmark_reply_nor_the_archive_lo
     // The background step still stores the cover through the ordinary
     // image path, and the Library serves that JPEG.
     for _ in 0..100 {
-        if log_lines(&fx, "images.jsonl")
-            .iter()
-            .any(|line| line["url"] == key && line["status"] == "ok")
-        {
+        let lines: Vec<Value> = log_lines(&fx, "images.jsonl")
+            .into_iter()
+            .filter(|line| line["url"] == key)
+            .collect();
+        if lines.iter().any(|line| line["status"] == "ok") {
+            // The replaced page read's image is never tried: its line would
+            // say the page has none while the cover waits.
+            assert_eq!(lines.len(), 1, "one image attempt: {lines:?}");
             let jpeg = fs::read(
                 fx.root
                     .join("pages/images")
