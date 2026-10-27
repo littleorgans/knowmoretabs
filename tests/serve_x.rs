@@ -266,7 +266,8 @@ fn doctor_line(fx: &Fixture) -> Value {
 
 fn health(state: &str) -> Value {
     json!({"state": state, "since": "2026-10-27T09:00:00Z", "version": "0.2.0", "views": 12,
-        "posts": 140, "controls": 140, "intents": 3, "confirmed": 3})
+        "posts": 140, "controls": 140, "intents": 3, "confirmed": 3, "dropped": 0,
+        "last_dropped": null})
 }
 
 #[test]
@@ -308,4 +309,65 @@ fn the_extensions_health_report_is_kept_and_doctor_says_it() {
         "degraded",
         "the last good report stands"
     );
+}
+
+#[test]
+fn bookmarks_dropped_while_the_library_was_down_degrade_doctor() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let report = |body: &Value| post_from(&server, &extension_origin(), "/api/x/health", body);
+    let last = jiff::Timestamp::now() - jiff::SignedDuration::from_hours(24);
+    let mut dropped = health("ok");
+    dropped["dropped"] = json!(3);
+    dropped["last_dropped"] = json!(last.to_string());
+    let kept = report(&dropped);
+    assert_eq!(kept.status, 200, "{}", kept.text());
+    let written: Value =
+        serde_json::from_slice(&fs::read(fx.root.join("extension.json")).unwrap()).unwrap();
+    assert_eq!(
+        (&written["dropped"], &written["last_dropped"]),
+        (&json!(3), &dropped["last_dropped"]),
+        "{written}"
+    );
+    let line = doctor_line(&fx);
+    assert_eq!(line["state"], "degraded", "{line}");
+    assert_eq!(
+        line["detail"],
+        format!(
+            "3 bookmarks on X were not saved because knowmoretabs was not answering; last {}",
+            last.strftime("%Y-%m-%d")
+        )
+    );
+    assert_eq!(
+        line["hint"],
+        "keep `just up` running while you bookmark on X"
+    );
+
+    let mut bad = Vec::new();
+    for (count, last) in [
+        (json!(-1), dropped["last_dropped"].clone()),
+        (json!(1.5), dropped["last_dropped"].clone()),
+        (json!(1_000_001), dropped["last_dropped"].clone()),
+        (json!(3), json!(null)),
+        (json!(0), dropped["last_dropped"].clone()),
+        (json!(3), json!("yesterday")),
+    ] {
+        let mut body = health("ok");
+        body["dropped"] = count;
+        body["last_dropped"] = last;
+        bad.push(body);
+    }
+    let mut missing = health("ok");
+    missing.as_object_mut().unwrap().remove("dropped");
+    bad.push(missing);
+    for body in bad {
+        let reply = report(&body);
+        assert_eq!(reply.status, 400, "{body}: {}", reply.text());
+    }
+
+    let ok = report(&health("ok"));
+    assert_eq!(ok.status, 200, "{}", ok.text());
+    assert_eq!(doctor_line(&fx)["state"], "ready", "no drops, ready again");
 }

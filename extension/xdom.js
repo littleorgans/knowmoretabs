@@ -119,8 +119,9 @@ function afterIntent(health, confirmed, now) {
   return next;
 }
 
-// The body `POST /api/x/health` takes: a state, a time, counts and the extension's version.
-function healthReport(health, version) {
+// The body `POST /api/x/health` takes: a state, a time, counts, the extension's version, and
+// how many saves the Library did not take with the time of the last, from `drops`.
+function healthReport(health, version, drops) {
   const { state, since, views, posts, controls, intents, confirmed } = health;
-  return { state, since, version, views, posts, controls, intents, confirmed };
+  return { state, since, version, views, posts, controls, intents, confirmed, dropped: drops?.count ?? 0, last_dropped: drops?.last ?? null };
 }

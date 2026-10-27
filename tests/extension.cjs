@@ -143,7 +143,11 @@ test('health turns unconfirmed after three add clicks X never showed as saved', 
   assert.equal(h.state, 'unconfirmed');
   h = xdom.afterIntent(h, true, now);
   assert.equal(h.state, 'ok');
-  assert.deepEqual(Object.keys(plain(xdom.healthReport(h, '0.2.0'))), ['state', 'since', 'version', 'views', 'posts', 'controls', 'intents', 'confirmed']);
+  const report = plain(xdom.healthReport(h, '0.2.0'));
+  assert.deepEqual(Object.keys(report), ['state', 'since', 'version', 'views', 'posts', 'controls', 'intents', 'confirmed', 'dropped', 'last_dropped']);
+  assert.deepEqual([report.dropped, report.last_dropped], [0, null], 'no drops');
+  const drops = { count: 2, last: now };
+  assert.deepEqual(plain(xdom.healthReport(h, '0.2.0', drops)).dropped, 2);
 });
 
 // The content script with the fixture DOM, a mutation observer and a deterministic clock.
@@ -248,8 +252,7 @@ function worker({ down = false, store = {}, fetchRequest } = {}) {
     store, fetched, context,
     send: async (message, sender = { id: 'self', tab, url: HOME }) => {
       onMessage(message, sender);
-      await vm.runInContext('work.storage', context);
-      await vm.runInContext('work.network', context);
+      await vm.runInContext('work', context);
     },
   };
 }
@@ -283,107 +286,64 @@ test('a message from another extension, a page off X or of the wrong shape is dr
   assert.deepEqual(w.store, {});
 });
 
-test('saves wait while the Library is down, at most 50 for 7 days, and go with the next', async () => {
+const saved = (w) => w.fetched.filter((f) => f.url.endsWith('/api/x/bookmark')).map((f) => f.body.post);
+const reports = (w) => w.fetched.filter((f) => f.url.endsWith('/api/x/health')).map((f) => f.body);
+const DAY = 24 * 60 * 60 * 1000;
+
+test('a save the Library does not answer is dropped and counted, and nothing of the post is kept', async () => {
   const w = worker({ down: true });
-  for (let i = 1; i <= 52; i += 1) await w.send({ kind: 'bookmark', post: `https://x.com/example_author/status/${i}` });
-  assert.equal(w.store.queue.length, 50);
-  assert.equal(w.store.queue[0].post, 'https://x.com/example_author/status/3', 'the oldest go first');
-  w.store.queue[0].at -= 8 * 24 * 60 * 60 * 1000;
+  await w.send({ kind: 'bookmark', post: POST });
+  await w.send({ kind: 'bookmark', post: 'https://x.com/example_author/status/101' });
+  assert.equal(w.store.drops.count, 2);
+  assert.ok(Date.now() - Date.parse(w.store.drops.last) < 1000, 'the time of the last drop');
+  assert.deepEqual(Object.keys(w.store).sort(), ['drops', 'health']);
+  assert.doesNotMatch(JSON.stringify(w.store), /example_author|status/, 'no address of a post');
   w.context.down = false;
   await w.send({ kind: 'view', posts: 4, controls: 4 });
-  const saved = w.fetched.filter((f) => f.url.endsWith('/api/x/bookmark')).map((f) => f.body.post);
-  assert.equal(saved.length, 49, 'one was older than 7 days');
-  assert.equal(saved[0], 'https://x.com/example_author/status/4');
-  assert.deepEqual(w.store.queue, []);
+  assert.deepEqual(saved(w), [], 'a dropped save is never sent again');
+  w.store.drops.last = new Date(Date.now() - 15 * DAY).toISOString();
+  w.context.down = true;
+  await w.send({ kind: 'bookmark', post: POST });
+  assert.equal(w.store.drops.count, 1, 'a drop long after the last starts a new count');
 });
 
-test('a save the archive failed stays queued; one the Library refused ends', async () => {
+test('a 5xx drops the save and counts it; a refusal ends it uncounted', async () => {
   const w = worker();
-  const saved = () => w.fetched.filter((f) => f.url.endsWith('/api/x/bookmark')).map((f) => f.body.post);
   w.context.status = 500;
   await w.send({ kind: 'bookmark', post: POST });
-  assert.deepEqual(w.store.queue.map((item) => item.post), [POST], 'a 5xx is retried');
-  w.context.status = 200;
-  await w.send({ kind: 'view', posts: 4, controls: 4 });
-  assert.deepEqual(saved(), [POST, POST]);
-  assert.deepEqual(w.store.queue, []);
+  assert.equal(w.store.drops.count, 1);
   w.context.status = 400;
   await w.send({ kind: 'bookmark', post: 'https://x.com/example_author/status/101' });
-  assert.deepEqual(w.store.queue, [], 'a 4xx is not retried');
-});
-
-test('a save survives a worker restart while its request is pending', async () => {
-  let started;
-  const fetching = new Promise((resolve) => (started = resolve));
-  let finish;
-  const w = worker({ fetchRequest: () => {
-    started();
-    return new Promise((resolve) => (finish = resolve));
-  } });
-  const sending = w.send({ kind: 'bookmark', post: POST });
-  await fetching;
-  const stored = structuredClone(w.store);
-  finish({ ok: true });
-  await sending;
-
-  assert.equal(stored.queue?.length, 1, 'the click is stored before the request finishes');
-  const restarted = worker({ store: stored });
-  await restarted.send({ kind: 'view', posts: 4, controls: 4 });
-  assert.equal(restarted.fetched.filter((f) => f.url.endsWith('/api/x/bookmark')).length, 1);
-  assert.deepEqual(restarted.store.queue, []);
-});
-
-test('new clicks reach storage while a previous save waits for the Library', async () => {
-  let started;
-  const fetching = new Promise((resolve) => (started = resolve));
-  let finish;
-  let requests = 0;
-  const w = worker({ fetchRequest: () => {
-    if (++requests !== 1) return { ok: true };
-    started();
-    return new Promise((resolve) => (finish = resolve));
-  } });
-  const first = w.send({ kind: 'bookmark', post: POST });
-  await fetching;
-  const second = w.send({ kind: 'bookmark', post: 'https://x.com/example_author/status/101' });
-  // Allow storage operations to finish without waiting for the network.
-  await new Promise((resolve) => setImmediate(resolve));
-  const queued = structuredClone(w.store.queue);
-  finish({ ok: true });
-  await Promise.all([first, second]);
-  assert.deepEqual(queued.map((item) => item.post), [POST, 'https://x.com/example_author/status/101']);
-  assert.deepEqual(w.store.queue, []);
-});
-
-test('each answered save is removed before the next request starts', async () => {
-  const queued = [POST, 'https://x.com/example_author/status/101'];
-  const store = { queue: queued.map((post) => ({ post, at: Date.now() })) };
-  let started;
-  const fetching = new Promise((resolve) => (started = resolve));
-  let finish;
-  let requests = 0;
-  const w = worker({ store, fetchRequest: () => {
-    requests += 1;
-    if (requests !== 2) return { ok: true };
-    started();
-    return new Promise((resolve) => (finish = resolve));
-  } });
-  const sending = w.send({ kind: 'bookmark', post: 'https://x.com/example_author/status/102' });
-  await fetching;
-  const kept = structuredClone(w.store.queue);
-  finish({ ok: true });
-  await sending;
-  assert.deepEqual(kept.map((item) => item.post), [queued[1], 'https://x.com/example_author/status/102']);
+  w.context.status = 200;
+  await w.send({ kind: 'bookmark', post: 'https://x.com/example_author/status/102' });
+  assert.equal(w.store.drops.count, 1, 'only the 5xx counts');
+  assert.equal(saved(w).length, 3, 'each save is sent once');
 });
 
 test('health is reported on a change and at most once a day while it holds', async () => {
   const w = worker();
-  const reports = () => w.fetched.filter((f) => f.url.endsWith('/api/x/health')).map((f) => f.body);
   await w.send({ kind: 'view', posts: 4, controls: 4 });
-  assert.deepEqual(reports().map((r) => [r.state, r.version, r.views]), [['ok', manifest.version, 1]]);
+  assert.deepEqual(reports(w).map((r) => [r.state, r.version, r.views]), [['ok', manifest.version, 1]]);
   await w.send({ kind: 'view', posts: 4, controls: 4 });
-  assert.equal(reports().length, 1, 'unchanged within the day');
+  assert.equal(reports(w).length, 1, 'unchanged within the day');
   for (let i = 0; i < 3; i += 1) await w.send({ kind: 'view', posts: 5, controls: 0 });
-  assert.deepEqual(reports().map((r) => r.state), ['ok', 'blind']);
-  for (const report of reports()) assert.deepEqual(Object.keys(report), ['state', 'since', 'version', 'views', 'posts', 'controls', 'intents', 'confirmed']);
+  assert.deepEqual(reports(w).map((r) => r.state), ['ok', 'blind']);
+  for (const report of reports(w)) {
+    assert.deepEqual(Object.keys(report), ['state', 'since', 'version', 'views', 'posts', 'controls', 'intents', 'confirmed', 'dropped', 'last_dropped']);
+  }
+});
+
+test('the next health report carries the drops, sent again when they change', async () => {
+  const w = worker();
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  assert.deepEqual([reports(w)[0].dropped, reports(w)[0].last_dropped], [0, null]);
+  w.context.down = true;
+  await w.send({ kind: 'bookmark', post: POST });
+  w.context.down = false;
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  const report = reports(w).at(-1);
+  assert.equal(reports(w).length, 2, 'a drop is a change');
+  assert.deepEqual([report.state, report.dropped, report.last_dropped], ['ok', 1, w.store.drops.last]);
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  assert.equal(reports(w).length, 2, 'unchanged within the day');
 });

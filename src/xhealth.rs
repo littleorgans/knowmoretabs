@@ -8,9 +8,11 @@
 //!      counts what it sees on each page of X and says when it sees posts
 //!      but no bookmark button, or clicks that X never shows as saved, and
 //!      `doctor` turns the last report, or its absence or age, into one
-//!      line. The report holds a state, a time and counts, never an
-//!      address, a handle or a word of a post, and anything else is
-//!      refused. It is one small file replaced whole under the archive
+//!      line. A bookmark the Library did not take while it was down is
+//!      dropped, not kept, so the report also counts the drops and says
+//!      when the last was, and `doctor` says so for two weeks. The report
+//!      holds a state, times and counts, never an address, a handle or a
+//!      word of a post, and anything else is refused. It is one small file replaced whole under the archive
 //!      lock, so a reader sees the old report or the new one.
 
 use std::path::{Path, PathBuf};
@@ -23,8 +25,11 @@ use crate::doctor::{Check, State};
 use crate::error::Error;
 
 pub const FILE: &str = "extension.json";
-/// A report older than this says the extension has gone quiet.
+/// A report older than this says the extension has gone quiet; a drop
+/// older than this is no longer news.
 const FRESH: SignedDuration = SignedDuration::from_hours(14 * 24);
+/// More drops than anyone bookmarks, the bound the extension counts to.
+const DROPPED_MAX: u32 = 1_000_000;
 const TIER: &str = "extension";
 
 pub fn path(root: &Path) -> PathBuf {
@@ -56,17 +61,30 @@ pub struct Report {
     pub controls: u32,
     pub intents: u32,
     pub confirmed: u32,
+    /// Bookmarks dropped because the Library did not take them.
+    pub dropped: u32,
+    /// When the last was dropped; null when none was.
+    pub last_dropped: Option<Timestamp>,
 }
 
 impl Report {
     /// Why the report is refused, when it is: a version that is not a
-    /// manifest version, one to four dot separated numbers.
+    /// manifest version, one to four dot separated numbers; more drops
+    /// than the bound; or drops without the time of the last, or a time
+    /// without drops.
     pub fn refusal(&self) -> Option<&'static str> {
         let parts: Vec<&str> = self.version.split('.').collect();
         let numbers = parts
             .iter()
             .all(|part| (1..=5).contains(&part.len()) && part.bytes().all(|b| b.is_ascii_digit()));
-        (!(1..=4).contains(&parts.len()) || !numbers).then_some("version is not a manifest version")
+        if !(1..=4).contains(&parts.len()) || !numbers {
+            return Some("version is not a manifest version");
+        }
+        if self.dropped > DROPPED_MAX {
+            return Some("dropped is more than the extension counts");
+        }
+        ((self.dropped == 0) != self.last_dropped.is_none())
+            .then_some("last_dropped is null exactly when dropped is 0")
     }
 }
 
@@ -84,6 +102,8 @@ pub struct Record {
     pub state: Health,
     pub since: Timestamp,
     pub reported_at: Timestamp,
+    pub dropped: u32,
+    pub last_dropped: Option<Timestamp>,
 }
 
 /// Keeps `report`, received now, in place of the last one.
@@ -145,6 +165,14 @@ fn line(kept: Result<Option<Record>, Error>, now: Timestamp) -> Check {
             format!("sees bookmark clicks on X it cannot confirm since {since}"),
         )
         .hint("X changed its page; check that bookmarks reach the Library"),
+        Health::Ok
+            if record
+                .last_dropped
+                .is_some_and(|last| now.duration_since(last) <= FRESH) =>
+        {
+            Check::new(TIER, State::Degraded, dropped(&record))
+                .hint("keep `just up` running while you bookmark on X")
+        }
         Health::Ok if now.duration_since(record.reported_at) > FRESH => Check::new(
             TIER,
             State::Degraded,
@@ -158,6 +186,18 @@ fn line(kept: Result<Option<Record>, Error>, now: Timestamp) -> Check {
                 "sees bookmark buttons on X; reported {}",
                 day(record.reported_at)
             ),
+        ),
+    }
+}
+
+fn dropped(record: &Record) -> String {
+    let last = record.last_dropped.map(day).unwrap_or_default();
+    match record.dropped {
+        1 => format!(
+            "1 bookmark on X was not saved because knowmoretabs was not answering; last {last}"
+        ),
+        n => format!(
+            "{n} bookmarks on X were not saved because knowmoretabs was not answering; last {last}"
         ),
     }
 }
@@ -179,6 +219,8 @@ mod tests {
             state,
             since: at("2026-10-01T09:00:00Z"),
             reported_at: at(reported),
+            dropped: 0,
+            last_dropped: None,
         }
     }
 
@@ -215,10 +257,52 @@ mod tests {
     }
 
     #[test]
+    fn drops_in_the_last_two_weeks_degrade_the_line() {
+        let now = at(NOW);
+        let dropped = |count, last: &str| Record {
+            dropped: count,
+            last_dropped: Some(at(last)),
+            ..kept(Health::Ok, NOW)
+        };
+        let recent = line(Ok(Some(dropped(3, "2026-10-13T09:00:00Z"))), now);
+        assert_eq!(
+            (recent.state, recent.detail.as_str()),
+            (
+                State::Degraded,
+                "3 bookmarks on X were not saved because knowmoretabs was not answering; last 2026-10-13"
+            )
+        );
+        assert_eq!(
+            recent.hint.as_deref(),
+            Some("keep `just up` running while you bookmark on X")
+        );
+        let one = line(Ok(Some(dropped(1, NOW))), now);
+        assert!(
+            one.detail.starts_with("1 bookmark on X was not saved"),
+            "{}",
+            one.detail
+        );
+        let old = line(Ok(Some(dropped(3, "2026-10-13T08:59:59Z"))), now);
+        assert_eq!(old.state, State::Ready, "{}", old.detail);
+        let blind = line(
+            Ok(Some(Record {
+                state: Health::Blind,
+                ..dropped(3, NOW)
+            })),
+            now,
+        );
+        assert!(
+            blind.detail.contains("no bookmark button"),
+            "{}",
+            blind.detail
+        );
+    }
+
+    #[test]
     fn a_report_carries_a_state_a_time_counts_and_a_version_only() {
         let body = serde_json::json!({"state": "ok", "since": "2026-10-27T09:00:00Z",
             "version": "0.2.0", "views": 12, "posts": 140, "controls": 140, "intents": 3,
-            "confirmed": 3});
+            "confirmed": 3, "dropped": 0, "last_dropped": null});
         let report: Report = serde_json::from_value(body.clone()).unwrap();
         assert_eq!(report.refusal(), None);
         for (field, value) in [
@@ -227,6 +311,9 @@ mod tests {
             ("views", serde_json::json!(-1)),
             ("posts", serde_json::json!(1.5)),
             ("since", serde_json::json!("yesterday")),
+            ("dropped", serde_json::json!(-1)),
+            ("dropped", serde_json::json!("2")),
+            ("last_dropped", serde_json::json!("yesterday")),
         ] {
             let mut bad = body.clone();
             bad[field] = value;
@@ -239,6 +326,25 @@ mod tests {
             let mut bad = report.clone();
             bad.version = version.to_owned();
             assert!(bad.refusal().is_some(), "{version:?}");
+        }
+        let last = Some(at(NOW));
+        for (dropped, last_dropped, refused) in [
+            (2, last, false),
+            (DROPPED_MAX, last, false),
+            (DROPPED_MAX + 1, last, true),
+            (2, None, true),
+            (0, last, true),
+        ] {
+            let drops = Report {
+                dropped,
+                last_dropped,
+                ..report.clone()
+            };
+            assert_eq!(
+                drops.refusal().is_some(),
+                refused,
+                "{dropped} {last_dropped:?}"
+            );
         }
     }
 }

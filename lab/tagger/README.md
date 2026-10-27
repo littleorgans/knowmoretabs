@@ -128,10 +128,11 @@ the `extension` folder. A click opens the Library tab already open on port 41878
 tab's address and title filled in; a page that is not on the web (`chrome://`, `file://`) opens Add link empty. On
 x.com and twitter.com, clicking X's own bookmark button on a post saves the post to the library (`POST /api/x/bookmark`
 on port 41878) as `https://x.com/<handle>/status/<id>`, with its text from the X post API; removing a bookmark does
-nothing. While the Library is not running, or answers that its archive failed, the extension keeps up to 50 saves for 7
-days and sends them with the next save or the next page of X. It counts the posts and bookmark buttons each page of X
-shows and reports a change, or once a day, to `POST /api/x/health`; `knowmoretabs doctor` says when it sees posts but no bookmark button. It asks for
-`activeTab`, to read the clicked tab; `storage`, for the saves it keeps and its health; `http://127.0.0.1:41878/*`, to
+nothing. A save is sent once: while the Library is not running, or answers that its archive failed, the bookmark is not
+saved, and the extension keeps only how many were dropped and when the last was, never the post. It counts the posts and
+bookmark buttons each page of X shows and reports a change, a drop, or once a day, to `POST /api/x/health`;
+`knowmoretabs doctor` says when it sees posts but no bookmark button, and for two weeks after a bookmark was dropped. It asks for
+`activeTab`, to read the clicked tab; `storage`, for its health and drop count; `http://127.0.0.1:41878/*`, to
 find the Library tab and reach the Library; and a content script on `https://x.com/*` and `https://twitter.com/*`,
 nothing else, so Chrome asks to "Read and change your data on x.com and twitter.com". The manifest's `key` pins the
 extension's id, the one origin besides its own the Library accepts (`EXTENSION_ORIGIN` in `src/http.rs`); a copy

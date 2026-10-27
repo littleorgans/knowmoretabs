@@ -163,7 +163,9 @@ same archive, and shows the best 50; while the service is stopped, loading or
 busy, search matches words as it does without it. The same service's Tag and
 Add link are served below `/model/`, and say so when the service is not
 answering. With the toolbar extension loaded, a post you bookmark on X is
-saved to the library as one page under `https://x.com/<handle>/status/<id>`.
+saved to the library as one page under `https://x.com/<handle>/status/<id>`,
+while `serve` is running: a bookmark made while it is stopped is not kept for
+later, and `doctor` says how many were missed.
 
 Forgetting hides a page from the library. It never touches a snapshot: every
 page you forget is still in every snapshot it was ever in, and `restore`
@@ -565,8 +567,9 @@ default) for headless reading; whether `content --signed-in` can reach
 your running Chrome, read from its remote debugging switch and
 `DevToolsActivePort` file, never by connecting. Then the archive:
 whether it is private, whether `pages/content` exists, and its pages by
-latest status. Last, the toolbar extension: whether it has reported, and
-whether it still sees X's bookmark button. It is offline by default, with
+latest status. Last, the toolbar extension: whether it has reported,
+whether it still sees X's bookmark button, and how many bookmarks on X it
+could not save in the last two weeks. It is offline by default, with
 GitHub sign in marked as not checked. With `--live`, gh checks its own sign in (the `gh auth status` exit
 code only; its output is never read), the X post API is asked once for a
 fixed public post, and the browser is started headless once, asked its
