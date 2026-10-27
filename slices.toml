@@ -418,16 +418,20 @@ it, names the post that owns the button and nothing else, and its service
 worker posts it to `serve`'s `POST /api/x/bookmark`. The extension's origin,
 pinned by the manifest's key, is the only origin besides the Library's own
 that `serve` accepts. The post
-is kept as one page under `https://x.com/<handle>/status/<id>`, through
-`add`'s admission and content stage, so its text and image come from the X
-post API as any X page's do; removing a bookmark does nothing. Each click is
-one line in `pages/xbookmarks.jsonl`, and the Library is served each page's
-latest bookmark time and clicked posts. While the Library is not running the
-extension keeps up to 50 saves for 7 days and sends them later. The extension
-reports what it sees on X to `POST /api/x/health`, kept as `extension.json`,
-and `doctor` says when it sees posts but no bookmark button. Reading the
-author's whole thread from the page, the linked article, the note on x.com
-and the From X list follow.
+is kept as one page under `https://x.com/<handle>/status/<id>`, the handle
+in lower case, through `add`'s admission; removing a bookmark does nothing.
+With the post the extension sends what the page shows of its author's
+thread at the click, which `serve` checks and keeps as the page's text, read
+signed in; when that read is missing, refused or may not be the whole
+thread, the X post API is asked for the thread by the post's number, and
+the longer text wins. A later bookmark of any post of a saved thread is the
+same page. Each click is one line in `pages/xbookmarks.jsonl`, with the
+thread's post numbers, and the Library is served each page's latest
+bookmark time and clicked posts. While the Library is not running the
+extension keeps up to 50 saves for 7 days and sends them later. The
+extension reports what it sees on X to `POST /api/x/health`, kept as
+`extension.json`, and `doctor` says when it sees posts but no bookmark
+button. The linked article, the note on x.com and the From X list follow.
 """
 intent = """
 Bookmarking on X is where the owner already says "keep this", so a second
