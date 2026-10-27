@@ -247,8 +247,8 @@ function worker({ down = false, store = {}, fetchRequest } = {}) {
     store, fetched, context,
     send: async (message, sender = { id: 'self', tab, url: HOME }) => {
       onMessage(message, sender);
-      await vm.runInContext("typeof work === 'undefined' ? chain : work.storage", context);
-      await vm.runInContext("typeof work === 'undefined' ? chain : work.network", context);
+      await vm.runInContext('work.storage', context);
+      await vm.runInContext('work.network', context);
     },
   };
 }
