@@ -357,7 +357,7 @@ test('the rank merge matches the shared vectors', async () => {
 // ---- The drawer's Content tab -----------------------------------------------
 // The renderer over one synthetic page, served or exported, with `document`
 // just deep enough for the top of the script.
-function drawer({ exported = false, fetch, nodes = {} } = {}) {
+function drawer({ exported = false, fetch, nodes = {}, library = { pages: [page(0)], snapshots: [snapshot('2026-01-01-000000Z', '2026-01-01T00:00:00Z', [0])] } } = {}) {
   const context = vm.createContext({
     fetch,
     document: {
@@ -365,7 +365,7 @@ function drawer({ exported = false, fetch, nodes = {} } = {}) {
       documentElement: { style: { setProperty() {} } },
     },
     IntersectionObserver: class {},
-    library: { pages: [page(0)], snapshots: [snapshot('2026-01-01-000000Z', '2026-01-01T00:00:00Z', [0])] },
+    library,
   });
   vm.runInContext(renderer, context);
   vm.runInContext('derive(library);', context);
@@ -429,6 +429,33 @@ test('a reopened Content tab keeps the newest reply when an earlier request sett
     assert.match(pane.innerHTML, /Newest text/);
     assert.doesNotMatch(pane.innerHTML, /Earlier text|late failure/);
   }
+});
+
+test('a post bookmarked on X and the article it links to name each other in the History pane, escaped', () => {
+  const post = 'https://x.com/example_author/status/301', article = 'http://blog.example.test/post', gone = 'https://gone.example.test/<b>';
+  const run = drawer({ library: {
+    pages: [
+      { url: post, domain: 'x.com', title: 'Example <Author> on X', x: { bookmarked_at: '2026-10-27T09:00:00Z', clicked: [post], links: [article, gone] } },
+      { url: article, domain: 'blog.example.test', title: 'A synthetic <i>article</i>' },
+      page(2),
+    ],
+    snapshots: [snapshot('added', '2026-10-27T09:00:00Z', [0, 1, 2])],
+  } });
+  const html = (i) => run(`histHTML(S.pages[${i}])`);
+  const dl = (i) => html(i).match(/<h4>From X<\/h4><dl>([\s\S]*?)<\/dl>/)?.[1] || '';
+  const said = (i) => [...dl(i).matchAll(/<dt>([^<]*)<\/dt><dd[^>]*>([\s\S]*?)<\/dd>/g)].map((m) => [m[1], m[2]]);
+  const [bookmarked, linksTo, unknown] = said(0);
+  assert.equal(bookmarked[0], 'Bookmarked on X');
+  assert.equal(bookmarked[1], `${run("F.dayYear.format(new Date('2026-10-27T09:00:00Z'))")} · ` +
+    '<a class="x" href="https://x.com/example_author/status/301" target="_blank" rel="noopener noreferrer"><code>x.com/example_author/status/301</code></a>');
+  assert.deepEqual(linksTo, ['Links to', '<a href="#pages/1" title="Show it in the library">A synthetic &lt;i&gt;article&lt;/i&gt;</a> ' +
+    '<a class="x" href="http://blog.example.test/post" target="_blank" rel="noopener noreferrer"><code>blog.example.test/post</code></a>']);
+  assert.deepEqual(unknown, ['Links to', '<a class="x" href="https://gone.example.test/&lt;b&gt;" target="_blank" rel="noopener noreferrer"><code>gone.example.test/&lt;b&gt;</code></a>'],
+    'a page the library does not list is its address alone');
+  assert.deepEqual(said(1), [['Linked from', '<a href="#pages/0" title="Show it in the library">Example &lt;Author&gt; on X</a> ' +
+    '<a class="x" href="https://x.com/example_author/status/301" target="_blank" rel="noopener noreferrer"><code>x.com/example_author/status/301</code></a>']]);
+  assert.equal(run('S.pages.map((p) => p.linkedFrom.length).join()'), '0,1,0', 'linkedFrom: what links to the page from X');
+  assert.doesNotMatch(html(2), /From X/, 'a page with no tie to X has no block');
 });
 
 // ---- Tag and Add link from the Library's address -------------------------

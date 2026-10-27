@@ -1071,6 +1071,24 @@ a row with signals. No console errors.
   Forget button stays where it was. If the section is read more than the
   sightings, it could sit beside them at wide widths instead of above.
 
+### From X (serve only)
+
+A page bookmarked on X, and the article its thread links to, get a **From
+X** section in the same two-column list, above Browser history:
+
+```
+FROM X
+Bookmarked on X   Oct 27, 2026 · x.com/example_author/status/301
+Links to          A synthetic article   blog.example.test/post
+```
+
+On the article it reads `Linked from  Example Author (@example_author) on X
+x.com/example_author/status/301`. Both directions come from the page's `x`
+field (`bookmarked_at`, `clicked`, `links`); `derive` reverses `links` into
+each target's `linkedFrom`. Titles jump to the row as Came from does, by the
+shared `pageRef`; a link to a page the library does not list shows its
+address alone. An export has no `x`, so no section.
+
 ## 11. Suggested tags: review in the chip line and the editor
 
 Since 7c, `tag --import` stores what an owner's agent suggested, and every
