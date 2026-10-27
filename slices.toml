@@ -427,9 +427,9 @@ thread, the X post API is asked for the thread by the post's number, and
 the longer text wins. A later bookmark of any post of a saved thread is the
 same page. Each click is one line in `pages/xbookmarks.jsonl`, with the
 thread's post numbers, and the Library is served each page's latest
-bookmark time and clicked posts. While the Library is not running the
-extension keeps up to 50 saves for 7 days and sends them later. The
-extension reports what it sees on X to `POST /api/x/health`, kept as
+bookmark time and clicked posts. A save requires `serve` to be running: a
+bookmark made while it is stopped is not kept for later, and `doctor` says
+how many were missed. The extension reports what it sees on X to `POST /api/x/health`, kept as
 `extension.json`, and `doctor` says when it sees posts but no bookmark
 button. The linked article, the note on x.com and the From X list follow.
 """
