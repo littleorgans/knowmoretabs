@@ -317,6 +317,7 @@ class Served(Fixture):
         self.port = self.server.server_address[1]
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
+        self.addCleanup(self.app.close)  # after the server stops: no request queues another fit
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 

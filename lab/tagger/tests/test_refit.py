@@ -174,3 +174,28 @@ class RefitTests(Served):
         self.finish_refit()
         self.assertIsNot(old.rules, self.app.lib.rules)
         np.testing.assert_allclose(self.app.lib.S, self.app.lib.rules.scores(self.app.lib.X)["supervised"])
+
+    def test_close_waits_out_the_running_fit_and_starts_no_other(self):
+        started, release = threading.Event(), threading.Event()
+        fitting = engine.fit_rules
+
+        def blocked(X, Y, q):
+            started.set()
+            if not release.wait(10):
+                raise TimeoutError("test did not release fit")
+            return fitting(X, Y, q)
+
+        with patch.object(engine, "fit_rules", side_effect=blocked):
+            self.tag([0], "Fresh")
+            self.assertEqual(200, self.call("GET", "/api/library")[0])
+            self.assertTrue(started.wait(2), "a tag change started a fit")
+            worker = self.app._refit_thread
+            self.tag([1], "Fresh")
+            self.assertEqual(200, self.call("GET", "/api/library")[0])  # a follow up waits on the running fit
+            threading.Timer(0.2, release.set).start()  # a close that does not wait returns while the fit is held
+            self.app.close()
+            self.assertFalse(worker.is_alive(), "close joined the running fit")
+            self.tag([2], "Fresh")
+            self.assertEqual(200, self.call("GET", "/api/library")[0])
+        with self.app.lock:
+            self.assertIsNone(self.app._refit_thread, "a closed app starts no fit")

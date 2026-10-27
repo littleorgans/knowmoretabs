@@ -58,6 +58,7 @@ class App:
         self.lock = Lock()  # the model and mutable app state have one caller at a time
         self._refit_thread: Thread | None = None
         self._refit_pending = False
+        self._closed = False
         self.binary = kmt.BINARY
         self.adds = add.Jobs(self)
         self.exclusions = Exclusions(folder)
@@ -79,7 +80,7 @@ class App:
     def _queue_refit(self) -> None:
         """Hold the app lock: one worker, with at most one follow up on the latest library."""
         self._refit_pending = True
-        if self._refit_thread is None:
+        if self._refit_thread is None and not self._closed:
             self._refit_thread = Thread(target=self._refit, daemon=True)
             self._refit_thread.start()
 
@@ -95,7 +96,7 @@ class App:
                     print(json.dumps({"refit_failed": type(err).__name__}), flush=True)
                     fitted = None
                 with self.lock:
-                    if self._refit_pending:
+                    if self._refit_pending and not self._closed:
                         continue  # a newer label or vector snapshot superseded this fit
                     if fitted is not None:
                         self.lib = replace(self.lib, **fitted, added_q=lib.added_q[:0])
@@ -107,6 +108,14 @@ class App:
                     self._refit_thread = None
                     if self._refit_pending:
                         self._queue_refit()
+
+    def close(self) -> None:
+        """Start no further fit and wait out the running one: no worker outlives the app into Python's exit."""
+        with self.lock:
+            self._closed = True
+            worker = self._refit_thread
+        if worker is not None:
+            worker.join()
 
     def gone(self) -> list[int]:
         """Rows of the forgotten pages."""
@@ -618,6 +627,7 @@ def run(
     print(json.dumps(stats))
     if smoke_only:
         print(json.dumps(smoke(paths, app)))
+        app.close()
         return
     server = serve(app, port, key)
     print(f"serving the Library on 127.0.0.1:{server.server_address[1]} (ctrl-c stops)", flush=True)
@@ -627,3 +637,4 @@ def run(
         pass
     finally:
         server.server_close()
+        app.close()

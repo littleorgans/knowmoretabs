@@ -49,6 +49,7 @@ class Shell:
         self.process.wait()
         self.process.stdout.close()
         self.stop_service()
+        self.app.close()
 
     def call(self, method: str, path: str, body=None, headers=None):
         """(status, headers by lower-case name, body bytes), as a browser on the Library's page asks."""
