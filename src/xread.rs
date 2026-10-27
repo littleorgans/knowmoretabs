@@ -156,8 +156,12 @@ pub fn parse(value: &Value, clicked: &str, handle: &str) -> Result<Read, String>
     if sent.posts.len() > MAX_POSTS {
         return Err(format!("posts: more than {MAX_POSTS}"));
     }
-    // Text the page cut short is kept as shown, and asks for the rest.
-    let texts_complete = sent.posts.iter().all(|post| post.text_complete);
+    // Cut text and unresolved links ask for the rest even when the reader
+    // fails to include the corresponding reason.
+    let parts_complete = sent
+        .posts
+        .iter()
+        .all(|post| post.text_complete && post.links.iter().all(|link| link.target.is_some()));
     let mut posts: Vec<ReadPost> = Vec::with_capacity(sent.posts.len());
     for post in sent.posts {
         let post = checked(post, handle)?;
@@ -174,7 +178,7 @@ pub fn parse(value: &Value, clicked: &str, handle: &str) -> Result<Read, String>
         .iter()
         .filter(|reason| REASONS.contains(&reason.as_str()));
     let complete =
-        sent.complete && sent.place == "status" && texts_complete && reasons.count() == 0;
+        sent.complete && sent.place == "status" && parts_complete && reasons.count() == 0;
     Ok(Read { posts, complete })
 }
 

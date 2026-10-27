@@ -416,6 +416,29 @@ fn a_thread_shown_in_part_is_filled_from_the_public_thread_and_later_bookmarks_j
 }
 
 #[test]
+fn an_unresolved_link_still_asks_for_the_public_thread_when_the_reader_claims_complete() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let mut post = shown(
+        "example_author",
+        202,
+        "A short preview with an unresolved link.",
+    );
+    post["links"] = json!([{"href": "https://t.co/example", "label": "example.org/full…",
+        "target": null}]);
+    let line = bookmark_read(
+        &server,
+        &status_of(202),
+        &page_read("example_author", 202, &[post], true),
+    );
+    assert_eq!(site.paths(), ["api.fxtwitter.com/2/thread/202"]);
+    assert_eq!(line["read"], "replaced");
+    assert!(kept_front(&fx, &status_of(202)).contains("Thread post 204, the whole"));
+}
+
+#[test]
 fn a_protected_thread_keeps_its_page_read_and_says_the_public_read_added_nothing() {
     let fx = Fixture::new();
     archive(&fx);

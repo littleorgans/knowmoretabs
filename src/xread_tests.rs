@@ -133,6 +133,16 @@ fn a_read_with_no_post_passes_and_names_none() {
 }
 
 #[test]
+fn an_unresolved_link_is_incomplete_even_when_the_reader_omits_its_reason() {
+    let mut one = post("102", "Read the linked article.");
+    one["links"] = json!([{"href": "https://t.co/example", "label": "example.org/full…"}]);
+    let mut sent = read(&[one]);
+    assert!(!parsed(&sent).unwrap().complete);
+    sent["posts"][0]["links"][0]["target"] = json!("https://example.org/full");
+    assert!(parsed(&sent).unwrap().complete);
+}
+
+#[test]
 fn a_read_out_of_bounds_or_of_another_post_is_refused_whole() {
     let many: Vec<Value> = (1..=51).map(|n| post(&n.to_string(), "x")).collect();
     let mut long = post("102", &"x".repeat(25_001));
