@@ -14,7 +14,9 @@
 //!      without a network, and the X post route answers by the same rules.
 //!      A page a browser rendered is read from its HTML on, as a response is.
 //!      A page that is an image is media, its copy the page's image, and a
-//!      PDF's text is read as a page's is. A later reading of a page that
+//!      PDF's text is read as a page's is. A plain text file is kept as
+//!      written, never parsed as HTML, titled by its file name. A later
+//!      reading of a page that
 //!      kept text replaces it only when it is longer and did not fail, one
 //!      rule for renders and bookmark saves alike.
 
@@ -42,6 +44,10 @@ const RETRIES: u32 = 2;
 const RETRY_AFTER_CAP: Duration = Duration::from_secs(60);
 /// Runs ending in `error` before a page is `unavailable`.
 pub const RUNS_BEFORE_UNAVAILABLE: u32 = 3;
+/// A page served as plain text.
+const TEXT_MIME: &str = "text/plain";
+/// The reader a plain text page's line names: its text is kept as served.
+pub const TEXT_EXTRACTOR: &str = "plain-text";
 
 /// One page's outcome: its line, without the run's attempt number yet, its
 /// text when there is text to keep, and what it says about its image.
@@ -229,7 +235,8 @@ fn read(raw: &str, mut response: Response, images: bool) -> Result<Capture, Pass
         return done(failed);
     }
     let mime = response.mime();
-    if mime != content_pdf::MIME && !mime.is_empty() && !mime.contains("html") {
+    let kind = File::of(&mime);
+    if matches!(kind, File::Image | File::Other) {
         let (state, reason) = not_html(&mime);
         let mut ended = Capture::ended(line(state, Some(reason)));
         ended.images = image_pick::not_html(&mime, &final_url);
@@ -239,7 +246,7 @@ fn read(raw: &str, mut response: Response, images: bool) -> Result<Capture, Pass
         Ok(bytes) => bytes,
         Err(ended) => return *ended,
     };
-    if mime == content_pdf::MIME {
+    if kind == File::Pdf {
         let images = image_pick::not_html(&mime, &final_url);
         return Ok(match content_pdf::read(&bytes) {
             Ok(page) => {
@@ -263,11 +270,13 @@ fn read(raw: &str, mut response: Response, images: bool) -> Result<Capture, Pass
             },
         });
     }
-    let html = match head::decode(
-        &bytes,
-        head::charset_param(&response.content_type).as_deref(),
-    ) {
-        Ok(html) => html,
+    let mut charset = head::charset_param(&response.content_type);
+    if kind == File::Text {
+        // Text declares no charset of its own: absent one, it is UTF-8.
+        charset.get_or_insert_with(|| "utf-8".to_owned());
+    }
+    let decoded = match head::decode(&bytes, charset.as_deref()) {
+        Ok(decoded) => decoded,
         Err(label) => {
             return done(line(
                 Status::Error,
@@ -275,20 +284,93 @@ fn read(raw: &str, mut response: Response, images: bool) -> Result<Capture, Pass
             ));
         }
     };
+    if kind == File::Text {
+        let images = image_pick::not_html(&mime, &final_url);
+        return Ok(match plain(&decoded, &response.url) {
+            Some(page) => {
+                let mut read = line(Status::Ok, None);
+                read.extractor = Some(TEXT_EXTRACTOR.to_owned());
+                Capture {
+                    line: read,
+                    page: Some(page),
+                    images,
+                }
+            }
+            None => Capture {
+                line: line(Status::NotHtml, Some("text file without text".to_owned())),
+                page: None,
+                images,
+            },
+        });
+    }
     Ok(from_html(
         raw,
         Tier::Web,
         &response.url,
         status,
-        &html,
+        &decoded,
         images,
     ))
 }
 
-/// How a page of type `mime` that is neither HTML nor a PDF ends: an
-/// image is `media`, its copy the page's image; anything else `not_html`.
+/// What a response's type says to read it as: the one list of the types
+/// this build reads.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum File {
+    /// HTML, or a response that names no type.
+    Html,
+    Pdf,
+    Text,
+    Image,
+    Other,
+}
+
+impl File {
+    fn of(mime: &str) -> Self {
+        match mime {
+            "" => Self::Html,
+            content_pdf::MIME => Self::Pdf,
+            TEXT_MIME => Self::Text,
+            mime if mime.contains("html") => Self::Html,
+            mime if mime.starts_with("image/") => Self::Image,
+            _ => Self::Other,
+        }
+    }
+}
+
+/// Plain `text` served at `final_url` as a page: kept as written, its
+/// indentation too, ending in one newline, and titled by the address's
+/// file name, else the address. `None` when it is only whitespace.
+fn plain(text: &str, final_url: &Url) -> Option<Page> {
+    let text = text.trim_end();
+    if text.trim().is_empty() {
+        return None;
+    }
+    let title = final_url
+        .path_segments()
+        .and_then(|mut segments| segments.rfind(|segment| !segment.is_empty()))
+        .map_or_else(
+            || final_url.to_string(),
+            |name| {
+                percent_encoding::percent_decode_str(name)
+                    .decode_utf8_lossy()
+                    .into_owned()
+            },
+        );
+    Some(Page {
+        title: Some(title),
+        extractor: TEXT_EXTRACTOR.to_owned(),
+        completeness: Completeness::Full,
+        chars: extract::plain_chars(text),
+        captions: None,
+        markdown: format!("{text}\n"),
+    })
+}
+
+/// How a page of type `mime` that this build does not read as text ends:
+/// an image is `media`, its copy the page's image; anything else `not_html`.
 fn not_html(mime: &str) -> (Status, String) {
-    if mime.starts_with("image/") {
+    if File::of(mime) == File::Image {
         (Status::Media, format!("image ({mime})"))
     } else {
         (Status::NotHtml, format!("not HTML ({mime})"))
@@ -296,7 +378,8 @@ fn not_html(mime: &str) -> (Status, String) {
 }
 
 /// Whether `line` is one an earlier build wrote as not HTML for a type
-/// this build reads, an image or a PDF: read again on a plain run.
+/// this build reads, an image, a PDF or plain text: read again on a plain
+/// run.
 pub fn outdated(line: &Line) -> bool {
     line.status == Status::NotHtml
         && line.tier == Some(Tier::Web)
@@ -304,7 +387,7 @@ pub fn outdated(line: &Line) -> bool {
             .reason
             .as_deref()
             .and_then(|reason| reason.strip_prefix("not HTML (")?.strip_suffix(')'))
-            .is_some_and(|mime| mime == content_pdf::MIME || not_html(mime).0 != Status::NotHtml)
+            .is_some_and(|mime| matches!(File::of(mime), File::Pdf | File::Text | File::Image))
 }
 
 /// What a page's decoded `html` says about page `raw`, read by `tier` at
@@ -654,7 +737,7 @@ mod tests {
         for mime in ["image/jpeg", "image/png"] {
             assert_eq!(not_html(mime), (Status::Media, format!("image ({mime})")));
         }
-        for mime in ["application/x-sh", "video/mp4", "text/plain"] {
+        for mime in ["application/x-sh", "video/mp4"] {
             assert_eq!(
                 not_html(mime),
                 (Status::NotHtml, format!("not HTML ({mime})"))
@@ -663,10 +746,31 @@ mod tests {
     }
 
     #[test]
+    fn plain_text_is_kept_as_written_and_titled_by_its_file_name() {
+        let text = "#!/bin/sh\n# <b>not markup</b>\nif [ -n \"$1\" ]; then\n    echo \"$1\" > /tmp/out\nfi\n\n\n";
+        let site = crate::content_test::site(move |_, _| {
+            Some(format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{text}",
+                text.len()
+            ))
+        });
+        let fetcher = Fetcher::resolving_to(site, Duration::from_millis(400));
+        let read = capture(&fetcher, "http://files.example.test/tools/install.sh", true);
+        assert_eq!(
+            (read.line.status, read.line.extractor.as_deref()),
+            (Status::Ok, Some(TEXT_EXTRACTOR))
+        );
+        let page = read.page.expect("plain text is kept");
+        assert_eq!(page.title.as_deref(), Some("install.sh"));
+        assert_eq!(page.markdown, text.trim_end().to_owned() + "\n");
+        assert_eq!(page.completeness, Completeness::Full);
+    }
+
+    #[test]
     fn not_html_lines_of_types_this_build_reads_are_outdated() {
         let line =
             |status, reason: &str| line("https://a.test/", Tier::Web, status).with_reason(reason);
-        for mime in ["image/jpeg", "image/png", "application/pdf"] {
+        for mime in ["image/jpeg", "image/png", "application/pdf", "text/plain"] {
             let earlier = line(Status::NotHtml, &format!("not HTML ({mime})"));
             assert!(outdated(&earlier), "{mime}");
             let mut rendered = earlier.clone();

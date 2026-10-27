@@ -445,9 +445,11 @@ content store. It records X profiles and YouTube channels and playlists as not
 a document, without a request. A page that is an image is `media`: it has no
 text, and its copy is the page's preview image. A PDF's text is read on this
 machine; a PDF that cannot be read, has no text (a scan) or is over 10 MB is
-`not_html` with that reason, and anything else that is not HTML is `not_html`
-with its type. An image or PDF an earlier version recorded as `not_html` is
-read again on the next plain run. A page that has text is `ok`, or `thin`
+`not_html` with that reason. A plain text file is kept as written, never read
+as HTML, titled by its file name, and is `ok` whatever its length; anything
+else that is not HTML is `not_html` with its type. An image, PDF or plain text
+file an earlier version recorded as `not_html` is read again on the next plain
+run. A page that has text is `ok`, or `thin`
 when it has less than 1,500 characters; either way the text is kept. A page drawn entirely by
 scripts is `empty_shell`, a sign-in form or a 401 is `behind_login`, a 403 is
 `blocked`, a 404 or 410 is `not_found`, and a short page whose publisher marks
