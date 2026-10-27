@@ -599,7 +599,7 @@ tier is ready; a missing tool is a warning.
 │   ├── images.jsonl           # what `content` did about each page's image, one line per attempt; append-only
 │   ├── images/                # one preview JPEG per captured page, named as its text file is
 │   ├── sources.jsonl          # which bytes each local document was when added: blob and commit; append-only
-│   ├── xbookmarks.jsonl       # one line per bookmark click on X, naming the page it saved; append-only
+│   ├── xbookmarks.jsonl       # bookmarks on X: a line per click naming the page it saved, and a line per thread naming its posts; append-only
 │   └── history.json           # what History last said about each page; refreshed, never drops a page
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
 ├── extension.json             # the toolbar extension's last report on what it sees on X; replaced whole
