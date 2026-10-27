@@ -127,7 +127,8 @@ Toolbar button (`extension/`, Chrome): in `chrome://extensions` turn on Develope
 the `extension` folder. A click opens the Library tab already open on port 41878, else a new one, at Add link with the
 tab's address and title filled in; a page that is not on the web (`chrome://`, `file://`) opens Add link empty. On
 x.com and twitter.com, clicking X's own bookmark button on a post saves the post to the library (`POST /api/x/bookmark`
-on port 41878) as `https://x.com/<handle>/status/<id>`, with its text from the X post API; removing a bookmark does
+on port 41878) as `https://x.com/<handle>/status/<id>`, with its author's thread as the page shows it at the click
+(read, never clicked or scrolled), filled from the X post API when the page shows only part; removing a bookmark does
 nothing. A save is sent once: while the Library is not running, or answers that its archive failed, the bookmark is not
 saved, and the extension keeps only how many were dropped and when the last was, never the post. It counts the posts and
 bookmark buttons each page of X shows and reports a change, a drop, or once a day, to `POST /api/x/health`;

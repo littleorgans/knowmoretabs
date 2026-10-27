@@ -1,7 +1,9 @@
 //! A post bookmarked on X, saved through `serve` by the real binary: the
-//! page, its click line and its text from a stand-in X post API; the
-//! origins the routes accept and refuse; the extension's health report and
-//! the `doctor` line it makes.
+//! page, its click line, its text read from the owner's page or from a
+//! stand-in X post API's thread, whichever is longer, and the thread's
+//! later bookmarks joining the same page; the origins the routes accept
+//! and refuse; the extension's health report and the `doctor` line it
+//! makes.
 
 mod common;
 
@@ -38,17 +40,58 @@ fn answer() -> Vec<u8> {
     .unwrap()
 }
 
-/// The X post API, standing in: post 100 answers, post 401 is private.
+/// A post of the synthetic thread by `example_author`, numbered `id`.
+fn thread_post(handle: &str, id: u64, text: &str) -> Value {
+    json!({"type": "status", "id": id.to_string(),
+        "url": format!("https://x.com/{handle}/status/{id}"),
+        "text": text, "created_timestamp": 1_791_363_600 + id, "lang": "en",
+        "author": {"type": "profile", "name": "Example Author", "screen_name": handle,
+            "protected": false},
+        "media": {}})
+}
+
+/// The thread's five posts by its author, numbers 200 to 204, and a reply
+/// by someone else, as the thread route answers for any of them.
+fn thread_answer(focal: u64) -> Vec<u8> {
+    let mut thread: Vec<Value> = (200..=204)
+        .map(|id| {
+            thread_post(
+                "example_author",
+                id,
+                &format!("Thread post {id}, the whole of it as the public service has it."),
+            )
+        })
+        .collect();
+    thread.insert(
+        2,
+        thread_post("example_reader", 250, "A reply by someone else."),
+    );
+    let status = thread_post("example_author", focal, "");
+    serde_json::to_vec(&json!({"code": 200, "status": status, "thread": thread})).unwrap()
+}
+
+fn json_reply(body: Vec<u8>) -> site::Reply {
+    site::Reply {
+        status: 200,
+        headers: vec![("Content-Type", "application/json".into())],
+        body,
+        stall: None,
+    }
+}
+
+/// The X post API, standing in: post 100 is a post alone, post 401 is
+/// private, posts 200 to 204 are one thread.
 fn x_api() -> Site {
-    Site::start(|host, path, _| match (host, path) {
-        ("api.fxtwitter.com", "/2/status/100") => site::Reply {
-            status: 200,
-            headers: vec![("Content-Type", "application/json".into())],
-            body: answer(),
-            stall: None,
-        },
-        ("api.fxtwitter.com", "/2/status/401") => site::Reply::status(401),
-        _ => site::Reply::status(404),
+    Site::start(|host, path, _| {
+        let id = path
+            .strip_prefix("/2/thread/")
+            .and_then(|id| id.parse::<u64>().ok());
+        match (host, id) {
+            ("api.fxtwitter.com", Some(100)) => json_reply(answer()),
+            ("api.fxtwitter.com", Some(401)) => site::Reply::status(401),
+            ("api.fxtwitter.com", Some(id @ 200..=204)) => json_reply(thread_answer(id)),
+            _ => site::Reply::status(404),
+        }
     })
 }
 
@@ -91,11 +134,62 @@ fn bookmark(server: &Server, post: &str) -> Reply {
     )
 }
 
+/// A bookmark with what the page showed of it.
+fn bookmark_read(server: &Server, post: &str, read: &Value) -> Value {
+    let reply = post_from(
+        server,
+        &extension_origin(),
+        "/api/x/bookmark",
+        &json!({"post": post, "read": read}),
+    );
+    assert_eq!(reply.status, 200, "{}", reply.text());
+    reply.json()
+}
+
+/// A post as the extension reads it from the page.
+fn shown(handle: &str, id: u64, text: &str) -> Value {
+    json!({"id": id.to_string(), "handle": handle, "name": "Example Author",
+        "at": "2026-01-01T10:00:00Z", "lang": "en", "text": text, "text_complete": true,
+        "alts": [], "media": [], "links": []})
+}
+
+/// A page read of the clicked post `clicked` by `author`: whole on the
+/// post's own page, else one post in Home.
+fn page_read(author: &str, clicked: u64, posts: &[Value], complete: bool) -> Value {
+    let (place, reasons) = if complete {
+        ("status", vec![])
+    } else {
+        ("timeline", vec!["timeline"])
+    };
+    json!({"where": place, "clicked": clicked.to_string(), "author": author,
+        "complete": complete, "reasons": reasons, "posts": posts})
+}
+
+fn status_of(id: u64) -> String {
+    format!("https://x.com/example_author/status/{id}")
+}
+
+fn content_line(fx: &Fixture, url: &str) -> Value {
+    log_lines(fx, "content.jsonl")
+        .into_iter()
+        .rev()
+        .find(|line| line["url"] == url)
+        .unwrap_or_else(|| panic!("no content line for {url}"))
+}
+
 fn log_lines(fx: &Fixture, name: &str) -> Vec<Value> {
     fs::read_to_string(fx.root.join("pages").join(name))
         .unwrap_or_default()
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
+        .collect()
+}
+
+/// The X log's click lines.
+fn clicks(fx: &Fixture) -> Vec<Value> {
+    log_lines(fx, "xbookmarks.jsonl")
+        .into_iter()
+        .filter(|line| line.get("post").is_some())
         .collect()
 }
 
@@ -131,11 +225,13 @@ fn a_bookmark_click_saves_the_post_once_and_marks_it_on_every_click() {
         (&json!("done"), &json!(POST), &json!("added"), &json!("ok")),
         "{line}"
     );
-    assert!(
-        site.paths()
-            .contains(&"api.fxtwitter.com/2/status/100".to_owned()),
-        "only the post's number was asked: {:?}",
-        site.paths()
+    assert_eq!(
+        (&line["read"], site.paths()),
+        (
+            &json!("none"),
+            vec!["api.fxtwitter.com/2/thread/100".to_owned()]
+        ),
+        "without a page read, only the post's number was asked"
     );
     let front = kept_front(&fx, POST);
     assert!(front.contains("tier: \"x\""), "{front}");
@@ -145,16 +241,16 @@ fn a_bookmark_click_saves_the_post_once_and_marks_it_on_every_click() {
         intake.last().unwrap()["title"],
         "Example Author (@example_author) on X"
     );
-    let clicks = log_lines(&fx, "xbookmarks.jsonl");
-    assert_eq!(clicks.len(), 1, "{clicks:?}");
+    let first = clicks(&fx);
+    assert_eq!(first.len(), 1, "{first:?}");
     assert_eq!(
-        (&clicks[0]["url"], &clicks[0]["post"], &clicks[0]["posts"]),
+        (&first[0]["url"], &first[0]["post"], &first[0]["posts"]),
         (&json!(POST), &json!(POST), &json!(["100"]))
     );
     let library = server.library();
     let saved = page(&library, POST);
     assert_eq!(saved["x"]["clicked"], json!([POST]), "{saved}");
-    assert_eq!(saved["x"]["bookmarked_at"], clicks[0]["at"]);
+    assert_eq!(saved["x"]["bookmarked_at"], first[0]["at"]);
     assert!(
         page(&library, A).get("x").is_none(),
         "only bookmarked pages"
@@ -163,8 +259,9 @@ fn a_bookmark_click_saves_the_post_once_and_marks_it_on_every_click() {
     // The same post again: known, one more click, no new intake line.
     let again = bookmark(&server, POST).json();
     assert_eq!(again["value"], "known", "{again}");
-    assert_eq!(log_lines(&fx, "xbookmarks.jsonl").len(), 2);
+    assert_eq!(clicks(&fx).len(), 2);
     assert_eq!(log_lines(&fx, "added.jsonl").len(), intake.len());
+    let marked = log_lines(&fx, "xbookmarks.jsonl").len();
 
     // Forgotten: nothing written, and the reply says so.
     let forget = server.post("/api/forget", &json!({"urls": [POST]}));
@@ -172,7 +269,7 @@ fn a_bookmark_click_saves_the_post_once_and_marks_it_on_every_click() {
     let forgotten = bookmark(&server, POST);
     assert_eq!(forgotten.status, 200, "{}", forgotten.text());
     assert_eq!(forgotten.json()["value"], "forgotten");
-    assert_eq!(log_lines(&fx, "xbookmarks.jsonl").len(), 2);
+    assert_eq!(log_lines(&fx, "xbookmarks.jsonl").len(), marked);
     assert_eq!(log_lines(&fx, "added.jsonl").len(), intake.len());
 }
 
@@ -191,6 +288,263 @@ fn a_private_post_is_saved_without_its_text() {
         "{line}"
     );
     page(&server.library(), PRIVATE);
+}
+
+#[test]
+fn a_whole_thread_read_on_its_page_is_kept_signed_in_and_nothing_is_asked() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let posts: Vec<Value> = (300..=303)
+        .map(|id| shown("example_author", id, &format!("Shown post {id}.")))
+        .collect();
+    let line = bookmark_read(
+        &server,
+        &status_of(301),
+        &page_read("example_author", 301, &posts, true),
+    );
+    assert_eq!(
+        (&line["value"], &line["content"], &line["read"]),
+        (&json!("added"), &json!("ok"), &json!("kept")),
+        "{line}"
+    );
+    assert!(site.paths().is_empty(), "nothing asked: {:?}", site.paths());
+    let front = kept_front(&fx, &status_of(301));
+    assert!(front.contains("tier: \"signed_in\""), "{front}");
+    assert!(front.contains("extractor: \"x-page 1\""), "{front}");
+    assert!(front.contains("access: \"signed_in\""), "{front}");
+    let at: Vec<usize> = (300..=303)
+        .map(|id| front.find(&format!("Shown post {id}.")).unwrap())
+        .collect();
+    assert!(at.is_sorted(), "the page's order: {front}");
+    assert_eq!(
+        content_line(&fx, &status_of(301))["reason"],
+        "4 posts as shown"
+    );
+    assert_eq!(clicks(&fx)[0]["posts"], json!(["300", "301", "302", "303"]));
+    assert_eq!(
+        log_lines(&fx, "added.jsonl").last().unwrap()["title"],
+        "Example Author (@example_author) on X"
+    );
+}
+
+#[test]
+fn a_thread_shown_in_part_is_filled_from_the_public_thread_and_later_bookmarks_join_it() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let key = status_of(202);
+    let one = |id: u64, text: &str| {
+        page_read(
+            "example_author",
+            id,
+            &[shown("example_author", id, text)],
+            false,
+        )
+    };
+
+    // The third post, from Home: the page read is written, then the
+    // public thread's five posts are longer and replace it.
+    let line = bookmark_read(
+        &server,
+        &key,
+        &one(202, "Thread post 202, as Home shows it."),
+    );
+    assert_eq!(
+        (&line["value"], &line["content"], &line["read"]),
+        (&json!("added"), &json!("ok"), &json!("replaced")),
+        "{line}"
+    );
+    assert_eq!(site.paths(), ["api.fxtwitter.com/2/thread/202"]);
+    let reads: Vec<Value> = log_lines(&fx, "content.jsonl");
+    assert_eq!(
+        reads
+            .iter()
+            .map(|line| line["tier"].clone())
+            .collect::<Vec<_>>(),
+        [json!("signed_in"), json!("x")],
+        "the page read, then the public thread"
+    );
+    let front = kept_front(&fx, &key);
+    assert!(front.contains("tier: \"x\""), "{front}");
+    let at: Vec<usize> = (200..=204)
+        .map(|id| front.find(&format!("Thread post {id}, the whole")).unwrap())
+        .collect();
+    assert!(at.is_sorted(), "the thread's order: {front}");
+    assert!(
+        !front.contains("someone else"),
+        "only the author's posts: {front}"
+    );
+    let thread = log_lines(&fx, "xbookmarks.jsonl").last().unwrap().clone();
+    assert_eq!(thread.get("post"), None, "{thread}");
+    assert_eq!(thread["posts"], json!(["200", "201", "202", "203", "204"]));
+
+    // Another post of the thread, later: the same page, known, a click
+    // more, and the shorter reads keep the thread's text.
+    let again = bookmark_read(&server, &status_of(204), &one(204, "Thread post 204."));
+    assert_eq!(
+        (&again["url"], &again["value"], &again["read"]),
+        (&json!(key), &json!("known"), &json!("kept")),
+        "{again}"
+    );
+    assert_eq!(kept_front(&fx, &key), front, "the longer text stands");
+    let kept = content_line(&fx, &key);
+    assert_eq!(
+        kept["reason"], "page read added no text; public read added no text",
+        "{kept}"
+    );
+    let marked = clicks(&fx);
+    assert_eq!(
+        (&marked[1]["url"], &marked[1]["post"]),
+        (&json!(key), &json!(status_of(204)))
+    );
+    let library = server.library();
+    assert_eq!(
+        page(&library, &key)["x"]["clicked"],
+        json!([status_of(204), key])
+    );
+    assert!(
+        library["pages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|page| page["url"] != status_of(204)),
+        "one page for the thread"
+    );
+}
+
+#[test]
+fn a_protected_thread_keeps_its_page_read_and_says_the_public_read_added_nothing() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let read = page_read(
+        "example_private",
+        401,
+        &[shown(
+            "example_private",
+            401,
+            "Only followers see this thread.",
+        )],
+        false,
+    );
+    let line = bookmark_read(&server, PRIVATE, &read);
+    assert_eq!(
+        (&line["content"], &line["read"]),
+        (&json!("ok"), &json!("kept")),
+        "{line}"
+    );
+    assert_eq!(site.paths(), ["api.fxtwitter.com/2/thread/401"]);
+    let kept = content_line(&fx, PRIVATE);
+    assert_eq!(
+        kept["reason"],
+        "1 post as shown; thread may continue; public read added no text"
+    );
+    assert_eq!(
+        (&kept["tier"], &kept["access"]),
+        (&json!("signed_in"), &json!("signed_in")),
+        "the log says what the stored file says: {kept}"
+    );
+    let front = kept_front(&fx, PRIVATE);
+    assert!(front.contains("Only followers see this thread."), "{front}");
+    assert!(front.contains("tier: \"signed_in\""), "{front}");
+}
+
+#[test]
+fn a_read_the_shell_refuses_still_saves_the_bookmark_through_the_public_thread() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let many: Vec<Value> = (1..=51)
+        .map(|id| shown("example_author", id, "x"))
+        .collect();
+    for read in [
+        page_read("example_author", 100, &many, true),
+        page_read(
+            "example_author",
+            999,
+            &[shown("example_author", 999, "Not it.")],
+            true,
+        ),
+        json!("not a read"),
+    ] {
+        let line = bookmark_read(&server, POST, &read);
+        assert_eq!(
+            (&line["content"], &line["read"]),
+            (&json!("ok"), &json!("refused")),
+            "{line}"
+        );
+    }
+    assert_eq!(
+        site.paths(),
+        vec!["api.fxtwitter.com/2/thread/100".to_owned(); 3]
+    );
+    assert!(
+        log_lines(&fx, "content.jsonl")
+            .iter()
+            .all(|line| line["tier"] == "x"),
+        "no page read was kept"
+    );
+    assert_eq!(clicks(&fx)[0]["posts"], json!(["100"]));
+}
+
+#[test]
+fn two_saves_at_once_in_one_thread_make_one_page_and_two_casings_one_key() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let posts = [
+        shown("example_author", 300, "Shown post 300."),
+        shown("example_author", 301, "Shown post 301."),
+    ];
+    let start = std::sync::Barrier::new(2);
+    let lines: Vec<Value> = std::thread::scope(|scope| {
+        let saves: Vec<_> = [300, 301]
+            .map(|id| {
+                let (server, start, posts) = (&server, &start, &posts);
+                scope.spawn(move || {
+                    start.wait();
+                    bookmark_read(
+                        server,
+                        &status_of(id),
+                        &page_read("example_author", id, posts, true),
+                    )
+                })
+            })
+            .into_iter()
+            .collect();
+        saves.into_iter().map(|save| save.join().unwrap()).collect()
+    });
+    assert_eq!(lines[0]["url"], lines[1]["url"], "{lines:?}");
+    let mut values: Vec<&Value> = lines.iter().map(|line| &line["value"]).collect();
+    values.sort_by_key(ToString::to_string);
+    assert_eq!(values, [&json!("added"), &json!("known")]);
+
+    let cased = bookmark(&server, "https://x.com/Example_Author/status/100").json();
+    let lower = bookmark(&server, POST).json();
+    assert_eq!(
+        (&cased["url"], &cased["value"], &lower["value"]),
+        (&json!(POST), &json!("added"), &json!("known"))
+    );
+}
+
+#[test]
+fn an_x_log_that_cannot_be_read_costs_the_marks_and_not_the_library() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    assert_eq!(bookmark(&server, POST).json()["value"], "added");
+    let log = fx.root.join("pages").join("xbookmarks.jsonl");
+    fs::remove_file(&log).unwrap();
+    fs::create_dir(&log).unwrap();
+    let library = server.library();
+    assert!(page(&library, POST).get("x").is_none(), "no marks");
 }
 
 #[test]

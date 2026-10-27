@@ -22,9 +22,9 @@ use std::time::{Duration, Instant};
 
 use url::Url;
 
-use crate::archive;
 use crate::browser::{self, Broken, Browser, Outcome, Readiness};
 use crate::capture::Log;
+use crate::content_fetch;
 use crate::content_image::Images;
 use crate::content_pdf;
 use crate::content_report::{seconds, spread};
@@ -145,31 +145,27 @@ impl Escalated {
 
 /// The line a page whose recorded line is `baseline` gets after a render
 /// by `tier` came to `outcome`, and the text to keep with it. Rendered text
-/// replaces the kept text only when it has more characters; otherwise the
+/// replaces the kept text by `content_fetch::longer`; otherwise the
 /// baseline's text is kept whole, marked as attempted by `tier`. Never an
 /// error.
 pub fn settle<'a>(baseline: &Line, outcome: &'a Outcome, tier: Tier) -> (Line, Option<&'a Page>) {
-    let kept = baseline.chars.unwrap_or(0);
     let not_rendered = |why: &str| {
         (
-            copied(baseline, &format!("not rendered: {why}"), tier),
+            content_fetch::copied(baseline, Some(&format!("not rendered: {why}")), tier),
             None,
         )
     };
     match outcome {
-        Outcome::Read(capture)
-            if capture.page.as_ref().is_some_and(|page| page.chars > kept)
-                && !matches!(
-                    capture.line.status,
-                    Status::Error | Status::Unavailable | Status::Skipped
-                ) =>
-        {
+        Outcome::Read(capture) if content_fetch::longer(baseline, capture) => {
             let mut line = capture.line.clone();
             baseline.url.clone_into(&mut line.url);
             line.attempt = baseline.attempt;
             (line, capture.page.as_ref())
         }
-        Outcome::Read(_) => (copied(baseline, "rendering added no text", tier), None),
+        Outcome::Read(_) => (
+            content_fetch::copied(baseline, Some("rendering added no text"), tier),
+            None,
+        ),
         Outcome::SignIn(signed) => {
             let mut line = (**signed).clone();
             baseline.url.clone_into(&mut line.url);
@@ -185,20 +181,6 @@ pub fn settle<'a>(baseline: &Line, outcome: &'a Outcome, tier: Tier) -> (Line, O
         Outcome::Refused(refusal) => not_rendered(&refusal.reason()),
         Outcome::NotRendered(why) => not_rendered(why),
     }
-}
-
-/// `baseline` as it stands, attempted now by `tier` with its access, its
-/// reason saying what the render came to.
-fn copied(baseline: &Line, note: &str, tier: Tier) -> Line {
-    let mut line = baseline.clone();
-    line.tier = Some(tier);
-    line.access = Some(tier.access());
-    line.attempted_at = archive::now();
-    line.reason = Some(match &baseline.reason {
-        Some(reason) => format!("{reason}; {note}"),
-        None => note.to_owned(),
-    });
-    line
 }
 
 /// What the headless tier did in a run.
@@ -588,6 +570,18 @@ mod tests {
         assert_eq!(
             copy.reason.as_deref(),
             Some("short text; rendering added no text")
+        );
+        let (copy, _) = settle(&copy, &outcomes[0], Tier::Headless);
+        assert_eq!(
+            copy.reason.as_deref(),
+            Some("short text; rendering added no text; rendering added no text"),
+            "each render attempt retains its note, as before the shared rule"
+        );
+        let (copy, _) = settle(&baseline, &outcomes[1], Tier::Headless);
+        let (copy, _) = settle(&copy, &outcomes[1], Tier::Headless);
+        assert_eq!(
+            copy.reason.as_deref(),
+            Some("short text; not rendered: HTTP 404; not rendered: HTTP 404")
         );
 
         let more = rendered(40);

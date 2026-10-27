@@ -216,15 +216,21 @@ impl<R> Latest<R> {
     /// The warning a command gives when lines of the log at `path` could
     /// not be read; `None` when every line could.
     pub fn unreadable_note(&self, path: &Path) -> Option<String> {
-        (self.unreadable > 0).then(|| {
-            format!(
-                "{} of {} could not be read and {} ignored",
-                plural(self.unreadable, "line"),
-                path.display(),
-                if self.unreadable == 1 { "was" } else { "were" }
-            )
-        })
+        unreadable_note(self.unreadable, path)
     }
+}
+
+/// The warning a command gives when `unreadable` lines of the log at
+/// `path` could not be read; `None` when every line could.
+pub fn unreadable_note(unreadable: usize, path: &Path) -> Option<String> {
+    (unreadable > 0).then(|| {
+        format!(
+            "{} of {} could not be read and {} ignored",
+            plural(unreadable, "line"),
+            path.display(),
+            if unreadable == 1 { "was" } else { "were" }
+        )
+    })
 }
 
 /// The whole log; a missing file is an empty log. `what` names the log in

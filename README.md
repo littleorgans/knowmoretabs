@@ -164,8 +164,11 @@ busy, search matches words as it does without it. The same service's Tag and
 Add link are served below `/model/`, and say so when the service is not
 answering. With the toolbar extension loaded, a post you bookmark on X is
 saved to the library as one page under `https://x.com/<handle>/status/<id>`,
-while `serve` is running: a bookmark made while it is stopped is not kept for
-later, and `doctor` says how many were missed.
+with its author's thread as the page showed it, filled from the X post API
+when the page showed only part; a later bookmark in the same thread is the
+same page. A save requires `serve` to be running:
+a bookmark made while it is stopped is not kept for later, and `doctor`
+says how many were missed.
 
 Forgetting hides a page from the library. It never touches a snapshot: every
 page you forget is still in every snapshot it was ever in, and `restore`
@@ -458,7 +461,7 @@ and a refetch that finds the same text leaves the file as it was.
 From an X post it keeps the post's text, the post it quotes, an article's
 body with its code and a link to each post it embeds, who wrote it and
 when, and the descriptions of its images; one post, not the thread around
-it. Where an article shows an image, its body has `[Image: <description>]`,
+it (a post you bookmark on X keeps its author's thread, below). Where an article shows an image, its body has `[Image: <description>]`,
 or `[Image]` when the image has no description; a video or GIF is
 `[Video]` the same way. The media is not kept beyond the post's one preview
 image, described below. A post the API does
@@ -596,7 +599,7 @@ tier is ready; a missing tool is a warning.
 │   ├── images.jsonl           # what `content` did about each page's image, one line per attempt; append-only
 │   ├── images/                # one preview JPEG per captured page, named as its text file is
 │   ├── sources.jsonl          # which bytes each local document was when added: blob and commit; append-only
-│   ├── xbookmarks.jsonl       # one line per bookmark click on X, naming the page it saved; append-only
+│   ├── xbookmarks.jsonl       # bookmarks on X: a line per click naming the page it saved, and a line per thread naming its posts; append-only
 │   └── history.json           # what History last said about each page; refreshed, never drops a page
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
 ├── extension.json             # the toolbar extension's last report on what it sees on X; replaced whole
@@ -618,9 +621,11 @@ and `search --mode combined` make none unless `--model-port` is set; then they
 send each query to the model service over loopback on this machine. CLI search
 also supplies the filtered page keys and current body digests.
 `search --mode keyword` makes no network requests.
-A post you bookmark on X reaches `serve` through the toolbar extension and is
-saved as `add` saves a page: the X post API is asked for the post's number,
-and the post's preview image is downloaded.
+A post you bookmark on X reaches `serve` through the toolbar extension with
+what the page showed of its author's thread, kept as the page's text. When
+the page showed only part, the X post API is asked for the thread by the
+post's number, and the longer text is kept. The post's preview image is
+downloaded, from X's own image host when it comes from the page.
 `enrich` and `content` are the only code that sends your pages' addresses,
 or a video's id to YouTube through yt-dlp, and what each sends is described
 above; `content` also downloads one preview image per page from the address
@@ -740,7 +745,8 @@ Why decrypting is not the answer is in
 No sync. No accounts. No cloud. No telemetry. The toolbar extension
 (`extension/`, set up in [`lab/tagger/README.md`](lab/tagger/README.md)) opens
 Add link and saves a post you bookmark on X; it reads only x.com and
-twitter.com pages, names the post you bookmarked and nothing else, and reports
+twitter.com pages, sends the post you bookmarked with what the page shows of
+its author's thread and nothing else, never clicks or scrolls there, and reports
 what it sees there to your Library alone. No page text unless you ask for it: `content` is opt in, and keyword
 search over what it stores comes later. No tag hierarchy. It never touches,
 closes or reorders your tabs in the live browser (`content --signed-in`

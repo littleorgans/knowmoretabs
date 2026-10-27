@@ -41,7 +41,7 @@ const { parseHTML, composedPath } = require('./x_dom.cjs');
 
 const manifest = JSON.parse(read('extension/manifest.json'));
 const xdom = vm.runInNewContext(
-  read('extension/xdom.js') + '\n({ X, canonicalPost, postIdentity, clickIntent, pageCounts, showsBookmarked, freshHealth, afterView, afterIntent, healthReport })',
+  read('extension/xdom.js') + '\n({ X, canonicalPost, postIdentity, clickIntent, pageRead, pageCounts, showsBookmarked, freshHealth, afterView, afterIntent, healthReport })',
   { URL },
 );
 const fixture = (name) => parseHTML(read(`tests/fixtures/x/${name}.html`));
@@ -108,6 +108,130 @@ test('a permalink is a post on X with its handle, kept on x.com', () => {
   assert.equal(xdom.canonicalPost('/Example_Author/status/7/video/1', HOME).post, 'https://x.com/Example_Author/status/7');
   for (const href of ['/i/status/7', '/example_author', '/example_author/status/x', 'https://example.org/a/status/7', 'http://x.com/a/status/7', '/sixteen_letters_/status/7', '/a/status/12345678901234567890']) {
     assert.equal(xdom.canonicalPost(href, HOME), null, href);
+  }
+});
+
+// The page read for a bookmark click on post `name` of fixture `doc`, on the page at `base`.
+const readOn = (doc, name, base) => plain(xdom.pageRead(composedPath(article(doc, name).querySelector('[data-testid="bookmark"]')), base));
+const ids = (read) => read.posts.map((post) => post.id);
+const THREAD = 'https://x.com/example_author/status/301';
+
+// A conversation of cells: `example_author` posts by number, `@<handle>:<id>` another's post,
+// `heading`, `more` and `unnamed` (a post whose permalink and author disagree) the boundaries a page shows.
+function conversation(cells) {
+  const cell = (spec) => {
+    if (spec === 'heading') return '<div data-testid="cellInnerDiv"><h2 role="heading">More From This Author</h2></div>';
+    if (spec === 'more') return '<div data-testid="cellInnerDiv"><div role="button" tabindex="0">Show more replies</div></div>';
+    if (spec === 'unnamed') return cell('@example_reader:99').replace('href="/example_reader"', 'href="/example_author"');
+    const [handle, id] = String(spec).startsWith('@') ? spec.slice(1).split(':') : ['example_author', spec];
+    return `<div data-testid="cellInnerDiv"><article data-testid="tweet" data-fixture="p${id}">
+      <div data-testid="User-Name"><a href="/${handle}">Example</a></div>
+      <a href="/${handle}/status/${id}"><time datetime="2026-01-01T10:00:00Z">10:00</time></a>
+      <div data-testid="tweetText" lang="en">Post ${id}.</div>
+      <button data-testid="bookmark">Bookmark</button></article></div>`;
+  };
+  return parseHTML(`<main><section>${cells.map(cell).join('')}</section></main>`);
+}
+
+test("a read on a post's own page is its author's run: ancestors kept, another author stops it", () => {
+  const read = readOn(fixture('status'), 'ancestor', 'https://x.com/example_author/status/102');
+  assert.equal(read.where, 'status');
+  assert.equal(read.clicked, '101');
+  assert.deepEqual(ids(read), ['101', '102', '103'], 'the reply by someone else and the recommendation are not in it');
+  assert.equal(read.posts[2].text_complete, false);
+  assert.equal(read.posts[2].text, 'A visible preview of a longer self reply…');
+  assert.deepEqual([read.complete, read.reasons], [false, ['text_truncated']], 'truncated text marks it incomplete');
+});
+
+test('a read keeps text as shown, image descriptions, a quote apart, and only full link targets', () => {
+  const read = readOn(fixture('thread'), 'focal', THREAD);
+  assert.deepEqual(ids(read), ['300', '301', '302'], 'the recommendation heading stops the run');
+  assert.deepEqual(read.reasons, ['recommendation_boundary', 'unresolved_link']);
+  assert.equal(read.complete, false);
+  const [first, , last] = read.posts;
+  assert.deepEqual(
+    { name: first.name, at: first.at, lang: first.lang, text: first.text },
+    { name: 'Example Author', at: '2026-01-02T10:00:00Z', lang: 'en', text: 'A thread in three posts.\nSecond line 🧵 and a link: example.org/full… and @example_quote' },
+  );
+  assert.deepEqual(first.alts, ['A synthetic diagram'], 'a generic "Image" and the quote\'s image are not its descriptions');
+  assert.deepEqual(first.media, ['https://example.org/image.png', 'https://example.org/second.png']);
+  assert.deepEqual(first.links, [{ href: 'https://t.co/EXAMPLE1', label: 'example.org/full…', target: 'https://example.org/full-path' }], 'a mention is not a link off X');
+  assert.deepEqual(first.quote, { url: 'https://x.com/example_quote/status/900', handle: 'example_quote', text: 'Quoted text, separate from the owning post.' });
+  assert.ok(!first.text.includes('Quoted text'));
+  assert.deepEqual(last.links, [{ href: 'https://t.co/EXAMPLE2', label: 'example.org/another…', target: null }], 'a label cut short is no target');
+});
+
+test('a read in Home is the clicked post alone, said to be from a timeline', () => {
+  const read = readOn(fixture('timeline'), 'plain', HOME);
+  assert.deepEqual([read.where, read.complete, read.reasons, ids(read)], ['timeline', false, ['timeline'], ['100']]);
+  assert.equal(read.posts[0].links[0].target, 'https://example.org/full-path');
+  assert.equal(read.posts[0].quote.handle, 'example_quote');
+});
+
+test('a run ending at another author or the conversation end is complete; a fold is not', () => {
+  const base = 'https://x.com/example_author/status/2';
+  const read = (cells) => readOn(conversation(cells), 'p2', base);
+  for (const cells of [[1, 2, 3, '@example_reader:9', 4], [1, 2, 3]]) {
+    const whole = read(cells);
+    assert.deepEqual([whole.complete, whole.reasons, ids(whole)], [true, [], ['1', '2', '3']], String(cells));
+  }
+  assert.deepEqual(read([1, 2, 'more', 3]).reasons, ['unexpanded_replies']);
+  assert.deepEqual(read(['heading', 2]).reasons, ['recommendation_boundary'], 'a heading before the run is a boundary too');
+  assert.equal(xdom.pageRead(composedPath(conversation([1]).querySelector('article')), base), null, 'no button, no read');
+});
+
+test('a boundary before the clicked post leaves the read incomplete', () => {
+  const base = 'https://x.com/example_author/status/1';
+  const read = (cells) => readOn(conversation(cells), 'p7', base);
+  for (const cells of [[1, 'heading', 7, 8], [1, 'heading', '@example_reader:5', 7]]) {
+    const below = read(cells);
+    assert.deepEqual([below.complete, below.reasons, ids(below)], [false, ['recommendation_boundary'], ['7']], String(cells));
+  }
+  const folded = read([1, 'more', 7, 8]);
+  assert.deepEqual([folded.complete, folded.reasons, ids(folded)], [false, ['unexpanded_replies'], ['7', '8']]);
+  const unnamed = read(['unnamed', 7, 8]);
+  assert.deepEqual([unnamed.complete, unnamed.reasons, ids(unnamed)], [false, ['missing_identity'], ['7', '8']]);
+});
+
+test('a read sends at most 50 posts around the clicked one', () => {
+  const many = Array.from({ length: 60 }, (_, i) => i + 1);
+  const read = readOn(conversation(many), 'p55', 'https://x.com/example_author/status/55');
+  assert.equal(read.posts.length, 50);
+  assert.deepEqual([ids(read)[0], ids(read).at(-1), read.complete], ['6', '55', false]);
+});
+
+test('a recommendation heading beside a post stops the run in both directions', () => {
+  const doc = conversation([1, 2, 3, 4]);
+  const cell = article(doc, 'p3').closest('[data-testid="cellInnerDiv"]');
+  cell.append(conversation(['heading']).querySelector('[role="heading"]'));
+  const before = readOn(doc, 'p2', THREAD);
+  assert.deepEqual(ids(before), ['1', '2']);
+  assert.deepEqual(before.reasons, ['recommendation_boundary']);
+  assert.equal(before.complete, false);
+  const after = readOn(doc, 'p4', THREAD);
+  assert.deepEqual(ids(after), ['4']);
+  const clicked = readOn(doc, 'p3', THREAD);
+  assert.deepEqual(ids(clicked), ['3'], 'a click beside the heading never joins the preceding thread');
+  assert.deepEqual(clicked.reasons, ['recommendation_boundary']);
+});
+
+test('a heading outside a cell still separates the conversation from recommendations', () => {
+  const doc = conversation([1, 2]);
+  const rows = article(doc, 'p1').closest('[data-testid="cellInnerDiv"]').parentElement;
+  rows.append(conversation(['heading']).querySelector('[role="heading"]'));
+  rows.append(article(conversation([3]), 'p3').closest('[data-testid="cellInnerDiv"]'));
+  const read = readOn(doc, 'p2', THREAD);
+  assert.deepEqual(ids(read), ['1', '2']);
+  assert.deepEqual(read.reasons, ['recommendation_boundary']);
+  assert.deepEqual(ids(readOn(doc, 'p3', THREAD)), ['3']);
+});
+
+test('a heading inside a post is part of the post, not a boundary', () => {
+  const doc = conversation([1, 2, 3]);
+  article(doc, 'p2').append(conversation(['heading']).querySelector('[role="heading"]'));
+  for (const name of ['p1', 'p2', 'p3']) {
+    const read = readOn(doc, name, THREAD);
+    assert.deepEqual([read.complete, read.reasons, ids(read)], [true, [], ['1', '2', '3']], name);
   }
 });
 
@@ -214,7 +338,7 @@ test('the content script saves trusted add clicks and watches the same post for 
   script.click(article(doc, 'bookmarked').querySelector('[data-testid="removeBookmark"]'), true);
   assert.deepEqual(script.messages, []);
   script.click(button, true);
-  assert.deepEqual(script.messages, [{ kind: 'bookmark', post: 'https://x.com/example_author/status/100' }]);
+  assert.deepEqual(script.messages.map(({ kind, post, read }) => [kind, post, read.clicked]), [['bookmark', 'https://x.com/example_author/status/100', '100']]);
   script.advance(250);
   assert.equal(script.messages.length, 1, 'another post already bookmarked does not confirm this one');
   button.attributes.set('data-testid', 'removeBookmark');
@@ -263,6 +387,14 @@ test('the worker posts a named post to the Library and nothing else', async () =
   const w = worker();
   await w.send({ kind: 'bookmark', post: POST });
   assert.deepEqual(w.fetched, [{ url: `${LIBRARY}api/x/bookmark`, body: { post: POST }, type: 'application/json' }]);
+});
+
+test('the worker sends the page read with the post, and leaves out a read of the wrong shape', async () => {
+  const w = worker();
+  const read = { where: 'status', clicked: '100', posts: [] };
+  await w.send({ kind: 'bookmark', post: POST, read });
+  await w.send({ kind: 'bookmark', post: POST, read: ['not', 'a', 'read'] });
+  assert.deepEqual(w.fetched.map((f) => f.body), [{ post: POST, read }, { post: POST }]);
 });
 
 test('a message from another extension, a page off X or of the wrong shape is dropped', async () => {

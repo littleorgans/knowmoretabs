@@ -18,9 +18,10 @@ function jsonPost(url, body) {
   return { url, init: { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } };
 }
 
-// Saves the post a content script named; the post's address is all it carries.
-function bookmarkRequest(post) {
-  return jsonPost(BOOKMARK_API, { post });
+// Saves the post a content script named, with what the page showed of its thread when there is
+// a read; the Library checks the read and never fetches what it names.
+function bookmarkRequest(post, read) {
+  return jsonPost(BOOKMARK_API, read ? { post, read } : { post });
 }
 
 // The extension's report on what it sees on X.

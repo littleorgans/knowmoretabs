@@ -14,7 +14,9 @@
 //!      without a network, and the X post route answers by the same rules.
 //!      A page a browser rendered is read from its HTML on, as a response is.
 //!      A page that is an image is media, its copy the page's image, and a
-//!      PDF's text is read as a page's is.
+//!      PDF's text is read as a page's is. A later reading of a page that
+//!      kept text replaces it only when it is longer and did not fail, one
+//!      rule for renders and bookmark saves alike.
 
 use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
@@ -23,6 +25,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use url::Url;
 
+use crate::archive;
 use crate::content_pdf;
 use crate::content_store::{Completeness, Line, Page, Status, Tier};
 use crate::extract::{self, Class};
@@ -58,6 +61,37 @@ impl Capture {
             images: Found::Unread,
         }
     }
+}
+
+/// Whether `capture` replaces the text a page kept with `baseline`: it
+/// has more characters and did not fail. Renders, signed in reads and
+/// bookmark saves keep a page's text by this one rule.
+pub fn longer(baseline: &Line, capture: &Capture) -> bool {
+    capture
+        .page
+        .as_ref()
+        .is_some_and(|page| page.chars > baseline.chars.unwrap_or(0))
+        && !matches!(
+            capture.line.status,
+            Status::Error | Status::Unavailable | Status::Skipped
+        )
+}
+
+/// `baseline` as it stands, attempted now by `tier` with its access, its
+/// reason extended with `note` when supplied:
+/// what a page keeps when a new capture is not [`longer`].
+pub fn copied(baseline: &Line, note: Option<&str>, tier: Tier) -> Line {
+    let mut line = baseline.clone();
+    line.tier = Some(tier);
+    line.access = Some(tier.access());
+    line.attempted_at = archive::now();
+    if let Some(note) = note {
+        line.reason = Some(match &baseline.reason {
+            Some(reason) => format!("{reason}; {note}"),
+            None => note.to_owned(),
+        });
+    }
+    line
 }
 
 /// A failure that may pass: worth another try after a wait. `T` is how
