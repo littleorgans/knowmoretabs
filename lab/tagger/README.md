@@ -165,15 +165,19 @@ The pipeline refuses missing or empty `KMT_TAGGER_DATA` and never defaults to li
 
 ## Startup after a chunker or model change
 
-A change to the chunker (`chunks.CHUNKER`) or to the embedding model re-embeds every chunk of Store C at startup.
-A model change also re-embeds stores A and B first. The app listens only once these rebuilds finish, so until then
-the tagger answers nothing: the Library falls back to keyword search without saying so, and Tag and Add link are
-unavailable. `just up` waits 120 seconds for the port, then reports that the tagger did not listen and exits 1, while
-the build keeps running. Wait for port 41879 to listen rather than restarting: a store publishes only when its rebuild
-completes, so a restart starts it over. Store C took about 35 minutes on an archive of about 1,650 pages (install of
-2026-10-24); the time scales with page count. If the startup build of Store C fails, the app starts without it and
-retries the full rebuild at the next Add link sync, holding the app lock throughout: search answers busy (the Library
-again uses keyword search), the other Tag requests wait, and that job's Search stage ends only with the rebuild.
+When Store C already exists, a change to the chunker (`chunks.CHUNKER`) or embedding model re-embeds every
+chunk of its visible pages at startup. A model change first refreshes the selected text store: B if present,
+otherwise A. The app listens only after startup work finishes. Until then the Library silently uses keyword
+search, and Tag and Add link are unavailable.
+
+`just up` waits 120 seconds for the port, then reports a failure and exits 1 while the rebuild continues.
+Wait for the configured tagger port (41879 by default) to listen. A store publishes only after rebuilding;
+restarting an unfinished rebuild repeats its work. A previous install report recorded about 35 minutes for
+Store C on about 1,650 pages (2026-10-24); that timing is unverified here. Rebuild work depends on chunk count.
+
+If Store C fails to rebuild at startup, the app serves without it. The next Add link sync retries under the
+app lock. Library ranking answers busy and the Library uses keyword search; Tag API requests wait and may
+time out. That job's Search stage waits for the retry to finish.
 
 ## Leakage boundary
 
