@@ -233,7 +233,6 @@ function worker({ down = false, store = {}, fetchRequest } = {}) {
       local: {
         get: async (keys) => Object.fromEntries([keys].flat().filter((k) => k in store).map((k) => [k, structuredClone(store[k])])),
         set: async (items) => Object.assign(store, structuredClone(items)),
-        remove: async (keys) => [keys].flat().forEach((key) => delete store[key]),
       },
     },
   };
@@ -290,15 +289,6 @@ test('a message from another extension, a page off X or of the wrong shape is dr
 const saved = (w) => w.fetched.filter((f) => f.url.endsWith('/api/x/bookmark')).map((f) => f.body.post);
 const reports = (w) => w.fetched.filter((f) => f.url.endsWith('/api/x/health')).map((f) => f.body);
 const DAY = 24 * 60 * 60 * 1000;
-
-test('starting the worker discards saves left by the previous queue without sending them', async () => {
-  const w = worker({ store: { queue: [{ post: POST, at: Date.now() }] } });
-  await vm.runInContext('work', w.context);
-  assert.deepEqual(w.store, {}, 'no post remains after the worker starts');
-  await w.send({ kind: 'view', posts: 4, controls: 4 });
-  assert.deepEqual(saved(w), [], 'old saves are never retried');
-  assert.doesNotMatch(JSON.stringify(w.store), /example_author|status/);
-});
 
 test('a save the Library does not answer is dropped and counted, and nothing of the post is kept', async () => {
   const w = worker({ down: true });

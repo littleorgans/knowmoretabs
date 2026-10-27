@@ -21,9 +21,8 @@ async function openAddLink(tab) {
 
 chrome.action.onClicked.addListener(openAddLink);
 
-// Discard any saves kept by the previous worker before processing new messages.
 // One step at a time, so each reads the storage the last one left.
-let work = chrome.storage.local.remove('queue');
+let work = Promise.resolve();
 function serial(step) {
   const next = work.then(step);
   work = next.catch(() => {});
