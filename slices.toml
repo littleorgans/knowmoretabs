@@ -431,7 +431,10 @@ bookmark time and clicked posts. A save requires `serve` to be running: a
 bookmark made while it is stopped is not kept for later, and `doctor` says
 how many were missed. The extension reports what it sees on X to `POST /api/x/health`, kept as
 `extension.json`, and `doctor` says when it sees posts but no bookmark
-button. The linked article, the note on x.com and the From X list follow.
+button. The first web link of the thread that leaves X is added as a page
+of its own, its tie to the post a line in the X log written with it, and
+read in the background through `add`'s content stage; the Library's drawer
+shows the tie both ways. The note on x.com and the From X list follow.
 """
 intent = """
 Bookmarking on X is where the owner already says "keep this", so a second
