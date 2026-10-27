@@ -163,8 +163,9 @@ function postRead(article, named, base) {
 // What a cell of the conversation is to the run of `handle`'s posts: one of them, another
 // author's post, or a boundary (a heading, an expander, a post the page does not name).
 function cellKind(cell, handle, base) {
+  if (cell.matches(X.heading) || cell.querySelector(X.heading)) return { kind: 'heading' };
   const article = cell.querySelector(X.post);
-  if (!article) return { kind: cell.querySelector(X.heading) ? 'heading' : 'expander' };
+  if (!article) return { kind: 'expander' };
   const named = postIdentity(article, base);
   if (!named) return { kind: 'unnamed' };
   if (named.handle.toLowerCase() !== handle.toLowerCase()) return { kind: 'other' };
@@ -182,9 +183,11 @@ function pageRead(path, base) {
   const reasons = new Set();
   let run = [{ article: clicked, named }];
   const cell = clicked.closest(X.cell);
-  const cells = cell?.parentElement ? [...cell.parentElement.children].filter((node) => node.matches(X.cell)) : [];
+  const cells = cell?.parentElement ? [...cell.parentElement.children] : [];
   if (!onStatus) {
     reasons.add('timeline');
+  } else if (cell && cellKind(cell, named.handle, base).kind === 'heading') {
+    reasons.add('recommendation_boundary');
   } else if (cells.length) {
     const at = cells.indexOf(cell);
     const before = [];

@@ -186,6 +186,32 @@ test('a read sends at most 50 posts around the clicked one', () => {
   assert.deepEqual([ids(read)[0], ids(read).at(-1), read.complete], ['6', '55', false]);
 });
 
+test('a recommendation heading beside a post stops the run in both directions', () => {
+  const doc = conversation([1, 2, 3, 4]);
+  const cell = article(doc, 'p3').closest('[data-testid="cellInnerDiv"]');
+  cell.append(conversation(['heading']).querySelector('[role="heading"]'));
+  const before = readOn(doc, 'p2', THREAD);
+  assert.deepEqual(ids(before), ['1', '2']);
+  assert.deepEqual(before.reasons, ['recommendation_boundary']);
+  assert.equal(before.complete, false);
+  const after = readOn(doc, 'p4', THREAD);
+  assert.deepEqual(ids(after), ['4']);
+  const clicked = readOn(doc, 'p3', THREAD);
+  assert.deepEqual(ids(clicked), ['3'], 'a click beside the heading never joins the preceding thread');
+  assert.deepEqual(clicked.reasons, ['recommendation_boundary']);
+});
+
+test('a heading outside a cell still separates the conversation from recommendations', () => {
+  const doc = conversation([1, 2]);
+  const rows = article(doc, 'p1').closest('[data-testid="cellInnerDiv"]').parentElement;
+  rows.append(conversation(['heading']).querySelector('[role="heading"]'));
+  rows.append(article(conversation([3]), 'p3').closest('[data-testid="cellInnerDiv"]'));
+  const read = readOn(doc, 'p2', THREAD);
+  assert.deepEqual(ids(read), ['1', '2']);
+  assert.deepEqual(read.reasons, ['recommendation_boundary']);
+  assert.deepEqual(ids(readOn(doc, 'p3', THREAD)), ['3']);
+});
+
 test('a page counts its posts and those holding a bookmark button; a flip shows as saved', () => {
   assert.deepEqual(plain(xdom.pageCounts(fixture('timeline'))), { posts: 5, controls: 5 });
   const status = fixture('status');
