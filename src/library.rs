@@ -20,6 +20,7 @@ use crate::library_history::Entry;
 use crate::local;
 use crate::model::{self, Snapshot};
 use crate::suggestions::Suggested;
+use crate::xbookmark_log::Mark;
 
 #[derive(Debug, Default)]
 pub struct Loaded {
@@ -340,7 +341,7 @@ pub struct Stats {
     pub forgotten: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Serialize)]
 struct Page {
     url: String,
     title: String,
@@ -365,6 +366,10 @@ struct Page {
     /// sets it, so an export never carries images.
     #[serde(skip_serializing_if = "Option::is_none")]
     image: Option<String>,
+    /// When the page was bookmarked on X and which posts were clicked;
+    /// only `serve` sets it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    x: Option<Mark>,
 }
 
 /// A tab's `model::TabHistory`, with the referrer named as the library
@@ -462,6 +467,15 @@ impl Library {
         self
     }
 
+    /// Each page's mark from the X log, by its key.
+    #[must_use]
+    pub fn with_x(mut self, mut marks: HashMap<String, Mark>) -> Self {
+        for page in &mut self.pages {
+            page.x = marks.remove(&page.url);
+        }
+        self
+    }
+
     /// Every page, in library order: what a prompt lists.
     pub fn listed(&self) -> impl Iterator<Item = Listed<'_>> {
         self.pages.iter().map(|page| {
@@ -541,9 +555,7 @@ pub fn build(
                     forgotten: is_forgotten,
                     tags: state.page_tags(&tab.url, &spellings),
                     suggested: suggested.get(&tab.url).cloned().unwrap_or_default(),
-                    history: None,
-                    added_at: None,
-                    image: None,
+                    ..Page::default()
                 });
                 index
             });

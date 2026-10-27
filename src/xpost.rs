@@ -21,7 +21,7 @@ use url::Url;
 use crate::content_fetch::{self, Capture, Passing};
 use crate::content_store::{Completeness, Line, Page, Status, Tier};
 use crate::extract;
-use crate::fetch::Fetcher;
+use crate::fetch::{self, Fetcher};
 use crate::head;
 use crate::image_pick::{Candidate, Found, Source};
 
@@ -46,7 +46,17 @@ pub fn post_id(url: &Url) -> Option<String> {
 }
 
 pub fn api_url(id: &str) -> String {
-    format!("https://{API_HOST}/{API_VERSION}/status/{id}")
+    format!("{}://{API_HOST}/{API_VERSION}/status/{id}", scheme())
+}
+
+/// `https`, except in a debug build whose every name resolves to a test's
+/// own server (`fetch::test_address`), which speaks plain HTTP.
+fn scheme() -> &'static str {
+    if fetch::test_address().is_some() {
+        "http"
+    } else {
+        "https"
+    }
 }
 
 /// The public post the API's own documentation uses as its example:

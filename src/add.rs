@@ -144,20 +144,21 @@ pub fn apply(
     if known_only && !root.exists() {
         return Ok(Outcome::Refused(Reason::NotInLibrary));
     }
-    admit(root, url, title, known_only, waiting, |_| Ok(()))
+    admit(root, url, title, known_only, waiting, |_, _| Ok(()))
 }
 
 /// [`apply`] past the URL's own refusal, for any key the library lists:
-/// `also` writes what goes with the page under the same hold of the lock,
-/// before its intake line, whenever the page is in the library at the end,
-/// so the page is never listed without it.
+/// `also` writes what goes with the page, given the key the library holds
+/// it under, under the same hold of the lock, before its intake line,
+/// whenever the page is in the library at the end, so the page is never
+/// listed without it.
 pub fn admit(
     root: &Path,
     url: &str,
     title: Option<&str>,
     known_only: bool,
     waiting: impl FnOnce(),
-    also: impl FnOnce(&Lock) -> Result<(), Error>,
+    also: impl FnOnce(&Lock, &str) -> Result<(), Error>,
 ) -> Result<Outcome, Error> {
     let archive = Archive::open(root)?;
     let lock = archive.lock(waiting)?;
@@ -166,9 +167,9 @@ pub fn admit(
     let loaded = library::load(&archive)?;
     let known = library::known_urls(&loaded.snapshots);
     match held(url, &key, &known, &forgotten) {
-        Some(outcome @ Outcome::Known(_)) => {
-            also(&lock)?;
-            return Ok(outcome);
+        Some(Outcome::Known(held)) => {
+            also(&lock, &held)?;
+            return Ok(Outcome::Known(held));
         }
         Some(outcome) => return Ok(outcome),
         None => {}
@@ -176,7 +177,7 @@ pub fn admit(
     if known_only {
         return Ok(Outcome::Refused(Reason::NotInLibrary));
     }
-    also(&lock)?;
+    also(&lock, &key)?;
     let mut log = Appender::open_locked(root, intake::path(root), &lock)?;
     log.append_locked(&intake::Line::new(&key, archive::now(), title), &lock)?;
     Ok(Outcome::Added(key.into_owned()))
@@ -237,9 +238,16 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
     let url = outcome.key().unwrap_or(url);
     stages.library(url, &outcome, args.content.is_some());
     let ended = match args.content {
-        Some(ask) if outcome.in_library() => add_content::capture(root, url, ask, json, log),
+        Some(ask) if outcome.in_library() => capture(root, url, ask, json, log),
         _ => Ended::default(),
     };
+    Ok(stages.done(url, &outcome, &ended, json!({})))
+}
+
+/// The content stage for `url`, a page the library holds: its text and
+/// image, then the title its text was kept with when its line had none.
+pub fn capture(root: &Path, url: &str, ask: Ask<'_>, json: bool, log: Log) -> Ended {
+    let ended = add_content::capture(root, url, ask, json, log);
     if let Some(title) = &ended.title
         && let Err(err) = intake::retitle(root, url, title, || {
             if !json {
@@ -249,7 +257,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
     {
         out::problem(&format!("knowmoretabs: {err}"));
     }
-    Ok(stages.done(url, &outcome, &ended, json!({})))
+    ended
 }
 
 /// The stage lines an add says, in order, and the exit code it ends on.
@@ -296,11 +304,7 @@ impl Stages {
     /// library at the end, failure when it was refused or is forgotten.
     pub fn done(self, url: &str, outcome: &Outcome, ended: &Ended, also: Value) -> ExitCode {
         if self.json {
-            let mut line = done_line(url, outcome, ended);
-            if let (Some(line), Value::Object(also)) = (line.as_object_mut(), also) {
-                line.extend(also);
-            }
-            out::json(&line);
+            out::json(&done_line(url, outcome, ended, also));
         }
         if outcome.in_library() {
             ExitCode::SUCCESS
@@ -330,10 +334,14 @@ fn library_done(outcome: &Outcome) -> Value {
 
 /// The last line: the page's key (the asked address on a refusal), how the
 /// library stage ended, and the text's and the image's status names, null
-/// when there is none.
-fn done_line(url: &str, outcome: &Outcome, ended: &Ended) -> Value {
-    json!({"stage": "done", "state": "done", "url": url, "value": outcome.value(),
-        "content": ended.content, "image": ended.image})
+/// when there is none; with the fields of `also`, an object, beside them.
+pub(crate) fn done_line(url: &str, outcome: &Outcome, ended: &Ended, also: Value) -> Value {
+    let mut line = json!({"stage": "done", "state": "done", "url": url,
+        "value": outcome.value(), "content": ended.content, "image": ended.image});
+    if let (Some(line), Value::Object(also)) = (line.as_object_mut(), also) {
+        line.extend(also);
+    }
+    line
 }
 
 /// A page in the library is news on stdout; a refusal is the error the run

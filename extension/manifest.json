@@ -1,11 +1,19 @@
 {
   "manifest_version": 3,
-  "name": "knowmoretabs: Add link",
-  "version": "0.1.0",
-  "description": "Opens this tab in the Library's Add link, its address filled in.",
-  "permissions": ["activeTab"],
+  "name": "knowmoretabs",
+  "version": "0.2.0",
+  "description": "Opens this tab in the Library's Add link, and saves a post you bookmark on X to the Library.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvMcCgPyOvQRF1VFZBLzJAjjpm6nhMd6DrclLaHjZhD+mjs174AmD7RDeRAMtbAvbO7SPTxhEd+0WqHxcw+z5SNbShJ8N9tAWCZP4mZYtzR067CT6kR4/IOUDFmUjQmJHSht9K7kenC+XdbpcoKQpiGBjYQDbLIqHGwR/OyL7Jeqh029eFfRLgNUDx45L+O2cqoDQVjZKIo0hVaMnTa7xYgrVaOKU8+3yZeuq2dJwp47BdMZVyJMxfU5i9qONyob02NsyXHSa5znLW3epb74JFdK9yOT2f4Fvl8ZWNjGiYv6sw5wczlZNyMeIRdXAXOJq9hEY5wiIQ/UMkZYt9zdOnQIDAQAB",
+  "permissions": ["activeTab", "storage"],
   "host_permissions": ["http://127.0.0.1:41878/*"],
   "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["xdom.js", "x.js"],
+      "run_at": "document_start"
+    }
+  ],
   "action": {
     "default_title": "Add to knowmoretabs",
     "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }

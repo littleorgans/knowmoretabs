@@ -1,7 +1,7 @@
 //! `knowmoretabs doctor`: which ways of reading pages this machine can use,
 //! and what the archive holds of page text.
 //!
-//! slice: content
+//! slice: content, x-bookmarks
 //! why: Content capture reads some pages with tools the owner may not have
 //!      installed, and falls back quietly when one is missing, so the
 //!      owner needs one place that says what is ready, what is missing and
@@ -14,7 +14,8 @@
 //!      read from its remote debugging switch and port file alone, never by
 //!      connecting, which would ask the owner to allow it.
 //!      Missing tools are warnings: only the generic web tier is required,
-//!      and it is compiled in.
+//!      and it is compiled in. The toolbar extension's last report on what
+//!      it sees on X is one more line, read from the archive.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
@@ -36,6 +37,7 @@ use crate::targets::Outcome as _;
 use crate::tools::{Probe, System};
 use crate::xpost;
 use crate::ytdlp;
+use crate::{archive, xhealth};
 
 /// The one tier content capture cannot do without.
 const REQUIRED: &str = "generic";
@@ -71,7 +73,7 @@ pub struct Check {
 }
 
 impl Check {
-    fn new(tier: &'static str, state: State, detail: impl Into<String>) -> Self {
+    pub(crate) fn new(tier: &'static str, state: State, detail: impl Into<String>) -> Self {
         Self {
             tier,
             state,
@@ -80,7 +82,7 @@ impl Check {
         }
     }
 
-    fn hint(mut self, hint: impl Into<String>) -> Self {
+    pub(crate) fn hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
     }
@@ -456,7 +458,7 @@ pub fn command(
     let started = live
         .then(|| browser::Readiness::check(&System, browser, false))
         .and_then(|readiness| Some(start(readiness.path()?, log)));
-    let report = Report::gather(
+    let mut report = Report::gather(
         &System,
         browser,
         content_signed_in::find(browser).map(|(port, _)| port),
@@ -464,6 +466,7 @@ pub fn command(
         started,
         Archive::read(root)?,
     );
+    report.checks.push(xhealth::check(root, archive::now()));
     if json {
         out::json(&serde_json::to_value(&report).unwrap_or_default());
     } else if !log.quiet {
