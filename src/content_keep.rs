@@ -1,5 +1,5 @@
 //! A capture made outside a `content` run, kept for one library page: its
-//! text by the rule every later reading keeps, then its image.
+//! text by the rule every later reading keeps, its image a separate step.
 //!
 //! slice: content, x-bookmarks
 //! why: A bookmark on X reads its page twice over, from the page the
@@ -9,7 +9,8 @@
 //!      when it is longer and did not fail, by the rule a render already
 //!      follows (`content_fetch::longer`); otherwise the kept line stands,
 //!      saying what the new reading added. A page with no kept text takes
-//!      any capture, as a refetch would. The image follows a capture the
+//!      any capture, as a refetch would. The caller can keep the image in
+//!      the background after the text is safe. It follows a capture the
 //!      page took, or a page that has none yet, through the content run's
 //!      own image step, so it is chosen and stored as every image is.
 
@@ -22,6 +23,7 @@ use crate::content_image::{self, Images};
 use crate::content_store::{self, Line, Store, Tier};
 use crate::error::Error;
 use crate::fetch::Fetcher;
+use crate::image_pick::Found;
 
 /// What became of one capture.
 #[derive(Debug, Clone)]
@@ -30,21 +32,31 @@ pub struct Kept {
     pub line: Line,
     /// The page took the capture; else its kept line stands, noted.
     pub taken: bool,
+    images: Found,
+}
+
+impl Kept {
+    /// Keeps the image from this capture when its text was taken or the
+    /// page still has no image. Network work belongs here, apart from
+    /// keeping the text, so a bookmark reply need not wait for it.
+    pub fn image(&self, root: &Path, fetcher: &Fetcher, log: Log) -> Result<(), Error> {
+        let plan = content_image::Plan::page(root, &self.line.url)?;
+        if self.taken || !plan.has_image(&self.line.url) {
+            Images::open(root, plan, &NoOne, log)?.after(
+                fetcher,
+                std::slice::from_ref(&self.line),
+                &self.images,
+            )?;
+        }
+        Ok(())
+    }
 }
 
 /// Keeps `capture` for library page `url`, or, when the page keeps a text
 /// the capture is not longer than, the page's line copied with `note`,
-/// still saying the tier that read the kept text;
-/// then the page's image, from what the capture found, when the page took
-/// it or has no image yet.
-pub fn keep(
-    root: &Path,
-    fetcher: &Fetcher,
-    url: &str,
-    capture: &Capture,
-    note: &str,
-    log: Log,
-) -> Result<Kept, Error> {
+/// still saying the tier that read the kept text. The returned image step
+/// can run after the caller replies.
+pub fn keep(root: &Path, url: &str, capture: &Capture, note: &str) -> Result<Kept, Error> {
     let known = content_store::read(root)?;
     let baseline = known.pages.get(url);
     let (line, page) = match baseline {
@@ -68,15 +80,11 @@ pub fn keep(
     };
     let taken = page.is_some() || baseline.is_none_or(|baseline| baseline.content_sha256.is_none());
     let line = Store::open(root)?.record(line, page)?;
-    let plan = content_image::Plan::page(root, url)?;
-    if taken || !plan.has_image(url) {
-        Images::open(root, plan, &NoOne, log)?.after(
-            fetcher,
-            std::slice::from_ref(&line),
-            &capture.images,
-        )?;
-    }
-    Ok(Kept { line, taken })
+    Ok(Kept {
+        line,
+        taken,
+        images: capture.images.clone(),
+    })
 }
 
 #[cfg(test)]
@@ -112,7 +120,9 @@ mod tests {
         let root = root.path();
         let fetcher = Fetcher::new(&std::collections::BTreeSet::default());
         let keep = |capture: &Capture, note: &str| {
-            keep(root, &fetcher, URL, capture, note, Log::default()).unwrap()
+            let kept = keep(root, URL, capture, note).unwrap();
+            kept.image(root, &fetcher, Log::default()).unwrap();
+            kept
         };
 
         let read = capture(Tier::SignedIn, Status::Ok, Some("Four posts as shown."));
@@ -153,11 +163,10 @@ mod tests {
     fn a_page_with_no_kept_text_takes_any_capture() {
         let root = tempfile::tempdir().unwrap();
         let root = root.path();
-        let fetcher = Fetcher::new(&std::collections::BTreeSet::default());
         let failed = capture(Tier::X, Status::Error, None);
-        let first = keep(root, &fetcher, URL, &failed, "n", Log::default()).unwrap();
+        let first = keep(root, URL, &failed, "n").unwrap();
         assert_eq!((first.taken, first.line.attempt), (true, 1));
-        let again = keep(root, &fetcher, URL, &failed, "n", Log::default()).unwrap();
+        let again = keep(root, URL, &failed, "n").unwrap();
         assert_eq!(
             (again.taken, again.line.attempt, again.line.reason),
             (true, 2, None),

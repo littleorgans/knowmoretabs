@@ -627,7 +627,9 @@ A post you bookmark on X reaches `serve` through the toolbar extension with
 what the page showed of its author's thread, kept as the page's text. When
 the page showed only part, the X post API is asked for the thread by the
 post's number, and the longer text is kept. The post's preview image is
-downloaded, from X's own image host when it comes from the page. The
+downloaded in the background after its text and title are saved, from X's
+own image host when it comes from the page. An Article cover also runs in
+the background, so the bookmark reply never waits for an image. The
 first web link of the thread that leaves X is then added and read as `add`
 reads a page: its site and preview image, `gh` for repositories, yt-dlp for
 video, or a headless browser for thin pages. These reads send page addresses

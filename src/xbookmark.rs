@@ -23,6 +23,9 @@
 //!      that hold of the lock, so a forgotten article stays forgotten and
 //!      untied; its text and image are read in the background through
 //!      `add`'s content stage, so the reply never waits on another site.
+//!      Post images and Article covers also run in the background, after
+//!      the post's text and title are safe, so a slow image cannot cost
+//!      the extension its bookmark reply.
 //!      One save at a time, so two clicks in one thread never race to mint
 //!      two pages and the API sees one paced request at once.
 
@@ -55,7 +58,7 @@ use crate::xread::{self, Read};
 /// Serializes saves across `serve`'s connection threads.
 static SAVING: Mutex<()> = Mutex::new(());
 
-/// Serializes the background reads of linked articles, apart from saves.
+/// Serializes background image and linked article reads, apart from saves.
 static READING: Mutex<()> = Mutex::new(());
 
 /// X itself, its link shortener and its media host: a link to one of them,
@@ -104,9 +107,9 @@ pub fn is_handle(handle: &str) -> bool {
 }
 
 /// Saves `post`, with what the owner's page showed of it, `read`: the
-/// page and its click line, then its text, image and title, then the
-/// article it links to. The reply is `add`'s last line, saying what became
-/// of the read and, when a link qualified, of the article.
+/// page and its click line, then its text and title, then the article it
+/// links to; images run in the background. The reply is `add`'s last line,
+/// saying what became of the read and, when a link qualified, of the article.
 pub fn save(root: &Path, post: &Post, read: Option<&Value>) -> Result<Value, Error> {
     let _saving = SAVING.lock().unwrap_or_else(PoisonError::into_inner);
     let shown = match read.map(|value| xread::parse(value, &post.id, &post.handle)) {
@@ -180,25 +183,21 @@ struct Captured {
 }
 
 /// Library page `url`'s text from what the page showed, then from the
-/// public post API's thread unless the page showed it whole; its image,
-/// and its title when it had none.
+/// public post API's thread unless the page showed it whole, and its title
+/// when it had none. Its images follow in the background.
 fn capture(root: &Path, url: &str, post: &Post, shown: &Shown) -> Result<Captured, Error> {
     let fetcher = Fetcher::new(&State::read(root)?.forgotten);
+    let mut images = Vec::new();
     let (mut said, mut content, whole) = match shown {
         Shown::Nothing => ("none", None, false),
         Shown::Refused => ("refused", None, false),
         Shown::Read(read) if read.posts.is_empty() => ("failed", None, false),
         Shown::Read(read) => {
             let capture = xread::capture(read, url, &post.key);
-            let kept = content_keep::keep(
-                root,
-                &fetcher,
-                url,
-                &capture,
-                "page read added no text",
-                QUIET,
-            )?;
-            ("kept", Some(kept.line), read.complete)
+            let kept = content_keep::keep(root, url, &capture, "page read added no text")?;
+            let line = kept.line.clone();
+            images.push(kept);
+            ("kept", Some(line), read.complete)
         }
     };
     let mut links: Vec<String> = match shown {
@@ -207,18 +206,12 @@ fn capture(root: &Path, url: &str, post: &Post, shown: &Shown) -> Result<Capture
     };
     if !whole {
         let thread = xpost::thread_capture(&fetcher, url, &post.id);
-        let public = content_keep::keep(
-            root,
-            &fetcher,
-            url,
-            &thread.capture,
-            "public read added no text",
-            QUIET,
-        )?;
+        let public = content_keep::keep(root, url, &thread.capture, "public read added no text")?;
         if said == "kept" && public.taken {
             said = "replaced";
         }
-        content = Some(public.line);
+        content = Some(public.line.clone());
+        images.push(public);
         links.splice(0..0, thread.links);
         if !thread.posts.is_empty() {
             xbookmark_log::learned(root, &Line::thread(url, archive::now(), thread.posts))?;
@@ -235,6 +228,13 @@ fn capture(root: &Path, url: &str, post: &Post, shown: &Shown) -> Result<Capture
             .map(|line| line.status.word().to_owned()),
         title: None,
     };
+    let root = root.to_owned();
+    std::thread::spawn(move || {
+        let _reading = READING.lock().unwrap_or_else(PoisonError::into_inner);
+        for kept in images {
+            let _ = kept.image(&root, &fetcher, QUIET);
+        }
+    });
     Ok(Captured { ended, said, links })
 }
 
