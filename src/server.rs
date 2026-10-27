@@ -74,6 +74,7 @@ pub fn run(options: &Options) -> Result<(), Error> {
     // A damaged History record only costs the signals it held, so it is a
     // warning, given once here rather than on every request.
     library_history::for_library(&options.root, options.log);
+    xbookmark_log::for_library(&options.root, options.log);
     // Settled, and said, before the banner announces the library.
     let model = options.model_port.and_then(|port| {
         ModelService::new(port, options.model_secret_file.as_deref())
@@ -312,14 +313,13 @@ impl Server {
         let loaded = library::load(&archive)?;
         let state = library::State::read(&self.root)?;
         let suggested = suggestions::by_page(&suggestions::read(&self.root)?, &state);
-        // Quiet: a damaged record was reported once, when `serve` started.
-        let recorded = library_history::for_library(
-            &self.root,
-            Log {
-                quiet: true,
-                verbose: false,
-            },
-        );
+        // Quiet: a damaged record or X log was reported once, when `serve`
+        // started.
+        let quiet = Log {
+            quiet: true,
+            verbose: false,
+        };
+        let recorded = library_history::for_library(&self.root, quiet);
         let library = library::build(
             &loaded.snapshots,
             &recorded,
@@ -328,7 +328,7 @@ impl Server {
             Shape::Serve,
         )
         .with_images(image_store::kept(&self.root, self.log))
-        .with_x(xbookmark_log::marks(&self.root)?);
+        .with_x(xbookmark_log::for_library(&self.root, quiet));
         serde_json::to_vec(&library).map_err(|source| Error::Json {
             path: self.root.join(library::STATE_FILE),
             source,
@@ -450,7 +450,7 @@ impl Server {
                 "post: name an X post as https://x.com/<handle>/status/<id>",
             );
         };
-        match xbookmark::save(&self.root, &post) {
+        match xbookmark::save(&self.root, &post, request.read.as_ref()) {
             Ok(line) => Response::ok("application/json", line.to_string().into_bytes()),
             Err(err) => self.failure(&err),
         }
@@ -553,6 +553,10 @@ struct TagsRequest {
 #[derive(Deserialize)]
 struct XBookmarkRequest {
     post: String,
+    /// What the page showed, checked by `xread`; never a reason to refuse
+    /// the save.
+    #[serde(default)]
+    read: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]

@@ -525,3 +525,71 @@ fn api_statuses_map_to_the_vocabulary() {
     assert_eq!(reason(503), (Status::Error, true, "HTTP 503".to_owned()));
     assert_eq!(reason(500), (Status::Error, false, "HTTP 500".to_owned()));
 }
+
+/// A post numbered `id` by `handle` in the API's shape.
+fn by(handle: &str, id: &str, text: &str) -> serde_json::Value {
+    let mut status = post(text);
+    status["id"] = json!(id);
+    status["url"] = json!(format!("https://x.com/{handle}/status/{id}"));
+    status["author"]["screen_name"] = json!(handle);
+    status
+}
+
+fn read_thread(focal: &serde_json::Value, thread: &serde_json::Value) -> (Capture, Vec<String>) {
+    let body =
+        serde_json::to_vec(&json!({"code": 200, "status": focal, "thread": thread})).unwrap();
+    read_posts(&body, &line, true)
+}
+
+#[test]
+fn a_thread_keeps_its_authors_posts_in_the_apis_order_and_a_deleted_one_as_a_line() {
+    let focal = by("example", "102", "Second.");
+    let thread = json!([
+        by("example", "101", "First."),
+        focal,
+        by("example_reader", "150", "A reply by someone else."),
+        {"type": "tombstone", "reason": "deleted"},
+        by("Example", "104", "Last."),
+    ]);
+    let (Capture { line, page, .. }, ids) = read_thread(&focal, &thread);
+    assert_eq!(ids, ["101", "102", "104"]);
+    assert_eq!(line.status, Status::Ok);
+    assert_eq!(
+        line.final_url.as_deref(),
+        Some("https://x.com/example/status/102")
+    );
+    let page = page.unwrap();
+    assert_eq!(
+        page.title.as_deref(),
+        Some("Example Person (@example) on X")
+    );
+    assert_eq!(
+        page.markdown,
+        "# Example Person (@example) on X\n\n\
+         Example Person (@example), 2026-10-07T09:00:00Z\n\nFirst.\n\n---\n\n\
+         Example Person (@example), 2026-10-07T09:00:00Z\n\nSecond.\n\n---\n\n\
+         Post deleted.\n\n---\n\n\
+         Example Person (@Example), 2026-10-07T09:00:00Z\n\nLast.\n"
+    );
+}
+
+#[test]
+fn a_thread_without_the_post_or_with_none_is_the_post_alone() {
+    let focal = by("example", "102", "Alone.");
+    let alone = read_value(&focal).page.unwrap().markdown;
+    for thread in [
+        json!(null),
+        json!([]),
+        json!([by("example", "101", "Other.")]),
+    ] {
+        let (capture, ids) = read_thread(&focal, &thread);
+        assert_eq!(ids, ["102"], "{thread}");
+        assert_eq!(capture.page.unwrap().markdown, alone, "{thread}");
+    }
+    let mut private = focal.clone();
+    private["author"]["protected"] = json!(true);
+    let (capture, ids) = read_thread(&private, &json!([private]));
+    assert_eq!(capture.line.status, Status::BehindLogin);
+    assert_eq!(ids, [] as [String; 0]);
+    assert_eq!(thread_url("7"), "https://api.fxtwitter.com/2/thread/7");
+}

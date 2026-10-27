@@ -98,6 +98,22 @@ impl Plan {
         })
     }
 
+    /// The image of one library page, `url`, after a capture made outside
+    /// a content run; no retries.
+    pub fn page(root: &Path, url: &str) -> Result<Self, Error> {
+        Ok(Self {
+            known: image_store::read(root)?,
+            metadata: metadata::read(root)?,
+            after_text: HashSet::from([url.to_owned()]),
+            retries: Vec::new(),
+        })
+    }
+
+    /// Whether page `url` has an image line.
+    pub fn has_image(&self, url: &str) -> bool {
+        self.known.pages.contains_key(url)
+    }
+
     /// The same plan without the retries of earlier failures: a signed in
     /// run gets images only for the pages it opens.
     pub fn without_retries(mut self) -> Self {

@@ -1,7 +1,7 @@
 //! The X post route: a post on `x.com` or `twitter.com`, read through the
 //! public X post API (`api.fxtwitter.com`, version 2) and kept as markdown.
 //!
-//! slice: content
+//! slice: content, x-bookmarks
 //! why: An X post page is an app shell to plain HTTP, so the generic route
 //!      keeps nothing of it, while the public post API answers with the
 //!      post itself. It is the one third party service content capture
@@ -10,9 +10,13 @@
 //!      What is kept is what a reader of the post sees as text: the post,
 //!      the post it quotes, an article's body with a placeholder where it
 //!      shows an image or video, who wrote it and when, and what its
-//!      images say in their descriptions. One post only: a thread
-//!      is not unrolled. A deleted post is final, a private one waits for a
-//!      signed in browser, and a busy API is retried as any site is.
+//!      images say in their descriptions. A `content` run reads one post:
+//!      a thread is not unrolled there. A bookmark on X may ask for the
+//!      post's thread instead, and keeps only its author's posts, in the
+//!      API's order, a deleted one as one line. A deleted post is final, a
+//!      private one waits for a signed in browser, and a busy API is
+//!      retried as any site is. The markdown is `xpost_page`'s, shared
+//!      with the page read of X itself.
 
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -24,6 +28,7 @@ use crate::extract;
 use crate::fetch::{self, Fetcher};
 use crate::head;
 use crate::image_pick::{Candidate, Found, Source};
+use crate::xpost_page;
 
 /// The API's host: the one host every X post is paced on.
 pub const API_HOST: &str = "api.fxtwitter.com";
@@ -47,6 +52,11 @@ pub fn post_id(url: &Url) -> Option<String> {
 
 pub fn api_url(id: &str) -> String {
     format!("{}://{API_HOST}/{API_VERSION}/status/{id}", scheme())
+}
+
+/// The same post with the thread it is part of, when the API has one.
+pub fn thread_url(id: &str) -> String {
+    format!("{}://{API_HOST}/{API_VERSION}/thread/{id}", scheme())
 }
 
 /// `https`, except in a debug build whose every name resolves to a test's
@@ -76,11 +86,42 @@ pub fn reachable(fetcher: &Fetcher) -> Result<u16, String> {
 /// passing failures as the web route does. Never fails: a failure is a
 /// capture too.
 pub fn capture(fetcher: &Fetcher, raw: &str, id: &str) -> Capture {
-    content_fetch::retrying(fetcher, || once(fetcher, raw, id))
+    content_fetch::retrying(fetcher, || {
+        once(fetcher, raw, &api_url(id), |bytes, line| read(bytes, line))
+    })
 }
 
-fn once(fetcher: &Fetcher, raw: &str, id: &str) -> Result<Capture, Passing> {
-    let mut response = match fetcher.get(&api_url(id), ACCEPT_JSON) {
+/// What the API gave of a post's thread: the capture of its author's
+/// posts, and their numbers in the API's order.
+#[derive(Debug, Clone)]
+pub struct Thread {
+    pub capture: Capture,
+    pub posts: Vec<String>,
+}
+
+/// Asks the API for post `id` and its thread, recorded for library page
+/// `raw`, as [`capture`] asks for the post alone. Only the post's author's
+/// posts are kept; another's reply in the thread is not.
+pub fn thread_capture(fetcher: &Fetcher, raw: &str, id: &str) -> Thread {
+    let mut posts = Vec::new();
+    let capture = content_fetch::retrying(fetcher, || {
+        once(fetcher, raw, &thread_url(id), |bytes, line| {
+            let (capture, ids) = read_posts(bytes, line, true);
+            posts = ids;
+            capture
+        })
+    });
+    Thread { capture, posts }
+}
+
+/// One request to the API at `url`, its successful body read by `read`.
+fn once(
+    fetcher: &Fetcher,
+    raw: &str,
+    url: &str,
+    read: impl FnOnce(&[u8], &dyn Fn(Status) -> Line) -> Capture,
+) -> Result<Capture, Passing> {
+    let mut response = match fetcher.get(url, ACCEPT_JSON) {
         Ok(response) => response,
         Err(refusal) => return content_fetch::refused(raw, Tier::X, refusal),
     };
@@ -113,7 +154,7 @@ fn once(fetcher: &Fetcher, raw: &str, id: &str) -> Result<Capture, Passing> {
         Ok(bytes) => bytes,
         Err(ended) => return *ended,
     };
-    Ok(read(&bytes, |state| line(state, None)))
+    Ok(read(&bytes, &|state| line(state, None)))
 }
 
 /// What a final or passing HTTP status says about a post.
@@ -125,12 +166,14 @@ fn failure_reason(state: Status, status: u16) -> String {
     }
 }
 
-/// The API's answer: the post, or a tombstone in its place.
+/// The API's answer: the post, or a tombstone in its place, and from the
+/// thread route the thread it is part of, itself included.
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct Answer {
     code: Option<u16>,
     status: Option<Post>,
+    thread: Option<Vec<Post>>,
 }
 
 /// A post as the API gives it; only what is kept is read. A tombstone has
@@ -140,6 +183,7 @@ struct Answer {
 struct Post {
     #[serde(rename = "type")]
     kind: String,
+    id: String,
     url: Option<String>,
     text: String,
     created_timestamp: Option<serde_json::Number>,
@@ -277,7 +321,15 @@ struct Video {
 /// The line and text for the body of a successful answer; `line` makes
 /// the response's line for a status.
 fn read(bytes: &[u8], line: impl Fn(Status) -> Line) -> Capture {
-    let done = |state: Status, reason: String| Capture::ended(line(state).with_reason(reason));
+    read_posts(bytes, &line, false).0
+}
+
+/// [`read`] of the post, or with `thread` of its author's posts in its
+/// thread; and the numbers of the posts kept.
+fn read_posts(bytes: &[u8], line: &dyn Fn(Status) -> Line, thread: bool) -> (Capture, Vec<String>) {
+    let done = |state: Status, reason: String| {
+        (Capture::ended(line(state).with_reason(reason)), Vec::new())
+    };
     let Ok(answer) = serde_json::from_slice::<Answer>(bytes) else {
         return done(Status::Error, "not a post answer".to_owned());
     };
@@ -286,15 +338,23 @@ fn read(bytes: &[u8], line: impl Fn(Status) -> Line) -> Capture {
     if let Some((state, _)) = content_fetch::status_outcome(code) {
         return done(state, failure_reason(state, code));
     }
-    let Some(post) = answer.status else {
+    let Some(post) = &answer.status else {
         return done(Status::Error, "no post in the answer".to_owned());
     };
-    if let Some((state, reason)) = unavailable(&post) {
+    if let Some((state, reason)) = unavailable(post) {
         return done(state, reason);
     }
-    let markdown = markdown(&post);
+    let posts = if thread {
+        authors_posts(post, answer.thread.as_deref().unwrap_or_default())
+    } else {
+        vec![post]
+    };
+    let neutral: Vec<xpost_page::Post> = posts.iter().map(|post| neutral(post)).collect();
+    let markdown = xpost_page::markdown(&neutral);
     let chars = extract::plain_chars(&markdown);
-    let has_text = !text_of(&post).is_empty();
+    let has_text = neutral
+        .iter()
+        .any(|post| !xpost_page::text_of(post).is_empty());
     let mut line = line(if has_text { Status::Ok } else { Status::Thin });
     if !has_text {
         line.reason = Some("no text in the post".to_owned());
@@ -304,7 +364,7 @@ fn read(bytes: &[u8], line: impl Fn(Status) -> Line) -> Capture {
     line.extractor = Some(EXTRACTOR.to_owned());
     line.extractor_version = Some(API_VERSION.to_owned());
     let page = Page {
-        title: Some(title(&post)),
+        title: Some(xpost_page::title(&neutral)),
         extractor: format!("{EXTRACTOR} {API_VERSION}"),
         completeness: if has_text {
             Completeness::Full
@@ -315,15 +375,69 @@ fn read(bytes: &[u8], line: impl Fn(Status) -> Line) -> Capture {
         captions: None,
         markdown,
     };
-    Capture {
+    let capture = Capture {
         line,
         page: Some(page),
-        images: images(&post).map_or(Found::TextOnly, |url| {
-            Found::Candidates(vec![Candidate {
-                url,
-                source: Source::XMedia,
-            }])
+        images: posts
+            .iter()
+            .find_map(|post| images(post))
+            .map_or(Found::TextOnly, |url| {
+                Found::Candidates(vec![Candidate {
+                    url,
+                    source: Source::XMedia,
+                }])
+            }),
+    };
+    let ids = posts
+        .iter()
+        .filter(|post| !post.id.is_empty())
+        .map(|post| post.id.clone())
+        .collect();
+    (capture, ids)
+}
+
+/// The posts of `focal`'s author in `thread`, in its order, a deleted one
+/// kept in its place; `focal` alone when the thread does not hold it.
+fn authors_posts<'a>(focal: &'a Post, thread: &'a [Post]) -> Vec<&'a Post> {
+    let author = |post: &Post| {
+        post.author
+            .as_ref()
+            .map(|author| author.screen_name.to_ascii_lowercase())
+    };
+    let theirs = author(focal);
+    let kept: Vec<&Post> = thread
+        .iter()
+        .filter(|post| post.kind == "tombstone" || author(post) == theirs)
+        .collect();
+    if kept.iter().any(|post| post.id == focal.id) {
+        kept
+    } else {
+        vec![focal]
+    }
+}
+
+/// `post` as the shared renderer draws it.
+fn neutral(post: &Post) -> xpost_page::Post {
+    xpost_page::Post {
+        author: post.author.as_ref().map(|author| xpost_page::Author {
+            name: author.name.clone(),
+            handle: author.screen_name.clone(),
         }),
+        at: post
+            .created_timestamp
+            .as_ref()
+            .and_then(serde_json::Number::as_i64)
+            .and_then(|seconds| Timestamp::from_second(seconds).ok()),
+        text: post.text.clone(),
+        article: post.article.as_ref().map(|article| xpost_page::Article {
+            title: article.title.clone(),
+            parts: article_parts(article).collect(),
+        }),
+        alts: alt_texts(post)
+            .map(|(kind, alt)| (kind, alt.to_owned()))
+            .collect(),
+        quote: post.quote.as_deref().map(|quote| Box::new(neutral(quote))),
+        unavailable: unavailable(post).map(|(_, reason)| reason),
     }
 }
 
@@ -374,56 +488,6 @@ fn unavailable(post: &Post) -> Option<(Status, String)> {
         .then(|| (Status::BehindLogin, "protected account".to_owned()))
 }
 
-/// The article's title, or who wrote the post.
-fn title(post: &Post) -> String {
-    match &post.article {
-        Some(article) if !article.title.trim().is_empty() => article.title.trim().to_owned(),
-        _ => format!("{} on X", byline_name(post)),
-    }
-}
-
-fn byline_name(post: &Post) -> String {
-    match &post.author {
-        Some(author) if !author.name.is_empty() => {
-            format!("{} (@{})", author.name, author.screen_name)
-        }
-        Some(author) => format!("@{}", author.screen_name),
-        None => "Someone".to_owned(),
-    }
-}
-
-/// `Name (@handle), 2026-10-07T09:00:00Z`.
-fn byline(post: &Post) -> String {
-    let when = post
-        .created_timestamp
-        .as_ref()
-        .and_then(serde_json::Number::as_i64)
-        .and_then(|seconds| Timestamp::from_second(seconds).ok());
-    match when {
-        Some(when) => format!("{}, {when}", byline_name(post)),
-        None => byline_name(post),
-    }
-}
-
-/// Every piece of text a post holds, quoted post included, joined; empty
-/// when it holds none.
-fn text_of(post: &Post) -> String {
-    if unavailable(post).is_some() {
-        return String::new();
-    }
-    let mut parts = vec![post.text.trim().to_owned()];
-    if let Some(article) = &post.article {
-        parts.push(article.title.trim().to_owned());
-        parts.extend(article_parts(article));
-    }
-    parts.extend(alt_texts(post).map(|(_, alt)| alt.to_owned()));
-    if let Some(quote) = &post.quote {
-        parts.push(text_of(quote));
-    }
-    parts.retain(|part| !part.is_empty());
-    parts.join("\n")
-}
-
 /// The rendered article parts, shared by completeness and the saved body.
 fn article_parts(article: &Article) -> impl Iterator<Item = String> + '_ {
     let media = &article.media_entities;
@@ -452,45 +516,6 @@ fn alt_texts(post: &Post) -> impl Iterator<Item = (&'static str, &str)> {
             };
             (!alt.is_empty()).then_some((kind, alt))
         })
-}
-
-/// `# Title`, the byline, the post's text, its article and its image
-/// descriptions, then the quoted post as a block quote. Ends in one
-/// newline.
-fn markdown(post: &Post) -> String {
-    let mut text = format!("# {}\n\n{}", title(post), body(post, false));
-    if let Some(quote) = &post.quote {
-        let quoted = match unavailable(quote) {
-            Some((_, reason)) => format!("Quoted {reason}."),
-            None => format!("Quoting {}", body(quote, true)),
-        };
-        text.push_str("\n\n");
-        for line in quoted.trim_end().lines() {
-            text.push_str(if line.is_empty() { ">" } else { "> " });
-            text.push_str(line);
-            text.push('\n');
-        }
-    }
-    format!("{}\n", text.trim_end())
-}
-
-/// A post without its quote: the byline, then each part a paragraph. A
-/// quoted article's title is a heading; the page's own is its title. The
-/// text is trimmed at its edges only: after a blank line, a leading indent
-/// of four spaces would make it a code block.
-fn body(post: &Post, quoted: bool) -> String {
-    let mut parts = vec![byline(post)];
-    if !post.text.trim().is_empty() {
-        parts.push(post.text.trim().to_owned());
-    }
-    if let Some(article) = &post.article {
-        if quoted && !article.title.trim().is_empty() {
-            parts.push(format!("## {}", article.title.trim()));
-        }
-        parts.extend(article_parts(article));
-    }
-    parts.extend(alt_texts(post).map(|(kind, alt)| format!("{kind}: {alt}")));
-    parts.join("\n\n")
 }
 
 /// An article paragraph as markdown, by its editor block type.

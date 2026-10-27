@@ -7,9 +7,12 @@
 //!      gets no new intake line, so the clicks are kept in a log of their
 //!      own, append only like every attempt log. It never decides whether
 //!      a page exists: `added.jsonl` and the snapshots still do, so a torn
-//!      or unknown line costs only the mark it carried. Each line names the
-//!      page by the key the library holds it under, and the fold keeps per
-//!      page when it was last bookmarked and which posts were clicked.
+//!      or unknown line costs only the mark it carried, and a log that
+//!      cannot be read at all costs only every mark: the Library still
+//!      opens. Each line names the page by the key the library holds it
+//!      under, and the fold keeps per page when it was last bookmarked,
+//!      which posts were clicked, and every post number its thread was
+//!      read with, so a later bookmark anywhere in that thread finds it.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -17,7 +20,8 @@ use std::path::{Path, PathBuf};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::archive::Lock;
+use crate::archive::{Archive, Lock};
+use crate::capture::Log;
 use crate::error::Error;
 use crate::jsonl::{self, Appender};
 use crate::metadata;
@@ -47,14 +51,27 @@ pub struct Line {
 }
 
 impl Line {
-    /// A click on post `post`, number `id`, saved as page `url`.
-    pub fn click(url: &str, at: Timestamp, post: &str, id: &str) -> Self {
+    /// A click on post `post` saved as page `url`, read with the thread's
+    /// post numbers `posts`, the clicked one among them.
+    pub fn click(url: &str, at: Timestamp, post: &str, posts: Vec<String>) -> Self {
         Self {
             schema_version: SCHEMA_VERSION,
             url: url.to_owned(),
             at,
             post: Some(post.to_owned()),
-            posts: vec![id.to_owned()],
+            posts,
+        }
+    }
+
+    /// What a later reading of page `url`'s thread learned: its post
+    /// numbers.
+    pub fn thread(url: &str, at: Timestamp, posts: Vec<String>) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            url: url.to_owned(),
+            at,
+            post: None,
+            posts,
         }
     }
 }
@@ -64,6 +81,13 @@ pub fn append(root: &Path, line: &Line, lock: &Lock) -> Result<(), Error> {
     Appender::open_locked(root, path(root), lock)?.append_locked(line, lock)
 }
 
+/// Appends `line` in a hold of the archive lock of its own.
+pub fn learned(root: &Path, line: &Line) -> Result<(), Error> {
+    let archive = Archive::open(root)?;
+    let lock = archive.lock(|| {})?;
+    append(root, line, &lock)
+}
+
 /// What the log says of one page, as the Library is served it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Mark {
@@ -71,31 +95,72 @@ pub struct Mark {
     pub bookmarked_at: Timestamp,
     /// The clicked posts, the latest click first, each once.
     pub clicked: Vec<String>,
+    /// Every post number the page's thread was read with, each once; the
+    /// save's to resolve, not the Library's.
+    #[serde(skip)]
+    pub thread: Vec<String>,
 }
 
-/// Every page's mark by its key; a missing log is none. A line this build
-/// cannot read is skipped, as every log's reader does.
-pub fn marks(root: &Path) -> Result<HashMap<String, Mark>, Error> {
+/// The fold of the whole log.
+#[derive(Debug, Default)]
+pub struct Marks {
+    /// Each bookmarked page's mark, by its key.
+    pub pages: HashMap<String, Mark>,
+    /// Lines this build could not read, skipped.
+    pub unreadable: usize,
+}
+
+/// The whole log folded; a missing log is none. A line this build cannot
+/// read is counted and skipped, as every log's reader does.
+pub fn read(root: &Path) -> Result<Marks, Error> {
     Ok(fold(&jsonl::text(&path(root), "read the X log")?))
 }
 
-fn fold(text: &str) -> HashMap<String, Mark> {
-    let (mut lines, _) = jsonl::records::<Line>(text);
+/// Every page's mark by its key, and none when the log cannot be read:
+/// the X log never decides whether the Library opens. What was skipped,
+/// or why there are no marks, is said on `log`.
+pub fn for_library(root: &Path, log: Log) -> HashMap<String, Mark> {
+    match read(root) {
+        Ok(marks) => {
+            if let Some(note) = jsonl::unreadable_note(marks.unreadable, &path(root)) {
+                log.warn(&note);
+            }
+            marks.pages
+        }
+        Err(err) => {
+            log.warn(&format!("{err}; no page shows its bookmark on X"));
+            HashMap::new()
+        }
+    }
+}
+
+fn fold(text: &str) -> Marks {
+    let (mut lines, unreadable) = jsonl::records::<Line>(text);
+    let mut threads: HashMap<String, Vec<String>> = HashMap::new();
+    for line in &lines {
+        let thread = threads.entry(line.url.clone()).or_default();
+        for id in &line.posts {
+            if !thread.contains(id) {
+                thread.push(id.clone());
+            }
+        }
+    }
     // Latest first; a stable sort keeps the later of two equal times first.
     lines.reverse();
     lines.sort_by_key(|line| std::cmp::Reverse(line.at));
-    let mut marks: HashMap<String, Mark> = HashMap::new();
+    let mut pages: HashMap<String, Mark> = HashMap::new();
     for line in lines {
         let Some(post) = line.post else { continue };
-        let mark = marks.entry(line.url).or_insert_with(|| Mark {
+        let mark = pages.entry(line.url).or_insert_with_key(|url| Mark {
             bookmarked_at: line.at,
             clicked: Vec::new(),
+            thread: threads.remove(url).unwrap_or_default(),
         });
         if !mark.clicked.contains(&post) {
             mark.clicked.push(post);
         }
     }
-    marks
+    Marks { pages, unreadable }
 }
 
 #[cfg(test)]
@@ -111,14 +176,19 @@ mod tests {
 
     fn line(post: &str, when: &str) -> String {
         let id = post.rsplit('/').next().unwrap();
-        serde_json::to_string(&Line::click(PAGE, at(when), post, id)).unwrap()
+        serde_json::to_string(&Line::click(PAGE, at(when), post, vec![id.to_owned()])).unwrap()
     }
 
     #[test]
     fn a_click_line_says_the_page_the_post_and_its_number() {
         assert_eq!(
-            serde_json::to_value(Line::click(PAGE, at("2026-10-27T09:00:00Z"), PAGE, "102"))
-                .unwrap(),
+            serde_json::to_value(Line::click(
+                PAGE,
+                at("2026-10-27T09:00:00Z"),
+                PAGE,
+                vec!["102".to_owned()]
+            ))
+            .unwrap(),
             serde_json::json!({"schema_version": 1, "url": PAGE, "at": "2026-10-27T09:00:00Z",
                 "post": PAGE, "posts": ["102"]})
         );
@@ -132,12 +202,13 @@ mod tests {
             line(PAGE, "2026-10-27T08:00:00Z"),
         ]
         .join("\n");
-        let marks = fold(&text);
+        let marks = fold(&text).pages;
         assert_eq!(
             marks[PAGE],
             Mark {
                 bookmarked_at: at("2026-10-27T10:00:00Z"),
                 clicked: vec![OTHER.to_owned(), PAGE.to_owned()],
+                thread: vec!["102".to_owned(), "103".to_owned()],
             }
         );
     }
@@ -155,7 +226,51 @@ mod tests {
         ]
         .join("\n");
         let marks = fold(&text);
+        assert_eq!(marks.unreadable, 2, "the torn and the other schema line");
+        let marks = marks.pages;
         assert_eq!(marks.len(), 1, "{marks:?}");
         assert_eq!(marks[PAGE].bookmarked_at, at("2026-10-27T09:00:00Z"));
+    }
+
+    #[test]
+    fn a_pages_thread_is_every_post_its_clicks_and_later_reads_named_each_once() {
+        let thread = |posts: &[&str]| {
+            serde_json::to_string(&Line::thread(
+                PAGE,
+                at("2026-10-27T09:00:02Z"),
+                posts.iter().map(|id| (*id).to_owned()).collect(),
+            ))
+            .unwrap()
+        };
+        let text = [
+            thread(&["100"]),
+            line(PAGE, "2026-10-27T09:00:00Z"),
+            thread(&["101", "102", "103"]),
+        ]
+        .join("\n");
+        let mark = &fold(&text).pages[PAGE];
+        assert_eq!(mark.thread, ["100", "102", "101", "103"]);
+        assert_eq!(mark.clicked, [PAGE], "a thread line is no click");
+        assert_eq!(
+            serde_json::to_value(mark).unwrap()["thread"],
+            serde_json::Value::Null,
+            "the Library is not served the thread"
+        );
+    }
+
+    #[test]
+    fn a_log_that_cannot_be_read_is_no_marks() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(
+            for_library(root.path(), Log::default()).is_empty(),
+            "no log"
+        );
+        std::fs::create_dir_all(path(root.path())).unwrap();
+        assert!(read(root.path()).is_err(), "a directory is not a log");
+        let quiet = Log {
+            quiet: true,
+            verbose: false,
+        };
+        assert!(for_library(root.path(), quiet).is_empty());
     }
 }
