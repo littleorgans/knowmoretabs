@@ -233,6 +233,7 @@ function worker({ down = false, store = {}, fetchRequest } = {}) {
       local: {
         get: async (keys) => Object.fromEntries([keys].flat().filter((k) => k in store).map((k) => [k, structuredClone(store[k])])),
         set: async (items) => Object.assign(store, structuredClone(items)),
+        remove: async (keys) => [keys].flat().forEach((key) => delete store[key]),
       },
     },
   };
@@ -290,6 +291,15 @@ const saved = (w) => w.fetched.filter((f) => f.url.endsWith('/api/x/bookmark')).
 const reports = (w) => w.fetched.filter((f) => f.url.endsWith('/api/x/health')).map((f) => f.body);
 const DAY = 24 * 60 * 60 * 1000;
 
+test('starting the worker discards saves left by the previous queue without sending them', async () => {
+  const w = worker({ store: { queue: [{ post: POST, at: Date.now() }] } });
+  await vm.runInContext('work', w.context);
+  assert.deepEqual(w.store, {}, 'no post remains after the worker starts');
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  assert.deepEqual(saved(w), [], 'old saves are never retried');
+  assert.doesNotMatch(JSON.stringify(w.store), /example_author|status/);
+});
+
 test('a save the Library does not answer is dropped and counted, and nothing of the post is kept', async () => {
   const w = worker({ down: true });
   await w.send({ kind: 'bookmark', post: POST });
@@ -346,4 +356,21 @@ test('the next health report carries the drops, sent again when they change', as
   assert.deepEqual([report.state, report.dropped, report.last_dropped], ['ok', 1, w.store.drops.last]);
   await w.send({ kind: 'view', posts: 4, controls: 4 });
   assert.equal(reports(w).length, 2, 'unchanged within the day');
+});
+
+test('a refused health report leaves drops to report on the next page view', async () => {
+  const w = worker();
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  const accepted = structuredClone(w.store.reported);
+  w.context.status = 503;
+  await w.send({ kind: 'bookmark', post: POST });
+  assert.equal(w.store.drops.count, 1);
+  assert.deepEqual(w.store.reported, accepted, 'only an accepted report updates reported');
+  w.context.status = 200;
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  assert.deepEqual(reports(w).map((report) => report.dropped), [0, 1, 1]);
+  assert.equal(w.store.reported.lastDropped, w.store.drops.last);
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  assert.equal(reports(w).length, 3, 'accepted reports are suppressed until the next change');
+  assert.equal(saved(w).length, 1, 'only the health report is attempted again');
 });

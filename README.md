@@ -569,7 +569,7 @@ your running Chrome, read from its remote debugging switch and
 whether it is private, whether `pages/content` exists, and its pages by
 latest status. Last, the toolbar extension: whether it has reported,
 whether it still sees X's bookmark button, and how many bookmarks on X it
-could not save in the last two weeks. It is offline by default, with
+could not save, shown for two weeks after the last drop. It is offline by default, with
 GitHub sign in marked as not checked. With `--live`, gh checks its own sign in (the `gh auth status` exit
 code only; its output is never read), the X post API is asked once for a
 fixed public post, and the browser is started headless once, asked its

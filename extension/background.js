@@ -21,8 +21,9 @@ async function openAddLink(tab) {
 
 chrome.action.onClicked.addListener(openAddLink);
 
+// Discard any saves kept by the previous worker before processing new messages.
 // One step at a time, so each reads the storage the last one left.
-let work = Promise.resolve();
+let work = chrome.storage.local.remove('queue');
 function serial(step) {
   const next = work.then(step);
   work = next.catch(() => {});
@@ -81,7 +82,8 @@ async function health(step, now) {
   const lastDropped = stored.drops?.last ?? null;
   const last = stored.reported;
   if (last && last.state === next.state && last.since === next.since && last.lastDropped === lastDropped && now - last.at < REPORT_MS) return;
-  if (await reply(healthRequest(healthReport(next, chrome.runtime.getManifest().version, stored.drops)))) {
+  const answer = await reply(healthRequest(healthReport(next, chrome.runtime.getManifest().version, stored.drops)));
+  if (answer?.ok) {
     await chrome.storage.local.set({ reported: { state: next.state, since: next.since, lastDropped, at: now } });
   }
 }
