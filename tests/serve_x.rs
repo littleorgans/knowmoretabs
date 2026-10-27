@@ -8,7 +8,9 @@
 mod common;
 
 use std::fs;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, mpsc};
+use std::time::Duration;
 
 use common::add::article;
 use common::serve::{A, HIDDEN, Reply, Server, archive, kept_name, page};
@@ -122,16 +124,18 @@ fn x_api() -> Site {
 
 /// `serve` with every name resolved to `site`.
 fn serve(fx: &Fixture, site: &Site) -> Server {
-    Server::from_child(
-        fx.command()
-            .args(["serve", "--port", "0"])
-            .env("KNOWMORETABS_TEST_RESOLVE", site.address.to_string())
-            .env("KNOWMORETABS_TEST_TIMEOUT_MS", "400")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawn serve"),
-    )
+    Server::from_child(serve_command(fx, site).spawn().expect("spawn serve"))
+}
+
+fn serve_command(fx: &Fixture, site: &Site) -> Command {
+    let mut command = fx.command();
+    command
+        .args(["serve", "--port", "0"])
+        .env("KNOWMORETABS_TEST_RESOLVE", site.address.to_string())
+        .env("KNOWMORETABS_TEST_TIMEOUT_MS", "400")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    command
 }
 
 /// A JSON POST from `origin`, as the extension's service worker sends it.
@@ -844,6 +848,66 @@ fn the_first_link_off_x_is_its_own_page_tied_to_the_post_and_read_in_the_backgro
         page(&library, ARTICLE).get("x").is_none(),
         "the article was not bookmarked itself"
     );
+}
+
+#[test]
+fn a_waiting_article_holds_neither_the_bookmark_reply_nor_the_archive_lock() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let (started, waiting) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let released = Mutex::new(released);
+    let site = Site::start(move |_, _, _| {
+        started.send(()).unwrap();
+        let _ = released
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(15));
+        site::Reply::html(article("A synthetic article"))
+    });
+    let server = Server::from_child(
+        serve_command(&fx, &site)
+            .env("KNOWMORETABS_TEST_TIMEOUT_MS", "30000")
+            .spawn()
+            .expect("spawn serve"),
+    );
+    std::thread::scope(|scope| {
+        let server = &server;
+        let (saved, reply) = mpsc::channel();
+        scope.spawn(move || {
+            saved
+                .send(bookmark_read(
+                    server,
+                    &status_of(340),
+                    &page_read("example_author", 340, &[linking(340, Some(ARTICLE))], true),
+                ))
+                .unwrap();
+        });
+        waiting
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the article request started");
+        let reply = reply.recv_timeout(Duration::from_secs(2));
+        let (changed, change) = mpsc::channel();
+        scope.spawn(move || {
+            changed
+                .send(server.post("/api/forget", &json!({"urls": [A]})))
+                .unwrap();
+        });
+        let change = change.recv_timeout(Duration::from_secs(2));
+        // Release the site before asserting, including on a regression.
+        release.send(()).unwrap();
+        assert_eq!(
+            reply.expect("bookmark replied while the article was waiting")["article"],
+            json!({"url": ARTICLE, "value": "added"})
+        );
+        assert_eq!(
+            change
+                .expect("another writer acquired the archive lock")
+                .status,
+            200
+        );
+    });
+    assert_eq!(titled_in_time(&fx, ARTICLE), "A synthetic article");
 }
 
 #[test]
