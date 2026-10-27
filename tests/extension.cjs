@@ -237,9 +237,10 @@ function worker({ down = false, store = {}, fetchRequest } = {}) {
     if (fetchRequest) return fetchRequest(url, init);
     if (context.down) throw new TypeError('Failed to fetch');
     fetched.push({ url, body: JSON.parse(init.body), type: init.headers['Content-Type'] });
-    return { ok: true };
+    return { ok: context.status < 400, status: context.status };
   };
   context.down = down;
+  context.status = 200;
   context.importScripts = (...files) => files.forEach((file) => vm.runInContext(read(`extension/${file}`), context));
   vm.runInContext(read('extension/background.js'), context);
   const tab = { id: 1 };
@@ -294,6 +295,21 @@ test('saves wait while the Library is down, at most 50 for 7 days, and go with t
   assert.equal(saved.length, 49, 'one was older than 7 days');
   assert.equal(saved[0], 'https://x.com/example_author/status/4');
   assert.deepEqual(w.store.queue, []);
+});
+
+test('a save the archive failed stays queued; one the Library refused ends', async () => {
+  const w = worker();
+  const saved = () => w.fetched.filter((f) => f.url.endsWith('/api/x/bookmark')).map((f) => f.body.post);
+  w.context.status = 500;
+  await w.send({ kind: 'bookmark', post: POST });
+  assert.deepEqual(w.store.queue.map((item) => item.post), [POST], 'a 5xx is retried');
+  w.context.status = 200;
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  assert.deepEqual(saved(), [POST, POST]);
+  assert.deepEqual(w.store.queue, []);
+  w.context.status = 400;
+  await w.send({ kind: 'bookmark', post: 'https://x.com/example_author/status/101' });
+  assert.deepEqual(w.store.queue, [], 'a 4xx is not retried');
 });
 
 test('a save survives a worker restart while its request is pending', async () => {

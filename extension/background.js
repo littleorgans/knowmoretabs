@@ -1,10 +1,11 @@
 // The service worker, the only file that speaks to the Library. The toolbar button points an
 // open Library tab, else a new one, at the link link.js builds. The content script on X names
-// a bookmarked post; the worker saves it, keeping it while the Library is not running, and
-// reports what the content script sees there. Every request is built from link.js's constants.
+// a bookmarked post; the worker saves it, keeping it while the Library is not running or its
+// archive fails, and reports what the content script sees there. Every request is built from
+// link.js's constants.
 importScripts('link.js', 'xdom.js');
 
-const QUEUE_MAX = 50; // saves kept while the Library is not running
+const QUEUE_MAX = 50; // saves kept for a retry
 const QUEUE_MS = 7 * 24 * 60 * 60 * 1000; // for at most this long
 const REPORT_MS = 24 * 60 * 60 * 1000; // an unchanged health is reported at most this often
 const X_PAGES = ['https://x.com/', 'https://twitter.com/'];
@@ -53,17 +54,16 @@ chrome.runtime.onMessage.addListener((message, sender) => {
 
 const iso = (ms) => new Date(ms).toISOString();
 
-// Whether the Library answered at all; what it answered is its own to say.
-async function sent({ url, init }) {
+// The Library's reply, or null when it did not answer.
+async function reply({ url, init }) {
   try {
-    await fetch(url, init);
-    return true;
+    return await fetch(url, init);
   } catch {
-    return false;
+    return null;
   }
 }
 
-// The saves kept while the Library was not running, oldest first, within their bounds.
+// The saves kept for a retry, oldest first, within their bounds.
 function bound(queue, now) {
   return queue.filter((item) => now - item.at < QUEUE_MS).slice(-QUEUE_MAX);
 }
@@ -75,6 +75,7 @@ async function queued(now) {
 
 // Sends the oldest pending save, then removes it from the current queue, including
 // clicks stored during the request. A stopped worker resumes with the pending saves.
+// A 5xx is the archive failing for now and keeps the save for a retry; a 4xx ends it.
 async function deliver() {
   for (;;) {
     const item = await serial('storage', async () => {
@@ -82,7 +83,8 @@ async function deliver() {
       await chrome.storage.local.set({ queue });
       return queue[0];
     });
-    if (!item || !(await sent(bookmarkRequest(item.post)))) return;
+    const answer = item && (await reply(bookmarkRequest(item.post)));
+    if (!answer || answer.status >= 500) return;
     await serial('storage', async () => {
       const queue = await queued(Date.now());
       const index = queue.findIndex((pending) => pending.post === item.post && pending.at === item.at);
@@ -108,7 +110,7 @@ async function health(step, now) {
   await chrome.storage.local.set({ health: next });
   const last = stored.reported;
   if (last && last.state === next.state && last.since === next.since && now - last.at < REPORT_MS) return;
-  if (await sent(healthRequest(healthReport(next, chrome.runtime.getManifest().version)))) {
+  if (await reply(healthRequest(healthReport(next, chrome.runtime.getManifest().version)))) {
     await chrome.storage.local.set({ reported: { state: next.state, since: next.since, at: now } });
   }
 }
