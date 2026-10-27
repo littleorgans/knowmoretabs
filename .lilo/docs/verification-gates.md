@@ -17,7 +17,7 @@ Up: [knowmoretabs system map](index.md)
 
 Scoped: `<file>` is an integration test in `tests/` (`code:tests/tags.rs` is one); unit tests live beside the code, and the crate has a binary target only, so `cargo test --locked --bin knowmoretabs <filter>` scopes those; `--lib` fails with no library target. Integration tests drive the real binary.
 
-Frontend: Cargo does not run JavaScript, so `code:tests/serve_frontend.cjs` runs the shipped `web/app.js` renderer in Node's `vm` with its DOM startup cut off, and `code:tests/extension.cjs` checks the toolbar extension's link building and port. Both use Node's own test runner and no packages. CI uses the Node that comes with the `ubuntu-24.04` image.
+Frontend: Cargo does not run JavaScript, so `code:tests/serve_frontend.cjs` runs the shipped `web/app.js` renderer in Node's `vm` with its DOM startup cut off, and `code:tests/extension.cjs` checks the toolbar extension's link building and port, the manifest and pinned id, the X content script and worker, and synthetic DOM fixtures. Both use Node's own test runner and no packages. CI uses the Node that comes with the `ubuntu-24.04` image.
 
 Toolchains: on the owner's machine Homebrew's rust comes before rustup on `PATH`, so plain `cargo` is Homebrew's, newer than CI's 1.89.0, and `rustup run 1.89.0` alone still finds Homebrew's `cargo-clippy`. That order is the owner's setup; leave the shell config alone. To run a gate on 1.89.0, prefix it with `PATH="$HOME/.rustup/toolchains/1.89.0-aarch64-apple-darwin/bin:$PATH"` and check that `cargo clippy --version` reports 0.1.89, or run `python3 scripts/clippy.py`, which reads the pin from `ci.yml` and puts that rustup toolchain's clippy first. Clippy must pass on both: CI runs 1.89.0, and a newer clippy adds lints.
 

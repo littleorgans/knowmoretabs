@@ -291,8 +291,9 @@ agent is never handed the owner's browsing.
 **Ships.** Clicking X's own bookmark button on a post on x.com or twitter.com saves the
 post to the library. The toolbar extension sees the click before X handles
 it, names the post that owns the button and nothing else, and its service
-worker posts it to `serve`'s `POST /api/x/bookmark`, the only origin besides
-the Library's own that `serve` accepts, pinned by the manifest's key. The post
+worker posts it to `serve`'s `POST /api/x/bookmark`. The extension's origin,
+pinned by the manifest's key, is the only origin besides the Library's own
+that `serve` accepts. The post
 is kept as one page under `https://x.com/<handle>/status/<id>`, through
 `add`'s admission and content stage, so its text and image come from the X
 post API as any X page's do; removing a bookmark does nothing. Each click is
