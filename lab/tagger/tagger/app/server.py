@@ -22,7 +22,7 @@ import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock, Thread
+from threading import Lock, Thread, current_thread
 
 import numpy as np
 
@@ -84,22 +84,29 @@ class App:
             self._refit_thread.start()
 
     def _refit(self) -> None:
-        while True:
+        try:
+            while True:
+                with self.lock:
+                    lib = self.lib
+                    self._refit_pending = False
+                try:
+                    fitted = engine.fit(lib.X, lib.Y, np.vstack([lib.rules.q, lib.added_q]))
+                except Exception as err:
+                    print(json.dumps({"refit_failed": type(err).__name__}), flush=True)
+                    fitted = None
+                with self.lock:
+                    if self._refit_pending:
+                        continue  # a newer label or vector snapshot superseded this fit
+                    if fitted is not None:
+                        self.lib = replace(self.lib, **fitted, added_q=lib.added_q[:0])
+                    self._refit_thread = None
+                    return
+        finally:
             with self.lock:
-                lib = self.lib
-                self._refit_pending = False
-            try:
-                fitted = engine.fit(lib.X, lib.Y, np.vstack([lib.rules.q, lib.added_q]))
-            except Exception as err:
-                print(json.dumps({"refit_failed": type(err).__name__}), flush=True)
-                fitted = None
-            with self.lock:
-                if self._refit_pending:
-                    continue  # a newer label or vector snapshot superseded this fit
-                if fitted is not None:
-                    self.lib = replace(self.lib, **fitted, added_q=lib.added_q[:0])
-                self._refit_thread = None
-                return
+                if self._refit_thread is current_thread():  # died outside the handler: free the slot for later fits
+                    self._refit_thread = None
+                    if self._refit_pending:
+                        self._queue_refit()
 
     def gone(self) -> list[int]:
         """Rows of the forgotten pages."""
