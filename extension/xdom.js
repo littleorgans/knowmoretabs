@@ -174,6 +174,10 @@ function cellKind(cell, handle, base) {
   return { kind: 'post', article, named };
 }
 
+// The reason each boundary that stops the run makes the read incomplete; another author's post
+// or the conversation's end leaves it whole.
+const BOUNDARY = { heading: 'recommendation_boundary', expander: 'unexpanded_replies', unnamed: 'missing_identity' };
+
 // What the page shows of the author's thread for a bookmark click, from its composed path, on
 // the page at `base`: the C3 read the Library checks, or null when the post cannot be named.
 function pageRead(path, base) {
@@ -188,30 +192,28 @@ function pageRead(path, base) {
   const cells = cell?.parentElement ? [...cell.parentElement.children] : [];
   if (!onStatus) {
     reasons.add('timeline');
-  } else if (cell && cellKind(cell, named.handle, base).kind === 'heading') {
-    reasons.add('recommendation_boundary');
   } else if (cells.length) {
     const at = cells.indexOf(cell);
-    const before = [];
-    for (let i = at - 1; i >= 0; i -= 1) {
-      const seen = cellKind(cells[i], named.handle, base);
-      if (seen.kind !== 'post') break;
-      before.unshift(seen);
-    }
-    const after = [];
-    let end = { kind: 'end' };
-    for (let i = at + 1; i < cells.length; i += 1) {
-      const seen = cellKind(cells[i], named.handle, base);
-      if (seen.kind !== 'post') {
-        end = seen;
-        break;
+    const kindAt = (i) => cellKind(cells[i], named.handle, base);
+    // The author's posts from the clicked one outward by `step`, and the cell that stops them.
+    const walk = (step) => {
+      const posts = [];
+      for (let i = at + step; i >= 0 && i < cells.length; i += step) {
+        const seen = kindAt(i);
+        if (seen.kind !== 'post') return { posts, edge: seen };
+        posts.push(seen);
       }
-      after.push(seen);
+      return { posts, edge: { kind: 'end' } };
+    };
+    // A heading in or before the clicked post's cell puts the click among recommendations.
+    if (cells.slice(0, at + 1).some((_, i) => kindAt(i).kind === 'heading')) {
+      reasons.add('recommendation_boundary');
+    } else {
+      const before = walk(-1);
+      const after = walk(1);
+      for (const { edge } of [before, after]) if (BOUNDARY[edge.kind]) reasons.add(BOUNDARY[edge.kind]);
+      run = [...before.posts.reverse(), run[0], ...after.posts];
     }
-    if (end.kind === 'heading') reasons.add('recommendation_boundary');
-    if (end.kind === 'expander') reasons.add('unexpanded_replies');
-    if (end.kind === 'unnamed') reasons.add('missing_identity');
-    run = [...before, run[0], ...after];
   }
   const ids = new Set();
   run = run.filter(({ named: post }) => !ids.has(post.id) && ids.add(post.id));

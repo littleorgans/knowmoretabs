@@ -117,11 +117,12 @@ const ids = (read) => read.posts.map((post) => post.id);
 const THREAD = 'https://x.com/example_author/status/301';
 
 // A conversation of cells: `example_author` posts by number, `@<handle>:<id>` another's post,
-// `heading` and `more` the boundaries a page shows.
+// `heading`, `more` and `unnamed` (a post whose permalink and author disagree) the boundaries a page shows.
 function conversation(cells) {
   const cell = (spec) => {
     if (spec === 'heading') return '<div data-testid="cellInnerDiv"><h2 role="heading">More From This Author</h2></div>';
     if (spec === 'more') return '<div data-testid="cellInnerDiv"><div role="button" tabindex="0">Show more replies</div></div>';
+    if (spec === 'unnamed') return cell('@example_reader:99').replace('href="/example_reader"', 'href="/example_author"');
     const [handle, id] = String(spec).startsWith('@') ? spec.slice(1).split(':') : ['example_author', spec];
     return `<div data-testid="cellInnerDiv"><article data-testid="tweet" data-fixture="p${id}">
       <div data-testid="User-Name"><a href="/${handle}">Example</a></div>
@@ -175,8 +176,21 @@ test('a run ending at another author or the conversation end is complete; a fold
     assert.deepEqual([whole.complete, whole.reasons, ids(whole)], [true, [], ['1', '2', '3']], String(cells));
   }
   assert.deepEqual(read([1, 2, 'more', 3]).reasons, ['unexpanded_replies']);
-  assert.deepEqual(read(['heading', 2]).reasons, [], 'a boundary before the run is not after it');
+  assert.deepEqual(read(['heading', 2]).reasons, ['recommendation_boundary'], 'a heading before the run is a boundary too');
   assert.equal(xdom.pageRead(composedPath(conversation([1]).querySelector('article')), base), null, 'no button, no read');
+});
+
+test('a boundary before the clicked post leaves the read incomplete', () => {
+  const base = 'https://x.com/example_author/status/1';
+  const read = (cells) => readOn(conversation(cells), 'p7', base);
+  for (const cells of [[1, 'heading', 7, 8], [1, 'heading', '@example_reader:5', 7]]) {
+    const below = read(cells);
+    assert.deepEqual([below.complete, below.reasons, ids(below)], [false, ['recommendation_boundary'], ['7']], String(cells));
+  }
+  const folded = read([1, 'more', 7, 8]);
+  assert.deepEqual([folded.complete, folded.reasons, ids(folded)], [false, ['unexpanded_replies'], ['7', '8']]);
+  const unnamed = read(['unnamed', 7, 8]);
+  assert.deepEqual([unnamed.complete, unnamed.reasons, ids(unnamed)], [false, ['missing_identity'], ['7', '8']]);
 });
 
 test('a read sends at most 50 posts around the clicked one', () => {
