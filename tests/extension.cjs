@@ -212,6 +212,15 @@ test('a heading outside a cell still separates the conversation from recommendat
   assert.deepEqual(ids(readOn(doc, 'p3', THREAD)), ['3']);
 });
 
+test('a heading inside a post is part of the post, not a boundary', () => {
+  const doc = conversation([1, 2, 3]);
+  article(doc, 'p2').append(conversation(['heading']).querySelector('[role="heading"]'));
+  for (const name of ['p1', 'p2', 'p3']) {
+    const read = readOn(doc, name, THREAD);
+    assert.deepEqual([read.complete, read.reasons, ids(read)], [true, [], ['1', '2', '3']], name);
+  }
+});
+
 test('a page counts its posts and those holding a bookmark button; a flip shows as saved', () => {
   assert.deepEqual(plain(xdom.pageCounts(fixture('timeline'))), { posts: 5, controls: 5 });
   const status = fixture('status');

@@ -161,9 +161,11 @@ function postRead(article, named, base) {
 }
 
 // What a cell of the conversation is to the run of `handle`'s posts: one of them, another
-// author's post, or a boundary (a heading, an expander, a post the page does not name).
+// author's post, or a boundary (a heading outside any post, an expander, a post the page does
+// not name).
 function cellKind(cell, handle, base) {
-  if (cell.matches(X.heading) || cell.querySelector(X.heading)) return { kind: 'heading' };
+  const headings = [...cell.querySelectorAll(X.heading)];
+  if (cell.matches(X.heading) || headings.some((node) => !node.closest(X.post))) return { kind: 'heading' };
   const article = cell.querySelector(X.post);
   if (!article) return { kind: 'expander' };
   const named = postIdentity(article, base);
