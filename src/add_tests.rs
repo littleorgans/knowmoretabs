@@ -373,9 +373,20 @@ fn json_lines_are_the_contract_shape() {
         );
     }
     assert_eq!(
-        done_line(A, &Outcome::Known(A.into()), &Ended::default()),
+        done_line(A, &Outcome::Known(A.into()), &Ended::default(), json!({})),
         json!({"stage": "done", "state": "done", "url": A, "value": "known",
             "content": null, "image": null})
+    );
+    assert_eq!(
+        done_line(
+            A,
+            &Outcome::Added(A.into()),
+            &Ended::default(),
+            json!({"read": "none"})
+        ),
+        json!({"stage": "done", "state": "done", "url": A, "value": "added",
+            "content": null, "image": null, "read": "none"}),
+        "extra fields join the line"
     );
     assert!(Outcome::Added(A.into()).in_library() && Outcome::Known(A.into()).in_library());
     assert!(!Outcome::Forgotten(A.into()).in_library());

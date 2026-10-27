@@ -115,7 +115,7 @@ pub fn command(root: &Path, args: Args<'_>, json: bool, log: Log) -> Result<Exit
         .or(doc.path.is_some().then_some(doc.name.as_str()));
     let stages = add::Stages::start(json, log);
     let pinned = Cell::new(false);
-    let outcome = add::admit(root, &key, title, false, stages.waiting(), |lock| {
+    let outcome = add::admit(root, &key, title, false, stages.waiting(), |lock, _| {
         let pins = sources::pins(root)?;
         if pins
             .pages
