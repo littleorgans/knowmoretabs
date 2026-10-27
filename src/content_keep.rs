@@ -51,6 +51,11 @@ pub fn keep(
             if baseline.content_sha256.is_some() && !content_fetch::longer(baseline, capture) =>
         {
             let tier = capture.line.tier.unwrap_or(Tier::Other);
+            let note = (!baseline
+                .reason
+                .as_deref()
+                .is_some_and(|reason| reason.split("; ").any(|said| said == note)))
+            .then_some(note);
             (content_fetch::copied(baseline, note, tier), None)
         }
         _ => {

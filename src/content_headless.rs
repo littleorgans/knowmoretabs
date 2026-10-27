@@ -151,7 +151,7 @@ impl Escalated {
 pub fn settle<'a>(baseline: &Line, outcome: &'a Outcome, tier: Tier) -> (Line, Option<&'a Page>) {
     let not_rendered = |why: &str| {
         (
-            content_fetch::copied(baseline, &format!("not rendered: {why}"), tier),
+            content_fetch::copied(baseline, Some(&format!("not rendered: {why}")), tier),
             None,
         )
     };
@@ -163,7 +163,7 @@ pub fn settle<'a>(baseline: &Line, outcome: &'a Outcome, tier: Tier) -> (Line, O
             (line, capture.page.as_ref())
         }
         Outcome::Read(_) => (
-            content_fetch::copied(baseline, "rendering added no text", tier),
+            content_fetch::copied(baseline, Some("rendering added no text"), tier),
             None,
         ),
         Outcome::SignIn(signed) => {
@@ -570,6 +570,18 @@ mod tests {
         assert_eq!(
             copy.reason.as_deref(),
             Some("short text; rendering added no text")
+        );
+        let (copy, _) = settle(&copy, &outcomes[0], Tier::Headless);
+        assert_eq!(
+            copy.reason.as_deref(),
+            Some("short text; rendering added no text; rendering added no text"),
+            "each render attempt retains its note, as before the shared rule"
+        );
+        let (copy, _) = settle(&baseline, &outcomes[1], Tier::Headless);
+        let (copy, _) = settle(&copy, &outcomes[1], Tier::Headless);
+        assert_eq!(
+            copy.reason.as_deref(),
+            Some("short text; not rendered: HTTP 404; not rendered: HTTP 404")
         );
 
         let more = rendered(40);

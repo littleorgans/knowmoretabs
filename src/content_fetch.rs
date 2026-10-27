@@ -78,18 +78,19 @@ pub fn longer(baseline: &Line, capture: &Capture) -> bool {
 }
 
 /// `baseline` as it stands, attempted now by `tier` with its access, its
-/// reason saying what the attempt came to, once however often it does:
+/// reason extended with `note` when supplied:
 /// what a page keeps when a new capture is not [`longer`].
-pub fn copied(baseline: &Line, note: &str, tier: Tier) -> Line {
+pub fn copied(baseline: &Line, note: Option<&str>, tier: Tier) -> Line {
     let mut line = baseline.clone();
     line.tier = Some(tier);
     line.access = Some(tier.access());
     line.attempted_at = archive::now();
-    line.reason = Some(match &baseline.reason {
-        Some(reason) if reason.split("; ").any(|said| said == note) => reason.clone(),
-        Some(reason) => format!("{reason}; {note}"),
-        None => note.to_owned(),
-    });
+    if let Some(note) = note {
+        line.reason = Some(match &baseline.reason {
+            Some(reason) => format!("{reason}; {note}"),
+            None => note.to_owned(),
+        });
+    }
     line
 }
 
