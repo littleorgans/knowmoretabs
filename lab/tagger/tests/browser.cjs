@@ -638,7 +638,9 @@ const cases = {
     await until(() => tileOf(gone), 'restored in its place');
     o.restored = { shown: K.selected().map(urlOf), pinned: K.pinned().map(urlOf) };
     $('#show-sel').click();
+    await until(() => K.views.view().kind === 'search', 'back to the results');   // leaving is a Back: one landing later would undo the next search
     // another caller retires a name and forgets a page: the next service read follows, no restart
+    await K.loadLibrary();   // reads in flight first: a call during one shares its answer, older than these writes
     o.external = urlOf(external);
     check((await post('/api/vocabulary', { create: [], retire: ['Typography'] })).status === 200, 'retired elsewhere');
     check((await post('/api/forget', { urls: [o.external] })).status === 200, 'forgotten elsewhere');
