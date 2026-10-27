@@ -1,7 +1,6 @@
 # knowmoretabs system map
 <!-- lilo-page kind=index schema=1 -->
 <!-- lilo-covers Cargo.toml Cargo.lock .cargo/config.toml xtask/Cargo.toml xtask/src/main.rs slices.toml src/*.rs web/index.html web/app.css web/app.js justfile scripts/clippy.py lab/tagger/tagger/paths.py lab/tagger/tagger/app/kmt.py lab/tagger/tagger/app/add.py lab/tagger/tagger/app/static/pages.js scripts/installation.py extension/manifest.json extension/*.js -->
-<!-- lilo-verified digest=1b7d4ff6d08124ea commit=d4b973eff38b date=2026-10-27 -->
 
 > One Rust binary that snapshots the open tabs of Chromium browsers from their on-disk session files and serves the snapshots as a local, searchable library.
 
@@ -14,8 +13,6 @@ Browsers: Chrome, Chrome Beta, Chrome Canary, Chromium, Brave, Edge and Vivaldi 
 Non-goals: sync, accounts, cloud, telemetry, page text unless you ask for it (`content` is opt in), copies of local documents (`add --file` keeps a reference), tag hierarchy, touching or closing live tabs, modifying browser files (claimed by S1, unverified).
 
 ## Responsibilities
-
-Each file's `//!` header says why it exists.
 
 - CLI, output, errors: `code:src/cli.rs`, `code:src/main.rs`, `code:src/out.rs`, `code:src/error.rs`; shared lowercase hex and SHA-256 spelling for file names, keys and MACs `code:src/digest.rs`.
 - Capture: `code:src/capture.rs`, `code:src/platform.rs`, `code:src/snss.rs`, `code:src/session.rs`, `code:src/staleness.rs` (encrypted sessions preflight), `code:src/history.rs`, `code:src/model.rs`, `code:src/local.rs` (what counts as this machine); the report a `save` ends with, as lines or JSON `code:src/save_report.rs`.
@@ -37,7 +34,7 @@ Each file's `//!` header says why it exists.
 
 ## Reading path
 
-Start here, then [verification gates](verification-gates.md). `rg 'slice:.*triage'` finds every file in a slice (`code:xtask/src/main.rs#parse_header`).
+Start here, then [verification gates](verification-gates.md). Before editing Rust under `src/` or `xtask/src/`, read its `//!` header for its slice and purpose. `rg 'slice:.*triage'` finds every file in a slice (`code:xtask/src/main.rs#parse_header`).
 
 ## Vocabulary
 
@@ -46,7 +43,7 @@ Start here, then [verification gates](verification-gates.md). `rg 'slice:.*triag
 - Added page: a page in `pages/added.jsonl`, by address or document key; the library reads the log as one in-memory snapshot, id `added` (`code:src/intake.rs#SNAPSHOT_ID`).
 - Page: one URL as the library lists it, derived across snapshots; a sighting is one appearance in a snapshot (`code:src/library.rs#Library`).
 - Library state: `library.json`: forgotten pages, tags and the tag vocabulary; retiring a tag hides it everywhere and keeps it (`code:src/library.rs#State`).
-- Signals: what the browser's History knows about a URL (`code:src/history.rs`). First visit is the earliest History retains, about 90 days (claimed by S5, unverified).
+- Signals: what the browser's History knows about a URL; first visit is the earliest visit it retains (`code:src/history.rs`).
 - Local document: a file added with `add --file`, keyed `kmt-git:<repo>//<path>` or `kmt-blob:sha256-<hex>` (`code:src/source_key.rs#GIT`, `code:src/source_key.rs#BLOB`); its pin in `pages/sources.jsonl` names its bytes (`code:src/sources.rs#Pin`).
 - X log: `pages/xbookmarks.jsonl`, a line per bookmark click on X naming the page it saved (`code:src/xbookmark_log.rs#FILE`); extension health: `extension.json` at the archive root (`code:src/xhealth.rs#FILE`).
 - Slice, capability: a vertical cut that ships user value, and the want it serves; `code:slices.toml` declares both, plus a future band.
@@ -77,9 +74,7 @@ none yet
 
 ## Sources
 
-| id | path | fingerprint | consulted | disposition | claims | watched |
-| --- | --- | --- | --- | --- | --- | --- |
-| S1 | README.md | 6547a40a3784 | 2026-10-06 | used | index.md#purpose-and-scope, index.md#rules | |
-| S2 | docs/SLICES.md | c4e1c70a9f8d | 2026-10-06 | used | index.md#vocabulary | |
-| S4 | docs/design-decision.md | d72a87609962 | 2026-10-06 | read, nothing kept | | |
-| S5 | docs/briefs/slice-07b-history.md | e583b4ab1abf | 2026-10-06 | used | index.md#vocabulary, index.md#rules | |
+| id | path | claims |
+| --- | --- | --- |
+| S1 | README.md | index.md#purpose-and-scope, domain/rules.md#build-and-fixtures |
+| S2 | docs/SLICES.md | index.md#vocabulary |

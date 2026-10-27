@@ -1,19 +1,18 @@
 # Verification gates
 <!-- lilo-page kind=gates schema=1 -->
 <!-- lilo-covers .github/workflows/ci.yml .github/workflows/release.yml .cargo/config.toml Cargo.toml xtask/src/main.rs tests/serve_frontend.cjs tests/extension.cjs lab/tagger/tests/test_browser.py lab/tagger/tests/test_auto_sync.py justfile scripts/clippy.py lab/tagger/pyproject.toml -->
-<!-- lilo-verified digest=453ceac0452accb7 commit=d4b973eff38b date=2026-10-27 -->
 
 Up: [knowmoretabs system map](index.md)
 
 ## Gates
 
-| Gate | Command | Executed |
-| --- | --- | --- |
-| Scoped | `cargo test --locked --test <file>` | not executed, from CI config |
-| Structural | `cargo clippy --workspace --all-targets --locked -- -D warnings` | not executed, from CI config |
-| Full | `cargo test --workspace --all-targets --locked` | not executed, from CI config |
-| Frontend | `node --test tests/serve_frontend.cjs tests/extension.cjs` | not executed, from CI config |
-| CI parity | `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --all-targets --locked && cargo run --locked --package xtask -- slices --check && node --test tests/serve_frontend.cjs tests/extension.cjs` | not executed, from CI config |
+| Gate | Command |
+| --- | --- |
+| Scoped | `cargo test --locked --test <file>` |
+| Structural | `cargo clippy --workspace --all-targets --locked -- -D warnings` |
+| Full | `cargo test --workspace --all-targets --locked` |
+| Frontend | `node --test tests/serve_frontend.cjs tests/extension.cjs` |
+| CI parity | `cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo test --workspace --all-targets --locked && cargo run --locked --package xtask -- slices --check && node --test tests/serve_frontend.cjs tests/extension.cjs` |
 
 Scoped: `<file>` is an integration test in `tests/` (`code:tests/tags.rs` is one); unit tests live beside the code, and the crate has a binary target only, so `cargo test --locked --bin knowmoretabs <filter>` scopes those; `--lib` fails with no library target. Integration tests drive the real binary.
 

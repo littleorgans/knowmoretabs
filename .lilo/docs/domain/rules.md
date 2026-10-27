@@ -1,7 +1,6 @@
 # Rules
 <!-- lilo-page kind=focus schema=1 -->
 <!-- lilo-covers Cargo.toml .github/workflows/ci.yml xtask/src/main.rs src/*.rs lab/tagger/tagger/app/service_auth.py tests/fixtures/service_auth.json -->
-<!-- lilo-verified digest=c6c1250ca23c29ba commit=d4b973eff38b date=2026-10-27 -->
 
 Up: [knowmoretabs system map](../index.md)
 
@@ -27,7 +26,7 @@ The invariants the archive, the network commands, `serve` and the build hold. Te
 - Export omits the search and referrer signals unless `--with-history`, and lists no forgotten page (`code:src/library.rs#Shape`).
 - Imported suggestions never change the owner's tags; tag names match without regard to case (`code:src/suggestions.rs`, `code:src/library.rs#fold`).
 - `add` keeps a new page under its cleaned address: trailing slashes on a non-root path, the fragment (a routing `#/` or `#!` stays) and tracking parameters dropped, and `/` supplied when the root path is absent; every other byte stays as written. An address that cleans the same as a page the library holds resolves to that page's key; no stored key is rewritten (`code:src/page_key.rs#clean`, `code:src/add.rs`).
-- A post bookmarked on X is kept under `https://x.com/<handle>/status/<id>` whatever host or suffix it was clicked on; its X log line is written under the same hold of the lock as its intake line, and a forgotten page gets nothing written (`code:src/xbookmark.rs#save`, `code:src/add.rs#admit`).
+- X bookmarks normalize the clicked post's host and path before admission; `add` reuses an existing matching key when present. The X log line precedes a new intake line under the same lock; a forgotten page writes neither (`code:src/xbookmark.rs#Post::parse`, `code:src/xbookmark.rs#save`, `code:src/add.rs#admit`).
 
 ## Local documents
 
