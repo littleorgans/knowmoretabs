@@ -79,6 +79,10 @@ fn a_read_is_complete_only_on_the_posts_page_with_nothing_cut_or_folded() {
     let mut cut = post("102", "A preview…");
     cut["text_complete"] = json!(false);
     assert!(!complete(&read(&[cut])));
+    assert!(
+        !complete(&read(&[post("101", "First."), post("102", " \n")])),
+        "a post that shows no text, as an X Article's does, asks for the rest"
+    );
     let mut said = read(&[post("102", "Text.")]);
     said["reasons"] = json!(["unresolved_link"]);
     assert!(!complete(&said), "a reason given is not complete");

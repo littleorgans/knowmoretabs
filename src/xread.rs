@@ -164,11 +164,14 @@ pub fn parse(value: &Value, clicked: &str, handle: &str) -> Result<Read, String>
         return Err(format!("posts: more than {MAX_POSTS}"));
     }
     // Cut text and unresolved links ask for the rest even when the reader
-    // fails to include the corresponding reason.
-    let parts_complete = sent
-        .posts
-        .iter()
-        .all(|post| post.text_complete && post.links.iter().all(|link| link.target.is_some()));
+    // fails to include the corresponding reason. So does a post that shows
+    // no text: the page draws an X Article, a card or media apart from the
+    // post's text, and the public service may hold what it shows.
+    let parts_complete = sent.posts.iter().all(|post| {
+        post.text_complete
+            && !post.text.trim().is_empty()
+            && post.links.iter().all(|link| link.target.is_some())
+    });
     let mut posts: Vec<ReadPost> = Vec::with_capacity(sent.posts.len());
     for post in sent.posts {
         let post = checked(post, handle)?;

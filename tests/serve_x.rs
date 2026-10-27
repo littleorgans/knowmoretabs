@@ -101,9 +101,27 @@ fn linked_thread_answer(focal: u64) -> Vec<u8> {
     serde_json::to_vec(&json!({"code": 200, "status": status, "thread": [first, second]})).unwrap()
 }
 
+/// Post 600, an X Article: its post text is empty, its title, body and
+/// cover are the article's, and its only link is the article on X itself.
+fn article_answer() -> Vec<u8> {
+    let mut status = thread_post("example_author", 600, "");
+    status["raw_text"] = json!({"text": "https://t.co/EXAMPLE6",
+        "facets": [{"type": "url", "original": "https://t.co/EXAMPLE6",
+            "replacement": "https://x.com/i/article/600", "display": "x.com/i/article/600"}]});
+    status["article"] = json!({"id": "600", "title": "A synthetic article title",
+        "preview_text": "The opening paragraph",
+        "media_entities": [],
+        "content": {"entityMap": [], "blocks": [
+            {"type": "unstyled", "text": "The opening paragraph of the article.", "entityRanges": []},
+            {"type": "header-two", "text": "A section", "entityRanges": []},
+            {"type": "unordered-list-item", "text": "A point in a list.", "entityRanges": []},
+            {"type": "unstyled", "text": "The closing paragraph of the article.", "entityRanges": []}]}});
+    serde_json::to_vec(&json!({"code": 200, "status": status.clone(), "thread": [status]})).unwrap()
+}
+
 /// The X post API, standing in: post 100 is a post alone, post 401 is
 /// private, posts 200 to 204 are one thread, 500 and 501 another with a
-/// link; and the article at `blog.example.test`.
+/// link, 600 an X Article; and the article at `blog.example.test`.
 fn x_api() -> Site {
     Site::start(|host, path, _| {
         let id = path
@@ -114,6 +132,7 @@ fn x_api() -> Site {
             ("api.fxtwitter.com", Some(401)) => site::Reply::status(401),
             ("api.fxtwitter.com", Some(id @ 200..=204)) => json_reply(thread_answer(id)),
             ("api.fxtwitter.com", Some(id @ 500..=501)) => json_reply(linked_thread_answer(id)),
+            ("api.fxtwitter.com", Some(600)) => json_reply(article_answer()),
             ("blog.example.test", _) if path == "/post" => {
                 site::Reply::html(article("A synthetic article"))
             }
@@ -486,6 +505,52 @@ fn a_thread_shown_in_part_is_filled_from_the_public_thread_and_later_bookmarks_j
             .iter()
             .all(|page| page["url"] != status_of(204)),
         "one page for the thread"
+    );
+}
+
+#[test]
+fn an_x_articles_page_read_that_shows_no_text_is_filled_from_the_public_article() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let key = status_of(600);
+    // The Article view on the post's own page: the post is named, and its
+    // title and body are drawn apart from the post's text.
+    let line = bookmark_read(
+        &server,
+        &key,
+        &page_read(
+            "example_author",
+            600,
+            &[shown("example_author", 600, "")],
+            true,
+        ),
+    );
+    assert_eq!(
+        (&line["value"], &line["content"], &line["read"]),
+        (&json!("added"), &json!("ok"), &json!("replaced")),
+        "{line}"
+    );
+    assert_eq!(
+        line.get("article"),
+        None,
+        "the article on X is no page of its own: {line}"
+    );
+    assert_eq!(site.paths(), ["api.fxtwitter.com/2/thread/600"]);
+    let front = kept_front(&fx, &key);
+    assert!(front.contains("tier: \"x\""), "{front}");
+    for part in [
+        "The opening paragraph of the article.",
+        "#### A section",
+        "- A point in a list.",
+        "The closing paragraph of the article.",
+    ] {
+        assert!(front.contains(part), "{part}: {front}");
+    }
+    assert_eq!(
+        log_lines(&fx, "added.jsonl").last().unwrap()["title"],
+        "A synthetic article title"
     );
 }
 
