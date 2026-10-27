@@ -317,13 +317,14 @@ class Served(Fixture):
         self.port = self.server.server_address[1]
         thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         thread.start()
-        self.addCleanup(self.app.close)  # after the server stops: no request queues another fit
         self.addCleanup(self.server.server_close)
         self.addCleanup(self.server.shutdown)
 
     def restart(self) -> server.App:
         """An app on this archive and these lists, as a restart starts one."""
-        return server.App(dataclasses.replace(self.lib, root=self.root), self.data / "app", fake_encode, fake_embed)
+        app = server.App(dataclasses.replace(self.lib, root=self.root), self.data / "app", fake_encode, fake_embed)
+        self.addCleanup(app.close)  # the initial app closes after its server; extra apps also finish their refits
+        return app
 
     def call(self, method, path, body=None, headers=None, prove=True):
         return signed.call(self.port, method, path, body, headers, prove)

@@ -7,6 +7,7 @@ from unittest.mock import patch
 import numpy as np
 
 from test_app import TOPICS, Served, topic_of
+from test_add import Served as AddServed
 from tagger.app import engine, server
 
 
@@ -14,7 +15,54 @@ class Died(BaseException):
     """Escapes the refit worker's `except Exception`, as a crash outside its handler does."""
 
 
+def check_app_cleanup(case, start_app):
+    """Keep a fit running until fixture cleanup closes its app; release it even if cleanup is missing."""
+    started, release = threading.Event(), threading.Event()
+    worker = None
+
+    def stopped():
+        if worker is None:
+            return
+        try:
+            case.assertFalse(worker.is_alive(), "fixture cleanup joined its app's refit")
+        finally:
+            release.set()
+            worker.join(10)
+
+    case.addCleanup(stopped)  # runs after the cleanup that start_app registers
+    app = start_app()
+
+    def held(X, Y, q):
+        started.set()
+        for _ in range(1000):
+            if release.wait(0.01):
+                return None
+            with app.lock:
+                if app._closed:
+                    return None
+        raise TimeoutError("fixture did not close its app")
+
+    with patch.object(engine, "fit", side_effect=held):
+        with app.lock:
+            app._queue_refit()
+            worker = app._refit_thread
+        case.assertTrue(started.wait(2), "the app started a refit")
+
+
+class AddAppCleanupTests(AddServed):
+    def test_local_app_cleanup_joins_its_refit(self):
+        lib, _ = self.load()
+        check_app_cleanup(self, lambda: self.make_app(lib))
+
+    def test_served_app_cleanup_joins_its_refit(self):
+        lib, _ = self.load()
+        check_app_cleanup(self, lambda: self.serve(lib)[0])
+
+
 class RefitTests(Served):
+    def test_restarted_app_cleanup_joins_its_refit(self):
+        check_app_cleanup(self, self.restart)
+
     def crashes(self) -> threading.Event:
         """Set once a worker dies of `Died`; its hook runs after the worker freed its slot, so wait on it."""
         died, report = threading.Event(), threading.excepthook
