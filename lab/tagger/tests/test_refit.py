@@ -7,17 +7,82 @@ from unittest.mock import patch
 import numpy as np
 
 from test_app import TOPICS, Served, topic_of
-from tagger.app import engine
+from test_add import Served as AddServed
+from tagger.app import engine, server
+
+
+class Died(BaseException):
+    """Escapes the refit worker's `except Exception`, as a crash outside its handler does."""
+
+
+def check_app_cleanup(case, start_app):
+    """Keep a fit running until fixture cleanup closes its app; release it even if cleanup is missing."""
+    started, release = threading.Event(), threading.Event()
+    worker = None
+
+    def stopped():
+        if worker is None:
+            return
+        try:
+            case.assertFalse(worker.is_alive(), "fixture cleanup joined its app's refit")
+        finally:
+            release.set()
+            worker.join(10)
+
+    case.addCleanup(stopped)  # runs after the cleanup that start_app registers
+    app = start_app()
+
+    def held(X, Y, q):
+        started.set()
+        for _ in range(1000):
+            if release.wait(0.01):
+                return None
+            with app.lock:
+                if app._closed:
+                    return None
+        raise TimeoutError("fixture did not close its app")
+
+    with patch.object(engine, "fit", side_effect=held):
+        with app.lock:
+            app._queue_refit()
+            worker = app._refit_thread
+        case.assertTrue(started.wait(2), "the app started a refit")
+
+
+class AddAppCleanupTests(AddServed):
+    def test_local_app_cleanup_joins_its_refit(self):
+        lib, _ = self.load()
+        check_app_cleanup(self, lambda: self.make_app(lib))
+
+    def test_served_app_cleanup_joins_its_refit(self):
+        lib, _ = self.load()
+        check_app_cleanup(self, lambda: self.serve(lib)[0])
 
 
 class RefitTests(Served):
+    def test_restarted_app_cleanup_joins_its_refit(self):
+        check_app_cleanup(self, self.restart)
+
+    def crashes(self) -> threading.Event:
+        """Set once a worker dies of `Died`; its hook runs after the worker freed its slot, so wait on it."""
+        died, report = threading.Event(), threading.excepthook
+        hook = patch.object(threading, "excepthook", lambda args: died.set() if args.exc_type is Died else report(args))
+        hook.start()
+        self.addCleanup(hook.stop)
+        return died
+
     def finish_refit(self):
-        with self.app.lock:
-            worker = self.app._refit_thread
-        if worker is not None:
+        """Wait out the worker and any worker it handed its follow up to."""
+        finished = []
+        while True:
+            with self.app.lock:
+                worker = self.app._refit_thread
+            if worker is None:
+                return
+            self.assertNotIn(worker, finished, "a finished worker still holds the refit slot")
             worker.join(20)
             self.assertFalse(worker.is_alive(), "refit finished")
-        self.assertIsNone(self.app._refit_thread)
+            finished.append(worker)
 
     def test_new_tag_learns_a_head_and_retired_tag_leaves_suggestions(self):
         rows = [i for i, r in enumerate(self.lib.records) if topic_of(r["key"]) == "coffee" and self.lib.live[i]]
@@ -107,3 +172,78 @@ class RefitTests(Served):
                 self.finish_refit()
         self.assertEqual(2, len(calls))
         np.testing.assert_allclose(self.app.lib.S, self.app.lib.rules.scores(refreshed.X)["supervised"])
+
+    def test_worker_dying_during_fit_still_fits_the_change_it_missed(self):
+        started, release = threading.Event(), threading.Event()
+        fitting = engine.fit
+        labels = []
+
+        def dies_first(X, Y, q):
+            labels.append(Y.copy())
+            if len(labels) == 1:
+                started.set()
+                if not release.wait(10):
+                    raise TimeoutError("test did not release fit")
+                raise Died
+            return fitting(X, Y, q)
+
+        died = self.crashes()
+        old = self.app.lib
+        with patch.object(engine, "fit", side_effect=dies_first):
+            try:
+                self.tag([0], "Fresh")
+                self.assertEqual(200, self.call("GET", "/api/library")[0])
+                self.assertTrue(started.wait(2), "a tag change started a fit")
+                self.tag([1], "Fresh")
+                self.assertEqual(200, self.call("GET", "/api/library")[0])
+                self.assertIs(old.rules, self.app.lib.rules, "requests use the last good fit")
+            finally:
+                release.set()
+                self.finish_refit()
+        self.assertTrue(died.wait(10), "the worker died outside its handler")
+        self.assertEqual(2, len(labels), "the change made during the dead fit is fitted without another")
+        np.testing.assert_array_equal(self.app.lib.Y, labels[-1])
+        self.assertIsNot(old.rules, self.app.lib.rules)
+        np.testing.assert_allclose(self.app.lib.S, self.app.lib.rules.scores(self.app.lib.X)["supervised"])
+
+    def test_worker_dying_while_publishing_keeps_last_fit_and_later_changes_refit(self):
+        died = self.crashes()
+        old = self.app.lib
+        with patch.object(server, "replace", side_effect=Died):
+            self.tag([0], "Coffee" if not old.Y[0, old.tags.index("Coffee")] else "Trains")
+            self.assertEqual(200, self.call("GET", "/api/library")[0])
+            self.finish_refit()
+        self.assertTrue(died.wait(10), "the worker died outside its handler")
+        for field in ("rules", "S", "threshold", "spread"):
+            self.assertIs(getattr(old, field), getattr(self.app.lib, field), field)
+        self.assertEqual(200, self.call("POST", "/api/search", {"query": "espresso", "n": 20})[0])
+        self.tag([1], "Coffee" if not old.Y[1, old.tags.index("Coffee")] else "Trains")
+        self.assertEqual(200, self.call("GET", "/api/library")[0])
+        self.finish_refit()
+        self.assertIsNot(old.rules, self.app.lib.rules)
+        np.testing.assert_allclose(self.app.lib.S, self.app.lib.rules.scores(self.app.lib.X)["supervised"])
+
+    def test_close_waits_out_the_running_fit_and_starts_no_other(self):
+        started, release = threading.Event(), threading.Event()
+        fitting = engine.fit_rules
+
+        def blocked(X, Y, q):
+            started.set()
+            if not release.wait(10):
+                raise TimeoutError("test did not release fit")
+            return fitting(X, Y, q)
+
+        with patch.object(engine, "fit_rules", side_effect=blocked):
+            self.tag([0], "Fresh")
+            self.assertEqual(200, self.call("GET", "/api/library")[0])
+            self.assertTrue(started.wait(2), "a tag change started a fit")
+            worker = self.app._refit_thread
+            self.tag([1], "Fresh")
+            self.assertEqual(200, self.call("GET", "/api/library")[0])  # a follow up waits on the running fit
+            threading.Timer(0.2, release.set).start()  # a close that does not wait returns while the fit is held
+            self.app.close()
+            self.assertFalse(worker.is_alive(), "close joined the running fit")
+            self.tag([2], "Fresh")
+            self.assertEqual(200, self.call("GET", "/api/library")[0])
+        with self.app.lock:
+            self.assertIsNone(self.app._refit_thread, "a closed app starts no fit")

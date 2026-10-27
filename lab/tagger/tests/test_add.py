@@ -105,6 +105,12 @@ class Synthetic(unittest.TestCase):
     def load(self, encode=fake_encode) -> tuple[engine.Library, dict]:
         return engine.load(self.paths, self.root, encode, fake_embed, embed_image=fake_image, dim=DIM)
 
+    def make_app(self, lib: engine.Library, encode=fake_encode, folder: Path | None = None) -> server.App:
+        """Every app, including one without a server, finishes its refit before its scratch root is removed."""
+        app = server.App(lib, folder if folder is not None else self.work / "app", encode, fake_embed)
+        self.addCleanup(app.close)
+        return app
+
 
 class IntakeFoldTests(Synthetic):
     def test_added_pages_join_the_known_pages_titled_by_their_latest_line(self):
@@ -154,7 +160,7 @@ class LoadTests(Synthetic):
         for key in keys:
             capture(self.root, key, "An invented page")
         lib = engine.sync(lib, Archive.load(self.root), keys, fake_embed)
-        app = server.App(lib, self.work / "app", fake_encode, fake_embed)
+        app = self.make_app(lib)
         hits = app.search({"query": "", "n": 5})["hits"]
         self.assertEqual(sorted(keys), [lib.records[h["row"]]["key"] for h in hits[:2]])
 
@@ -174,7 +180,7 @@ class LoadTests(Synthetic):
         self.assertEqual(0, len(lib.rules.heads))
         q = fake_encode(["night train"])[0]
         self.assertEqual(5, len(engine.search(lib, q, "night train", 5)))
-        app = server.App(lib, self.work / "app", encode, fake_embed)
+        app = self.make_app(lib, encode)
         self.assertEqual({"tags": [], "app_tags": []}, {k: app.library()[k] for k in ("tags", "app_tags")})
         synthetic_archive.edit_state(self.root, lambda state: state["vocabulary"]["Trains"].pop("retired_at"))
         app.follow()
@@ -229,7 +235,7 @@ class LoadTests(Synthetic):
     def test_sync_follows_the_archive_for_one_page(self):
         lib, _ = self.load()
         self.assertIs(lib, engine.sync(lib, Archive.load(self.root), [NEW], fake_embed), "a page the archive lacks")
-        app = server.App(lib, self.work / "app", fake_encode, fake_embed)
+        app = self.make_app(lib)
         key = lib.records[5]["key"]
         synthetic_archive.edit_state(self.root, lambda state: state.update(forgotten=[key]))
         self.assertIsNone(app.sync(key, Archive.load(self.root)), "a forgotten page is not shown")
@@ -240,7 +246,7 @@ class LoadTests(Synthetic):
 
     def test_an_add_shows_the_decisions_made_after_its_archive_read(self):
         lib, _ = self.load()
-        app = server.App(lib, self.work / "app", fake_encode, fake_embed)
+        app = self.make_app(lib)
         capture(self.root, NEW)
         archive = Archive.load(self.root)  # as the job reads it, outside the app's lock
         other = lib.records[5]["key"]
@@ -304,7 +310,7 @@ class RecentTests(Synthetic):
             Typography={"used_at": "2026-10-08T00:00:00"},  # no offset: not a time
         )
         lib, _ = self.load()
-        app = server.App(lib, self.work / "app", fake_encode, fake_embed)
+        app = self.make_app(lib)
         library = app.library()
         self.assertEqual(["Coffee", "Keyboards", "Rust"], library["recent"])
         self.assertEqual(sorted(synthetic_archive.DEFINITIONS.keys() - {"Trains"}, key=str.lower), library["app_tags"])
@@ -327,7 +333,7 @@ class PortTests(unittest.TestCase):
 
 class Served(Synthetic):
     def serve(self, lib: engine.Library) -> tuple[server.App, int]:
-        app = server.App(lib, self.work / "lab-data" / f"app-{id(lib)}", fake_encode, fake_embed)
+        app = self.make_app(lib, folder=self.work / "lab-data" / f"app-{id(lib)}")
         httpd = server.serve(app, 0, signed.KEY)
         threading.Thread(target=httpd.serve_forever, daemon=True).start()
         self.addCleanup(httpd.server_close)
