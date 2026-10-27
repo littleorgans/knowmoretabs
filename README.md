@@ -162,7 +162,8 @@ text through the tagger's model service on that port of `127.0.0.1`, over the
 same archive, and shows the best 50; while the service is stopped, loading or
 busy, search matches words as it does without it. The same service's Tag and
 Add link are served below `/model/`, and say so when the service is not
-answering.
+answering. With the toolbar extension loaded, a post you bookmark on X is
+saved to the library as one page under `https://x.com/<handle>/status/<id>`.
 
 Forgetting hides a page from the library. It never touches a snapshot: every
 page you forget is still in every snapshot it was ever in, and `restore`
@@ -564,8 +565,9 @@ default) for headless reading; whether `content --signed-in` can reach
 your running Chrome, read from its remote debugging switch and
 `DevToolsActivePort` file, never by connecting. Then the archive:
 whether it is private, whether `pages/content` exists, and its pages by
-latest status. It is offline by default, with GitHub sign in marked as not
-checked. With `--live`, gh checks its own sign in (the `gh auth status` exit
+latest status. Last, the toolbar extension: whether it has reported, and
+whether it still sees X's bookmark button. It is offline by default, with
+GitHub sign in marked as not checked. With `--live`, gh checks its own sign in (the `gh auth status` exit
 code only; its output is never read), the X post API is asked once for a
 fixed public post, and the browser is started headless once, asked its
 version and closed, with no page. It sends nothing of yours. It exits 0 whenever the web
@@ -591,8 +593,10 @@ tier is ready; a missing tool is a warning.
 │   ├── images.jsonl           # what `content` did about each page's image, one line per attempt; append-only
 │   ├── images/                # one preview JPEG per captured page, named as its text file is
 │   ├── sources.jsonl          # which bytes each local document was when added: blob and commit; append-only
+│   ├── xbookmarks.jsonl       # one line per bookmark click on X, naming the page it saved; append-only
 │   └── history.json           # what History last said about each page; refreshed, never drops a page
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
+├── extension.json             # the toolbar extension's last report on what it sees on X; replaced whole
 ├── tags/
 │   └── suggested.jsonl        # imported suggestions, one line per page per import; append-only
 ├── lock                       # held for the length of a run, so two can't collide
@@ -611,6 +615,9 @@ and `search --mode combined` make none unless `--model-port` is set; then they
 send each query to the model service over loopback on this machine. CLI search
 also supplies the filtered page keys and current body digests.
 `search --mode keyword` makes no network requests.
+A post you bookmark on X reaches `serve` through the toolbar extension and is
+saved as `add` saves a page: the X post API is asked for the post's number,
+and the post's preview image is downloaded.
 `enrich` and `content` are the only code that sends your pages' addresses,
 or a video's id to YouTube through yt-dlp, and what each sends is described
 above; `content` also downloads one preview image per page from the address
@@ -628,7 +635,8 @@ provider read it, is your choice.
 `serve` binds `127.0.0.1` only, refuses any request whose `Host` is not
 `127.0.0.1` or `localhost` with its own port, which is what stops a web page
 reaching it through DNS rebinding, refuses any request carrying another
-origin's `Origin` header, and
+origin's `Origin` header (the toolbar extension's own, pinned by its manifest
+`key`, counts as the Library's), and
 sends no CORS headers; the page's own Content-Security-Policy allows no
 request to anywhere else. The exported site opens from `file://` with the
 same policy.
@@ -726,8 +734,11 @@ Why decrypting is not the answer is in
 
 ## Non-goals
 
-No sync. No accounts. No cloud. No telemetry. No browser extension (for
-now). No page text unless you ask for it: `content` is opt in, and keyword
+No sync. No accounts. No cloud. No telemetry. The toolbar extension
+(`extension/`, set up in [`lab/tagger/README.md`](lab/tagger/README.md)) opens
+Add link and saves a post you bookmark on X; it reads only x.com and
+twitter.com pages, names the post you bookmarked and nothing else, and reports
+what it sees there to your Library alone. No page text unless you ask for it: `content` is opt in, and keyword
 search over what it stores comes later. No tag hierarchy. It never touches,
 closes or reorders your tabs in the live browser (`content --signed-in`
 opens hidden tabs of its own there, which Chrome closes with the run), and

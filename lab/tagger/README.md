@@ -125,8 +125,18 @@ Bookmarklet (Chrome's bookmarks bar):
 (the Library hands the fragment, whole, to Add link).
 Toolbar button (`extension/`, Chrome): in `chrome://extensions` turn on Developer mode, then Load unpacked and pick
 the `extension` folder. A click opens the Library tab already open on port 41878, else a new one, at Add link with the
-tab's address and title filled in; a page that is not on the web (`chrome://`, `file://`) opens Add link empty. It asks
-for `activeTab`, to read the clicked tab, and for `http://127.0.0.1:41878/*`, to find the Library tab, nothing else.
+tab's address and title filled in; a page that is not on the web (`chrome://`, `file://`) opens Add link empty. On
+x.com and twitter.com, clicking X's own bookmark button on a post saves the post to the library (`POST /api/x/bookmark`
+on port 41878) as `https://x.com/<handle>/status/<id>`, with its text from the X post API; removing a bookmark does
+nothing. While the Library is not running the extension keeps up to 50 saves for 7 days and sends them with the next
+save or the next page of X. It counts the posts and bookmark buttons each page of X shows and reports a change, or once
+a day, to `POST /api/x/health`; `knowmoretabs doctor` says when it sees posts but no bookmark button. It asks for
+`activeTab`, to read the clicked tab; `storage`, for the saves it keeps and its health; `http://127.0.0.1:41878/*`, to
+find the Library tab and reach the Library; and a content script on `https://x.com/*` and `https://twitter.com/*`,
+nothing else, so Chrome asks to "Read and change your data on x.com and twitter.com". The manifest's `key` pins the
+extension's id, the one origin besides its own the Library accepts (`EXTENSION_ORIGIN` in `src/http.rs`); a copy
+loaded before the key existed has another id and is a different extension to Chrome, so remove it and load the
+folder again.
 From the moment the box holds a web address the page's tile (a placeholder until the library lists the page) and its
 tag panel show (`static/panel.js`): Suggested, one line, and Recently used, three lines held open, a box that
 filters the tags or, on Enter with no match, has the library make one, and every active name folded under "All N tags" in letter rows
