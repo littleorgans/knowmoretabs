@@ -400,6 +400,13 @@ test('the Content tab says how the fetch went, then the text, escaped', () => {
   assert.deepEqual(paragraphs, ['# Title', 'One &lt;script&gt;alert(1)&lt;/script&gt; two\nthree &amp;amp;', '&lt;img src=x onerror=alert(2)&gt;']);
 });
 
+test('a plain text file shows whole as written, its markup and shell syntax literal', () => {
+  const text = '#!/bin/sh\n<script>alert(1)</script>\n\nif [ -n "$1" ]; then\n    echo "$1" > out &\nfi\n';
+  const html = drawer()(`contentHTML(${capture({ content: { ...fetched, tier: 'web', extractor: 'plain-text' }, text })})`);
+  assert.doesNotMatch(html, /<script|<p>/, 'no markup, one block');
+  assert.ok(html.includes('<pre>#!/bin/sh\n&lt;script&gt;alert(1)&lt;/script&gt;\n\nif [ -n &quot;$1&quot; ]; then\n    echo &quot;$1&quot; &gt; out &amp;\nfi</pre>'), html);
+});
+
 test('the Content tab of a page never fetched, or fetched with no text, says so', () => {
   const run = drawer();
   const never = run(`contentHTML(${capture({})})`);

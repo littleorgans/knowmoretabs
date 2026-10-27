@@ -1185,3 +1185,45 @@ fn no_link_off_x_that_add_would_take_makes_no_article() {
         "only the post's page: {intake:?}"
     );
 }
+
+#[test]
+fn a_plain_text_link_is_the_article_kept_as_written_and_titled_by_its_file_name() {
+    const SCRIPT: &str = "http://files.example.test/tools/install.sh";
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = Site::start(|host, path, _| match (host, path) {
+        ("files.example.test", "/tools/install.sh") => site::Reply {
+            status: 200,
+            headers: vec![("Content-Type", "text/plain".into())],
+            body: b"#!/bin/sh\n<script>alert(1)</script>\necho \"$HOME\"\n".to_vec(),
+            stall: None,
+        },
+        ("blog.example.test", "/post") => site::Reply::html(article("A synthetic article")),
+        _ => site::Reply::status(404),
+    });
+    let server = serve(&fx, &site);
+    let posts = [linking(350, Some(SCRIPT)), linking(351, Some(ARTICLE))];
+    let line = bookmark_read(
+        &server,
+        &status_of(350),
+        &page_read("example_author", 350, &posts, true),
+    );
+    assert_eq!(
+        line["article"],
+        json!({"url": SCRIPT, "value": "added"}),
+        "{line}"
+    );
+    assert_eq!(titled_in_time(&fx, SCRIPT), "install.sh");
+    let read = content_line(&fx, SCRIPT);
+    assert_eq!(
+        (&read["status"], &read["extractor"]),
+        (&json!("ok"), &json!("plain-text"))
+    );
+    assert!(kept_front(&fx, SCRIPT).contains("<script>alert(1)</script>\necho \"$HOME\"\n"));
+    let library = server.library();
+    assert_eq!(
+        page(&library, &status_of(350))["x"]["links"],
+        json!([SCRIPT])
+    );
+    assert_eq!(page(&library, SCRIPT)["title"], "install.sh");
+}

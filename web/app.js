@@ -435,7 +435,9 @@ function contentHTML(r) {
   if (text) meta.push(`<span>${plural((text.match(/\S+/g) || []).length, 'word')}</span>`);
   if (img) meta.push(`<span${FAILED.includes(img.status) ? ' class="bad"' : ''}>Image: ${esc([said(img.status), img.reason].filter(Boolean).join(' · '))}</span>`);
   if (text) meta.push('<button type="button" data-act="copytext">Copy text</button>');
-  const body = text ? `<div class="ctext" tabindex="0" aria-label="Page text">${text.trim().split(/\n{2,}/).map((par) => `<p>${esc(par)}</p>`).join('')}</div>`
+  // A plain text file is shown whole as written, indentation and all.
+  const shown = c?.extractor === 'plain-text' ? `<pre>${esc(text.trimEnd())}</pre>` : text.trim().split(/\n{2,}/).map((par) => `<p>${esc(par)}</p>`).join('');
+  const body = text ? `<div class="ctext" tabindex="0" aria-label="Page text">${shown}</div>`
     : `<p class="cnote">${c ? 'No text kept for this page.' : 'Not fetched yet. Run <code>knowmoretabs content</code> to fetch page text.'}</p>`;
   return (meta.length ? `<p class="cmeta">${meta.join('')}</p>` : '') + body;
 }
