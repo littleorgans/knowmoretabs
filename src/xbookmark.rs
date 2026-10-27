@@ -17,9 +17,14 @@
 //!      missing, refused or may not be the whole thread, the public post
 //!      API is asked for the thread by the post's number alone, and the
 //!      longer text wins (`content_keep`). A read the shell refuses never
-//!      costs the bookmark. One save at a time, so two clicks in one
-//!      thread never race to mint two pages and the API sees one paced
-//!      request at once.
+//!      costs the bookmark. The first web link of the thread that leaves X
+//!      is the article the post is about: it becomes a page of its own by
+//!      the same admission, its tie to the post written to the X log under
+//!      that hold of the lock, so a forgotten article stays forgotten and
+//!      untied; its text and image are read in the background through
+//!      `add`'s content stage, so the reply never waits on another site.
+//!      One save at a time, so two clicks in one thread never race to mint
+//!      two pages and the API sees one paced request at once.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -29,7 +34,7 @@ use serde_json::{Value, json};
 use url::Url;
 
 use crate::add::{self, Outcome};
-use crate::add_content::Ended;
+use crate::add_content::{Ask, Ended};
 use crate::archive;
 use crate::capture::Log;
 use crate::content_keep;
@@ -41,6 +46,7 @@ use crate::guard;
 use crate::image_store;
 use crate::intake;
 use crate::library::State;
+use crate::platform;
 use crate::targets::Outcome as _;
 use crate::xbookmark_log::{self, Line, Mark};
 use crate::xpost;
@@ -48,6 +54,13 @@ use crate::xread::{self, Read};
 
 /// Serializes saves across `serve`'s connection threads.
 static SAVING: Mutex<()> = Mutex::new(());
+
+/// Serializes the background reads of linked articles, apart from saves.
+static READING: Mutex<()> = Mutex::new(());
+
+/// X itself, its link shortener and its media host: a link to one of them,
+/// or to a host below one, is no article.
+const X_HOSTS: [&str; 4] = ["x.com", "twitter.com", "t.co", "twimg.com"];
 
 /// A bookmarked post: the page key it is kept under and its number.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,8 +104,9 @@ pub fn is_handle(handle: &str) -> bool {
 }
 
 /// Saves `post`, with what the owner's page showed of it, `read`: the
-/// page and its click line, then its text, image and title. The reply is
-/// `add`'s last line, saying what became of the read.
+/// page and its click line, then its text, image and title, then the
+/// article it links to. The reply is `add`'s last line, saying what became
+/// of the read and, when a link qualified, of the article.
 pub fn save(root: &Path, post: &Post, read: Option<&Value>) -> Result<Value, Error> {
     let _saving = SAVING.lock().unwrap_or_else(PoisonError::into_inner);
     let shown = match read.map(|value| xread::parse(value, &post.id, &post.handle)) {
@@ -118,12 +132,20 @@ pub fn save(root: &Path, post: &Post, read: Option<&Value>) -> Result<Value, Err
         },
     )?;
     let url = outcome.key().unwrap_or(&key);
-    let (ended, said) = match (&outcome, &shown) {
-        (Outcome::Added(_) | Outcome::Known(_), _) => capture(root, url, post, &shown)?,
-        (_, Shown::Refused) => (Ended::default(), "refused"),
-        _ => (Ended::default(), "none"),
+    let (ended, said, article) = match (&outcome, &shown) {
+        (Outcome::Added(_) | Outcome::Known(_), _) => {
+            let read = capture(root, url, post, &shown)?;
+            let article = article(root, url, &read.links)?;
+            (read.ended, read.said, article)
+        }
+        (_, Shown::Refused) => (Ended::default(), "refused", None),
+        _ => (Ended::default(), "none", None),
     };
-    Ok(add::done_line(url, &outcome, &ended, json!({"read": said})))
+    let mut also = json!({"read": said});
+    if let Some(article) = article {
+        also["article"] = article;
+    }
+    Ok(add::done_line(url, &outcome, &ended, also))
 }
 
 /// What the owner's page showed of a bookmarked post, by the request.
@@ -145,17 +167,22 @@ fn thread_page(marks: &HashMap<String, Mark>, ids: &[String]) -> Option<String> 
         .map(|(url, _)| url.clone())
 }
 
+/// What became of a saved post's text.
+struct Captured {
+    /// How the text and image stand.
+    ended: Ended,
+    /// What became of the page read: `kept`, `replaced` by the public
+    /// thread, `failed` (it named no post), `refused` or `none`.
+    said: &'static str,
+    /// Where the thread's links lead: the public thread's, in its order,
+    /// then the page read's.
+    links: Vec<String>,
+}
+
 /// Library page `url`'s text from what the page showed, then from the
 /// public post API's thread unless the page showed it whole; its image,
-/// and its title when it had none. How the text and image stand, and what
-/// became of the page read: `kept`, `replaced` by the public thread,
-/// `failed` (it named no post), `refused` or `none`.
-fn capture(
-    root: &Path,
-    url: &str,
-    post: &Post,
-    shown: &Shown,
-) -> Result<(Ended, &'static str), Error> {
+/// and its title when it had none.
+fn capture(root: &Path, url: &str, post: &Post, shown: &Shown) -> Result<Captured, Error> {
     let fetcher = Fetcher::new(&State::read(root)?.forgotten);
     let (mut said, mut content, whole) = match shown {
         Shown::Nothing => ("none", None, false),
@@ -174,6 +201,10 @@ fn capture(
             ("kept", Some(kept.line), read.complete)
         }
     };
+    let mut links: Vec<String> = match shown {
+        Shown::Read(read) => read.links().cloned().collect(),
+        _ => Vec::new(),
+    };
     if !whole {
         let thread = xpost::thread_capture(&fetcher, url, &post.id);
         let public = content_keep::keep(
@@ -188,6 +219,7 @@ fn capture(
             said = "replaced";
         }
         content = Some(public.line);
+        links.splice(0..0, thread.links);
         if !thread.posts.is_empty() {
             xbookmark_log::learned(root, &Line::thread(url, archive::now(), thread.posts))?;
         }
@@ -203,8 +235,60 @@ fn capture(
             .map(|line| line.status.word().to_owned()),
         title: None,
     };
-    Ok((ended, said))
+    Ok(Captured { ended, said, links })
 }
+
+/// The article page `url`'s thread links to: the first of `links` that
+/// leaves X and that `add` would take, admitted with its tie to `url`, its
+/// text and image then read in the background. What became of it, as
+/// `add`'s library stage says it; `None` when no link qualified.
+fn article(root: &Path, url: &str, links: &[String]) -> Result<Option<Value>, Error> {
+    let Some(link) = links
+        .iter()
+        .find(|link| leaves_x(link) && add::refusal(link).is_none())
+    else {
+        return Ok(None);
+    };
+    let at = archive::now();
+    let outcome = add::admit(
+        root,
+        link,
+        None,
+        false,
+        || {},
+        |lock, held| xbookmark_log::append(root, &Line::link(url, at, held), lock),
+    )?;
+    let key = outcome.key().unwrap_or(link).to_owned();
+    let said = json!({"url": key, "value": outcome.value()});
+    if outcome.in_library() {
+        let root = root.to_owned();
+        std::thread::spawn(move || {
+            let _reading = READING.lock().unwrap_or_else(PoisonError::into_inner);
+            add::capture(&root, &key, ASK, false, QUIET);
+        });
+    }
+    Ok(Some(said))
+}
+
+/// Whether `link` is a web address off X's own hosts.
+fn leaves_x(link: &str) -> bool {
+    let Some(url) = Url::parse(link).ok().filter(guard::is_web) else {
+        return false;
+    };
+    let host = guard::host_key(&url);
+    !X_HOSTS.iter().any(|x| {
+        host.strip_suffix(x)
+            .is_some_and(|rest| rest.is_empty() || rest.ends_with('.'))
+    })
+}
+
+/// The public tiers only: an article's read never opens the owner's
+/// browser signed in.
+const ASK: Ask<'static> = Ask {
+    browser: platform::CHROME,
+    signed_in: false,
+    retry: &[],
+};
 
 /// The route answers with its reply; nothing is said on `serve`'s terminal.
 const QUIET: Log = Log {
@@ -246,6 +330,32 @@ mod tests {
             },
             "two casings of one handle are one page"
         );
+    }
+
+    #[test]
+    fn the_article_is_a_web_link_off_xs_own_hosts() {
+        for link in [
+            "https://blog.example.test/post",
+            "http://www.video.example.test/watch?v=EXAMPLE",
+            "https://code.example.test/example/repo",
+            "https://notx.com/post",
+            "https://x.company.test/post",
+        ] {
+            assert!(leaves_x(link), "{link}");
+        }
+        for link in [
+            "https://x.com/example_other/status/200",
+            "https://X.com./i/article/1",
+            "https://pic.x.com/EXAMPLE",
+            "https://pic.twitter.com/EXAMPLE",
+            "https://mobile.twitter.com/example_other",
+            "https://t.co/EXAMPLE",
+            "https://pbs.twimg.com/media/EXAMPLE.jpg",
+            "mailto:someone@example.test",
+            "not a link",
+        ] {
+            assert!(!leaves_x(link), "{link}");
+        }
     }
 
     #[test]

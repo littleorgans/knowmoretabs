@@ -86,7 +86,8 @@ pub enum Outcome {
 }
 
 impl Outcome {
-    fn value(&self) -> &'static str {
+    /// The library stage's `value`.
+    pub(crate) fn value(&self) -> &'static str {
         match self {
             Self::Added(_) => "added",
             Self::Known(_) => "known",

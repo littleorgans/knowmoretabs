@@ -535,7 +535,7 @@ fn by(handle: &str, id: &str, text: &str) -> serde_json::Value {
     status
 }
 
-fn read_thread(focal: &serde_json::Value, thread: &serde_json::Value) -> (Capture, Vec<String>) {
+fn read_thread(focal: &serde_json::Value, thread: &serde_json::Value) -> Thread {
     let body =
         serde_json::to_vec(&json!({"code": 200, "status": focal, "thread": thread})).unwrap();
     read_posts(&body, &line, true)
@@ -551,7 +551,11 @@ fn a_thread_keeps_its_authors_posts_in_the_apis_order_and_a_deleted_one_as_a_lin
         {"type": "tombstone", "reason": "deleted"},
         by("Example", "104", "Last."),
     ]);
-    let (Capture { line, page, .. }, ids) = read_thread(&focal, &thread);
+    let Thread {
+        capture: Capture { line, page, .. },
+        posts: ids,
+        ..
+    } = read_thread(&focal, &thread);
     assert_eq!(ids, ["101", "102", "104"]);
     assert_eq!(line.status, Status::Ok);
     assert_eq!(
@@ -582,14 +586,50 @@ fn a_thread_without_the_post_or_with_none_is_the_post_alone() {
         json!([]),
         json!([by("example", "101", "Other.")]),
     ] {
-        let (capture, ids) = read_thread(&focal, &thread);
+        let Thread {
+            capture,
+            posts: ids,
+            ..
+        } = read_thread(&focal, &thread);
         assert_eq!(ids, ["102"], "{thread}");
         assert_eq!(capture.page.unwrap().markdown, alone, "{thread}");
     }
     let mut private = focal.clone();
     private["author"]["protected"] = json!(true);
-    let (capture, ids) = read_thread(&private, &json!([private]));
+    let Thread {
+        capture,
+        posts: ids,
+        ..
+    } = read_thread(&private, &json!([private]));
     assert_eq!(capture.line.status, Status::BehindLogin);
     assert_eq!(ids, [] as [String; 0]);
     assert_eq!(thread_url("7"), "https://api.fxtwitter.com/2/thread/7");
+}
+
+#[test]
+fn a_threads_links_are_its_authors_url_facets_else_their_cards_in_order() {
+    let mut first = by("example", "101", "Read this.");
+    first["raw_text"] = json!({"text": "Read this. https://t.co/EXAMPLE1", "facets": [
+        {"type": "mention", "original": "example_other", "replacement": "example_other"},
+        {"type": "url", "original": "https://t.co/EXAMPLE1",
+            "replacement": "https://blog.example.test/post", "display": "blog.example.test/post"},
+    ]});
+    first["card"] = json!({"url": "https://t.co/EXAMPLE1"});
+    let mut focal = by("example", "102", "And this.");
+    focal["card"] = json!({"url": "https://video.example.test/watch"});
+    let mut other = by("example_reader", "150", "Mine instead.");
+    other["raw_text"] = json!({"facets": [
+        {"type": "url", "replacement": "https://reader.example.test/"},
+    ]});
+    let thread = read_thread(&focal, &json!([first, focal, other]));
+    assert_eq!(
+        thread.links,
+        [
+            "https://blog.example.test/post",
+            "https://video.example.test/watch"
+        ],
+        "a card counts only for a post without a facet; another's reply makes none"
+    );
+    let no_post = serde_json::to_vec(&json!({"code": 200, "status": null})).unwrap();
+    assert_eq!(read_posts(&no_post, &line, true).links, [] as [String; 0]);
 }
