@@ -21,11 +21,13 @@ async function openAddLink(tab) {
 
 chrome.action.onClicked.addListener(openAddLink);
 
-// One step at a time, so two clicks never race over the stored queue or health.
-let chain = Promise.resolve();
-function serial(step) {
-  chain = chain.then(step).catch(() => {});
-  return chain;
+// Keep storage operations in order without waiting for a network request. The
+// network has its own order, so every click can be stored while a save is pending.
+const work = { storage: Promise.resolve(), network: Promise.resolve() };
+function serial(kind, step) {
+  const next = work[kind].then(step);
+  work[kind] = next.catch(() => {});
+  return next;
 }
 
 // A message only from this extension's own content script, in a tab on X.
@@ -39,12 +41,13 @@ chrome.runtime.onMessage.addListener((message, sender) => {
   if (!fromX(sender) || typeof message !== 'object' || message === null) return;
   const now = Date.now();
   if (message.kind === 'bookmark' && typeof message.post === 'string' && canonicalPost(message.post)?.post === message.post) {
-    serial(() => save(message.post, now));
+    serial('storage', () => save(message.post, now));
+    serial('network', () => deliver());
   } else if (message.kind === 'view' && isCount(message.posts) && isCount(message.controls) && message.controls <= message.posts) {
     const counts = { posts: message.posts, controls: message.controls };
-    serial(() => viewed(counts, now));
+    serial('network', () => viewed(counts, now));
   } else if (message.kind === 'intent' && typeof message.confirmed === 'boolean') {
-    serial(() => health((h) => afterIntent(h, message.confirmed, iso(now)), now));
+    serial('network', () => health((h) => afterIntent(h, message.confirmed, iso(now)), now));
   }
 });
 
@@ -70,20 +73,32 @@ async function queued(now) {
   return bound(Array.isArray(queue) ? queue : [], now);
 }
 
-// Sends `items` in order until the Library does not answer; the rest are kept.
-async function deliver(items, now) {
-  let i = 0;
-  while (i < items.length && (await sent(bookmarkRequest(items[i].post)))) i += 1;
-  await chrome.storage.local.set({ queue: bound(items.slice(i), now) });
+// Sends the oldest pending save, then removes it from the current queue, including
+// clicks stored during the request. A stopped worker resumes with the pending saves.
+async function deliver() {
+  for (;;) {
+    const item = await serial('storage', async () => {
+      const queue = await queued(Date.now());
+      await chrome.storage.local.set({ queue });
+      return queue[0];
+    });
+    if (!item || !(await sent(bookmarkRequest(item.post)))) return;
+    await serial('storage', async () => {
+      const queue = await queued(Date.now());
+      const index = queue.findIndex((pending) => pending.post === item.post && pending.at === item.at);
+      if (index !== -1) queue.splice(index, 1);
+      await chrome.storage.local.set({ queue });
+    });
+  }
 }
 
 async function save(post, now) {
-  await deliver([...(await queued(now)), { post, at: now }], now);
+  await chrome.storage.local.set({ queue: bound([...(await queued(now)), { post, at: now }], now) });
 }
 
 async function viewed(counts, now) {
   await health((h) => afterView(h, counts, iso(now)), now);
-  await deliver(await queued(now), now);
+  await deliver();
 }
 
 // Steps the stored health; reports it when it changed, or once a day while it holds.

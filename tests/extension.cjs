@@ -147,8 +147,7 @@ test('health turns unconfirmed after three add clicks X never showed as saved', 
 });
 
 // background.js in its own context with a fake chrome: storage in memory, fetch recorded.
-function worker({ down = false } = {}) {
-  const store = {};
+function worker({ down = false, store = {}, fetchRequest } = {}) {
   const fetched = [];
   let onMessage;
   const chrome = {
@@ -163,6 +162,7 @@ function worker({ down = false } = {}) {
   };
   const context = vm.createContext({ chrome, URL, structuredClone, console });
   context.fetch = async (url, init) => {
+    if (fetchRequest) return fetchRequest(url, init);
     if (context.down) throw new TypeError('Failed to fetch');
     fetched.push({ url, body: JSON.parse(init.body), type: init.headers['Content-Type'] });
     return { ok: true };
@@ -175,7 +175,8 @@ function worker({ down = false } = {}) {
     store, fetched, context,
     send: async (message, sender = { id: 'self', tab, url: HOME }) => {
       onMessage(message, sender);
-      await vm.runInContext('chain', context);
+      await vm.runInContext("typeof work === 'undefined' ? chain : work.storage", context);
+      await vm.runInContext("typeof work === 'undefined' ? chain : work.network", context);
     },
   };
 }
@@ -221,6 +222,70 @@ test('saves wait while the Library is down, at most 50 for 7 days, and go with t
   assert.equal(saved.length, 49, 'one was older than 7 days');
   assert.equal(saved[0], 'https://x.com/example_author/status/4');
   assert.deepEqual(w.store.queue, []);
+});
+
+test('a save survives a worker restart while its request is pending', async () => {
+  let started;
+  const fetching = new Promise((resolve) => (started = resolve));
+  let finish;
+  const w = worker({ fetchRequest: () => {
+    started();
+    return new Promise((resolve) => (finish = resolve));
+  } });
+  const sending = w.send({ kind: 'bookmark', post: POST });
+  await fetching;
+  const stored = structuredClone(w.store);
+  finish({ ok: true });
+  await sending;
+
+  assert.equal(stored.queue?.length, 1, 'the click is stored before the request finishes');
+  const restarted = worker({ store: stored });
+  await restarted.send({ kind: 'view', posts: 4, controls: 4 });
+  assert.equal(restarted.fetched.filter((f) => f.url.endsWith('/api/x/bookmark')).length, 1);
+  assert.deepEqual(restarted.store.queue, []);
+});
+
+test('new clicks reach storage while a previous save waits for the Library', async () => {
+  let started;
+  const fetching = new Promise((resolve) => (started = resolve));
+  let finish;
+  let requests = 0;
+  const w = worker({ fetchRequest: () => {
+    if (++requests !== 1) return { ok: true };
+    started();
+    return new Promise((resolve) => (finish = resolve));
+  } });
+  const first = w.send({ kind: 'bookmark', post: POST });
+  await fetching;
+  const second = w.send({ kind: 'bookmark', post: 'https://x.com/example_author/status/101' });
+  // Allow storage operations to finish without waiting for the network.
+  await new Promise((resolve) => setImmediate(resolve));
+  const queued = structuredClone(w.store.queue);
+  finish({ ok: true });
+  await Promise.all([first, second]);
+  assert.deepEqual(queued.map((item) => item.post), [POST, 'https://x.com/example_author/status/101']);
+  assert.deepEqual(w.store.queue, []);
+});
+
+test('each answered save is removed before the next request starts', async () => {
+  const queued = [POST, 'https://x.com/example_author/status/101'];
+  const store = { queue: queued.map((post) => ({ post, at: Date.now() })) };
+  let started;
+  const fetching = new Promise((resolve) => (started = resolve));
+  let finish;
+  let requests = 0;
+  const w = worker({ store, fetchRequest: () => {
+    requests += 1;
+    if (requests !== 2) return { ok: true };
+    started();
+    return new Promise((resolve) => (finish = resolve));
+  } });
+  const sending = w.send({ kind: 'bookmark', post: 'https://x.com/example_author/status/102' });
+  await fetching;
+  const kept = structuredClone(w.store.queue);
+  finish({ ok: true });
+  await sending;
+  assert.deepEqual(kept.map((item) => item.post), [queued[1], 'https://x.com/example_author/status/102']);
 });
 
 test('health is reported on a change and at most once a day while it holds', async () => {
