@@ -1,6 +1,7 @@
 # knowmoretabs system map
 <!-- lilo-page kind=index schema=1 -->
 <!-- lilo-covers Cargo.toml Cargo.lock .cargo/config.toml xtask/Cargo.toml xtask/src/main.rs slices.toml src/*.rs web/index.html web/app.css web/app.js justfile scripts/clippy.py lab/tagger/tagger/paths.py lab/tagger/tagger/app/kmt.py lab/tagger/tagger/app/add.py lab/tagger/tagger/app/static/pages.js scripts/installation.py extension/manifest.json extension/*.js -->
+<!-- lilo-verified digest=1b7d4ff6d08124ea commit=d4b973eff38b date=2026-10-27 -->
 
 > One Rust binary that snapshots the open tabs of Chromium browsers from their on-disk session files and serves the snapshots as a local, searchable library.
 
@@ -74,7 +75,7 @@ none yet
 
 ## Sources
 
-| id | path | claims |
-| --- | --- | --- |
-| S1 | README.md | index.md#purpose-and-scope, domain/rules.md#build-and-fixtures |
-| S2 | docs/SLICES.md | index.md#vocabulary |
+| id | path | fingerprint | consulted | disposition | claims | watched |
+| --- | --- | --- | --- | --- | --- | --- |
+| S1 | README.md | 6547a40a3784 | 2026-10-06 | used | index.md#purpose-and-scope, domain/rules.md#build-and-fixtures | |
+| S2 | docs/SLICES.md | c4e1c70a9f8d | 2026-10-06 | used | index.md#vocabulary | |
