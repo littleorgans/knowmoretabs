@@ -146,6 +146,78 @@ test('health turns unconfirmed after three add clicks X never showed as saved', 
   assert.deepEqual(Object.keys(plain(xdom.healthReport(h, '0.2.0'))), ['state', 'since', 'version', 'views', 'posts', 'controls', 'intents', 'confirmed']);
 });
 
+// The content script with the fixture DOM, a mutation observer and a deterministic clock.
+function contentScript(doc) {
+  const messages = [];
+  const listeners = {};
+  const timers = new Map();
+  let now = 0;
+  let timer = 0;
+  let changed;
+  doc.documentElement = doc.children[0];
+  doc.addEventListener = (kind, listener) => (listeners[kind] = listener);
+  vm.runInNewContext(read('extension/xdom.js') + '\n' + read('extension/x.js'), {
+    URL,
+    document: doc,
+    location: { href: HOME },
+    Date: { now: () => now },
+    chrome: { runtime: { sendMessage: async (message) => messages.push(plain(message)) } },
+    MutationObserver: class {
+      constructor(callback) { changed = callback; }
+      observe() {}
+    },
+    setTimeout: (callback, delay) => { timers.set(++timer, { callback, at: now + delay }); return timer; },
+    clearTimeout: (id) => timers.delete(id),
+  });
+  return {
+    messages,
+    changed: () => changed(),
+    click: (node, isTrusted) => listeners.click({ isTrusted, composedPath: () => composedPath(node) }),
+    advance: (ms) => {
+      const end = now + ms;
+      for (;;) {
+        const next = [...timers].filter(([, task]) => task.at <= end).sort((a, b) => a[1].at - b[1].at)[0];
+        if (!next) break;
+        const [id, task] = next;
+        now = task.at;
+        timers.delete(id);
+        task.callback();
+      }
+      now = end;
+    },
+  };
+}
+
+test('health waits for posts when the page shell settles before the feed arrives', () => {
+  const doc = parseHTML('<main></main>');
+  const script = contentScript(doc);
+  script.changed();
+  script.advance(2500);
+  doc.querySelector('main').append(article(fixture('timeline'), 'plain'));
+  script.changed();
+  script.advance(2000);
+  assert.deepEqual(script.messages, [{ kind: 'view', posts: 1, controls: 1 }]);
+  script.changed();
+  script.advance(2000);
+  assert.equal(script.messages.length, 1, 'a rendered view is counted once');
+});
+
+test('the content script saves trusted add clicks and watches the same post for confirmation', () => {
+  const doc = fixture('timeline');
+  const script = contentScript(doc);
+  const button = article(doc, 'plain').querySelector('[data-testid="bookmark"]');
+  script.click(button, false);
+  script.click(article(doc, 'bookmarked').querySelector('[data-testid="removeBookmark"]'), true);
+  assert.deepEqual(script.messages, []);
+  script.click(button, true);
+  assert.deepEqual(script.messages, [{ kind: 'bookmark', post: 'https://x.com/example_author/status/100' }]);
+  script.advance(250);
+  assert.equal(script.messages.length, 1, 'another post already bookmarked does not confirm this one');
+  button.attributes.set('data-testid', 'removeBookmark');
+  script.advance(250);
+  assert.deepEqual(script.messages[1], { kind: 'intent', confirmed: true });
+});
+
 // background.js in its own context with a fake chrome: storage in memory, fetch recorded.
 function worker({ down = false, store = {}, fetchRequest } = {}) {
   const fetched = [];

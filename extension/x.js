@@ -42,8 +42,12 @@ let changing = 0;
 function count() {
   pending = 0;
   if (location.href === counted) return;
+  const counts = pageCounts(document);
+  // The app shell can settle before X has loaded its posts. Count the view
+  // when the feed arrives, so a slow load does not hide missing controls.
+  if (!counts.posts) return;
   counted = location.href;
-  tell({ kind: 'view', ...pageCounts(document) });
+  tell({ kind: 'view', ...counts });
 }
 
 new MutationObserver(() => {
