@@ -33,7 +33,8 @@ pub struct Kept {
 }
 
 /// Keeps `capture` for library page `url`, or, when the page keeps a text
-/// the capture is not longer than, the page's line copied with `note`;
+/// the capture is not longer than, the page's line copied with `note`,
+/// still saying the tier that read the kept text;
 /// then the page's image, from what the capture found, when the page took
 /// it or has no image yet.
 pub fn keep(
@@ -50,7 +51,7 @@ pub fn keep(
         Some(baseline)
             if baseline.content_sha256.is_some() && !content_fetch::longer(baseline, capture) =>
         {
-            let tier = capture.line.tier.unwrap_or(Tier::Other);
+            let tier = baseline.tier.or(capture.line.tier).unwrap_or(Tier::Other);
             let note = (!baseline
                 .reason
                 .as_deref()
@@ -127,7 +128,8 @@ mod tests {
             assert!(!kept.taken);
             assert_eq!(
                 (kept.line.status, kept.line.tier, kept.line.chars),
-                (Status::Ok, Some(Tier::X), Some(20))
+                (Status::Ok, Some(Tier::SignedIn), Some(20)),
+                "the line keeps the kept text's tier"
             );
             assert_eq!(
                 kept.line.reason.as_deref(),

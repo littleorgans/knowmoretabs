@@ -443,6 +443,11 @@ fn a_protected_thread_keeps_its_page_read_and_says_the_public_read_added_nothing
         kept["reason"],
         "1 post as shown; thread may continue; public read added no text"
     );
+    assert_eq!(
+        (&kept["tier"], &kept["access"]),
+        (&json!("signed_in"), &json!("signed_in")),
+        "the log says what the stored file says: {kept}"
+    );
     let front = kept_front(&fx, PRIVATE);
     assert!(front.contains("Only followers see this thread."), "{front}");
     assert!(front.contains("tier: \"signed_in\""), "{front}");
