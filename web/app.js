@@ -147,6 +147,10 @@ function derive(lib) {
   setVocab(Array.isArray(lib.vocabulary) ? lib.vocabulary : []);
   for (const p of S.pages) { setTags(p, Array.isArray(p.tags) ? p.tags.filter((t) => typeof t === 'string' && t) : []); loadSug(p, p.suggested); }
   S.byUrl = new Map(S.pages.map((p) => [p.url, p]));
+  // A page bookmarked on X names the pages its thread links to (serve only);
+  // each of those is linked from it, so an article knows its post.
+  for (const p of S.pages) { p.x = p.x && typeof p.x === 'object' ? p.x : null; p.linkedFrom = []; }
+  for (const p of S.pages) for (const u of strings(p.x?.links)) S.byUrl.get(u)?.linkedFrom.push(p);
   S.skipped = 0;
   S.snaps = (lib.snapshots || []).filter((s) => { const ok = s && !isNaN(new Date(s.captured_at)); if (!ok) S.skipped++; return ok; }).map((s, k) => {
     const rows = Array.isArray(s.tabs) ? s.tabs : [], tabs = rows.filter((t) => Array.isArray(t) && t.length > 3 && typeof P[t[0]]?.url === 'string');
@@ -344,13 +348,31 @@ function span(s) {
   return parts.join(' ') || 'under a second';
 }
 const norm = (t) => String(t).toLowerCase().replace(/\s+/g, ' ').trim();
+// The drawer's term and description lines, and an address that opens outside.
+const line = (dt, dd, title = '') => `<dt>${dt}</dt><dd${title ? ` title="${esc(title)}"` : ''}>${dd}</dd>`;
+const ext = (url, text) => (/^https?:\/\//i.test(url) ? `<a class="x" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${text}</a>` : `<span class="x">${text}</span>`);
+const strings = (v) => (Array.isArray(v) ? v.filter((u) => typeof u === 'string' && u) : []);
+// Another page by its address: its title, linked to it in the library when
+// the library shows it, then the address itself.
+function pageRef(url, title) {
+  const q = S.byUrl.get(url), t = title || q?.title;
+  return (q?.n && t ? `<a href="#pages/${q.i}" title="Show it in the library">${esc(t)}</a> ` : '') + ext(url, `<code>${esc(url.replace(/^https?:\/\/(www\.)?/i, ''))}</code>`);
+}
+// What the X log says of the page (serve only): when it was bookmarked on X
+// and from which posts, the article its thread links to, and on an article
+// the posts that link to it.
+function xHTML(p) {
+  const x = p.x, out = [], at = new Date(x?.bookmarked_at);
+  if (x) out.push(line('Bookmarked on X', [isNaN(at) ? '' : F.dayYear.format(at), ...strings(x.clicked).map((u) => ext(u, `<code>${esc(u.replace(/^https?:\/\//i, ''))}</code>`))].filter(Boolean).join(' · ')));
+  for (const u of strings(x?.links)) out.push(line('Links to', pageRef(u), u));
+  for (const q of p.linkedFrom) out.push(line('Linked from', pageRef(q.url), q.url));
+  return out.length ? `<div class="hx"><h4>From X</h4><dl>${out.join('')}</dl></div>` : '';
+}
 // What the browser's own History said about the page when it was last saved
 // (NOTES §10). Absent for pages seen only before it was recorded, and an
 // export leaves out the search and the referrer unless asked for them.
 function browserHTML(p) {
   const h = p.history; if (!h || typeof h !== 'object') return '';
-  const line = (dt, dd, title = '') => `<dt>${dt}</dt><dd${title ? ` title="${esc(title)}"` : ''}>${dd}</dd>`;
-  const ext = (url, text) => (/^https?:\/\//i.test(url) ? `<a class="x" href="${esc(url)}" target="_blank" rel="noopener noreferrer">${text}</a>` : `<span class="x">${text}</span>`);
   const date = (t) => { const d = new Date(t); return t == null || isNaN(d) ? '' : F.dayYear.format(d); };
   let ref = h.referrer && typeof h.referrer.url === 'string' && h.referrer.url !== p.url ? h.referrer : null, out = '';
   const term = typeof h.search?.term === 'string' && h.search.term.trim() ? h.search.term : '', hops = +h.search?.hops || 0;
@@ -361,11 +383,7 @@ function browserHTML(p) {
     const where = hops === 0 ? ' · this page is the results' : hops > 1 ? ` · ${hops} links away` : '';
     out += line('Found by searching', `<q>${esc(term)}</q>${on}${where}`, `${term}\nThe nearest search results page${hops ? `, ${plural(hops, 'link')} before this page` : ''}.`);
   }
-  if (ref) {
-    const q = S.byUrl.get(ref.url), title = ref.title || q?.title;
-    const shown = ref.url.replace(/^https?:\/\/(www\.)?/i, '');
-    out += line('Came from', (q?.n && title ? `<a href="#pages/${q.i}" title="Show it in the library">${esc(title)}</a> ` : '') + ext(ref.url, `<code>${esc(shown)}</code>`), ref.url);
-  }
+  if (ref) out += line('Came from', pageRef(ref.url, ref.title), ref.url);
   if (h.visits) {
     const f = new Date(h.first_visit), l = new Date(h.last_visit), last = date(h.last_visit);
     const first = date(h.first_visit) && (f.getUTCFullYear() === l.getUTCFullYear() ? F.day : F.dayYear).format(f);
@@ -390,7 +408,7 @@ function histHTML(p, cls = 'hist in') {
   const history = full +
     `<p class="sum">Seen in ${p.n} of ${plural(S.snaps.length, 'snapshot')} · ${first === last ? first : `${first} to ${last}`}${p.open ? ' · open now' : ''}${groups}${tagged}</p>` +
     `<p class="acts">${p.domain ? `<button type="button" data-act="domain">${only}</button>` : ''}<button type="button" data-act="copy">Copy URL</button>${host.forget ? act : ro}</p>` +
-    browserHTML(p) + `<div class="sights"><h4>${plural(p.seen.length, 'sighting')}</h4><ol>${sightings.join('')}</ol></div>`;
+    xHTML(p) + browserHTML(p) + `<div class="sights"><h4>${plural(p.seen.length, 'sighting')}</h4><ol>${sightings.join('')}</ol></div>`;
   // An export has no server to read the text from, so its drawer is the history alone.
   if (!host.content) return `<div class="${cls}"><div class="hist-in">${history}</div></div>`;
   const id = (name) => `${name}-${p.i}`, on = (name) => S.tab === name;

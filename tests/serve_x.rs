@@ -1,22 +1,27 @@
 //! A post bookmarked on X, saved through `serve` by the real binary: the
 //! page, its click line, its text read from the owner's page or from a
 //! stand-in X post API's thread, whichever is longer, and the thread's
-//! later bookmarks joining the same page; the origins the routes accept
-//! and refuse; the extension's health report and the `doctor` line it
-//! makes.
+//! later bookmarks joining the same page; the article the thread links to,
+//! a page of its own tied to the post; the origins the routes accept and
+//! refuse; the extension's health report and the `doctor` line it makes.
 
 mod common;
 
 use std::fs;
-use std::process::Stdio;
+use std::process::{Command, Stdio};
+use std::sync::{Mutex, mpsc};
+use std::time::Duration;
 
-use common::serve::{A, Reply, Server, archive, kept_name, page};
+use common::add::article;
+use common::serve::{A, HIDDEN, Reply, Server, archive, kept_name, page};
 use common::site::{self, Site};
 use common::{Fixture, stderr, stdout};
 use serde_json::{Value, json};
 
 const POST: &str = "https://x.com/example_author/status/100";
 const PRIVATE: &str = "https://x.com/example_private/status/401";
+/// Plain HTTP: the stand-in site speaks no TLS.
+const ARTICLE: &str = "http://blog.example.test/post";
 
 /// The extension's origin as `serve` pins it, read where it is declared.
 fn extension_origin() -> String {
@@ -79,8 +84,26 @@ fn json_reply(body: Vec<u8>) -> site::Reply {
     }
 }
 
+/// A thread of posts 500 and 501 whose links the public service resolves:
+/// 500's card leads only to `t.co`, 501's text links to the article.
+fn linked_thread_answer(focal: u64) -> Vec<u8> {
+    let mut first = thread_post("example_author", 500, "A thread with a link.");
+    first["card"] = json!({"url": "https://t.co/EXAMPLE0"});
+    let mut second = thread_post("example_author", 501, "The article it is about.");
+    second["raw_text"] = json!({"text": "The article it is about. https://t.co/EXAMPLE1",
+        "facets": [{"type": "url", "original": "https://t.co/EXAMPLE1",
+            "replacement": ARTICLE, "display": "blog.example.test/post"}]});
+    let status = if focal == 500 {
+        first.clone()
+    } else {
+        second.clone()
+    };
+    serde_json::to_vec(&json!({"code": 200, "status": status, "thread": [first, second]})).unwrap()
+}
+
 /// The X post API, standing in: post 100 is a post alone, post 401 is
-/// private, posts 200 to 204 are one thread.
+/// private, posts 200 to 204 are one thread, 500 and 501 another with a
+/// link; and the article at `blog.example.test`.
 fn x_api() -> Site {
     Site::start(|host, path, _| {
         let id = path
@@ -90,6 +113,10 @@ fn x_api() -> Site {
             ("api.fxtwitter.com", Some(100)) => json_reply(answer()),
             ("api.fxtwitter.com", Some(401)) => site::Reply::status(401),
             ("api.fxtwitter.com", Some(id @ 200..=204)) => json_reply(thread_answer(id)),
+            ("api.fxtwitter.com", Some(id @ 500..=501)) => json_reply(linked_thread_answer(id)),
+            ("blog.example.test", _) if path == "/post" => {
+                site::Reply::html(article("A synthetic article"))
+            }
             _ => site::Reply::status(404),
         }
     })
@@ -97,16 +124,18 @@ fn x_api() -> Site {
 
 /// `serve` with every name resolved to `site`.
 fn serve(fx: &Fixture, site: &Site) -> Server {
-    Server::from_child(
-        fx.command()
-            .args(["serve", "--port", "0"])
-            .env("KNOWMORETABS_TEST_RESOLVE", site.address.to_string())
-            .env("KNOWMORETABS_TEST_TIMEOUT_MS", "400")
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()
-            .expect("spawn serve"),
-    )
+    Server::from_child(serve_command(fx, site).spawn().expect("spawn serve"))
+}
+
+fn serve_command(fx: &Fixture, site: &Site) -> Command {
+    let mut command = fx.command();
+    command
+        .args(["serve", "--port", "0"])
+        .env("KNOWMORETABS_TEST_RESOLVE", site.address.to_string())
+        .env("KNOWMORETABS_TEST_TIMEOUT_MS", "400")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit());
+    command
 }
 
 /// A JSON POST from `origin`, as the extension's service worker sends it.
@@ -167,6 +196,51 @@ fn page_read(author: &str, clicked: u64, posts: &[Value], complete: bool) -> Val
 
 fn status_of(id: u64) -> String {
     format!("https://x.com/example_author/status/{id}")
+}
+
+/// Post `id` as shown, its text linking through `t.co` to `target`, or
+/// with only a cut label when the page did not resolve it.
+fn linking(id: u64, target: Option<&str>) -> Value {
+    let mut post = shown(
+        "example_author",
+        id,
+        &format!("Shown post {id}, with a link."),
+    );
+    let label = target.map_or("blog.example.test/po…", |target| {
+        target.split_once("://").map_or(target, |(_, rest)| rest)
+    });
+    post["links"] = json!([{"href": format!("https://t.co/EXAMPLE{id}"), "label": label,
+        "target": target}]);
+    post
+}
+
+/// The X log's lines tying a page to the pages its thread links to.
+fn ties(fx: &Fixture) -> Vec<Value> {
+    log_lines(fx, "xbookmarks.jsonl")
+        .into_iter()
+        .filter(|line| line.get("links").is_some())
+        .map(|line| json!({"url": line["url"], "links": line["links"]}))
+        .collect()
+}
+
+/// `url`'s title in the intake log, once its background read has given it
+/// one.
+fn titled_in_time(fx: &Fixture, url: &str) -> Value {
+    for _ in 0..200 {
+        let title = log_lines(fx, "added.jsonl")
+            .into_iter()
+            .rev()
+            .find(|line| line["url"] == url)
+            .map(|line| line["title"].clone());
+        if let Some(title @ Value::String(_)) = title {
+            return title;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!(
+        "{url} was never titled: {:?}",
+        log_lines(fx, "content.jsonl")
+    )
 }
 
 fn content_line(fx: &Fixture, url: &str) -> Value {
@@ -724,4 +798,202 @@ fn bookmarks_dropped_while_the_library_was_down_degrade_doctor() {
     let ok = report(&health("ok"));
     assert_eq!(ok.status, 200, "{}", ok.text());
     assert_eq!(doctor_line(&fx)["state"], "ready", "no drops, ready again");
+}
+
+#[test]
+fn the_first_link_off_x_is_its_own_page_tied_to_the_post_and_read_in_the_background() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let posts = [
+        shown("example_author", 300, "Shown post 300."),
+        linking(301, Some("https://x.com/example_other/status/9")),
+        linking(302, Some("http://blog.example.test/post?utm_source=x")),
+        linking(303, Some("https://video.example.test/watch")),
+    ];
+    let line = bookmark_read(
+        &server,
+        &status_of(301),
+        &page_read("example_author", 301, &posts, true),
+    );
+    assert_eq!(
+        (&line["value"], &line["article"]),
+        (&json!("added"), &json!({"url": ARTICLE, "value": "added"})),
+        "the first link off X, under its cleaned key: {line}"
+    );
+    assert_eq!(
+        ties(&fx),
+        [json!({"url": status_of(301), "links": [ARTICLE]})]
+    );
+    assert_eq!(titled_in_time(&fx, ARTICLE), "A synthetic article");
+    let read = content_line(&fx, ARTICLE);
+    assert_eq!(
+        (&read["status"], &read["tier"]),
+        (&json!("ok"), &json!("web"))
+    );
+    assert!(
+        site.paths()
+            .iter()
+            .all(|path| !path.contains("video.example.test")),
+        "one article per bookmark: {:?}",
+        site.paths()
+    );
+    let library = server.library();
+    assert_eq!(
+        page(&library, &status_of(301))["x"]["links"],
+        json!([ARTICLE])
+    );
+    assert!(
+        page(&library, ARTICLE).get("x").is_none(),
+        "the article was not bookmarked itself"
+    );
+}
+
+#[test]
+fn a_waiting_article_holds_neither_the_bookmark_reply_nor_the_archive_lock() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let (started, waiting) = mpsc::channel();
+    let (release, released) = mpsc::channel();
+    let released = Mutex::new(released);
+    let site = Site::start(move |_, _, _| {
+        started.send(()).unwrap();
+        let _ = released
+            .lock()
+            .unwrap()
+            .recv_timeout(Duration::from_secs(15));
+        site::Reply::html(article("A synthetic article"))
+    });
+    let server = Server::from_child(
+        serve_command(&fx, &site)
+            .env("KNOWMORETABS_TEST_TIMEOUT_MS", "30000")
+            .spawn()
+            .expect("spawn serve"),
+    );
+    std::thread::scope(|scope| {
+        let server = &server;
+        let (saved, reply) = mpsc::channel();
+        scope.spawn(move || {
+            saved
+                .send(bookmark_read(
+                    server,
+                    &status_of(340),
+                    &page_read("example_author", 340, &[linking(340, Some(ARTICLE))], true),
+                ))
+                .unwrap();
+        });
+        waiting
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the article request started");
+        let reply = reply.recv_timeout(Duration::from_secs(2));
+        let (changed, change) = mpsc::channel();
+        scope.spawn(move || {
+            changed
+                .send(server.post("/api/forget", &json!({"urls": [A]})))
+                .unwrap();
+        });
+        let change = change.recv_timeout(Duration::from_secs(2));
+        // Release the site before asserting, including on a regression.
+        release.send(()).unwrap();
+        assert_eq!(
+            reply.expect("bookmark replied while the article was waiting")["article"],
+            json!({"url": ARTICLE, "value": "added"})
+        );
+        assert_eq!(
+            change
+                .expect("another writer acquired the archive lock")
+                .status,
+            200
+        );
+    });
+    assert_eq!(titled_in_time(&fx, ARTICLE), "A synthetic article");
+}
+
+#[test]
+fn a_link_the_page_left_unresolved_is_found_in_the_public_thread() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let read = page_read("example_author", 501, &[linking(501, None)], false);
+    let line = bookmark_read(&server, &status_of(501), &read);
+    assert_eq!(
+        (&line["read"], &line["article"]),
+        (
+            &json!("replaced"),
+            &json!({"url": ARTICLE, "value": "added"})
+        ),
+        "{line}"
+    );
+    assert_eq!(
+        ties(&fx),
+        [json!({"url": status_of(501), "links": [ARTICLE]})]
+    );
+    assert_eq!(titled_in_time(&fx, ARTICLE), "A synthetic article");
+}
+
+#[test]
+fn an_article_already_kept_is_tied_and_a_forgotten_one_is_neither_tied_nor_restored() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let whole =
+        |id: u64, target: &str| page_read("example_author", id, &[linking(id, Some(target))], true);
+    let known = bookmark_read(&server, &status_of(310), &whole(310, A));
+    assert_eq!(
+        known["article"],
+        json!({"url": A, "value": "known"}),
+        "{known}"
+    );
+    let forgotten = bookmark_read(&server, &status_of(320), &whole(320, HIDDEN));
+    assert_eq!(
+        forgotten["article"],
+        json!({"url": HIDDEN, "value": "forgotten"}),
+        "{forgotten}"
+    );
+    assert_eq!(ties(&fx), [json!({"url": status_of(310), "links": [A]})]);
+    let intake = log_lines(&fx, "added.jsonl");
+    assert!(
+        intake
+            .iter()
+            .all(|line| line["url"] != A && line["url"] != HIDDEN),
+        "{intake:?}"
+    );
+    let state = fs::read_to_string(fx.root.join("library.json")).unwrap();
+    assert!(state.contains(HIDDEN), "still forgotten: {state}");
+}
+
+#[test]
+fn no_link_off_x_that_add_would_take_makes_no_article() {
+    let fx = Fixture::new();
+    archive(&fx);
+    let site = x_api();
+    let server = serve(&fx, &site);
+    let posts = [
+        linking(330, Some("https://x.com/example_other/status/9")),
+        linking(331, Some("https://pic.x.com/EXAMPLE")),
+        linking(332, Some("https://pbs.twimg.com/media/EXAMPLE.jpg")),
+        linking(333, Some("http://192.168.0.10/admin")),
+        linking(334, None),
+    ];
+    let line = bookmark_read(
+        &server,
+        &status_of(330),
+        &page_read("example_author", 330, &posts, true),
+    );
+    assert_eq!(line["value"], "added", "{line}");
+    assert_eq!(line.get("article"), None, "{line}");
+    assert_eq!(ties(&fx), [] as [Value; 0]);
+    assert_eq!(
+        site.paths(),
+        ["api.fxtwitter.com/2/thread/330"],
+        "the unresolved link asked the public thread; no link was fetched"
+    );
+    let intake = log_lines(&fx, "added.jsonl");
+    assert!(
+        intake.iter().all(|line| line["url"] == status_of(330)),
+        "only the post's page: {intake:?}"
+    );
 }

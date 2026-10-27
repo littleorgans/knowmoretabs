@@ -166,7 +166,9 @@ answering. With the toolbar extension loaded, a post you bookmark on X is
 saved to the library as one page under `https://x.com/<handle>/status/<id>`,
 with its author's thread as the page showed it, filled from the X post API
 when the page showed only part; a later bookmark in the same thread is the
-same page. A save requires `serve` to be running:
+same page. The first web link of the thread that leaves X (an article, a
+video, a repository) is saved as a page of its own, read in the background,
+and each page's history names the other. A save requires `serve` to be running:
 a bookmark made while it is stopped is not kept for later, and `doctor`
 says how many were missed.
 
@@ -599,7 +601,7 @@ tier is ready; a missing tool is a warning.
 │   ├── images.jsonl           # what `content` did about each page's image, one line per attempt; append-only
 │   ├── images/                # one preview JPEG per captured page, named as its text file is
 │   ├── sources.jsonl          # which bytes each local document was when added: blob and commit; append-only
-│   ├── xbookmarks.jsonl       # bookmarks on X: a line per click naming the page it saved, and a line per thread naming its posts; append-only
+│   ├── xbookmarks.jsonl       # bookmarks on X: a line per click naming the page it saved, a line per thread naming its posts, and a line per linked article tying it to the post; append-only
 │   └── history.json           # what History last said about each page; refreshed, never drops a page
 ├── library.json               # your own state: the forgotten URLs, your tags and their vocabulary
 ├── extension.json             # the toolbar extension's last report on what it sees on X; replaced whole
@@ -615,21 +617,23 @@ and then the platform default. Empty `KMT_ROOT` means unset.
 with a `schema_version`; it is the source of truth and readable in any
 editor. Everything under `export/` is derived and can be deleted.
 
-Nothing leaves the machine unless you run `enrich` or `content`. `save`,
-`export`, the tag commands and `add --file` make no network requests. `serve`
-and `search --mode combined` make none unless `--model-port` is set; then they
-send each query to the model service over loopback on this machine. CLI search
+`enrich`, `content`, `add` and `serve`'s X bookmark route can contact outside
+services. `save`, `export`, the tag commands and `add --file` make no network
+requests. With `--model-port`, `serve` and `search --mode combined` also send
+each query to the model service over loopback on this machine. CLI search
 also supplies the filtered page keys and current body digests.
 `search --mode keyword` makes no network requests.
 A post you bookmark on X reaches `serve` through the toolbar extension with
 what the page showed of its author's thread, kept as the page's text. When
 the page showed only part, the X post API is asked for the thread by the
 post's number, and the longer text is kept. The post's preview image is
-downloaded, from X's own image host when it comes from the page.
-`enrich` and `content` are the only code that sends your pages' addresses,
-or a video's id to YouTube through yt-dlp, and what each sends is described
-above; `content` also downloads one preview image per page from the address
-the page names, which may be on another host, and images stay in the
+downloaded, from X's own image host when it comes from the page. The
+first web link of the thread that leaves X is then added and read as `add`
+reads a page: its site and preview image, `gh` for repositories, yt-dlp for
+video, or a headless browser for thin pages. These reads send page addresses
+to their sites, or a video's id to YouTube through yt-dlp. `content` also
+downloads one preview image per page from the address the page names, which
+may be on another host, and images stay in the
 private archive. `content --signed-in` has your own Chrome open pages,
 signed in as you, as described above. `doctor` is offline by default.
 `doctor --live` lets gh check its own sign in with GitHub, asks the X

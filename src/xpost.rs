@@ -13,10 +13,11 @@
 //!      images say in their descriptions. A `content` run reads one post:
 //!      a thread is not unrolled there. A bookmark on X may ask for the
 //!      post's thread instead, and keeps only its author's posts, in the
-//!      API's order, a deleted one as one line. A deleted post is final, a
-//!      private one waits for a signed in browser, and a busy API is
-//!      retried as any site is. The markdown is `xpost_page`'s, shared
-//!      with the page read of X itself.
+//!      API's order, a deleted one as one line, and where their links lead,
+//!      so the article the thread links to can be saved beside it. A
+//!      deleted post is final, a private one waits for a signed in
+//!      browser, and a busy API is retried as any site is. The markdown
+//!      is `xpost_page`'s, shared with the page read of X itself.
 
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -92,26 +93,43 @@ pub fn capture(fetcher: &Fetcher, raw: &str, id: &str) -> Capture {
 }
 
 /// What the API gave of a post's thread: the capture of its author's
-/// posts, and their numbers in the API's order.
+/// posts, their numbers and the web links they make, in the API's order.
 #[derive(Debug, Clone)]
 pub struct Thread {
     pub capture: Capture,
     pub posts: Vec<String>,
+    /// Each post's link targets, else its card's address.
+    pub links: Vec<String>,
 }
 
 /// Asks the API for post `id` and its thread, recorded for library page
 /// `raw`, as [`capture`] asks for the post alone. Only the post's author's
 /// posts are kept; another's reply in the thread is not.
 pub fn thread_capture(fetcher: &Fetcher, raw: &str, id: &str) -> Thread {
-    let mut posts = Vec::new();
+    let (mut posts, mut links) = (Vec::new(), Vec::new());
     let capture = content_fetch::retrying(fetcher, || {
         once(fetcher, raw, &thread_url(id), |bytes, line| {
-            let (capture, ids) = read_posts(bytes, line, true);
-            posts = ids;
-            capture
+            let thread = read_posts(bytes, line, true);
+            (posts, links) = (thread.posts, thread.links);
+            thread.capture
         })
     });
-    Thread { capture, posts }
+    Thread {
+        capture,
+        posts,
+        links,
+    }
+}
+
+impl Thread {
+    /// A capture that read no post.
+    fn ended(capture: Capture) -> Self {
+        Self {
+            capture,
+            posts: Vec::new(),
+            links: Vec::new(),
+        }
+    }
 }
 
 /// One request to the API at `url`, its successful body read by `read`.
@@ -192,8 +210,34 @@ struct Post {
     quote: Option<Box<Post>>,
     article: Option<Article>,
     media: Option<Media>,
+    raw_text: Option<RawText>,
+    card: Option<Card>,
     /// Why a tombstone stands in for the post.
     reason: Option<String>,
+}
+
+/// The post's text as X stores it, with what each span of it stands for.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct RawText {
+    facets: Vec<Facet>,
+}
+
+/// A span of the text: for `type` `url`, the `t.co` address the text
+/// holds and, as `replacement`, where it leads.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Facet {
+    #[serde(rename = "type")]
+    kind: String,
+    replacement: Option<String>,
+}
+
+/// The preview X draws for a post's link.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct Card {
+    url: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -321,14 +365,14 @@ struct Video {
 /// The line and text for the body of a successful answer; `line` makes
 /// the response's line for a status.
 fn read(bytes: &[u8], line: impl Fn(Status) -> Line) -> Capture {
-    read_posts(bytes, &line, false).0
+    read_posts(bytes, &line, false).capture
 }
 
 /// [`read`] of the post, or with `thread` of its author's posts in its
-/// thread; and the numbers of the posts kept.
-fn read_posts(bytes: &[u8], line: &dyn Fn(Status) -> Line, thread: bool) -> (Capture, Vec<String>) {
+/// thread; with the numbers of the posts kept and their links.
+fn read_posts(bytes: &[u8], line: &dyn Fn(Status) -> Line, thread: bool) -> Thread {
     let done = |state: Status, reason: String| {
-        (Capture::ended(line(state).with_reason(reason)), Vec::new())
+        Thread::ended(Capture::ended(line(state).with_reason(reason)))
     };
     let Ok(answer) = serde_json::from_slice::<Answer>(bytes) else {
         return done(Status::Error, "not a post answer".to_owned());
@@ -388,12 +432,35 @@ fn read_posts(bytes: &[u8], line: &dyn Fn(Status) -> Line, thread: bool) -> (Cap
                 }])
             }),
     };
-    let ids = posts
+    Thread {
+        capture,
+        posts: posts
+            .iter()
+            .filter(|post| !post.id.is_empty())
+            .map(|post| post.id.clone())
+            .collect(),
+        links: posts.iter().flat_map(|post| links(post)).collect(),
+    }
+}
+
+/// Where `post`'s links lead: each `url` facet's target, else its card's
+/// address.
+fn links(post: &Post) -> Vec<String> {
+    let facets: Vec<String> = post
+        .raw_text
         .iter()
-        .filter(|post| !post.id.is_empty())
-        .map(|post| post.id.clone())
+        .flat_map(|raw| &raw.facets)
+        .filter(|facet| facet.kind == "url")
+        .filter_map(|facet| facet.replacement.clone())
         .collect();
-    (capture, ids)
+    if facets.is_empty() {
+        post.card
+            .iter()
+            .filter_map(|card| card.url.clone())
+            .collect()
+    } else {
+        facets
+    }
 }
 
 /// The posts of `focal`'s author in `thread`, in its order, a deleted one

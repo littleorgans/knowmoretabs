@@ -124,6 +124,8 @@ pub struct ReadPost {
     pub alts: Vec<String>,
     /// The post's images on X's own image host.
     pub media: Vec<String>,
+    /// Where its resolved links lead, in the text's order.
+    pub links: Vec<String>,
     pub quote: Option<Quote>,
 }
 
@@ -137,6 +139,11 @@ impl Read {
     /// The posts' numbers, in the page's order.
     pub fn ids(&self) -> Vec<String> {
         self.posts.iter().map(|post| post.id.clone()).collect()
+    }
+
+    /// Where the posts' resolved links lead, in the page's order.
+    pub fn links(&self) -> impl Iterator<Item = &String> {
+        self.posts.iter().flat_map(|post| &post.links)
     }
 }
 
@@ -227,6 +234,11 @@ fn checked(post: SentPost, handle: &str) -> Result<ReadPost, String> {
             .media
             .into_iter()
             .filter(|url| is_x_media(url))
+            .collect(),
+        links: post
+            .links
+            .into_iter()
+            .filter_map(|link| link.target)
             .collect(),
         id: post.id,
         handle: post.handle,

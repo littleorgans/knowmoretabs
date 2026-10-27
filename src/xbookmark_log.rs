@@ -11,8 +11,9 @@
 //!      cannot be read at all costs only every mark: the Library still
 //!      opens. Each line names the page by the key the library holds it
 //!      under, and the fold keeps per page when it was last bookmarked,
-//!      which posts were clicked, and every post number its thread was
-//!      read with, so a later bookmark anywhere in that thread finds it.
+//!      which posts were clicked, every post number its thread was read
+//!      with, so a later bookmark anywhere in that thread finds it, and the
+//!      pages it links to, so the Library ties the article to the post.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -34,7 +35,8 @@ pub fn path(root: &Path) -> PathBuf {
 }
 
 /// One line. A line with `post` is a bookmark click; a later reading of
-/// the thread adds what it learned as a line without one.
+/// the thread adds what it learned as a line without one: its post
+/// numbers, or the library pages it links to.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Line {
     #[serde(deserialize_with = "jsonl::schema::<_, SCHEMA_VERSION>")]
@@ -48,6 +50,9 @@ pub struct Line {
     /// Post numbers of the page's thread.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub posts: Vec<String>,
+    /// Keys of library pages the thread links to.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
 }
 
 impl Line {
@@ -60,6 +65,7 @@ impl Line {
             at,
             post: Some(post.to_owned()),
             posts,
+            links: Vec::new(),
         }
     }
 
@@ -72,6 +78,19 @@ impl Line {
             at,
             post: None,
             posts,
+            links: Vec::new(),
+        }
+    }
+
+    /// Page `url`'s thread links to the library page `key`.
+    pub fn link(url: &str, at: Timestamp, key: &str) -> Self {
+        Self {
+            schema_version: SCHEMA_VERSION,
+            url: url.to_owned(),
+            at,
+            post: None,
+            posts: Vec::new(),
+            links: vec![key.to_owned()],
         }
     }
 }
@@ -99,6 +118,9 @@ pub struct Mark {
     /// save's to resolve, not the Library's.
     #[serde(skip)]
     pub thread: Vec<String>,
+    /// The library pages the thread links to, each once.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub links: Vec<String>,
 }
 
 /// The fold of the whole log.
@@ -136,14 +158,11 @@ pub fn for_library(root: &Path, log: Log) -> HashMap<String, Mark> {
 
 fn fold(text: &str) -> Marks {
     let (mut lines, unreadable) = jsonl::records::<Line>(text);
-    let mut threads: HashMap<String, Vec<String>> = HashMap::new();
+    let mut learned: HashMap<String, (Vec<String>, Vec<String>)> = HashMap::new();
     for line in &lines {
-        let thread = threads.entry(line.url.clone()).or_default();
-        for id in &line.posts {
-            if !thread.contains(id) {
-                thread.push(id.clone());
-            }
-        }
+        let (thread, linked) = learned.entry(line.url.clone()).or_default();
+        union(thread, &line.posts);
+        union(linked, &line.links);
     }
     // Latest first; a stable sort keeps the later of two equal times first.
     lines.reverse();
@@ -151,16 +170,29 @@ fn fold(text: &str) -> Marks {
     let mut pages: HashMap<String, Mark> = HashMap::new();
     for line in lines {
         let Some(post) = line.post else { continue };
-        let mark = pages.entry(line.url).or_insert_with_key(|url| Mark {
-            bookmarked_at: line.at,
-            clicked: Vec::new(),
-            thread: threads.remove(url).unwrap_or_default(),
+        let mark = pages.entry(line.url).or_insert_with_key(|url| {
+            let (thread, linked) = learned.remove(url).unwrap_or_default();
+            Mark {
+                bookmarked_at: line.at,
+                clicked: Vec::new(),
+                thread,
+                links: linked,
+            }
         });
         if !mark.clicked.contains(&post) {
             mark.clicked.push(post);
         }
     }
     Marks { pages, unreadable }
+}
+
+/// Adds to `all` each of `more` it does not hold yet, in order.
+fn union(all: &mut Vec<String>, more: &[String]) {
+    for item in more {
+        if !all.contains(item) {
+            all.push(item.clone());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -209,6 +241,7 @@ mod tests {
                 bookmarked_at: at("2026-10-27T10:00:00Z"),
                 clicked: vec![OTHER.to_owned(), PAGE.to_owned()],
                 thread: vec!["102".to_owned(), "103".to_owned()],
+                links: Vec::new(),
             }
         );
     }
@@ -255,6 +288,41 @@ mod tests {
             serde_json::to_value(mark).unwrap()["thread"],
             serde_json::Value::Null,
             "the Library is not served the thread"
+        );
+    }
+
+    #[test]
+    fn a_pages_links_are_every_page_its_link_lines_named_each_once_and_served() {
+        const ARTICLE: &str = "https://blog.example.test/post";
+        let link = |key: &str| {
+            serde_json::to_string(&Line::link(PAGE, at("2026-10-27T09:00:02Z"), key)).unwrap()
+        };
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&link(ARTICLE)).unwrap(),
+            serde_json::json!({"schema_version": 1, "url": PAGE, "at": "2026-10-27T09:00:02Z",
+                "links": [ARTICLE]})
+        );
+        let text = [
+            line(PAGE, "2026-10-27T09:00:00Z"),
+            link(ARTICLE),
+            link(ARTICLE),
+            link("https://video.example.test/watch"),
+        ]
+        .join("\n");
+        let mark = &fold(&text).pages[PAGE];
+        assert_eq!(mark.clicked, [PAGE], "a link line is no click");
+        assert_eq!(mark.links, [ARTICLE, "https://video.example.test/watch"]);
+        assert_eq!(
+            serde_json::to_value(mark).unwrap()["links"],
+            serde_json::json!([ARTICLE, "https://video.example.test/watch"])
+        );
+        let alone = fold(&line(PAGE, "2026-10-27T09:00:00Z")).pages;
+        assert!(
+            serde_json::to_value(&alone[PAGE])
+                .unwrap()
+                .get("links")
+                .is_none(),
+            "none served when none"
         );
     }
 

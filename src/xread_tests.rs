@@ -138,8 +138,15 @@ fn an_unresolved_link_is_incomplete_even_when_the_reader_omits_its_reason() {
     one["links"] = json!([{"href": "https://t.co/example", "label": "example.org/full…"}]);
     let mut sent = read(&[one]);
     assert!(!parsed(&sent).unwrap().complete);
+    assert_eq!(parsed(&sent).unwrap().links().count(), 0, "no target kept");
     sent["posts"][0]["links"][0]["target"] = json!("https://example.org/full");
-    assert!(parsed(&sent).unwrap().complete);
+    let read = parsed(&sent).unwrap();
+    assert!(read.complete);
+    assert_eq!(
+        read.links().collect::<Vec<_>>(),
+        ["https://example.org/full"],
+        "the target, never the t.co address"
+    );
 }
 
 #[test]
