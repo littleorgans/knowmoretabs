@@ -1,0 +1,41 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Example Author on X</title>
+<!-- Synthetic selector fixture for the extension, after research/x-dom.md section 6: fake handles,
+     ids and text. Not an archived X page. Served as https://x.com/example_author/status/102. -->
+<main data-testid="primaryColumn">
+  <section aria-label="Timeline: Conversation">
+    <div data-testid="cellInnerDiv"><article role="article" tabindex="0" data-testid="tweet" data-fixture="ancestor">
+      <div data-testid="User-Name"><a href="/example_author">Example Author</a><span>@example_author</span></div>
+      <a href="/example_author/status/101"><time datetime="2026-01-01T10:00:00Z">10:00</time></a>
+      <div data-testid="tweetText" lang="en">First visible thread candidate.</div>
+      <div role="group"><button type="button" data-testid="bookmark" aria-label="Bookmark">Bookmark</button></div>
+    </article></div>
+    <div data-testid="cellInnerDiv"><article role="article" tabindex="-1" data-testid="tweet" data-fixture="focal">
+      <div data-testid="User-Name"><a href="/example_author">Example Author</a><span>@example_author</span></div>
+      <a href="/example_author/status/102"><time datetime="2026-01-01T10:01:00Z">10:01</time></a>
+      <div data-testid="tweetText" lang="en">Focal post, already bookmarked.</div>
+      <div role="group"><button type="button" data-testid="removeBookmark" aria-label="Remove Bookmark">Remove Bookmark</button></div>
+    </article></div>
+    <div data-testid="cellInnerDiv"><article role="article" tabindex="0" data-testid="tweet" data-fixture="self-reply">
+      <div data-testid="User-Name"><a href="/example_author">Example Author</a><span>@example_author</span></div>
+      <a href="/example_author/status/103"><time datetime="2026-01-01T10:02:00Z">10:02</time></a>
+      <div data-testid="tweetText" lang="en">A visible preview of a longer self reply…</div>
+      <button type="button" data-testid="tweet-text-show-more-link">Show more</button>
+      <div role="group"><button type="button" data-testid="bookmark" aria-label="Bookmark">Bookmark</button></div>
+    </article></div>
+    <div data-testid="cellInnerDiv"><article role="article" tabindex="0" data-testid="tweet" data-fixture="reply">
+      <div data-testid="User-Name"><a href="/example_reader">Example Reader</a><span>@example_reader</span></div>
+      <a href="/example_reader/status/104"><time datetime="2026-01-01T10:03:00Z">10:03</time></a>
+      <div data-testid="tweetText" lang="en">A reply by someone else.</div>
+      <div role="group"><button type="button" data-testid="bookmark" aria-label="Bookmark">Bookmark</button></div>
+    </article></div>
+    <div data-testid="cellInnerDiv"><div role="button" tabindex="0">Show more replies</div></div>
+    <div data-testid="cellInnerDiv"><h2 role="heading">More From This Author</h2></div>
+    <div data-testid="cellInnerDiv"><article role="article" tabindex="0" data-testid="tweet" data-fixture="recommendation">
+      <div data-testid="User-Name"><a href="/example_author">Example Author</a><span>@example_author</span></div>
+      <a href="/example_author/status/999"><time datetime="2025-12-01T10:00:00Z">Dec 1</time></a>
+      <div data-testid="tweetText" lang="en">Same author, recommendation outside the conversation.</div>
+    </article></div>
+  </section>
+</main>

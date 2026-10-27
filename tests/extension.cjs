@@ -33,3 +33,204 @@ test("the Library's port is the one `just up` serves and the manifest may reach"
   assert.match(read('justfile'), new RegExp(`^lib_port := "${PORT}"$`, 'm'));
   assert.deepEqual(JSON.parse(read('extension/manifest.json')).host_permissions, [`${LIBRARY}*`]);
 });
+
+// --- X: manifest, id pin, xdom.js over the synthetic fixtures, background.js with a fake chrome.
+
+const { createHash } = require('node:crypto');
+const { parseHTML, composedPath } = require('./x_dom.cjs');
+
+const manifest = JSON.parse(read('extension/manifest.json'));
+const xdom = vm.runInNewContext(
+  read('extension/xdom.js') + '\n({ X, canonicalPost, postIdentity, clickIntent, pageCounts, showsBookmarked, freshHealth, afterView, afterIntent, healthReport })',
+  { URL },
+);
+const fixture = (name) => parseHTML(read(`tests/fixtures/x/${name}.html`));
+const HOME = 'https://x.com/home';
+const STATUS = 'https://x.com/example_author/status/102';
+const article = (doc, name) => doc.querySelector(`article[data-fixture="${name}"]`);
+const clickOn = (doc, name, control = 'bookmark', base = HOME) =>
+  xdom.clickIntent(composedPath(article(doc, name).querySelector(`[data-testid="${control}"]`)), base);
+const plain = (value) => JSON.parse(JSON.stringify(value));
+
+test('the manifest asks for storage and X pages and nothing more', () => {
+  assert.deepEqual(manifest.permissions, ['activeTab', 'storage']);
+  assert.deepEqual(manifest.host_permissions, [`${LIBRARY}*`]);
+  assert.deepEqual(manifest.content_scripts, [
+    { matches: ['https://x.com/*', 'https://twitter.com/*'], js: ['xdom.js', 'x.js'], run_at: 'document_start' },
+  ]);
+});
+
+test("the extension id the manifest key pins is the origin serve accepts", () => {
+  const der = Buffer.from(manifest.key, 'base64');
+  const id = [...createHash('sha256').update(der).digest('hex').slice(0, 32)].map((c) => String.fromCharCode(97 + parseInt(c, 16))).join('');
+  const declared = /^pub\(crate\) const EXTENSION_ORIGIN: &str = "chrome-extension:\/\/([a-p]{32})";$/m.exec(read('src/http.rs'));
+  assert.ok(declared, 'EXTENSION_ORIGIN in src/http.rs');
+  assert.equal(declared[1], id);
+});
+
+test('an add click names the post that owns the button, an inner icon included', () => {
+  const doc = fixture('timeline');
+  const icon = doc.querySelector('path[data-fixture="icon"]');
+  assert.deepEqual(plain(xdom.clickIntent(composedPath(icon), HOME)), {
+    kind: 'add', handle: 'example_author', id: '100', post: 'https://x.com/example_author/status/100',
+  });
+  assert.deepEqual(plain(xdom.clickIntent(composedPath(icon), 'https://twitter.com/home')).post, 'https://x.com/example_author/status/100');
+});
+
+test('a quote before the timestamp is not the post; a media suffix is dropped', () => {
+  assert.deepEqual(plain(clickOn(fixture('timeline'), 'quote-first')), {
+    kind: 'add', handle: 'example_writer', id: '200', post: 'https://x.com/example_writer/status/200',
+  });
+});
+
+test('removing a bookmark, or any other click, is no intent', () => {
+  const doc = fixture('timeline');
+  assert.deepEqual(plain(clickOn(doc, 'bookmarked', 'removeBookmark')), { kind: 'remove' });
+  assert.deepEqual(plain(clickOn(doc, 'plain', 'share')), { kind: 'none' });
+  assert.deepEqual(plain(xdom.clickIntent(composedPath(doc.querySelector('[role="menuitem"]')), HOME)), { kind: 'none' });
+});
+
+test('a post whose permalink and author disagree, or that has no permalink, is not named', () => {
+  const doc = fixture('timeline');
+  for (const name of ['mismatch', 'no-time']) {
+    assert.deepEqual(plain(clickOn(doc, name)), { kind: 'add', missing: 'missing_identity' }, name);
+  }
+});
+
+test('a reply clicked while another post is focal is the reply', () => {
+  const doc = fixture('status');
+  assert.equal(clickOn(doc, 'reply', 'bookmark', STATUS).post, 'https://x.com/example_reader/status/104');
+  assert.equal(clickOn(doc, 'self-reply', 'bookmark', STATUS).post, 'https://x.com/example_author/status/103');
+  assert.deepEqual(plain(clickOn(doc, 'focal', 'removeBookmark', STATUS)), { kind: 'remove' });
+});
+
+test('a permalink is a post on X with its handle, kept on x.com', () => {
+  assert.equal(xdom.canonicalPost('/Example_Author/status/7/video/1', HOME).post, 'https://x.com/Example_Author/status/7');
+  for (const href of ['/i/status/7', '/example_author', '/example_author/status/x', 'https://example.org/a/status/7', 'http://x.com/a/status/7', '/sixteen_letters_/status/7', '/a/status/12345678901234567890']) {
+    assert.equal(xdom.canonicalPost(href, HOME), null, href);
+  }
+});
+
+test('a page counts its posts and those holding a bookmark button; a flip shows as saved', () => {
+  assert.deepEqual(plain(xdom.pageCounts(fixture('timeline'))), { posts: 5, controls: 5 });
+  const status = fixture('status');
+  assert.deepEqual(plain(xdom.pageCounts(status)), { posts: 5, controls: 4 });
+  assert.equal(xdom.showsBookmarked(status, '102', STATUS), true);
+  assert.equal(xdom.showsBookmarked(status, '101', STATUS), false);
+});
+
+test('health turns blind after three busy views without a button, and back on seeing one', () => {
+  const t = (n) => `2026-10-27T09:00:0${n}Z`;
+  let h = xdom.freshHealth(t(0));
+  h = xdom.afterView(h, { posts: 10, controls: 0 }, t(1));
+  h = xdom.afterView(h, { posts: 1, controls: 0 }, t(2)); // too few posts to say anything
+  h = xdom.afterView(h, { posts: 10, controls: 0 }, t(3));
+  assert.equal(h.state, 'ok');
+  h = xdom.afterView(h, { posts: 10, controls: 0 }, t(4));
+  assert.deepEqual([h.state, h.since], ['blind', t(4)]);
+  h = xdom.afterView(h, { posts: 10, controls: 0 }, t(5));
+  assert.equal(h.since, t(4), 'a held state keeps its time');
+  h = xdom.afterView(h, { posts: 10, controls: 9 }, t(6));
+  assert.deepEqual([h.state, h.since], ['ok', t(6)]);
+});
+
+test('health turns unconfirmed after three add clicks X never showed as saved', () => {
+  const now = '2026-10-27T09:00:00Z';
+  let h = xdom.freshHealth(now);
+  for (const confirmed of [false, false, true, false, false]) h = xdom.afterIntent(h, confirmed, now);
+  assert.equal(h.state, 'ok');
+  h = xdom.afterIntent(h, false, now);
+  assert.equal(h.state, 'unconfirmed');
+  h = xdom.afterIntent(h, true, now);
+  assert.equal(h.state, 'ok');
+  assert.deepEqual(Object.keys(plain(xdom.healthReport(h, '0.2.0'))), ['state', 'since', 'version', 'views', 'posts', 'controls', 'intents', 'confirmed']);
+});
+
+// background.js in its own context with a fake chrome: storage in memory, fetch recorded.
+function worker({ down = false } = {}) {
+  const store = {};
+  const fetched = [];
+  let onMessage;
+  const chrome = {
+    runtime: { id: 'self', onMessage: { addListener: (f) => (onMessage = f) }, getManifest: () => ({ version: manifest.version }) },
+    action: { onClicked: { addListener() {} } },
+    storage: {
+      local: {
+        get: async (keys) => Object.fromEntries([keys].flat().filter((k) => k in store).map((k) => [k, structuredClone(store[k])])),
+        set: async (items) => Object.assign(store, structuredClone(items)),
+      },
+    },
+  };
+  const context = vm.createContext({ chrome, URL, structuredClone, console });
+  context.fetch = async (url, init) => {
+    if (context.down) throw new TypeError('Failed to fetch');
+    fetched.push({ url, body: JSON.parse(init.body), type: init.headers['Content-Type'] });
+    return { ok: true };
+  };
+  context.down = down;
+  context.importScripts = (...files) => files.forEach((file) => vm.runInContext(read(`extension/${file}`), context));
+  vm.runInContext(read('extension/background.js'), context);
+  const tab = { id: 1 };
+  return {
+    store, fetched, context,
+    send: async (message, sender = { id: 'self', tab, url: HOME }) => {
+      onMessage(message, sender);
+      await vm.runInContext('chain', context);
+    },
+  };
+}
+
+const POST = 'https://x.com/example_author/status/100';
+
+test('the worker posts a named post to the Library and nothing else', async () => {
+  const w = worker();
+  await w.send({ kind: 'bookmark', post: POST });
+  assert.deepEqual(w.fetched, [{ url: `${LIBRARY}api/x/bookmark`, body: { post: POST }, type: 'application/json' }]);
+});
+
+test('a message from another extension, a page off X or of the wrong shape is dropped', async () => {
+  const w = worker();
+  for (const sender of [
+    { id: 'other', tab: { id: 1 }, url: HOME },
+    { id: 'self', url: HOME },
+    { id: 'self', tab: { id: 1 }, url: 'https://example.org/' },
+    { id: 'self', tab: { id: 1 }, url: 'https://x.com.example.org/' },
+  ]) {
+    await w.send({ kind: 'bookmark', post: POST }, sender);
+  }
+  for (const message of [
+    null, 'bookmark', { kind: 'bookmark' }, { kind: 'bookmark', post: 'https://example.org/a/status/1' },
+    { kind: 'bookmark', post: `${POST}?s=20` }, { kind: 'bookmark', post: 'https://twitter.com/example_author/status/100' },
+    { kind: 'view', posts: -1, controls: 0 }, { kind: 'view', posts: 1, controls: 2 }, { kind: 'intent', confirmed: 'yes' }, { kind: 'fetch', url: 'https://example.org/' },
+  ]) {
+    await w.send(message);
+  }
+  assert.deepEqual(w.fetched, []);
+  assert.deepEqual(w.store, {});
+});
+
+test('saves wait while the Library is down, at most 50 for 7 days, and go with the next', async () => {
+  const w = worker({ down: true });
+  for (let i = 1; i <= 52; i += 1) await w.send({ kind: 'bookmark', post: `https://x.com/example_author/status/${i}` });
+  assert.equal(w.store.queue.length, 50);
+  assert.equal(w.store.queue[0].post, 'https://x.com/example_author/status/3', 'the oldest go first');
+  w.store.queue[0].at -= 8 * 24 * 60 * 60 * 1000;
+  w.context.down = false;
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  const saved = w.fetched.filter((f) => f.url.endsWith('/api/x/bookmark')).map((f) => f.body.post);
+  assert.equal(saved.length, 49, 'one was older than 7 days');
+  assert.equal(saved[0], 'https://x.com/example_author/status/4');
+  assert.deepEqual(w.store.queue, []);
+});
+
+test('health is reported on a change and at most once a day while it holds', async () => {
+  const w = worker();
+  const reports = () => w.fetched.filter((f) => f.url.endsWith('/api/x/health')).map((f) => f.body);
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  assert.deepEqual(reports().map((r) => [r.state, r.version, r.views]), [['ok', manifest.version, 1]]);
+  await w.send({ kind: 'view', posts: 4, controls: 4 });
+  assert.equal(reports().length, 1, 'unchanged within the day');
+  for (let i = 0; i < 3; i += 1) await w.send({ kind: 'view', posts: 5, controls: 0 });
+  assert.deepEqual(reports().map((r) => r.state), ['ok', 'blind']);
+  for (const report of reports()) assert.deepEqual(Object.keys(report), ['state', 'since', 'version', 'views', 'posts', 'controls', 'intents', 'confirmed']);
+});

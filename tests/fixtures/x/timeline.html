@@ -1,0 +1,75 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Home / X</title>
+<!-- Synthetic selector fixture for the extension, after research/x-dom.md section 6: fake handles,
+     ids and text, example.org media. Not an archived X page. Served as https://x.com/home. -->
+<main data-testid="primaryColumn">
+  <section aria-label="Timeline: Home">
+    <div data-testid="cellInnerDiv">
+      <article role="article" tabindex="0" data-testid="tweet" data-fixture="plain">
+        <div data-testid="User-Name">
+          <a href="/example_author">Example Author</a><span>@example_author</span>
+          <a href="/example_author/status/100"><time datetime="2026-01-01T09:00:00Z">9:00</time></a>
+        </div>
+        <div data-testid="tweetText" lang="en">Timeline text
+          <a href="https://t.co/EXAMPLE" title="https://example.org/full-path">example.org/full…</a>
+        </div>
+        <div role="link" tabindex="0">
+          <div data-testid="User-Name"><a href="/example_quote">Example Quote</a><span>@example_quote</span></div>
+          <a href="/example_quote/status/900"><time datetime="2026-01-01T08:00:00Z">8:00</time></a>
+          <div data-testid="tweetText">Quoted text, separate from the owning post.</div>
+        </div>
+        <div data-testid="tweetPhoto"><img src="https://example.org/image.png" alt="A synthetic diagram"></div>
+        <div role="group">
+          <button type="button" data-testid="bookmark" aria-label="Bookmark"><svg><path data-fixture="icon"></path></svg></button>
+          <button type="button" data-testid="share" aria-label="Share post" aria-haspopup="menu">Share</button>
+        </div>
+      </article>
+    </div>
+    <div data-testid="cellInnerDiv">
+      <article role="article" tabindex="0" data-testid="tweet" data-fixture="quote-first">
+        <div data-testid="User-Name"><a href="/example_writer">Example Writer</a><span>@example_writer</span></div>
+        <div role="link" tabindex="0">
+          <div data-testid="User-Name"><a href="/example_quote">Example Quote</a><span>@example_quote</span></div>
+          <a href="/example_quote/status/901"><time datetime="2026-01-01T07:00:00Z">7:00</time></a>
+          <div data-testid="tweetText">A quote placed before the owning timestamp.</div>
+        </div>
+        <a href="/example_writer/status/200/photo/1"><time datetime="2026-01-01T09:30:00Z">9:30</time></a>
+        <div data-testid="tweetText" lang="en">The writer's own words.</div>
+        <div role="group">
+          <button type="button" data-testid="bookmark" aria-label="Bookmark"><svg><path></path></svg></button>
+        </div>
+      </article>
+    </div>
+    <div data-testid="cellInnerDiv">
+      <article role="article" tabindex="0" data-testid="tweet" data-fixture="bookmarked">
+        <div data-testid="User-Name"><a href="/example_author">Example Author</a><span>@example_author</span></div>
+        <a href="/example_author/status/300"><time datetime="2026-01-01T10:00:00Z">10:00</time></a>
+        <div data-testid="tweetText" lang="en">Already bookmarked.</div>
+        <div role="group">
+          <button type="button" data-testid="removeBookmark" aria-label="Remove Bookmark"><svg><path></path></svg></button>
+        </div>
+      </article>
+    </div>
+    <div data-testid="cellInnerDiv">
+      <article role="article" tabindex="0" data-testid="tweet" data-fixture="mismatch">
+        <div data-testid="User-Name"><a href="/example_one">Example One</a><span>@example_one</span></div>
+        <a href="/example_two/status/400"><time datetime="2026-01-01T11:00:00Z">11:00</time></a>
+        <div data-testid="tweetText" lang="en">The permalink names someone else.</div>
+        <div role="group">
+          <button type="button" data-testid="bookmark" aria-label="Bookmark"><svg><path></path></svg></button>
+        </div>
+      </article>
+    </div>
+    <div data-testid="cellInnerDiv">
+      <article role="article" tabindex="0" data-testid="tweet" data-fixture="no-time">
+        <div data-testid="User-Name"><a href="/example_promoted">Example Promoted</a><span>@example_promoted</span></div>
+        <div data-testid="tweetText" lang="en">No timestamp, so no permalink.</div>
+        <div role="group">
+          <button type="button" data-testid="bookmark" aria-label="Bookmark"><svg><path></path></svg></button>
+        </div>
+      </article>
+    </div>
+  </section>
+</main>
+<div id="layers"><div role="menu"><div role="menuitem" tabindex="0">Add post to Bookmarks</div></div></div>
